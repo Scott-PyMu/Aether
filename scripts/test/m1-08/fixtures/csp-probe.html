@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Aether CSP Probe</title>
+    <!-- 本地同源探针脚本最先加载：先挂 securitypolicyviolation 监听，再触发违规 -->
+    <script src="/csp-probe.js"></script>
+    <!-- 内联脚本：CSP script-src 'self' 必须阻断执行（DoD1） -->
+    <script>
+      window.__inlineExecuted = true;
+    </script>
+    <!-- 远程脚本：CSP script-src 'self' 必须阻断加载与执行（DoD1） -->
+    <script src="{{BEACON}}/remote.js"></script>
+    <!-- 远程样式：CSP style-src 'self' 'unsafe-inline' 必须阻断 -->
+    <link rel="stylesheet" href="{{BEACON}}/remote.css" />
+  </head>
+  <body>
+    <h1>CSP Probe</h1>
+    <!-- 远程图片：CSP img-src 'self' data: blob: 必须阻断 -->
+    <img src="{{BEACON}}/pixel.png" alt="remote pixel" />
+    <!-- 远程框架：CSP frame-src 'none' 必须阻断 -->
+    <iframe src="{{BEACON}}/frame.html" title="remote frame"></iframe>
+  </body>
+</html>

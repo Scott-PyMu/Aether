@@ -92,6 +92,27 @@ jobs:
       - name: 冒烟（--version / --aether-diagnostics）
         run: node scripts/test/smoke-desktop.mjs
 
+  # M1-08：Tauri 壳与安全基线（CSP 真实阻断、外链导航拦截、IPC 参数校验矩阵、
+  # capabilities 最小 allowlist、devtools 仅 debug）——E2E 需要真实 WebView2。
+  security-baseline:
+    name: Tauri security baseline (M1-08)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: M1-08 验证（单测矩阵 + 静态检查 + CSP/导航 E2E）
+        run: node scripts/test/m1-08/verify-m1-08.mjs
+
   # DoD3：覆盖率门禁（Rust cargo-llvm-cov + TS vitest --coverage，行覆盖 <70% 失败）
   coverage:
     name: Coverage gate (>=70% lines)

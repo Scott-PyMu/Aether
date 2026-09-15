@@ -8,12 +8,34 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+# windows-gnu 下 lib/bin 自带的测试目标无法加载 Common-Controls v6 manifest
+# （tauri-build 仅对 bin 目标输出资源），`cargo test` 会在加载阶段失败。
+# 因此按 Cargo 官方约定把测试统一放在 `tests/` 集成测试目标（build.rs 为其注入
+# manifest 资源，见 build.rs 顶部说明）；lib/bin 不生成测试目标。
+[lib]
+test = false
+
+[[bin]]
+name = "aether-tauri"
+path = "src/main.rs"
+test = false
+
 [build-dependencies]
+# 测试目标注入 Common-Controls v6 清单资源（见 build.rs；MIT 许可，随 tauri-winres 已在依赖图内）
+embed-resource = "3.0.11"
 tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
 aether-core.workspace = true
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 tauri = { version = "2.11.5", features = [] }
+url = { version = "2", features = [] }
+
+# `test` feature 仅用于测试目标（MockRuntime / get_ipc_response）。
+# 生产构建（cargo build）不合并 dev-dependencies 的 feature，产物不包含测试支撑。
+[dev-dependencies]
+tauri = { version = "2.11.5", features = ["test"] }
 
 [lints]
 workspace = true
