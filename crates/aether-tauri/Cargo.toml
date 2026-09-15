@@ -18,9 +18,14 @@ tauri = { version = "2.11.5", features = [] }
 [lints]
 workspace = true
 
-# cargo-dist 构建命令：Tauri 需要先构建前端资源，再编译壳二进制（不含安装器）。
+# Tauri 2：未启用该 feature 时二进制按 dev 模式加载 devUrl（localhost:5173）。
+# 生产构建（cargo-dist / MSI / DMG / 归档）必须启用；见 [package.metadata.dist].features。
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+
+# 由 cargo-dist 的构建传递 --features custom-protocol（v0 元数据不支持 build-command）
 [package.metadata.dist]
-build-command = ["node", "../../scripts/ci/build-tauri.mjs"]
+features = ["custom-protocol"]
 
 [package.metadata.wix]
 upgrade-guid = "95AA332B-77D2-44E3-AA28-F87ED2F05FF2"

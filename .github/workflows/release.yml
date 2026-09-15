@@ -136,6 +136,8 @@ jobs:
           "node-version": 22
       - name: "安装前端依赖"
         run: "pnpm install --frozen-lockfile"
+      - name: "构建前端资源（tauri-build 生产构建需要 frontendDist）"
+        run: "pnpm -r --if-present build"
       - name: Install dist
         run: ${{ matrix.install_dist.run }}
       # Get the dist-manifest
