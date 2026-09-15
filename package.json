@@ -19,6 +19,7 @@
     "verify:supply-chain": "node scripts/test/verify-supply-chain-gate.mjs",
     "verify:coverage": "node scripts/test/verify-coverage-gate.mjs",
     "verify:m1-02": "node scripts/test/m1-02/verify-m1-02.mjs",
+    "verify:m1-03": "node scripts/test/m1-03/verify-m1-03.mjs",
     "verify:m1-07": "node scripts/test/m1-07-verify.mjs",
     "verify:m1-08": "node scripts/test/m1-08/verify-m1-08.mjs",
     "smoke": "node scripts/test/smoke-desktop.mjs",

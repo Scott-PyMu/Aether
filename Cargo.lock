@@ -73,8 +73,11 @@ name = "aether-store"
 version = "0.1.0"
 dependencies = [
  "aether-core",
+ "hex",
  "rusqlite",
  "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]

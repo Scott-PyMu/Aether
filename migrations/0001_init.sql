@@ -1,15 +1,13 @@
 -- 0001_init.sql —— 初始 schema（设计文档 附录 C / D3 / D12，迁移 0001 一次到位）。
--- 版本机制：schema_migrations(version, checksum, applied_at)；禁止使用 PRAGMA user_version（D3 评审修订 #2）。
--- 已发布后只允许新增迁移文件，禁止修改本文件。
-
-PRAGMA journal_mode = WAL;
-PRAGMA synchronous = NORMAL;
-PRAGMA foreign_keys = ON;
-PRAGMA busy_timeout = 5000;
-PRAGMA wal_autocheckpoint = 1000;
-PRAGMA journal_size_limit = 67108864;
-PRAGMA temp_store = MEMORY;
-PRAGMA cache_size = -32000;
+--
+-- 迁移文件契约（M1-03 迁移框架，见 crates/aether-store/src/migration.rs）：
+--   * 纯 schema 初始化：不含 PRAGMA（连接打开时执行，D3）、不含 BEGIN/COMMIT
+--     （单事务由迁移框架包裹）、不含 schema_migrations 版本写入（由框架负责）。
+--   * 版本机制：schema_migrations(version, checksum, applied_at)；checksum 为本文件
+--     字节的 sha256；禁止使用 PRAGMA user_version（D3 评审修订 #2）。
+--   * 已发布后只允许新增迁移文件，禁止修改本文件（AGENTS.md §8）。
+--   * events.type 为 TEXT + 应用层校验（D12），不加 CHECK 枚举。
+--   * runtimes.status CHECK 枚举与 D5 监督状态机一一对应，不做映射。
 
 CREATE TABLE schema_migrations (
   version    INTEGER PRIMARY KEY,
@@ -138,6 +136,7 @@ CREATE TABLE settings (
 );
 
 -- ===== P2/P4 预留（MVP 建表不写入） =====
+-- P2/P4 启用：任务调度（MVP 建表不写入）
 CREATE TABLE tasks (
   id              TEXT PRIMARY KEY,
   session_id      TEXT REFERENCES sessions(id) ON DELETE CASCADE,
@@ -155,6 +154,7 @@ CREATE TABLE tasks (
   updated_at      INTEGER NOT NULL
 );
 
+-- P2/P4 启用：编排定义（MVP 建表不写入）
 CREATE TABLE workflows (
   id          TEXT PRIMARY KEY,
   name        TEXT NOT NULL,
@@ -166,6 +166,7 @@ CREATE TABLE workflows (
   updated_at  INTEGER NOT NULL
 );
 
+-- P2/P4 启用：编排运行（MVP 建表不写入）
 CREATE TABLE workflow_runs (
   id          TEXT PRIMARY KEY,
   workflow_id TEXT NOT NULL REFERENCES workflows(id),
@@ -175,6 +176,7 @@ CREATE TABLE workflow_runs (
   finished_at INTEGER
 );
 
+-- P2/P4 启用：编排节点运行（MVP 建表不写入）
 CREATE TABLE node_runs (
   id              TEXT PRIMARY KEY,
   workflow_run_id TEXT NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
@@ -189,6 +191,7 @@ CREATE TABLE node_runs (
   finished_at     INTEGER
 );
 
+-- P2/P4 启用：记忆（D14；P4 向量检索，MVP 建表不写入）
 CREATE TABLE memories (
   id           TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -200,6 +203,7 @@ CREATE TABLE memories (
   UNIQUE (workspace_id, scope, key)
 );
 
+-- P2/P4 启用：适配器插件台账（MVP 建表不写入）
 CREATE TABLE adapter_plugins (
   id           TEXT PRIMARY KEY,
   name         TEXT NOT NULL,
@@ -211,6 +215,7 @@ CREATE TABLE adapter_plugins (
   installed_at INTEGER NOT NULL
 );
 
+-- P2/P4 启用：备份台账（MVP 建表不写入）
 CREATE TABLE backups (
   id         TEXT PRIMARY KEY,
   path       TEXT NOT NULL,
