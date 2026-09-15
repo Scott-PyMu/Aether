@@ -1,0 +1,9 @@
+[workspace]
+members = []
+
+[workspace.package]
+version = "9.9.9"
+edition = "2021"
+
+[workspace.dependencies]
+aether-core = { path = "crates/aether-core", version = "0.0.1" }

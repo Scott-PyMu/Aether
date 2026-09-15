@@ -1,0 +1,154 @@
+﻿name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # DoD1：Linux cargo check + vite build
+  linux-check:
+    name: Linux cargo check + vite build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+      - name: 版本一致性（单一来源）
+        run: pnpm version:check
+      - name: vite build
+        run: pnpm -r --if-present build
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: 安装 Tauri Linux 系统依赖（webkit2gtk 等）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: cargo check
+        run: cargo check --workspace
+
+  # DoD1：Windows 构建 + 冒烟
+  windows-build-smoke:
+    name: Windows build + smoke
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+      - name: 构建前端（tauri-build 需要 frontendDist）
+        run: pnpm -r --if-present build
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: 构建（工作区）
+        run: cargo build --workspace
+      - name: 冒烟（--version / --aether-diagnostics）
+        run: node scripts/test/smoke-desktop.mjs
+
+  # DoD1：macOS 构建 + 冒烟
+  macos-build-smoke:
+    name: macOS build + smoke
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+      - name: 构建前端（tauri-build 需要 frontendDist）
+        run: pnpm -r --if-present build
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: 构建（工作区）
+        run: cargo build --workspace
+      - name: 冒烟（--version / --aether-diagnostics）
+        run: node scripts/test/smoke-desktop.mjs
+
+  # DoD3：覆盖率门禁（Rust cargo-llvm-cov + TS vitest --coverage，行覆盖 <70% 失败）
+  coverage:
+    name: Coverage gate (>=70% lines)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: TS 覆盖率门禁（vitest --coverage，阈值 70）
+        run: pnpm -r --if-present coverage
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: Swatinem/rust-cache@v2
+      - name: Rust 覆盖率门禁（cargo-llvm-cov，行覆盖 >=70）
+        # 壳层 aether-tauri 无业务逻辑，其验证为 Windows/macOS 构建+冒烟；
+        # 该排除为 M1-01 常量级决策，已记录在任务证据中。
+        run: cargo llvm-cov --workspace --exclude aether-tauri --fail-under-lines 70
+
+  # DoD2：供应链门禁（依赖白名单 / 许可证 / 相似度 / SBOM）
+  supply-chain:
+    name: Supply chain gate
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@cargo-deny
+      - name: cargo-deny（许可证 / 禁令 / 来源；含 advisories）
+        run: cargo deny check
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: npm 许可证门禁
+        run: pnpm check:licenses
+
+      - name: 相似度 / 净室合规扫描
+        run: node scripts/ci/similarity-scan.mjs --root .
+
+      - name: 生成 SBOM（SPDX JSON）
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+          syft dir:. -o spdx-json=sbom.spdx.json --exclude ./node_modules --exclude ./target
+      - name: 上传 SBOM
+        uses: actions/upload-artifact@v7
+        with:
+          name: sbom-spdx
+          path: sbom.spdx.json
+          retention-days: 30

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Aether 最小能力集：MVP 仅允许 core 默认能力，其他权限随 M1-08 逐项评审加入",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

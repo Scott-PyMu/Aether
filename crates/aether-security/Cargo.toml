@@ -1,0 +1,15 @@
+[package]
+name = "aether-security"
+description = "Aether 权限网关：permission.request 回环与路径校验（设计 D9）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+aether-core.workspace = true
+
+[lints]
+workspace = true

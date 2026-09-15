@@ -1,0 +1,51 @@
+name: release-desktop-installers
+
+# Tauri 平台安装器（Windows MSI / macOS DMG），与 cargo-dist 生成的 release.yml
+# 互补：dist 负责归档/SBOM/发布编排，本工作流负责 Tauri bundler 产出的安装器。
+# 设计依据：§2.2 打包/发布（WiX(MSI)/DMG）、§2.1 平台交付（Win 主 / mac 次 / Linux 顺延）。
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  desktop-installers:
+    name: Desktop installers (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            artifact: "*.msi"
+          - os: macos-14
+            artifact: "*.dmg"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: 构建安装器（MSI/DMG）
+        run: node scripts/ci/build-desktop-installer.mjs
+
+      - name: 附加到 GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "$tag" --generate-notes
+          gh release upload "$tag" dist-out/* --clobber

@@ -1,0 +1,15 @@
+[package]
+name = "aether-store"
+description = "Aether 存储层：SQLite + WAL + 单写任务（设计 D3）；依赖 aether-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+aether-core.workspace = true
+
+[lints]
+workspace = true

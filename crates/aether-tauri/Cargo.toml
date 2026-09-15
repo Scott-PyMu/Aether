@@ -1,0 +1,29 @@
+[package]
+name = "aether-tauri"
+description = "Aether 桌面壳：Tauri 2 命令层（薄），显示版本号（设计 D1/D7）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+aether-core.workspace = true
+tauri = { version = "2.11.5", features = [] }
+
+[lints]
+workspace = true
+
+# cargo-dist 构建命令：Tauri 需要先构建前端资源，再编译壳二进制（不含安装器）。
+[package.metadata.dist]
+build-command = ["node", "../../scripts/ci/build-tauri.mjs"]
+
+[package.metadata.wix]
+upgrade-guid = "95AA332B-77D2-44E3-AA28-F87ED2F05FF2"
+path-guid = "7D7D57A5-4BB2-4D9A-BB69-535B23364E4D"
+license = false
+eula = false

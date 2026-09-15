@@ -1,0 +1,28 @@
+:root {
+  color-scheme: dark;
+  font-family:
+    "Segoe UI",
+    "PingFang SC",
+    "Microsoft YaHei",
+    system-ui,
+    sans-serif;
+  background-color: #14161a;
+  color: #e8eaed;
+}
+
+body {
+  margin: 0;
+}
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  min-height: 100vh;
+}
+
+.app-subtitle {
+  color: #9aa0a6;
+}

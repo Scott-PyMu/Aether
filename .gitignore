@@ -1,0 +1,34 @@
+# Rust
+/target
+**/*.rs.bk
+**/target/
+
+# Node / pnpm
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.pnpm-store/
+
+# Tauri 生成物（capability schema 由 tauri-build 生成）
+crates/aether-tauri/gen/schemas/
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# 本地验证临时目录
+scripts/test/.tmp/
+
+# 发布产物（安装器收集目录）
+dist-out/
+
+# 本地设计与流程文档（明确不上传）
+/设计文档.md
+/需求文档.md
+/实施计划与验收标准.md
+/开发要求.md
+/AGENTS.md

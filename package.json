@@ -1,0 +1,27 @@
+{
+  "name": "@aether/root",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.34.5",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "pnpm -r --if-present build",
+    "test": "pnpm -r --if-present test",
+    "coverage": "pnpm -r --if-present coverage",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "version:sync": "node scripts/ci/version.mjs sync",
+    "version:check": "node scripts/ci/version.mjs check",
+    "check:licenses": "node scripts/ci/check-npm-licenses.mjs",
+    "check:similarity": "node scripts/ci/similarity-scan.mjs --root .",
+    "verify:version": "node scripts/test/verify-version-sync.mjs",
+    "verify:supply-chain": "node scripts/test/verify-supply-chain-gate.mjs",
+    "verify:coverage": "node scripts/test/verify-coverage-gate.mjs",
+    "smoke": "node scripts/test/smoke-desktop.mjs",
+    "ci:local": "node scripts/test/ci-local.mjs"
+  },
+  "devDependencies": {
+    "license-checker": "25.0.1"
+  }
+}

@@ -1,0 +1,64 @@
+# 依赖白名单与供应链门禁（设计 A11 / §2.2；AGENTS §2.10）。
+# 运行：cargo deny check
+#
+# 基线策略：默认拒绝；仅显式允许宽松许可证。
+# 明确禁止：GPL / LGPL / AGPL / BUSL（Business Source License）。
+# 注意：BSL-1.0 为 Boost Software License（宽松），与本仓库禁止的 BUSL-1.1 不同。
+
+[graph]
+targets = [
+    { triple = "x86_64-pc-windows-msvc" },
+    { triple = "x86_64-apple-darwin" },
+    { triple = "aarch64-apple-darwin" },
+    { triple = "x86_64-unknown-linux-gnu" },
+]
+all-features = true
+
+[advisories]
+version = 2
+# yanked 版本一律拒绝；漏洞告警（rustsec）在 CI 中启用
+yanked = "deny"
+# 仅对本仓库自身 crate 的 unmaintained 告警阻断；传递依赖的 unmaintained 告警
+# 不阻断 CI（当前清单，随 Tauri 升级复查）：
+#   RUSTSEC-2024-0370 proc-macro-error
+#   RUSTSEC-2025-0075/0080/0081/0098/0100 rust-unic 系列
+# 均为 tauri-utils -> urlpattern -> unic-* 传递依赖，上游尚无迁移版本。
+unmaintained = "workspace"
+
+[licenses]
+version = 2
+allow = [
+    "Apache-2.0",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "0BSD",
+    "Zlib",
+    "Unlicense",
+    "CC0-1.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    # Boost Software License（宽松），注意与 BUSL-1.1 区分
+    "BSL-1.0",
+    # Apache-2.0 + LLVM 例外（宽松），例：target-lexicon
+    "Apache-2.0 WITH LLVM-exception",
+    # MPL-2.0：文件级弱传染。仅用于未修改的 Tauri 传递依赖
+    # （cssparser / cssparser-macros / selectors / dtoa-short / option-ext），
+    # 不属于 AGENTS §2.10 禁止的 GPL/AGPL/BUSL；记录为供应链评审项。
+    "MPL-2.0",
+]
+confidence-threshold = 0.9
+# 未命中的预授权许可证不产生噪声告警（白名单用于后续任务复用）
+unused-allowed-license = "allow"
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

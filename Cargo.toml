@@ -1,0 +1,48 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/aether-core",
+    "crates/aether-store",
+    "crates/aether-adapters",
+    "crates/aether-control",
+    "crates/aether-security",
+    "crates/aether-tauri",
+]
+
+[workspace.package]
+# 单一版本来源：所有 crate / package.json / 安装器版本均由该值派生。
+# 一致性由 `pnpm version:check`（scripts/ci/version.mjs）在 CI 强制。
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+authors = ["Aether Contributors"]
+license = "Apache-2.0"
+homepage = "https://github.com/Scott-PyMu/Aether"
+repository = "https://github.com/Scott-PyMu/Aether"
+
+[workspace.dependencies]
+aether-core = { path = "crates/aether-core", version = "0.1.0" }
+aether-store = { path = "crates/aether-store", version = "0.1.0" }
+aether-adapters = { path = "crates/aether-adapters", version = "0.1.0" }
+aether-control = { path = "crates/aether-control", version = "0.1.0" }
+aether-security = { path = "crates/aether-security", version = "0.1.0" }
+aether-tauri = { path = "crates/aether-tauri", version = "0.1.0" }
+
+# AGENTS §2.2：核心 crate 禁止 unwrap/expect/panic（测试代码显式豁免，见各 crate 顶部 cfg_attr）。
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+
+# cargo-dist 发布专用 profile（dist 约定）。
+[profile.dist]
+inherits = "release"
+lto = "thin"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

@@ -1,0 +1,14 @@
+[package]
+name = "aether-core"
+description = "Aether 核心模型层：纯模型、无 I/O、不依赖任何其他内部 crate（设计 D2）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

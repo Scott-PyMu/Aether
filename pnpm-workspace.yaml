@@ -1,0 +1,7 @@
+packages:
+  - apps/*
+  - packages/*
+
+# pnpm 10 默认阻止依赖 postinstall；esbuild 需要其安装脚本以校验原生二进制。
+onlyBuiltDependencies:
+  - esbuild

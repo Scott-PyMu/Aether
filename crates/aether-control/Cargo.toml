@@ -1,0 +1,15 @@
+[package]
+name = "aether-control"
+description = "Aether 生命周期与调度层：会话、run 串行、事件管线（设计 D2/D4）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+aether-core.workspace = true
+
+[lints]
+workspace = true

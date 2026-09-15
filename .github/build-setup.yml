@@ -1,0 +1,13 @@
+# cargo-dist 构建前置步骤（在 build-local-artifacts 的 checkout 之后执行）。
+# Tauri 打包需要 Node + pnpm + 前端依赖。
+- name: 安装 pnpm
+  uses: pnpm/action-setup@v4
+
+- name: 安装 Node
+  uses: actions/setup-node@v4
+  with:
+    node-version: 22
+    cache: pnpm
+
+- name: 安装前端依赖
+  run: pnpm install --frozen-lockfile

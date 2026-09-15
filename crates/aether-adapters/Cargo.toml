@@ -1,0 +1,15 @@
+[package]
+name = "aether-adapters"
+description = "Aether 适配器宿主与监督器：独立进程 + JSON-RPC 线协议（设计 D5/D6）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+aether-core.workspace = true
+
+[lints]
+workspace = true

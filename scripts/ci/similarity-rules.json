@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "description": "相似度/合规扫描规则（设计 A11 净室合规）。patterns 为 JS 正则字符串；exceptions 为同行豁免子串。",
+  "scanExtensions": [
+    ".rs",
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".mjs",
+    ".cjs",
+    ".json",
+    ".toml",
+    ".yml",
+    ".yaml",
+    ".sql",
+    ".html",
+    ".css"
+  ],
+  "excludeNames": ["node_modules", "target", "dist", "coverage", ".git", ".pnpm-store", "gen"],
+  "excludePaths": [
+    "LICENSE",
+    "Cargo.lock",
+    "pnpm-lock.yaml",
+    "deny.toml",
+    "scripts/ci/similarity-rules.json",
+    "scripts/ci/npm-license-allowlist.json",
+    "scripts/test/fixtures"
+  ],
+  "rules": [
+    {
+      "id": "foreign-copyright",
+      "reason": "发现非本项目版权声明：疑似拷贝上游源码（A11）",
+      "patterns": ["Copyright \\(c\\)"],
+      "exceptions": ["Aether Contributors"]
+    },
+    {
+      "id": "gpl-notice",
+      "reason": "GPL 授权声明：许可证污染（AGENTS §2.10）",
+      "patterns": ["GNU General Public License"]
+    },
+    {
+      "id": "agpl-notice",
+      "reason": "AGPL 授权声明：许可证污染（AGENTS §2.10）",
+      "patterns": ["GNU Affero General Public License"]
+    },
+    {
+      "id": "busl-notice",
+      "reason": "BUSL 授权声明：许可证污染（AGENTS §2.10）",
+      "patterns": ["Business Source License"]
+    },
+    {
+      "id": "similarity-test-injection",
+      "reason": "相似度门禁注入标记（DoD2 验证用：出现即视为模拟相似度告警）",
+      "patterns": ["AETHER_SIMILARITY_TEST_INJECTION"]
+    }
+  ]
+}
