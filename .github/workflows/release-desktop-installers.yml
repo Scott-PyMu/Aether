@@ -1,8 +1,9 @@
 name: release-desktop-installers
 
-# Tauri 平台安装器（Windows MSI / macOS DMG），与 cargo-dist 生成的 release.yml
-# 互补：dist 负责归档/SBOM/发布编排，本工作流负责 Tauri bundler 产出的安装器。
-# 设计依据：§2.2 打包/发布（WiX(MSI)/DMG）、§2.1 平台交付（Win 主 / mac 次 / Linux 顺延）。
+# 平台安装器唯一产出方（ADR-001）：Windows MSI（WiX，WebView2 embedBootstrapper 内嵌）
+# 与 macOS DMG，均由 Tauri bundler 生成；cargo-dist 生成的 release.yml 负责编排、
+# 归档与创建 Release，本工作流在其后把安装器附加到同一 Release。
+# 设计依据：§2.1 平台交付、§2.2 打包/发布、docs/adr/ADR-001-tauri-identifier-msi.md。
 
 on:
   push:

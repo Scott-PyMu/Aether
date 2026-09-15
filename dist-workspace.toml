@@ -1,10 +1,12 @@
-# cargo-dist 配置（设计 §2.2 打包/发布：生成三平台 CI 与安装器）。
+# cargo-dist 配置（设计 §2.2 打包/发布；ADR-001）。
 #
-# 说明：
-# - Tauri 自带 WiX(MSI)/DMG bundler，因此 MSI 采用 dist 内置 msi 安装器，
-#   DMG 由 .github/workflows/release-desktop-installers.yml 产出并附加到同一 Release。
-# - 应用二进制的构建由 scripts/ci/build-tauri.mjs 承担（见 crates/aether-tauri/Cargo.toml
-#   的 [package.metadata.dist] build-command）。
+# 职责划分（ADR-001）：
+# - MSI/DMG 由 Tauri bundler 生成（MSI 含 WebView2 embedBootstrapper 内嵌引导），
+#   见 .github/workflows/release-desktop-installers.yml；
+# - cargo-dist 仅负责编排与发布：生成三平台 CI 工作流、构建/上传归档与校验和、
+#   创建 Release、挂接签名/公证步骤，不生成安装器（installers = []）。
+# - 应用二进制的生产构建启用 tauri/custom-protocol：
+#   见 crates/aether-tauri/Cargo.toml 的 features / [package.metadata.dist].features。
 
 [workspace]
 # 根虚拟工作区；dist 通过 cargo metadata 识别可分发包（当前仅 aether-tauri）
@@ -13,11 +15,11 @@ members = ["cargo:."]
 [dist]
 cargo-dist-version = "0.32.0"
 ci = "github"
-# Windows：dist 内置 MSI 安装器；macOS：DMG 见 release-desktop-installers.yml
-installers = ["msi"]
+# 不生成安装器（ADR-001：安装器由 Tauri bundler 产出）
+installers = []
 # 平台交付（设计 §2.1）：Windows 主、macOS 次；Linux 仅 CI 编译检查
 targets = ["x86_64-pc-windows-msvc", "aarch64-apple-darwin", "x86_64-apple-darwin"]
-# 构建前置步骤（Node + pnpm + 前端依赖；路径相对 .github/workflows/）
+# 构建前置步骤（Node + pnpm + 前端资源；路径相对 .github/workflows/）
 github-build-setup = "../build-setup.yml"
 # PR 只跑 plan，不跑完整发布构建
 pr-run-mode = "plan"

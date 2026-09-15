@@ -2,8 +2,9 @@
 /**
  * 构建平台安装器（Windows MSI / macOS DMG）并复制到 dist-out/。
  *
+ * 安装器唯一产出方（ADR-001：cargo-dist 不生成安装器，仅编排上传）。
  * 由 release workflow 的 desktop-installers 作业调用：
- *   - Windows runner  -> MSI（WiX，WebView2 bootstrapper 内嵌）
+ *   - Windows runner  -> MSI（WiX，WebView2 embedBootstrapper 内嵌）
  *   - macOS runner    -> DMG
  *   - Linux           -> 打包顺延 P1（设计 §2.1 平台交付），直接跳过
  *
