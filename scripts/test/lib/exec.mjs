@@ -51,16 +51,60 @@ export function rustcHost() {
   return match ? match[1] : "";
 }
 
+function quoteWindowsArg(arg) {
+  if (!/[ \t"&|<>^]/.test(arg)) return arg;
+  return `"${`${arg}`.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, "$1$1")}"`;
+}
+
+/**
+ * Windows 上按 PATH 解析命令（where.exe）。
+ * 优先返回 .exe；若只有 .cmd/.bat（如 pnpm/action-setup 安装的 pnpm.cmd），
+ * 由 run() 用 cmd.exe 包裹执行。
+ */
+function resolveOnWindows(name) {
+  if (process.platform !== "win32") return name;
+  if (path.extname(name) !== "" || name.includes("/") || name.includes("\\")) return name;
+  const result = spawnSync("where.exe", [name], { encoding: "utf8" });
+  if (result.status === 0 && result.stdout) {
+    const candidates = result.stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const exe = candidates.find((candidate) => /\.exe$/i.test(candidate));
+    if (exe) return exe;
+    const script = candidates.find((candidate) => /\.(cmd|bat)$/i.test(candidate));
+    if (script) return script;
+    if (candidates.length > 0) return candidates[0];
+  }
+  return name;
+}
+
 /** 同步执行命令并透传输出；返回退出码（无法启动时返回 127）。 */
 export function run(name, args, options = {}) {
-  console.log(`\n$ ${[name, ...args].join(" ")}${options.env ? "   # 附加环境变量" : ""}`);
-  const result = spawnSync(name, args, {
-    cwd: options.cwd ?? repoRoot,
-    stdio: options.capture ? "pipe" : "inherit",
-    encoding: "utf8",
-    env: { ...process.env, ...(options.env ?? {}) },
-    shell: false,
-  });
+  const resolved = resolveOnWindows(name);
+  const printable = [name, ...args].join(" ");
+  console.log(`\n$ ${printable}${options.env ? "   # 附加环境变量" : ""}`);
+
+  let result;
+  if (process.platform === "win32" && /\.(cmd|bat)$/i.test(resolved)) {
+    const commandLine = [resolved, ...args].map(quoteWindowsArg).join(" ");
+    result = spawnSync(commandLine, {
+      cwd: options.cwd ?? repoRoot,
+      stdio: options.capture ? "pipe" : "inherit",
+      encoding: "utf8",
+      env: { ...process.env, ...(options.env ?? {}) },
+      shell: true,
+    });
+  } else {
+    result = spawnSync(resolved, args, {
+      cwd: options.cwd ?? repoRoot,
+      stdio: options.capture ? "pipe" : "inherit",
+      encoding: "utf8",
+      env: { ...process.env, ...(options.env ?? {}) },
+      shell: false,
+    });
+  }
+
   if (result.error) {
     console.error(`[exec] 无法执行 ${name}：${result.error.message}`);
     return 127;
