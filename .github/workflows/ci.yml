@@ -119,6 +119,7 @@ jobs:
         run: cargo llvm-cov --workspace --exclude aether-tauri --fail-under-lines 70
 
   # DoD2：供应链门禁（依赖白名单 / 许可证 / 相似度 / SBOM）
+  # 各检查步骤使用 if: !cancelled()，保证一次运行报告全部违规（不因首个失败短路）。
   supply-chain:
     name: Supply chain gate
     runs-on: ubuntu-22.04
@@ -130,23 +131,31 @@ jobs:
       - name: cargo-deny（许可证 / 禁令 / 来源；含 advisories）
         run: cargo deny check
 
+      - name: 相似度 / 净室合规扫描
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/similarity-scan.mjs --root .
+
       - uses: pnpm/action-setup@v4
+        if: ${{ !cancelled() }}
       - uses: actions/setup-node@v4
+        if: ${{ !cancelled() }}
         with:
           node-version: 22
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      - name: 安装前端依赖
+        if: ${{ !cancelled() }}
+        run: pnpm install --frozen-lockfile
       - name: npm 许可证门禁
+        if: ${{ !cancelled() }}
         run: pnpm check:licenses
 
-      - name: 相似度 / 净室合规扫描
-        run: node scripts/ci/similarity-scan.mjs --root .
-
       - name: 生成 SBOM（SPDX JSON）
+        if: ${{ !cancelled() }}
         run: |
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
           syft dir:. -o spdx-json=sbom.spdx.json --exclude ./node_modules --exclude ./target
       - name: 上传 SBOM
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
           name: sbom-spdx
