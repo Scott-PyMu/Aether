@@ -18,6 +18,7 @@
     "verify:version": "node scripts/test/verify-version-sync.mjs",
     "verify:supply-chain": "node scripts/test/verify-supply-chain-gate.mjs",
     "verify:coverage": "node scripts/test/verify-coverage-gate.mjs",
+    "verify:m1-02": "node scripts/test/m1-02/verify-m1-02.mjs",
     "smoke": "node scripts/test/smoke-desktop.mjs",
     "ci:local": "node scripts/test/ci-local.mjs"
   },

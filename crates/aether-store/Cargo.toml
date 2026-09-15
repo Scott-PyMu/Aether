@@ -11,5 +11,11 @@ authors.workspace = true
 [dependencies]
 aether-core.workspace = true
 
+[dev-dependencies]
+# M1-02：信封 ↔ events 表列的真实 SQLite 入库往返验证（D4/附录 C）。
+# 设计 D3 选型 rusqlite（bundled SQLite），构建期需要 C 编译器。
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde_json = "1.0"
+
 [lints]
 workspace = true

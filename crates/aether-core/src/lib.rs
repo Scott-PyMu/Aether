@@ -7,6 +7,31 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+pub mod domain;
+pub mod error;
+pub mod event;
+pub mod ids;
+
+pub use domain::{
+    LogLevel, Message, MessageRole, PermissionDecision, PermissionScope, PermissionStatus, Run,
+    RunStatus, Runtime, RuntimeStatus, Session, SessionStatus, TokenUsage, Workspace,
+};
+pub use error::{EnvelopeError, UnknownValue};
+pub use event::{
+    ErrorInfo, EventEnvelope, EventPayload, EventType, LogPayload, MessageCompletedPayload,
+    MessageDeltaPayload, MessageReasoningDeltaPayload, MessageSummary, PermissionRequestedPayload,
+    PermissionResolvedPayload, RunCancelledPayload, RunCompletedPayload, RunFailedPayload,
+    RunStartedPayload, RuntimeStatusChangedPayload, SessionClosedPayload, SessionCreatedPayload,
+    SessionStatusChangedPayload, SessionSummary, SessionUpdatedPayload, SubagentCompletedPayload,
+    SubagentSpawnedPayload, ToolCallCompletedPayload, ToolCallFailedPayload,
+    ToolCallStartedPayload, UsagePayload, WorkflowEventPayload, ENVELOPE_FIELDS,
+    EVENT_ENVELOPE_VERSION,
+};
+pub use ids::{
+    EventId, MessageId, PermissionRequestId, RunId, RuntimeId, SessionId, ToolCallId,
+    WorkflowRunId, WorkspaceId,
+};
+
 /// 核心层版本号——取自单一版本来源（工作区 `Cargo.toml`）。
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
