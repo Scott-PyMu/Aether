@@ -1,0 +1,11 @@
+# M1-11 fixture：DSH acp profile 的增强 overlay（仅用于可行性探针）
+# - 覆写 acp 行的 provider/model（按需修改）
+# - 注入自研 Cordis 插件行 dsh-stream-probe（插件包需位于 <DSH_HOME>/profiles/acp/node_modules/，且无 BOM）
+- id: acp
+  config:
+    provider: streamax
+    model: deepseek-v4-pro
+
+- insert:
+    - id: spike-stream
+      name: dsh-stream-probe
