@@ -41,6 +41,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      # M1-07：keyring（sync-secret-service）经 libdbus-sys 构建，必须安装 libdbus 开发包。
+      - name: 安装 Linux 系统依赖（keyring/secret-service 需要 libdbus）
+        run: sudo apt-get install -y libdbus-1-dev pkg-config
       - name: cargo check
         run: cargo check --workspace
 
@@ -159,6 +162,12 @@ jobs:
           components: llvm-tools-preview
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: Swatinem/rust-cache@v2
+
+      # M1-07：keyring（sync-secret-service）经 libdbus-sys 构建，必须安装 libdbus 开发包。
+      - name: 安装 Linux 系统依赖（keyring/secret-service 需要 libdbus）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
 
       # M1-09：构建 Mock 适配器，使 aether-adapters 一致性/健壮性集成测试参与覆盖率统计。
       - uses: oven-sh/setup-bun@v2
