@@ -64,15 +64,15 @@ jobs:
           New-Item -ItemType Directory -Force -Path $codexHome | Out-Null
           $model = if ($env:M1_11_CODEX_MODEL) { $env:M1_11_CODEX_MODEL } else { 'gpt-5.5' }
           @"
-model_provider = "spike"
-model = "$model"
-model_reasoning_effort = "$env:M1_11_CODEX_REASONING"
-[model_providers.spike]
-name = "spike"
-base_url = "$env:M1_11_CODEX_BASE_URL"
-wire_api = "responses"
-env_key = "OPENAI_API_KEY"
-"@ | Set-Content -Encoding utf8 (Join-Path $codexHome 'config.toml')
+          model_provider = "spike"
+          model = "$model"
+          model_reasoning_effort = "$env:M1_11_CODEX_REASONING"
+          [model_providers.spike]
+          name = "spike"
+          base_url = "$env:M1_11_CODEX_BASE_URL"
+          wire_api = "responses"
+          env_key = "OPENAI_API_KEY"
+          "@ | Set-Content -Encoding utf8 (Join-Path $codexHome 'config.toml')
           "CODEX_HOME=$codexHome" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           "OPENAI_API_KEY=$env:M1_11_CODEX_API_KEY" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
@@ -97,27 +97,27 @@ env_key = "OPENAI_API_KEY"
           New-Item -ItemType Directory -Force -Path $dshHome | Out-Null
           $model = if ($env:M1_11_DSH_MODEL) { $env:M1_11_DSH_MODEL } else { 'deepseek-v4-pro' }
           @"
-agent-default-model:
-  provider: spike
-  model: $model
-llm-pi-ai:
-  providers:
-    spike:
-      displayName: spike
-      apiKeyEnv: M1_11_DSH_API_KEY
-      api: openai-completions
-      baseURL: $env:M1_11_DSH_BASE_URL
-      models:
-        - id: $model
-          name: $model
-          contextWindow: 1024000
-          maxTokens: 128000
-"@ | Set-Content -Encoding utf8 (Join-Path $dshHome 'settings.yaml')
+          agent-default-model:
+            provider: spike
+            model: $model
+          llm-pi-ai:
+            providers:
+              spike:
+                displayName: spike
+                apiKeyEnv: M1_11_DSH_API_KEY
+                api: openai-completions
+                baseURL: $env:M1_11_DSH_BASE_URL
+                models:
+                  - id: $model
+                    name: $model
+                    contextWindow: 1024000
+                    maxTokens: 128000
+          "@ | Set-Content -Encoding utf8 (Join-Path $dshHome 'settings.yaml')
           @"
-version: 1
-refs:
-  M1_11_DSH_API_KEY: $env:M1_11_DSH_API_KEY
-"@ | Set-Content -Encoding utf8 (Join-Path $dshHome '.credentials.yaml')
+          version: 1
+          refs:
+            M1_11_DSH_API_KEY: $env:M1_11_DSH_API_KEY
+          "@ | Set-Content -Encoding utf8 (Join-Path $dshHome '.credentials.yaml')
           dsh --profile headless --help | Out-Null
           if ($LASTEXITCODE -ne 0) {
             dsh plugin --profile headless add @deepseek-ai/dsh-headless
@@ -134,35 +134,35 @@ refs:
           $acpRoot = Join-Path $env:RUNNER_TEMP 'dsh-acp-015'
           New-Item -ItemType Directory -Force -Path $acpRoot | Out-Null
           @'
-{ "name": "dsh-acp-spike", "private": true, "version": "1.0.0" }
-'@ | Set-Content -Encoding utf8 (Join-Path $acpRoot 'package.json')
+          { "name": "dsh-acp-spike", "private": true, "version": "1.0.0" }
+          '@ | Set-Content -Encoding utf8 (Join-Path $acpRoot 'package.json')
           npm install --prefix $acpRoot @deepseek-ai/dsh@0.1.5-rc.2 --no-audit --no-fund
 
           $acpHome = Join-Path $env:RUNNER_TEMP 'dsh-acp-home'
           New-Item -ItemType Directory -Force -Path $acpHome | Out-Null
           $model = if ($env:M1_11_DSH_MODEL) { $env:M1_11_DSH_MODEL } else { 'deepseek-v4-pro' }
           @"
-agent-default-model:
-  provider: spike
-  model: $model
-llm-pi-ai:
-  providers:
-    spike:
-      displayName: spike
-      apiKeyEnv: M1_11_DSH_API_KEY
-      api: openai-completions
-      baseURL: $env:M1_11_DSH_BASE_URL
-      models:
-        - id: $model
-          name: $model
-          contextWindow: 1024000
-          maxTokens: 128000
-"@ | Set-Content -Encoding utf8 (Join-Path $acpHome 'settings.yaml')
+          agent-default-model:
+            provider: spike
+            model: $model
+          llm-pi-ai:
+            providers:
+              spike:
+                displayName: spike
+                apiKeyEnv: M1_11_DSH_API_KEY
+                api: openai-completions
+                baseURL: $env:M1_11_DSH_BASE_URL
+                models:
+                  - id: $model
+                    name: $model
+                    contextWindow: 1024000
+                    maxTokens: 128000
+          "@ | Set-Content -Encoding utf8 (Join-Path $acpHome 'settings.yaml')
           @"
-version: 1
-refs:
-  M1_11_DSH_API_KEY: $env:M1_11_DSH_API_KEY
-"@ | Set-Content -Encoding utf8 (Join-Path $acpHome '.credentials.yaml')
+          version: 1
+          refs:
+            M1_11_DSH_API_KEY: $env:M1_11_DSH_API_KEY
+          "@ | Set-Content -Encoding utf8 (Join-Path $acpHome '.credentials.yaml')
           "M1_11_DSH_ACP_BIN=$acpRoot\node_modules\@deepseek-ai\dsh\lib\bin.js" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           "M1_11_DSH_ACP_HOME=$acpHome" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           "M1_11_DSH_ACP_PROVIDER=spike" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV

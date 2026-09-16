@@ -87,7 +87,25 @@ function checkArtifacts() {
   let ciJob = { file: '.github/workflows/spike-m1-11.yml', exists: false, opt_in: false };
   if (existsSync(CI_JOB_FILE)) {
     const content = readFileSync(CI_JOB_FILE, 'utf8');
-    ciJob = { file: ciJob.file, exists: true, opt_in: /workflow_dispatch/.test(content) };
+    // 防回归：PowerShell here-string 内容/终止符与 JSON 载荷必须缩进在 run:| 块内；
+    // 列 0 会截断 YAML 块标量导致 workflow 无法解析（GitHub 报 0-job 失败 run）。
+    const columnZero = content
+      .split(/\r?\n/)
+      .map((line, index) => ({ line, index: index + 1 }))
+      .filter(({ line }) => /^(@'|"@|'@|\{ ?")/.test(line));
+    if (columnZero.length > 0) {
+      console.error(
+        `[m1-11] spike-m1-11.yml 存在列 0 的块内容行：${columnZero
+          .map((item) => `L${item.index}`)
+          .join(', ')}`,
+      );
+    }
+    ciJob = {
+      file: ciJob.file,
+      exists: true,
+      opt_in: /workflow_dispatch/.test(content),
+      yaml_indentation_ok: columnZero.length === 0,
+    };
   }
   const requiredSections = [
     '## 结论',
@@ -802,6 +820,7 @@ async function main() {
     report.artifacts.samples.every((sample) => sample.exists) &&
     report.artifacts.ciJob.exists &&
     report.artifacts.ciJob.opt_in &&
+    report.artifacts.ciJob.yaml_indentation_ok !== false &&
     report.artifacts.notes.exists &&
     Object.values(report.artifacts.notes.sections).every(Boolean);
   report.artifactsOk = artifactOk;
