@@ -167,5 +167,8 @@ fn empty_file_is_created_as_fresh_database() {
     let store = Store::open(&path).unwrap();
     assert!(matches!(store.mode(), StoreMode::ReadWrite));
     assert!(store.quick_check().ok);
-    assert_eq!(store.applied_migrations().unwrap().len(), 1);
+    assert_eq!(
+        store.applied_migrations().unwrap().len(),
+        aether_store::EMBEDDED_MIGRATIONS.len()
+    );
 }

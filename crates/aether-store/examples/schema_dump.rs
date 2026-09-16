@@ -1,8 +1,8 @@
 //! 附录 C 结构核对转储（M1-03 DoD3）。
 //!
-//! 在内存库执行迁移 0001 后，把真实 schema 结构以纯 JSON 输出到 stdout，
-//! 由 `scripts/test/m1-03/verify-m1-03.mjs` 与设计文档附录 C 逐项比对：
-//! 表 / 列（类型、NOT NULL、默认值、主键）/ 外键（含 ON DELETE）/ 索引。
+//! 在内存库执行全部内嵌迁移（0001 → 0002 → …）后，把真实 schema 结构以纯 JSON
+//! 输出到 stdout，由 `scripts/test/m1-03/verify-m1-03.mjs` 与设计文档附录 C 逐项比对：
+//! 表 / 列（类型、NOT NULL、默认值、主键）/ 外键（含 ON DELETE）/ 索引（含 UNIQUE）。
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use rusqlite::Connection;

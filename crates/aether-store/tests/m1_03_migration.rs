@@ -33,16 +33,24 @@ fn migration_zero_to_latest_is_idempotent() {
         let store = Store::open(&path).unwrap();
         assert_eq!(store.mode(), &StoreMode::ReadWrite);
         let applied = store.applied_migrations().unwrap();
-        assert_eq!(applied.len(), 1, "0 → 最新应恰好应用 1 个迁移");
-        assert_eq!(applied[0].version, 1);
-        assert!(applied[0].applied_at > 0, "applied_at 必须落库");
+        assert_eq!(
+            applied.len(),
+            EMBEDDED_MIGRATIONS.len(),
+            "0 → 最新应恰好应用全部内嵌迁移"
+        );
+        assert_eq!(
+            applied.iter().map(|item| item.version).collect::<Vec<_>>(),
+            vec![1, 2],
+            "迁移必须按 0001 → 0002 顺序应用"
+        );
+        assert!(applied.iter().all(|item| item.applied_at > 0));
     }
 
     {
         let store = Store::open(&path).unwrap();
         assert_eq!(
             store.applied_migrations().unwrap().len(),
-            1,
+            EMBEDDED_MIGRATIONS.len(),
             "重开不得重复记录"
         );
     }
@@ -53,7 +61,60 @@ fn migration_zero_to_latest_is_idempotent() {
     assert!(first.is_empty(), "已是最新时不应再有待应用迁移");
     let second = migrate(&mut conn).unwrap();
     assert!(second.is_empty());
-    assert_eq!(migration_count(&conn), 1);
+    assert_eq!(migration_count(&conn), EMBEDDED_MIGRATIONS.len() as i64);
+}
+
+#[test]
+fn existing_0001_only_database_is_upgraded_by_0002_increment() {
+    // M1-03 DoD5（ADR-004 决策 6）：既有库（已应用 0001）经 0002+ 增量迁移补齐。
+    let dir = common::temp_dir("migration-existing-0001");
+    let path = common::db_path(&dir);
+
+    // 构造「旧库」：仅应用 0001（0002 尚未发布时的状态）。
+    {
+        let mut conn = Connection::open(&path).unwrap();
+        let applied = migrate_with(&mut conn, &EMBEDDED_MIGRATIONS[..1]).unwrap();
+        assert_eq!(applied.len(), 1);
+        assert_eq!(applied[0].version, 1);
+    }
+
+    // 以当前程序打开：应增量应用 0002，且保留 0001 的记录（不得重跑/修改）。
+    let store = Store::open(&path).unwrap();
+    let applied = store.applied_migrations().unwrap();
+    assert_eq!(applied.len(), 2);
+    assert_eq!(applied[0].version, 1);
+    assert_eq!(applied[1].version, 2);
+
+    let conn = store.connection();
+    let has_column: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name = 'client_msg_id'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(has_column, 1, "0002 必须补齐 messages.client_msg_id 列");
+
+    let unique_indexes: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_index_list('events') WHERE name = 'idx_events_session_seq_uq' AND \"unique\" = 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        unique_indexes, 1,
+        "0002 必须建立 events UNIQUE(session_id, seq)"
+    );
+
+    let redundant: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_events_session_seq'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(redundant, 0, "冗余的 idx_events_session_seq 必须删除");
 }
 
 #[test]
@@ -152,7 +213,11 @@ fn tampered_migration_file_is_refused_on_start() {
         )
         .unwrap();
     assert_eq!(marker, 0, "被拒绝的迁移不得执行");
-    assert_eq!(migration_count(&conn), 1, "被拒绝的迁移不得写版本记录");
+    assert_eq!(
+        migration_count(&conn),
+        EMBEDDED_MIGRATIONS.len() as i64,
+        "被拒绝的迁移不得写版本记录"
+    );
 }
 
 #[test]
@@ -196,7 +261,7 @@ fn database_newer_than_program_is_refused() {
     match Store::open(&path) {
         Err(StoreError::SchemaNewerThanProgram {
             database: 99,
-            program: 1,
+            program: 2,
         }) => {}
         Err(other) => panic!("应为 SchemaNewerThanProgram，实际: {other:?}"),
         Ok(_) => panic!("库版本高于程序时必须拒绝启动"),

@@ -25,11 +25,20 @@ pub struct MigrationFile {
 }
 
 /// 全部已发布迁移（按版本升序）。
-pub const EMBEDDED_MIGRATIONS: &[MigrationFile] = &[MigrationFile {
-    version: 1,
-    name: "0001_init.sql",
-    bytes: include_bytes!("../../../migrations/0001_init.sql"),
-}];
+///
+/// 已发布迁移文件不可修改（AGENTS.md §8）；差异一律追加 `NNNN_*.sql`（ADR-004 决策 6）。
+pub const EMBEDDED_MIGRATIONS: &[MigrationFile] = &[
+    MigrationFile {
+        version: 1,
+        name: "0001_init.sql",
+        bytes: include_bytes!("../../../migrations/0001_init.sql"),
+    },
+    MigrationFile {
+        version: 2,
+        name: "0002_unique_keys.sql",
+        bytes: include_bytes!("../../../migrations/0002_unique_keys.sql"),
+    },
+];
 
 /// 迁移文件 sha256（小写十六进制）。
 pub fn checksum(bytes: &[u8]) -> String {

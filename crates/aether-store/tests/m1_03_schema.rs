@@ -109,35 +109,54 @@ fn appendix_c_explicit_indexes_exist_with_expected_columns() {
     let (_dir, store) = common::open_temp_store("schema-indexes");
     let conn = store.connection();
 
-    let expected: &[(&str, &str, &[&str])] = &[
-        ("idx_audit_ts", "audit_log", &["ts"]),
-        ("idx_events_session_seq", "events", &["session_id", "seq"]),
-        ("idx_events_type_ts", "events", &["type", "ts"]),
+    // 附录 C 显式索引 + ADR-004/ADR-005 唯一索引（0002 迁移落地，UNIQUE 由唯一索引承载）。
+    let expected: &[(&str, &str, &[&str], bool)] = &[
+        ("idx_audit_ts", "audit_log", &["ts"], false),
+        (
+            "idx_events_session_seq_uq",
+            "events",
+            &["session_id", "seq"],
+            true,
+        ),
+        ("idx_events_type_ts", "events", &["type", "ts"], false),
+        (
+            "idx_messages_client_msg",
+            "messages",
+            &["session_id", "client_msg_id"],
+            true,
+        ),
         (
             "idx_messages_session_seq",
             "messages",
             &["session_id", "seq"],
+            false,
         ),
-        ("idx_sessions_parent", "sessions", &["parent_session_id"]),
+        (
+            "idx_sessions_parent",
+            "sessions",
+            &["parent_session_id"],
+            false,
+        ),
         (
             "idx_sessions_runtime",
             "sessions",
             &["runtime_id", "status"],
+            false,
         ),
     ];
 
     let mut expected_names: Vec<String> = expected
         .iter()
-        .map(|(name, _, _)| (*name).to_owned())
+        .map(|(name, _, _, _)| (*name).to_owned())
         .collect();
     expected_names.sort();
     assert_eq!(
         user_indexes(conn),
         expected_names,
-        "不得增删附录 C 之外的索引"
+        "不得增删附录 C / ADR-004 / ADR-005 之外的索引"
     );
 
-    for (name, table, columns) in expected {
+    for (name, table, columns, unique) in expected {
         let actual_table: String = conn
             .query_row(
                 "SELECT tbl_name FROM sqlite_master WHERE type = 'index' AND name = ?1",
@@ -155,6 +174,108 @@ fn appendix_c_explicit_indexes_exist_with_expected_columns() {
                 .collect::<Vec<_>>(),
             "{name} 的列顺序必须与附录 C 一致"
         );
+        let is_unique: i64 = conn
+            .query_row(
+                "SELECT \"unique\" FROM pragma_index_list(?1) WHERE name = ?2",
+                [table, name],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(is_unique, i64::from(*unique), "{name} 的 UNIQUE 属性不符");
+    }
+
+    // 冗余索引必须已由 0002 删除（UNIQUE(session_id, seq) 自带索引）。
+    let redundant: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_events_session_seq'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(redundant, 0, "0002 必须删除冗余的 idx_events_session_seq");
+}
+
+#[test]
+fn unique_keys_reject_duplicates_and_allow_nulls() {
+    // M1-03 DoD3/DoD5：events UNIQUE(session_id, seq)；messages UNIQUE(session_id, client_msg_id)
+    // （NULL 不参与去重，ADR-005；重复写入被拒）。
+    let (_dir, store) = common::open_temp_store("schema-unique-keys");
+    store
+        .execute_write(
+            "INSERT INTO runtimes (id, name, kind, version, created_at, updated_at) \
+             VALUES ('mock', 'Mock', 'mock', '0.1.0', 1, 1)",
+        )
+        .unwrap();
+    store
+        .execute_write(
+            "INSERT INTO sessions (id, runtime_id, title, status, created_at, updated_at) \
+             VALUES ('s-uq', 'mock', 't', 'idle', 1, 1)",
+        )
+        .unwrap();
+    store
+        .execute_write(
+            "INSERT INTO sessions (id, runtime_id, title, status, created_at, updated_at) \
+             VALUES ('other-session', 'mock', 't', 'idle', 1, 1)",
+        )
+        .unwrap();
+
+    // events：同会话重复 seq 拒绝
+    store
+        .execute_write(
+            "INSERT INTO events (id, session_id, runtime_id, seq, type, payload, ts) \
+             VALUES ('e1', 's-uq', 'mock', 1, 'log', '{}', 1)",
+        )
+        .unwrap();
+    let duplicate_seq = store
+        .execute_write(
+            "INSERT INTO events (id, session_id, runtime_id, seq, type, payload, ts) \
+             VALUES ('e2', 's-uq', 'mock', 1, 'log', '{}', 2)",
+        )
+        .unwrap_err();
+    assert!(
+        is_constraint_violation(&duplicate_seq),
+        "重复 (session_id, seq) 必须被拒: {duplicate_seq:?}"
+    );
+    // 不同会话相同 seq 允许
+    store
+        .execute_write(
+            "INSERT INTO events (id, session_id, runtime_id, seq, type, payload, ts) \
+             VALUES ('e3', 'other-session', 'mock', 1, 'log', '{}', 3)",
+        )
+        .unwrap();
+
+    // messages：同会话重复 client_msg_id 拒绝
+    store
+        .execute_write(
+            "INSERT INTO messages (id, session_id, client_msg_id, role, seq, created_at) \
+             VALUES ('m1', 's-uq', 'CLIENT01', 'user', 1, 1)",
+        )
+        .unwrap();
+    let duplicate_client_msg = store
+        .execute_write(
+            "INSERT INTO messages (id, session_id, client_msg_id, role, seq, created_at) \
+             VALUES ('m2', 's-uq', 'CLIENT01', 'user', 2, 2)",
+        )
+        .unwrap_err();
+    assert!(
+        is_constraint_violation(&duplicate_client_msg),
+        "重复 (session_id, client_msg_id) 必须被拒: {duplicate_client_msg:?}"
+    );
+    // 同 client_msg_id 不同会话允许
+    store
+        .execute_write(
+            "INSERT INTO messages (id, session_id, client_msg_id, role, seq, created_at) \
+             VALUES ('m3', 'other-session', 'CLIENT01', 'user', 1, 3)",
+        )
+        .unwrap();
+    // NULL 不参与去重：系统/助手消息可重复为 NULL（ADR-005）
+    for id in ["m4", "m5"] {
+        store
+            .execute_write(&format!(
+                "INSERT INTO messages (id, session_id, client_msg_id, role, seq, created_at) \
+                 VALUES ('{id}', 's-uq', NULL, 'assistant', 100, 4)"
+            ))
+            .unwrap();
     }
 }
 
