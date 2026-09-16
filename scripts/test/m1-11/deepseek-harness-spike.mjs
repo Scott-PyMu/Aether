@@ -91,6 +91,8 @@ export async function runDshOnce(options) {
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   });
+  // 进程身份：供「重启进程 → native_id 恢复」步骤断言（DoD2④）。
+  record.pid = child.pid ?? null;
 
   let closed = false;
   let interruptPromise = null;

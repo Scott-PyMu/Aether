@@ -4,8 +4,10 @@
  * 覆盖 DoD：
  *  - DoD1（脚本可重复执行 + opt-in CI job）：检查样例脚本与 .github/workflows/spike-m1-11.yml 存在
  *  - DoD2①②③（≥1 候选连续 N=20 次 run）：终态无挂起 / 拼接流式文本对照基线一致 / 中断 5s 内生效
+ *  - DoD2④（会话恢复）：重启进程 → 用 `sessions.config.native_id` 恢复原生会话 → 续聊；
+ *    支持 = Mode R，不支持/仅能新建会话 = Mode N（ADR-005）——决定 M2-02 重放语义
  *  - DoD2 尾（首 token 与吞吐基线）：统计并写入基线文件
- *  - DoD3（接入笔记）：检查 docs/spike/M1-11-接入笔记.md 与必需小节
+ *  - DoD3（接入笔记）：检查 docs/spike/M1-11-接入笔记.md 与必需小节（含「会话恢复能力（Mode R/N）」）
  *
  * 用法：node verify-m1-11.mjs [--runs 20] [--candidate all|both|claude|codex|dsh|dsh-acp] [--timeout-ms 240000] [--evidence-dir <p>]
  * 退出码：0 = 至少一个候选 ①②③ 全过且交付物检查通过；1 = 不满足（含全部候选不可用）。
@@ -87,7 +89,15 @@ function checkArtifacts() {
     const content = readFileSync(CI_JOB_FILE, 'utf8');
     ciJob = { file: ciJob.file, exists: true, opt_in: /workflow_dispatch/.test(content) };
   }
-  const requiredSections = ['## 结论', '## 鉴权', '## 会话模型映射', '## 权限映射', '## 对照基线', '## 已知坑'];
+  const requiredSections = [
+    '## 结论',
+    '## 鉴权',
+    '## 会话模型映射',
+    '## 会话恢复能力（Mode R/N）',
+    '## 权限映射',
+    '## 对照基线',
+    '## 已知坑',
+  ];
   let notes = { file: 'docs/spike/M1-11-接入笔记.md', exists: false, sections: {} };
   if (existsSync(NOTES_FILE)) {
     const content = readFileSync(NOTES_FILE, 'utf8');
@@ -103,6 +113,32 @@ function checkArtifacts() {
 function appendJsonl(file, record, secrets) {
   ensureDir(dirname(file));
   appendFileSync(file, `${redact(JSON.stringify(record), secrets)}\n`, 'utf8');
+}
+
+/**
+ * DoD2④ 会话恢复结论（ADR-005 Mode R/N）。
+ *
+ * 恢复用例 = 两次独立进程：首进程创建原生会话并记住口令（native_id 等价于
+ * `sessions.config.native_id`）；进程退出后，第二个进程用 native_id 恢复原生会话并续聊。
+ * 两个 pid 必须不同（证明「重启进程」），且续聊命中口令标记。
+ * 支持恢复 = Mode R；不支持/仅能新建会话 = Mode N（决定 M2-02 重放语义）。
+ */
+function sessionRecovery({ nativeId, first, second, ok, note = null }) {
+  const processRestart = Boolean(first?.pid && second?.pid && first.pid !== second.pid);
+  const supported = Boolean(ok) && processRestart;
+  return {
+    native_id: nativeId ?? null,
+    native_id_field: 'sessions.config.native_id',
+    steps: ['创建原生会话（进程 1）', '进程 1 退出', 'native_id 恢复（进程 2）', '续聊命中'],
+    process_restart: processRestart,
+    first_pid: first?.pid ?? null,
+    second_pid: second?.pid ?? null,
+    resumed_requested: second?.resumed === true,
+    second_terminal: second?.terminal ?? null,
+    ok: supported,
+    mode: supported ? 'R' : 'N',
+    note,
+  };
 }
 
 function summarizeRuns(records) {
@@ -172,7 +208,7 @@ async function verifyClaude({ runs, timeoutMs, evidenceDir, secrets, log, cwd })
       log(`[claude] run ${index + 1}/${runs} → ${record.terminal} baseline=${record.baselineMatch} control=${record.controlMatch} first=${record.firstTextMs}ms`);
     }
 
-    log('[claude] 会话续聊（--session-id → --resume）…');
+    log('[claude] 会话恢复（DoD2④：重启进程 → native_id 恢复 → 续聊）…');
     const sessionId = randomUUID();
     const continuationFirst = await runClaudeOnce({
       cli: claudeCli,
@@ -236,19 +272,33 @@ async function verifyClaude({ runs, timeoutMs, evidenceDir, secrets, log, cwd })
       textDeltaCount: interruptRecord.textDeltaCount,
       exitCode: interruptRecord.exitCode,
     };
+    const recovery = sessionRecovery({
+      nativeId: sessionId,
+      first: continuationFirst,
+      second: continuationSecond,
+      ok: continuationOk,
+    });
+    console.log(
+      `[claude] 恢复模式 Mode ${recovery.mode}（process_restart=${recovery.process_restart}，` +
+        `pid ${recovery.first_pid} → ${recovery.second_pid}）`,
+    );
     candidate.session_continuation = {
       sessionId,
       firstTerminal: continuationFirst.terminal,
       secondTerminal: continuationSecond.terminal,
       secondTextPreview: redact((continuationSecond.streamText || '').slice(0, 120), secrets),
       ok: continuationOk,
+      recovery_mode: recovery.mode,
     };
+    candidate.session_recovery = recovery;
     candidate.checks = {
       terminal_no_hang: terminalCount === runs,
       in_run_baseline_consistent: inRunMatches === runs,
       control_baseline_consistent: controlMatches === runs,
       interrupt_within_5s: Boolean(interruptOk),
       session_continuation_ok: continuationOk,
+      session_recovery_ok: recovery.ok,
+      session_recovery_mode: recovery.mode,
       streaming_available: candidate.runs.first_text_delta_present === runs,
     };
     candidate.verdict =
@@ -317,7 +367,7 @@ async function verifyCodex({ runs, timeoutMs, evidenceDir, secrets, log, cwd }) 
     log(`[codex] run ${index + 1}/${runs} → ${record.terminal} baseline=${record.baselineMatch} first=${record.firstTextMs}ms`);
   }
 
-  log('[codex] 会话续聊（thread.started → exec resume）…');
+  log('[codex] 会话恢复（DoD2④：重启进程 → native_id（thread_id）恢复 → 续聊）…');
   const continuationFirst = await runCodexOnce({
     cli,
     config,
@@ -379,18 +429,32 @@ async function verifyCodex({ runs, timeoutMs, evidenceDir, secrets, log, cwd }) 
     eventCountsAtInterrupt: interruptRecord.eventCounts,
     exitCode: interruptRecord.exitCode,
   };
+  const recovery = sessionRecovery({
+    nativeId: continuationFirst.threadId,
+    first: continuationFirst,
+    second: continuationSecond,
+    ok: continuationOk,
+  });
+  console.log(
+    `[codex] 恢复模式 Mode ${recovery.mode}（process_restart=${recovery.process_restart}，` +
+      `pid ${recovery.first_pid} → ${recovery.second_pid}）`,
+  );
   candidate.session_continuation = {
     threadId: continuationFirst.threadId,
     firstTerminal: continuationFirst.terminal,
     secondTerminal: continuationSecond.terminal,
     secondTextPreview: redact((continuationSecond.streamText || '').slice(0, 120), secrets),
     ok: continuationOk,
+    recovery_mode: recovery.mode,
   };
+  candidate.session_recovery = recovery;
   candidate.checks = {
     terminal_no_hang: terminalCount === runs,
     control_baseline_consistent: controlMatches === runs,
     interrupt_within_5s: Boolean(interruptOk),
     session_continuation_ok: continuationOk,
+    session_recovery_ok: recovery.ok,
+    session_recovery_mode: recovery.mode,
     streaming_available: candidate.runs.text_delta_events_available,
   };
   candidate.verdict =
@@ -494,11 +558,22 @@ async function verifyDsh({ runs, timeoutMs, evidenceDir, secrets, log, cwd }) {
     session_resume: 'headless CLI 无 --resume/--session-id；web profile 的 /api 为浏览器载体（无鉴权、browser-trust fence）',
   };
   candidate.session_continuation = { supported: false, note: candidate.limitations.session_resume };
+  candidate.session_recovery = {
+    native_id: null,
+    native_id_field: 'sessions.config.native_id',
+    steps: ['创建原生会话（进程 1）', '不支持恢复'],
+    process_restart: false,
+    ok: false,
+    mode: 'N',
+    note: candidate.limitations.session_resume,
+  };
   candidate.checks = {
     terminal_no_hang: terminalCount === runs,
     control_baseline_consistent: baselineMatches === runs,
     interrupt_within_5s: Boolean(interruptOk),
     session_continuation_ok: false,
+    session_recovery_ok: false,
+    session_recovery_mode: 'N',
     streaming_available: false,
   };
   candidate.verdict =
@@ -562,7 +637,7 @@ async function verifyDshAcp({ runs, timeoutMs, evidenceDir, secrets, log, cwd })
     log(`[dsh-acp] run ${index + 1}/${runs} → ${record.terminal}/${record.stopReason} baseline=${record.baselineMatch} first=${record.firstTextMs}ms`);
   }
 
-  log('[dsh-acp] 会话续聊（session/new → session/resume 跨进程）…');
+  log('[dsh-acp] 会话恢复（DoD2④：重启进程 → session/resume 跨进程恢复 → 续聊）…');
   const continuationFirst = await runAcpOnce({
     config,
     patch,
@@ -630,18 +705,32 @@ async function verifyDshAcp({ runs, timeoutMs, evidenceDir, secrets, log, cwd })
     streaming: 'ACP 只发 committed 语义更新：一次 assistant 消息 = 一个 agent_message_chunk（无 token 级 delta）',
     reference: 'hermes-studio 为获得 token 级 delta 注入私有 Cordis 插件（_ekko/assistant_stream），属适配器实现，不在最小 spike 范围',
   };
+  const recovery = sessionRecovery({
+    nativeId: continuationFirst.sessionId,
+    first: continuationFirst,
+    second: continuationSecond,
+    ok: continuationOk,
+  });
+  console.log(
+    `[dsh-acp] 恢复模式 Mode ${recovery.mode}（process_restart=${recovery.process_restart}，` +
+      `pid ${recovery.first_pid} → ${recovery.second_pid}）`,
+  );
   candidate.session_continuation = {
     sessionId: continuationFirst.sessionId,
     firstTerminal: continuationFirst.terminal,
     secondTerminal: continuationSecond.terminal,
     secondTextPreview: redact((continuationSecond.streamText || '').slice(0, 120), secrets),
     ok: continuationOk,
+    recovery_mode: recovery.mode,
   };
+  candidate.session_recovery = recovery;
   candidate.checks = {
     terminal_no_hang: terminalCount === runs,
     control_baseline_consistent: baselineMatches === runs,
     interrupt_within_5s: Boolean(interruptOk),
     session_continuation_ok: continuationOk,
+    session_recovery_ok: recovery.ok,
+    session_recovery_mode: recovery.mode,
     streaming_available: chunkCounts.every((count) => count > 1),
   };
   candidate.verdict =
@@ -723,6 +812,37 @@ async function main() {
     anyPass: verdicts.includes('pass'),
     artifactOk,
   };
+
+  // Gate 1 结论（ADR-005）：选定适配器的会话恢复能力（Mode R/N）决定 M2-02 重放语义。
+  const preferred = ['claude-code', 'codex', 'deepseek-harness-acp', 'deepseek-harness'];
+  const passing = preferred
+    .map((name) =>
+      Object.values(report.candidates).find(
+        (candidate) => candidate.candidate === name && candidate.verdict === 'pass',
+      ),
+    )
+    .find(Boolean);
+  const recoveryMode = passing?.session_recovery?.mode ?? null;
+  report.gate1Recovery = passing
+    ? {
+        selected: passing.candidate,
+        mode: recoveryMode,
+        statement:
+          `M2-02 重放语义按 Mode ${recoveryMode} 执行` +
+          (recoveryMode === 'R'
+            ? '（用 sessions.config.native_id 恢复原生会话续聊，上下文保留）'
+            : '（新建原生会话并重放输入，UI 明示原生上下文可能丢失）'),
+      }
+    : {
+        selected: null,
+        mode: null,
+        statement: '无通过候选；按 A1 降级路径 3 评估 M2-02M（Mock-only beta）',
+      };
+  report.summary.recoveryMode = recoveryMode;
+  console.log(
+    `[m1-11] Gate 1 恢复能力结论：selected=${report.gate1Recovery.selected ?? 'none'} ` +
+      `mode=${recoveryMode ?? 'n/a'}`,
+  );
 
   writeJson(join(evidenceDir, 'summary.json'), report);
   const baselineFile = join(EVIDENCE_ROOT, 'baseline.json');

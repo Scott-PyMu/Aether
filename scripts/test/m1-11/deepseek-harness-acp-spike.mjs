@@ -297,6 +297,8 @@ export async function runAcpOnce(options) {
     },
   });
   client.start();
+  // 进程身份：供「重启进程 → native_id 恢复」步骤断言（DoD2④）。
+  record.pid = client.child?.pid ?? null;
   client.child.once('close', () => {
     closed = true;
     if (cancelFallbackTimer) clearTimeout(cancelFallbackTimer);
