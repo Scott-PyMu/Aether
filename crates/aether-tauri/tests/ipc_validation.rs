@@ -15,12 +15,16 @@ use std::sync::{Arc, Mutex};
 
 use aether_tauri::ipc::backend::IpcBackend;
 use aether_tauri::ipc::dto::{
-    BackupCreateRequest, ExportDiagnosticsRequest, MessagesPageRequest, PermissionResolveRequest,
-    PermissionsPendingRequest, SessionCreateRequest, SessionIdRequest, SessionListRequest,
-    SessionSendRequest, SettingsGetRequest, SettingsSetRequest,
+    AppRestartRequest, BackupCreateRequest, BackupRestoreRequest, ExportDiagnosticsRequest,
+    MessagesPageRequest, PermissionResolveRequest, PermissionsPendingRequest, RunRetryRequest,
+    RuntimeEnableRequest, RuntimeRetryRequest, SessionCreateRequest, SessionIdRequest,
+    SessionListRequest, SessionSendRequest, SettingsGetRequest, SettingsSetRequest,
+    WorkspaceSetRequest,
 };
 use aether_tauri::ipc::error::IpcError;
-use aether_tauri::ipc::path::{is_within, validate_user_path};
+use aether_tauri::ipc::path::{
+    is_within, validate_external_file, validate_user_path, validate_workspace_root,
+};
 use aether_tauri::ipc::validate::{
     parse_strict, CommandRequest, MAX_MESSAGE_BYTES, MAX_TITLE_CHARS,
 };
@@ -31,6 +35,7 @@ use tauri::webview::InvokeRequest;
 use tauri::{App, WebviewWindow, WebviewWindowBuilder};
 
 const ULID: &str = "01J8ZQ5R0N7W9Y8X6V4T2S0K1M";
+const CLIENT_MSG_ID: &str = "01J8ZQ5R0N7W9Y8X6V4T2S0K1N";
 
 /// 记录后端：只为断言「下游是否被调用」。
 #[derive(Default)]
@@ -102,6 +107,42 @@ impl IpcBackend for RecordingBackend {
 
     fn backup_create(&self, _request: &BackupCreateRequest) -> Result<Value, IpcError> {
         self.record("backup_create")
+    }
+
+    fn backup_list(&self) -> Result<Value, IpcError> {
+        self.record("backup_list")
+    }
+
+    fn backup_restore(
+        &self,
+        _request: &BackupRestoreRequest,
+        _canonical_external_path: Option<&Path>,
+    ) -> Result<Value, IpcError> {
+        self.record("backup_restore")
+    }
+
+    fn app_restart(&self, _request: &AppRestartRequest) -> Result<Value, IpcError> {
+        self.record("app_restart")
+    }
+
+    fn run_retry(&self, _request: &RunRetryRequest) -> Result<Value, IpcError> {
+        self.record("run_retry")
+    }
+
+    fn runtime_retry(&self, _request: &RuntimeRetryRequest) -> Result<Value, IpcError> {
+        self.record("runtime_retry")
+    }
+
+    fn runtime_enable(&self, _request: &RuntimeEnableRequest) -> Result<Value, IpcError> {
+        self.record("runtime_enable")
+    }
+
+    fn workspace_set(
+        &self,
+        _request: &WorkspaceSetRequest,
+        _canonical_root_path: Option<&Path>,
+    ) -> Result<Value, IpcError> {
+        self.record("workspace_set")
     }
 
     fn export_diagnostics(
@@ -216,6 +257,14 @@ fn malformed_samples_return_structured_errors_and_do_not_reach_backend() {
     let overlong_text = "x".repeat(MAX_MESSAGE_BYTES + 1);
     let long_title = "标".repeat(MAX_TITLE_CHARS + 1);
     let outside = fixture.outside.to_string_lossy().to_string();
+    let external_db = fixture.outside.join("candidate.db");
+    std::fs::write(&external_db, b"not a database").expect("写入外部候选 .db");
+    let external_txt = fixture.outside.join("candidate.txt");
+    std::fs::write(&external_txt, b"x").expect("写入外部候选 .txt");
+    let missing_db = fixture.outside.join("missing.db");
+    let sync_root = fixture.outside.join("OneDrive").join("workspace");
+    std::fs::create_dir_all(&sync_root).expect("创建同步盘样本目录");
+    let inside = fixture.root.to_string_lossy().to_string();
     let traversal = fixture
         .root
         .join("..")
@@ -226,37 +275,49 @@ fn malformed_samples_return_structured_errors_and_do_not_reach_backend() {
     let samples: Vec<(&str, Value, &str, Option<&str>)> = vec![
         (
             "session_send",
-            json!({ "session_id": ULID, "text": "hi", "unexpected": true }),
+            json!({ "session_id": ULID, "text": "hi", "client_msg_id": CLIENT_MSG_ID, "unexpected": true }),
             "unknown_field",
             Some("unexpected"),
         ),
         (
             "session_send",
-            json!({ "session_id": ULID }),
+            json!({ "session_id": ULID, "client_msg_id": CLIENT_MSG_ID }),
             "missing_field",
             Some("text"),
         ),
         (
             "session_send",
-            json!({ "session_id": ULID, "text": overlong_text }),
+            json!({ "session_id": ULID, "text": "hi" }),
+            "missing_field",
+            Some("client_msg_id"),
+        ),
+        (
+            "session_send",
+            json!({ "session_id": ULID, "text": "hi", "client_msg_id": "msg-1" }),
+            "invalid_format",
+            Some("client_msg_id"),
+        ),
+        (
+            "session_send",
+            json!({ "session_id": ULID, "text": overlong_text, "client_msg_id": CLIENT_MSG_ID }),
             "too_large",
             Some("text"),
         ),
         (
             "session_send",
-            json!({ "session_id": ULID, "text": 42 }),
+            json!({ "session_id": ULID, "text": 42, "client_msg_id": CLIENT_MSG_ID }),
             "invalid_type",
             None,
         ),
         (
             "session_send",
-            json!({ "session_id": "not-a-ulid", "text": "hi" }),
+            json!({ "session_id": "not-a-ulid", "text": "hi", "client_msg_id": CLIENT_MSG_ID }),
             "invalid_format",
             Some("session_id"),
         ),
         (
             "session_send",
-            json!({ "session_id": ULID, "text": "bad\u{0}text" }),
+            json!({ "session_id": ULID, "text": "bad\u{0}text", "client_msg_id": CLIENT_MSG_ID }),
             "invalid_format",
             Some("text"),
         ),
@@ -350,6 +411,94 @@ fn malformed_samples_return_structured_errors_and_do_not_reach_backend() {
             "invalid_type",
             None,
         ),
+        // ===== ADR-004 七命令校验矩阵 =====
+        (
+            "backup_list",
+            json!({ "unexpected": 1 }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
+        ("backup_restore", json!({}), "missing_field", Some("source")),
+        (
+            "backup_restore",
+            json!({ "source": { "internal": { "id": "short" } } }),
+            "invalid_format",
+            Some("source.internal.id"),
+        ),
+        (
+            "backup_restore",
+            json!({ "source": { "external": { "path": "relative.db" } } }),
+            "path_rejected",
+            None,
+        ),
+        (
+            "backup_restore",
+            json!({ "source": { "external": { "path": external_txt.to_string_lossy() } } }),
+            "path_rejected",
+            None,
+        ),
+        (
+            "backup_restore",
+            json!({ "source": { "external": { "path": missing_db.to_string_lossy() } } }),
+            "path_rejected",
+            None,
+        ),
+        ("app_restart", json!({}), "missing_field", Some("confirm")),
+        (
+            "app_restart",
+            json!({ "confirm": false }),
+            "invalid_value",
+            Some("confirm"),
+        ),
+        (
+            "app_restart",
+            json!({ "confirm": "yes" }),
+            "invalid_type",
+            None,
+        ),
+        (
+            "run_retry",
+            json!({ "run_id": "short" }),
+            "invalid_format",
+            Some("run_id"),
+        ),
+        (
+            "run_retry",
+            json!({ "run": ULID }),
+            "unknown_field",
+            Some("run"),
+        ),
+        (
+            "runtime_retry",
+            json!({ "runtime_id": "Claude Code" }),
+            "invalid_format",
+            Some("runtime_id"),
+        ),
+        (
+            "runtime_enable",
+            json!({}),
+            "missing_field",
+            Some("runtime_id"),
+        ),
+        ("workspace_set", json!({}), "invalid_value", None),
+        (
+            "workspace_set",
+            json!({ "workspace_id": ULID, "root_path": inside }),
+            "invalid_value",
+            None,
+        ),
+        (
+            "workspace_set",
+            json!({ "root_path": "relative" }),
+            "path_rejected",
+            None,
+        ),
+        (
+            "workspace_set",
+            json!({ "root_path": sync_root.to_string_lossy() }),
+            "path_rejected",
+            None,
+        ),
         (
             "session_send",
             json!(["not-an-object"]),
@@ -373,6 +522,8 @@ fn malformed_samples_return_structured_errors_and_do_not_reach_backend() {
 fn valid_requests_reach_backend_exactly_once() {
     let fixture = fixture("valid");
     let inside = fixture.root.to_string_lossy().to_string();
+    let external_db = fixture.outside.join("restore-candidate.db");
+    std::fs::write(&external_db, b"candidate").expect("写入外部候选 .db");
 
     let samples: Vec<(&str, Value, &str)> = vec![
         ("runtimes_list", Value::Null, "runtimes_list"),
@@ -384,7 +535,7 @@ fn valid_requests_reach_backend_exactly_once() {
         ),
         (
             "session_send",
-            json!({ "session_id": ULID, "text": "你好", "client_msg_id": "msg-1" }),
+            json!({ "session_id": ULID, "text": "你好", "client_msg_id": CLIENT_MSG_ID }),
             "session_send",
         ),
         (
@@ -412,6 +563,41 @@ fn valid_requests_reach_backend_exactly_once() {
             "backup_create",
             json!({ "label": "手动备份" }),
             "backup_create",
+        ),
+        // ADR-004 七命令：合法形态必须到达后端（含无参数 backup_list 的两种调用方式）。
+        ("backup_list", Value::Null, "backup_list"),
+        ("backup_list", json!({}), "backup_list"),
+        (
+            "backup_restore",
+            json!({ "source": { "internal": { "id": ULID } } }),
+            "backup_restore",
+        ),
+        (
+            "backup_restore",
+            json!({ "source": { "external": { "path": external_db.to_string_lossy() } } }),
+            "backup_restore",
+        ),
+        ("app_restart", json!({ "confirm": true }), "app_restart"),
+        ("run_retry", json!({ "run_id": ULID }), "run_retry"),
+        (
+            "runtime_retry",
+            json!({ "runtime_id": "mock" }),
+            "runtime_retry",
+        ),
+        (
+            "runtime_enable",
+            json!({ "runtime_id": "mock" }),
+            "runtime_enable",
+        ),
+        (
+            "workspace_set",
+            json!({ "workspace_id": ULID }),
+            "workspace_set",
+        ),
+        (
+            "workspace_set",
+            json!({ "root_path": inside }),
+            "workspace_set",
         ),
         (
             "export_diagnostics",
@@ -456,6 +642,16 @@ fn valid_requests_reach_backend_exactly_once() {
         "permissions_pending",
         "permission_resolve",
         "backup_create",
+        "backup_list",
+        "backup_list",
+        "backup_restore",
+        "backup_restore",
+        "app_restart",
+        "run_retry",
+        "runtime_retry",
+        "runtime_enable",
+        "workspace_set",
+        "workspace_set",
         "export_diagnostics",
     ]
     .into_iter()
@@ -548,6 +744,66 @@ fn path_prefix_check_is_component_wise() {
     });
     assert!(is_within(&inside, &root));
     assert!(!is_within(&sibling, &root));
+}
+
+#[test]
+fn external_and_workspace_path_validators_follow_d13_d7() {
+    let base = temp_dir("path-external");
+
+    // backup_restore 外部候选：必须存在、是文件、后缀 .db（大小写不敏感）。
+    let db = base.join("backup.DB");
+    std::fs::write(&db, b"x").expect("写入候选");
+    assert!(validate_external_file(&db.to_string_lossy(), "db").is_ok());
+    let txt = base.join("backup.txt");
+    std::fs::write(&txt, b"x").expect("写入候选");
+    assert_eq!(
+        validate_external_file(&txt.to_string_lossy(), "db")
+            .expect_err("非 .db 必须拒绝")
+            .code
+            .as_str(),
+        "path_rejected"
+    );
+    assert_eq!(
+        validate_external_file(&base.join("missing.db").to_string_lossy(), "db")
+            .expect_err("不存在必须拒绝")
+            .code
+            .as_str(),
+        "path_rejected"
+    );
+    assert_eq!(
+        validate_external_file(&base.to_string_lossy(), "db")
+            .expect_err("目录必须拒绝")
+            .code
+            .as_str(),
+        "path_rejected"
+    );
+
+    // workspace_set root_path：必须存在且为目录；同步盘路径段拒绝（A4 预检）。
+    let workspace = base.join("workspace");
+    std::fs::create_dir_all(&workspace).expect("创建 workspace");
+    assert!(validate_workspace_root(&workspace.to_string_lossy()).is_ok());
+    assert_eq!(
+        validate_workspace_root(&base.join("missing").to_string_lossy())
+            .expect_err("不存在必须拒绝")
+            .code
+            .as_str(),
+        "path_rejected"
+    );
+    assert_eq!(
+        validate_workspace_root(&db.to_string_lossy())
+            .expect_err("文件必须拒绝")
+            .code
+            .as_str(),
+        "path_rejected"
+    );
+    let sync = base.join("OneDrive").join("ws");
+    std::fs::create_dir_all(&sync).expect("创建同步盘样本");
+    let rejection = validate_workspace_root(&sync.to_string_lossy()).expect_err("同步盘必须拒绝");
+    assert_eq!(rejection.code.as_str(), "path_rejected");
+    assert!(
+        rejection.message.contains("同步盘") || rejection.message.contains("OneDrive"),
+        "拒绝原因必须可读：{rejection}"
+    );
 }
 
 #[test]

@@ -7,13 +7,15 @@
 use serde_json::Value;
 
 use super::dto::{
-    BackupCreateRequest, ExportDiagnosticsRequest, MessagesPageRequest, PermissionResolveRequest,
-    PermissionsPendingRequest, SessionCreateRequest, SessionIdRequest, SessionListRequest,
-    SessionSendRequest, SettingsGetRequest, SettingsSetRequest,
+    AppRestartRequest, BackupCreateRequest, BackupListRequest, BackupRestoreRequest,
+    ExportDiagnosticsRequest, MessagesPageRequest, PermissionResolveRequest,
+    PermissionsPendingRequest, RunRetryRequest, RuntimeEnableRequest, RuntimeRetryRequest,
+    SessionCreateRequest, SessionIdRequest, SessionListRequest, SessionSendRequest,
+    SettingsGetRequest, SettingsSetRequest, WorkspaceSetRequest,
 };
 use super::error::IpcError;
 use super::path;
-use super::validate::parse_strict;
+use super::validate::{parse_no_params, parse_strict};
 use super::IpcState;
 
 #[tauri::command]
@@ -120,6 +122,82 @@ pub(crate) fn backup_create(
     state.backend().backup_create(&request)
 }
 
+/// ADR-004：无参数命令；缺省载荷等价空对象，任何成员都会被严格模式拒绝。
+#[tauri::command]
+pub(crate) fn backup_list(
+    state: tauri::State<'_, IpcState>,
+    payload: Option<Value>,
+) -> Result<Value, IpcError> {
+    let _request: BackupListRequest = parse_no_params(payload.unwrap_or(Value::Null))?;
+    state.backend().backup_list()
+}
+
+/// ADR-004/D13：外部候选先 canonicalize（存在性 + `.db` 后缀）再进入恢复七步。
+#[tauri::command]
+pub(crate) fn backup_restore(
+    state: tauri::State<'_, IpcState>,
+    payload: Value,
+) -> Result<Value, IpcError> {
+    let request: BackupRestoreRequest = parse_strict(payload)?;
+    let canonical = request.canonical_external_path()?;
+    state
+        .backend()
+        .backup_restore(&request, canonical.as_deref())
+}
+
+/// ADR-004：显式 `confirm:true` 才可重启（复用 D2 关闭序列）。
+#[tauri::command]
+pub(crate) fn app_restart(
+    state: tauri::State<'_, IpcState>,
+    payload: Value,
+) -> Result<Value, IpcError> {
+    let request: AppRestartRequest = parse_strict(payload)?;
+    state.backend().app_restart(&request)
+}
+
+/// ADR-004/M3-06：仅终态 run 可重试（`run_id` ULID；状态由后端判定）。
+#[tauri::command]
+pub(crate) fn run_retry(
+    state: tauri::State<'_, IpcState>,
+    payload: Value,
+) -> Result<Value, IpcError> {
+    let request: RunRetryRequest = parse_strict(payload)?;
+    state.backend().run_retry(&request)
+}
+
+/// ADR-004/M1-10：仅 `disabled + start_failed` 可用（白名单与状态由后端判定）。
+#[tauri::command]
+pub(crate) fn runtime_retry(
+    state: tauri::State<'_, IpcState>,
+    payload: Value,
+) -> Result<Value, IpcError> {
+    let request: RuntimeRetryRequest = parse_strict(payload)?;
+    state.backend().runtime_retry(&request)
+}
+
+/// ADR-004/M1-10：仅 `disabled` 可用；`untrusted`/`version_mismatch` 需先修复。
+#[tauri::command]
+pub(crate) fn runtime_enable(
+    state: tauri::State<'_, IpcState>,
+    payload: Value,
+) -> Result<Value, IpcError> {
+    let request: RuntimeEnableRequest = parse_strict(payload)?;
+    state.backend().runtime_enable(&request)
+}
+
+/// ADR-004/D14：`workspace_id` 或 `root_path`（canonicalize + 同步盘拒绝）。
+#[tauri::command]
+pub(crate) fn workspace_set(
+    state: tauri::State<'_, IpcState>,
+    payload: Value,
+) -> Result<Value, IpcError> {
+    let request: WorkspaceSetRequest = parse_strict(payload)?;
+    let canonical = request.canonical_root_path()?;
+    state
+        .backend()
+        .workspace_set(&request, canonical.as_deref())
+}
+
 #[tauri::command]
 pub(crate) fn export_diagnostics(
     state: tauri::State<'_, IpcState>,
@@ -150,6 +228,13 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         settings_get,
         settings_set,
         backup_create,
+        backup_list,
+        backup_restore,
+        app_restart,
+        run_retry,
+        runtime_retry,
+        runtime_enable,
+        workspace_set,
         export_diagnostics,
         crate::probe::e2e_probe_report,
     ]
@@ -171,6 +256,13 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         settings_get,
         settings_set,
         backup_create,
+        backup_list,
+        backup_restore,
+        app_restart,
+        run_retry,
+        runtime_retry,
+        runtime_enable,
+        workspace_set,
         export_diagnostics,
     ]
 }

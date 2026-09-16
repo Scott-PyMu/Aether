@@ -9,9 +9,11 @@ use std::path::Path;
 use serde_json::Value;
 
 use super::dto::{
-    BackupCreateRequest, ExportDiagnosticsRequest, MessagesPageRequest, PermissionResolveRequest,
-    PermissionsPendingRequest, SessionCreateRequest, SessionIdRequest, SessionListRequest,
-    SessionSendRequest, SettingsGetRequest, SettingsSetRequest,
+    AppRestartRequest, BackupCreateRequest, BackupRestoreRequest, ExportDiagnosticsRequest,
+    MessagesPageRequest, PermissionResolveRequest, PermissionsPendingRequest, RunRetryRequest,
+    RuntimeEnableRequest, RuntimeRetryRequest, SessionCreateRequest, SessionIdRequest,
+    SessionListRequest, SessionSendRequest, SettingsGetRequest, SettingsSetRequest,
+    WorkspaceSetRequest,
 };
 use super::error::IpcError;
 
@@ -63,6 +65,49 @@ pub trait IpcBackend: Send + Sync + 'static {
 
     fn backup_create(&self, _request: &BackupCreateRequest) -> Result<Value, IpcError> {
         Err(IpcError::not_implemented("backup_create"))
+    }
+
+    /// ADR-004：无参数；返回内部备份清单（M3-04 落地）。
+    fn backup_list(&self) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("backup_list"))
+    }
+
+    /// ADR-004/D13：恢复七步；`canonical_external_path` 为外部候选的 canonicalize 结果。
+    fn backup_restore(
+        &self,
+        _request: &BackupRestoreRequest,
+        _canonical_external_path: Option<&Path>,
+    ) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("backup_restore"))
+    }
+
+    /// ADR-004：显式 confirm 后复用 D2 关闭序列重启（M3-06 落地）。
+    fn app_restart(&self, _request: &AppRestartRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("app_restart"))
+    }
+
+    /// ADR-004/M3-06：仅终态 run 可重试；重放按 M1-11 恢复模式（Mode R/N）。
+    fn run_retry(&self, _request: &RunRetryRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("run_retry"))
+    }
+
+    /// ADR-004/M1-10：仅 `disabled + start_failed` 可用。
+    fn runtime_retry(&self, _request: &RuntimeRetryRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("runtime_retry"))
+    }
+
+    /// ADR-004/M1-10：仅 `disabled` 可用；`untrusted`/`version_mismatch` 需先修复。
+    fn runtime_enable(&self, _request: &RuntimeEnableRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("runtime_enable"))
+    }
+
+    /// ADR-004/D14：绑定/切换工作区；`canonical_root_path` 为 root_path 的 canonicalize 结果。
+    fn workspace_set(
+        &self,
+        _request: &WorkspaceSetRequest,
+        _canonical_root_path: Option<&Path>,
+    ) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("workspace_set"))
     }
 
     fn export_diagnostics(

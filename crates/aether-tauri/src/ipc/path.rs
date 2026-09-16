@@ -15,6 +15,119 @@ use super::validate::MAX_PATH_CHARS;
 ///
 /// `allowed_roots` 为空表示「尚未配置允许目录」——一律拒绝（默认拒绝原则）。
 pub fn validate_user_path(raw: &str, allowed_roots: &[PathBuf]) -> Result<PathBuf, IpcError> {
+    let canonical = canonicalize_checked(raw)?;
+
+    if allowed_roots.is_empty() {
+        return Err(IpcError::path_rejected(
+            "未配置允许根目录；按默认拒绝策略拒绝该路径",
+        ));
+    }
+
+    let within = allowed_roots.iter().any(|root| {
+        let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.clone());
+        is_within(&canonical, &canonical_root)
+    });
+    if !within {
+        return Err(IpcError::path_rejected(
+            "路径不在允许根目录内（canonicalize 后前缀校验失败）",
+        ));
+    }
+
+    Ok(canonical)
+}
+
+/// 校验外部候选文件（D13 `backup_restore` 的外部 `.db`）：绝对路径、存在、必须为文件、
+/// 后缀匹配（大小写不敏感）。外部选择器路径不受允许根目录限制（D13：不做默认目录信任）。
+pub fn validate_external_file(raw: &str, extension: &str) -> Result<PathBuf, IpcError> {
+    let canonical = canonicalize_checked(raw)?;
+    let metadata = std::fs::metadata(&canonical)
+        .map_err(|error| IpcError::path_rejected(format!("路径不可读：{error}")))?;
+    if !metadata.is_file() {
+        return Err(IpcError::path_rejected("候选必须是文件（不能是目录）"));
+    }
+    let suffix_ok = canonical
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.eq_ignore_ascii_case(extension));
+    if !suffix_ok {
+        return Err(IpcError::path_rejected(format!(
+            "候选文件必须以 .{extension} 结尾"
+        )));
+    }
+    Ok(canonical)
+}
+
+/// 校验工作区根目录（D7 `workspace_set`）：绝对路径、存在且为目录、同步盘预检拒绝。
+///
+/// P0 仅对新会话生效（D14）；已有会话不迁移。
+pub fn validate_workspace_root(raw: &str) -> Result<PathBuf, IpcError> {
+    let canonical = canonicalize_checked(raw)?;
+    if !canonical.is_dir() {
+        return Err(IpcError::path_rejected("工作区根路径必须是已存在的目录"));
+    }
+    reject_cloud_sync_path(&canonical)?;
+    Ok(canonical)
+}
+
+/// A4 同步盘预检（M1-08 最小集；完整检测由 M1-06 接管：注册表 `UserFolder`、父目录
+/// 重解析点、macOS File Provider、单实例锁）。
+///
+/// 命中即拒绝（A4：默认拒绝，不提供覆盖开关）。
+pub fn reject_cloud_sync_path(canonical: &Path) -> Result<(), IpcError> {
+    if let Some(marker) = cloud_sync_marker(canonical) {
+        return Err(IpcError::path_rejected(format!(
+            "命中同步盘/云目录拒绝清单（{marker}）；数据目录必须位于本地磁盘（A4）"
+        )));
+    }
+    Ok(())
+}
+
+/// 同步盘标记识别（Windows 环境变量前缀 + 路径段；macOS File Provider/iCloud）。
+fn cloud_sync_marker(canonical: &Path) -> Option<&'static str> {
+    for variable in ["OneDrive", "OneDriveConsumer", "OneDriveCommercial"] {
+        let Some(value) = std::env::var_os(variable) else {
+            continue;
+        };
+        if value.is_empty() {
+            continue;
+        }
+        let Ok(root) = std::fs::canonicalize(PathBuf::from(value)) else {
+            continue;
+        };
+        if is_within(canonical, &root) {
+            return Some("OneDrive 环境变量前缀祖先");
+        }
+    }
+
+    let parts: Vec<String> = canonical
+        .components()
+        .filter_map(|component| match component {
+            Component::Prefix(prefix) => {
+                Some(prefix.as_os_str().to_string_lossy().to_ascii_lowercase())
+            }
+            Component::Normal(part) => Some(part.to_string_lossy().to_ascii_lowercase()),
+            _ => None,
+        })
+        .collect();
+    for (index, part) in parts.iter().enumerate() {
+        if part == "onedrive" {
+            return Some("路径段 OneDrive");
+        }
+        if part == "cloudstorage"
+            && index > 0
+            && parts.get(index - 1).is_some_and(|value| value == "library")
+        {
+            return Some("~/Library/CloudStorage（File Provider）");
+        }
+        if part == "mobile documents" {
+            return Some("iCloud Documents");
+        }
+    }
+    None
+}
+
+/// 公共路径检查：空/长度/NUL → 绝对路径 → Windows 特殊形态 → canonicalize（解析软链接/Junction）。
+fn canonicalize_checked(raw: &str) -> Result<PathBuf, IpcError> {
     if raw.is_empty() {
         return Err(IpcError::path_rejected("路径为空"));
     }
@@ -34,27 +147,9 @@ pub fn validate_user_path(raw: &str, allowed_roots: &[PathBuf]) -> Result<PathBu
 
     reject_windows_special_forms(raw)?;
 
-    let canonical = std::fs::canonicalize(&candidate).map_err(|error| {
+    std::fs::canonicalize(&candidate).map_err(|error| {
         IpcError::path_rejected(format!("路径不可解析（canonicalize 失败）：{error}"))
-    })?;
-
-    if allowed_roots.is_empty() {
-        return Err(IpcError::path_rejected(
-            "未配置允许根目录；按默认拒绝策略拒绝该路径",
-        ));
-    }
-
-    let within = allowed_roots.iter().any(|root| {
-        let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.clone());
-        is_within(&canonical, &canonical_root)
-    });
-    if !within {
-        return Err(IpcError::path_rejected(
-            "路径不在允许根目录内（canonicalize 后前缀校验失败）",
-        ));
-    }
-
-    Ok(canonical)
+    })
 }
 
 /// `path` 是否位于 `root` 之下或等于 `root`（按组件比较；Windows 大小写不敏感）。

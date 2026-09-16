@@ -6,7 +6,8 @@
 
 use serde::Deserialize;
 
-use super::error::IpcError;
+use super::error::{IpcError, IpcErrorCode};
+use super::path;
 use super::validate::{
     self, ensure_max_bytes, ensure_max_chars, ensure_not_empty, ensure_value_size, is_ulid,
     reject_control_chars, CommandRequest, MAX_LABEL_CHARS, MAX_MESSAGE_BYTES, MAX_PAGE_LIMIT,
@@ -99,8 +100,9 @@ impl CommandRequest for SessionListRequest {
 pub struct SessionSendRequest {
     pub session_id: String,
     pub text: String,
-    #[serde(default)]
-    pub client_msg_id: Option<String>,
+    /// 幂等键（ADR-005）：必填 ULID；重复发送同一 `(session_id, client_msg_id)`
+    /// 返回既有 message_id/run_id，核心重启后重放同样不重复。
+    pub client_msg_id: String,
 }
 
 impl CommandRequest for SessionSendRequest {
@@ -110,8 +112,11 @@ impl CommandRequest for SessionSendRequest {
         }
         ensure_max_bytes(&self.text, "text", MAX_MESSAGE_BYTES)?;
         reject_control_chars(&self.text, "text", true)?;
-        if let Some(client_msg_id) = &self.client_msg_id {
-            validate::validate_ascii_id(client_msg_id, "client_msg_id")?;
+        if !is_ulid(&self.client_msg_id) {
+            return Err(IpcError::invalid_format(
+                "client_msg_id",
+                "必须是 26 位 ULID（ADR-005 幂等键，必填）",
+            ));
         }
         Ok(())
     }
@@ -232,6 +237,161 @@ impl CommandRequest for BackupCreateRequest {
             reject_control_chars(label, "label", false)?;
         }
         Ok(())
+    }
+}
+
+/// `backup_list`（ADR-004）：无参数命令；非空成员一律拒绝。
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BackupListRequest {}
+
+impl CommandRequest for BackupListRequest {}
+
+/// 备份来源（ADR-004 `backup_restore`）：内部备份 id 枚举 或 外部 `.db` 路径。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum BackupSource {
+    /// 内部备份 id（`backups` 表白名单，仅 ULID 格式层校验；存在性由后端判定）。
+    Internal { id: String },
+    /// 外部 `.db` 路径（canonicalize + 存在性 + 后缀，D13 七步第一步）。
+    External { path: String },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BackupRestoreRequest {
+    pub source: BackupSource,
+}
+
+impl BackupRestoreRequest {
+    /// 外部候选路径的规范化结果（内部来源为 `None`）。
+    pub fn canonical_external_path(&self) -> Result<Option<std::path::PathBuf>, IpcError> {
+        match &self.source {
+            BackupSource::Internal { .. } => Ok(None),
+            BackupSource::External { path } => path::validate_external_file(path, "db").map(Some),
+        }
+    }
+}
+
+impl CommandRequest for BackupRestoreRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        match &self.source {
+            BackupSource::Internal { id } => {
+                if !is_ulid(id) {
+                    return Err(IpcError::invalid_format(
+                        "source.internal.id",
+                        "必须是 26 位 ULID（内部备份 id）",
+                    ));
+                }
+                Ok(())
+            }
+            BackupSource::External { path } => path::validate_external_file(path, "db").map(|_| ()),
+        }
+    }
+}
+
+/// `app_restart`（ADR-004）：显式 `confirm:true` 才允许复用关闭序列重启。
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppRestartRequest {
+    pub confirm: bool,
+}
+
+impl CommandRequest for AppRestartRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !self.confirm {
+            return Err(IpcError::at_field(
+                IpcErrorCode::InvalidValue,
+                "confirm",
+                "必须显式 confirm:true（重启将中断全部在途 run）",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// `run_retry`（ADR-004）：仅终态 run 可重试；格式层校验 ULID，终态由后端判定。
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunRetryRequest {
+    pub run_id: String,
+}
+
+impl CommandRequest for RunRetryRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.run_id) {
+            return Err(IpcError::invalid_format("run_id", "必须是 26 位 ULID"));
+        }
+        Ok(())
+    }
+}
+
+/// `runtime_retry`（ADR-004/M1-10）：仅 `disabled + start_failed` 可用；
+/// `runtime_id` 必须命中 `runtimes` 白名单（存在性由后端判定）。
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeRetryRequest {
+    pub runtime_id: String,
+}
+
+impl CommandRequest for RuntimeRetryRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        validate::validate_identifier(&self.runtime_id, "runtime_id")
+    }
+}
+
+/// `runtime_enable`（ADR-004/M1-10）：仅 `disabled` 可用；
+/// `untrusted` / `version_mismatch` 必须先修复后再启用（后端状态判定）。
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeEnableRequest {
+    pub runtime_id: String,
+}
+
+impl CommandRequest for RuntimeEnableRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        validate::validate_identifier(&self.runtime_id, "runtime_id")
+    }
+}
+
+/// `workspace_set`（ADR-004/D14）：`workspace_id` 存在性 或 `root_path`
+/// canonicalize（目录须存在；命中同步盘拒绝清单则拒绝）。P0 仅对新会话生效。
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceSetRequest {
+    #[serde(default)]
+    pub workspace_id: Option<String>,
+    #[serde(default)]
+    pub root_path: Option<String>,
+}
+
+impl WorkspaceSetRequest {
+    /// 目标工作区根目录的规范化结果（按 `workspace_id` 绑定时为 `None`，由后端解析）。
+    pub fn canonical_root_path(&self) -> Result<Option<std::path::PathBuf>, IpcError> {
+        match &self.root_path {
+            Some(root_path) => path::validate_workspace_root(root_path).map(Some),
+            None => Ok(None),
+        }
+    }
+}
+
+impl CommandRequest for WorkspaceSetRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        match (&self.workspace_id, &self.root_path) {
+            (Some(workspace_id), None) => {
+                if !is_ulid(workspace_id) {
+                    return Err(IpcError::invalid_format(
+                        "workspace_id",
+                        "必须是 26 位 ULID",
+                    ));
+                }
+                Ok(())
+            }
+            (None, Some(root_path)) => path::validate_workspace_root(root_path).map(|_| ()),
+            _ => Err(IpcError::invalid_value(
+                "必须且只能提供 workspace_id 或 root_path 之一",
+            )),
+        }
     }
 }
 

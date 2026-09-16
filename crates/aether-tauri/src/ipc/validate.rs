@@ -53,6 +53,18 @@ pub fn parse_strict<T: CommandRequest>(value: Value) -> Result<T, IpcError> {
     Ok(request)
 }
 
+/// 无参数命令的严格解析（ADR-004：`backup_list` 无参数）。
+///
+/// 缺省调用（`null` 载荷）等价于空对象；任何成员都会被 `deny_unknown_fields` 拒绝。
+pub fn parse_no_params<T: CommandRequest>(value: Value) -> Result<T, IpcError> {
+    let value = if value.is_null() {
+        Value::Object(serde_json::Map::new())
+    } else {
+        value
+    };
+    parse_strict(value)
+}
+
 /// 把 serde 反序列化错误映射为稳定错误码。
 ///
 /// serde_json 的错误文本是事实上的稳定接口（`unknown field \`x\`` /
