@@ -167,6 +167,20 @@ fn temp_dir(label: &str) -> PathBuf {
     dir
 }
 
+/// 长路径形式（测试夹具用）。
+///
+/// CI 的 `%TEMP%` 形如 `C:\Users\RUNNER~1\...`，含 8.3 短名——短名是 D9/T7 的
+/// **拒绝样本**，不能直接当作合法输入；夹具先 canonicalize 并去掉 `\\?\` 前缀。
+fn long_path(path: &Path) -> String {
+    let canonical = std::fs::canonicalize(path).expect("canonicalize 夹具路径");
+    let text = canonical.to_string_lossy().to_string();
+    #[cfg(windows)]
+    if let Some(stripped) = text.strip_prefix(r"\\?\") {
+        return stripped.to_string();
+    }
+    text
+}
+
 struct Fixture {
     #[allow(dead_code)]
     app: App<MockRuntime>,
@@ -521,9 +535,10 @@ fn malformed_samples_return_structured_errors_and_do_not_reach_backend() {
 #[test]
 fn valid_requests_reach_backend_exactly_once() {
     let fixture = fixture("valid");
-    let inside = fixture.root.to_string_lossy().to_string();
+    let inside = long_path(&fixture.root);
     let external_db = fixture.outside.join("restore-candidate.db");
     std::fs::write(&external_db, b"candidate").expect("写入外部候选 .db");
+    let external_db = long_path(&external_db);
 
     let samples: Vec<(&str, Value, &str)> = vec![
         ("runtimes_list", Value::Null, "runtimes_list"),
@@ -574,7 +589,7 @@ fn valid_requests_reach_backend_exactly_once() {
         ),
         (
             "backup_restore",
-            json!({ "source": { "external": { "path": external_db.to_string_lossy() } } }),
+            json!({ "source": { "external": { "path": external_db } } }),
             "backup_restore",
         ),
         ("app_restart", json!({ "confirm": true }), "app_restart"),
@@ -706,8 +721,8 @@ fn path_validator_accepts_inside_and_rejects_escape() {
     let inside = root.join("nested");
     std::fs::create_dir_all(&inside).expect("创建子目录");
 
-    assert!(validate_user_path(&inside.to_string_lossy(), std::slice::from_ref(&root)).is_ok());
-    assert!(validate_user_path(&root.to_string_lossy(), std::slice::from_ref(&root)).is_ok());
+    assert!(validate_user_path(&long_path(&inside), std::slice::from_ref(&root)).is_ok());
+    assert!(validate_user_path(&long_path(&root), std::slice::from_ref(&root)).is_ok());
 
     let outside = temp_dir("path-outside");
     let escape = root
@@ -749,29 +764,31 @@ fn path_prefix_check_is_component_wise() {
 #[test]
 fn external_and_workspace_path_validators_follow_d13_d7() {
     let base = temp_dir("path-external");
+    let base_long = long_path(&base);
 
     // backup_restore 外部候选：必须存在、是文件、后缀 .db（大小写不敏感）。
     let db = base.join("backup.DB");
     std::fs::write(&db, b"x").expect("写入候选");
-    assert!(validate_external_file(&db.to_string_lossy(), "db").is_ok());
+    assert!(validate_external_file(&long_path(&db), "db").is_ok());
     let txt = base.join("backup.txt");
     std::fs::write(&txt, b"x").expect("写入候选");
     assert_eq!(
-        validate_external_file(&txt.to_string_lossy(), "db")
+        validate_external_file(&long_path(&txt), "db")
             .expect_err("非 .db 必须拒绝")
             .code
             .as_str(),
         "path_rejected"
     );
+    let missing = PathBuf::from(&base_long).join("missing.db");
     assert_eq!(
-        validate_external_file(&base.join("missing.db").to_string_lossy(), "db")
+        validate_external_file(&missing.to_string_lossy(), "db")
             .expect_err("不存在必须拒绝")
             .code
             .as_str(),
         "path_rejected"
     );
     assert_eq!(
-        validate_external_file(&base.to_string_lossy(), "db")
+        validate_external_file(&base_long, "db")
             .expect_err("目录必须拒绝")
             .code
             .as_str(),
@@ -781,16 +798,17 @@ fn external_and_workspace_path_validators_follow_d13_d7() {
     // workspace_set root_path：必须存在且为目录；同步盘路径段拒绝（A4 预检）。
     let workspace = base.join("workspace");
     std::fs::create_dir_all(&workspace).expect("创建 workspace");
-    assert!(validate_workspace_root(&workspace.to_string_lossy()).is_ok());
+    assert!(validate_workspace_root(&long_path(&workspace)).is_ok());
+    let missing_ws = PathBuf::from(&base_long).join("missing");
     assert_eq!(
-        validate_workspace_root(&base.join("missing").to_string_lossy())
+        validate_workspace_root(&missing_ws.to_string_lossy())
             .expect_err("不存在必须拒绝")
             .code
             .as_str(),
         "path_rejected"
     );
     assert_eq!(
-        validate_workspace_root(&db.to_string_lossy())
+        validate_workspace_root(&long_path(&db))
             .expect_err("文件必须拒绝")
             .code
             .as_str(),
@@ -798,7 +816,7 @@ fn external_and_workspace_path_validators_follow_d13_d7() {
     );
     let sync = base.join("OneDrive").join("ws");
     std::fs::create_dir_all(&sync).expect("创建同步盘样本");
-    let rejection = validate_workspace_root(&sync.to_string_lossy()).expect_err("同步盘必须拒绝");
+    let rejection = validate_workspace_root(&long_path(&sync)).expect_err("同步盘必须拒绝");
     assert_eq!(rejection.code.as_str(), "path_rejected");
     assert!(
         rejection.message.contains("同步盘") || rejection.message.contains("OneDrive"),

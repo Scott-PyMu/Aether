@@ -28,18 +28,26 @@ export function bin(name) {
 
 /**
  * 解析 pnpm 调用方式。
- * Windows 下 pnpm 是 .cmd 垫片，Node 无法直接 spawn，因此优先定位全局安装的
- * pnpm.cjs 并用当前 Node 执行；找不到时回退到 PATH 上的 pnpm。
+ * Windows 下 pnpm 可能是 .cmd 垫片或独立 exe，Node 无法直接 spawn .cmd，
+ * 因此按序探测：AETHER_PNPM 覆盖 → PNPM_HOME（pnpm/action-setup）→
+ * 全局 npm 安装的 pnpm.cjs → %LOCALAPPDATA%\pnpm\pnpm.exe；最后回退 PATH。
  */
 export function pnpmCommand() {
   if (process.env.AETHER_PNPM) return { command: process.env.AETHER_PNPM, prefix: [] };
   const appData = process.env.APPDATA ?? path.join(os.homedir(), "AppData", "Roaming");
-  const npmGlobalCandidates = [
+  const localAppData = process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local");
+  const candidates = [
+    process.env.PNPM_HOME && path.join(process.env.PNPM_HOME, "pnpm.exe"),
+    process.env.PNPM_HOME && path.join(process.env.PNPM_HOME, "pnpm.cjs"),
+    process.env.PNPM_HOME && path.join(process.env.PNPM_HOME, "pnpm"),
     path.join(appData, "npm", "node_modules", "pnpm", "bin", "pnpm.cjs"),
     path.join(appData, "npm", "node_modules", "pnpm", "bin", "pnpm.js"),
-  ];
-  for (const candidate of npmGlobalCandidates) {
-    if (existsSync(candidate)) return { command: process.execPath, prefix: [candidate] };
+    localAppData && path.join(localAppData, "pnpm", "pnpm.exe"),
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    if (!existsSync(candidate)) continue;
+    if (/\.(cjs|js)$/i.test(candidate)) return { command: process.execPath, prefix: [candidate] };
+    return { command: candidate, prefix: [] };
   }
   return { command: "pnpm", prefix: [] };
 }
@@ -86,7 +94,11 @@ export function run(name, args, options = {}) {
   console.log(`\n$ ${printable}${options.env ? "   # 附加环境变量" : ""}`);
 
   let result;
-  if (process.platform === "win32" && /\.(cmd|bat)$/i.test(resolved)) {
+  // .cmd/.bat 垫片需要 cmd.exe；未解析到具体路径的裸命令同样交给 cmd.exe 做 PATH 解析
+  //（Node 直接 spawn 裸命令在部分 CI 环境会 ENOENT）。
+  const useWindowsShell =
+    process.platform === "win32" && (/\.(cmd|bat)$/i.test(resolved) || resolved === name);
+  if (useWindowsShell) {
     const commandLine = [resolved, ...args].map(quoteWindowsArg).join(" ");
     result = spawnSync(commandLine, {
       cwd: options.cwd ?? repoRoot,
