@@ -38,6 +38,54 @@ pub enum StoreError {
     BackupTargetExists { path: PathBuf },
     /// 路径无法转换为 UTF-8（SQLite 文件名接口要求）。
     NonUtf8Path { path: PathBuf },
+    /// 写队列深度超过 L2 阈值：拒绝新工作准入（D8；错误码 `storage_backpressure`）。
+    StorageBackpressure {
+        /// 触发时的待提交条目数（队列深度）。
+        depth: usize,
+        /// 当前 L2 阈值。
+        threshold: usize,
+    },
+    /// 写事务失败（批次内每个提交独立构造；`code` 为 SQLite 扩展错误码，供持久化降级判定）。
+    WriteTransactionFailed {
+        /// SQLite 扩展错误码（非 SQLite 错误为 `None`，如 payload 序列化失败）。
+        code: Option<i32>,
+        message: String,
+    },
+    /// 写队列已关闭（关停或写任务退出后提交被拒绝）。
+    WriteQueueClosed,
+    /// 空写批次（调用方错误，不产生事务）。
+    EmptyWriteBatch,
+    /// 写队列配置非法（容量/批量/间隔/读连接数）。
+    InvalidWriteQueueConfig { reason: String },
+    /// 库中事件行无法重建信封（损坏或与当前模型不兼容）。
+    InvalidStoredEvent { id: String, reason: String },
+    /// 内部不变量被破坏（互斥锁中毒、后台任务异常退出等）。
+    Internal { reason: String },
+}
+
+impl StoreError {
+    /// 稳定错误码（命令层 / 审计 / 诊断使用；`storage_backpressure` 为 D8 约定错误码）。
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::Sqlite(_) => "sqlite",
+            Self::Io(_) => "io",
+            Self::MigrationChecksumMismatch { .. } => "migration_checksum_mismatch",
+            Self::SchemaNewerThanProgram { .. } => "schema_newer_than_program",
+            Self::InvalidMigrationEncoding { .. } => "invalid_migration_encoding",
+            Self::InvalidMigrationSet { .. } => "invalid_migration_set",
+            Self::SafeModeWriteRefused { .. } => "safe_mode_write_refused",
+            Self::SafeModeUnavailable { .. } => "safe_mode_unavailable",
+            Self::BackupTargetExists { .. } => "backup_target_exists",
+            Self::NonUtf8Path { .. } => "non_utf8_path",
+            Self::StorageBackpressure { .. } => "storage_backpressure",
+            Self::WriteTransactionFailed { .. } => "write_transaction_failed",
+            Self::WriteQueueClosed => "write_queue_closed",
+            Self::EmptyWriteBatch => "empty_write_batch",
+            Self::InvalidWriteQueueConfig { .. } => "invalid_write_queue_config",
+            Self::InvalidStoredEvent { .. } => "invalid_stored_event",
+            Self::Internal { .. } => "internal",
+        }
+    }
 }
 
 impl fmt::Display for StoreError {
@@ -78,6 +126,28 @@ impl fmt::Display for StoreError {
             Self::NonUtf8Path { path } => {
                 write!(f, "路径不是合法 UTF-8，无法传给 SQLite：{}", path.display())
             }
+            Self::StorageBackpressure { depth, threshold } => write!(
+                f,
+                "存储写队列背压（storage_backpressure）：待提交 {depth} 条 > 阈值 {threshold}，拒绝新工作准入（D8 L2）"
+            ),
+            Self::WriteTransactionFailed { code, message } => {
+                let code = match code {
+                    Some(value) => format!("SQLite 扩展码 {value}"),
+                    None => "非 SQLite 错误".to_owned(),
+                };
+                write!(f, "写事务失败（{code}）：{message}")
+            }
+            Self::WriteQueueClosed => {
+                write!(f, "写队列已关闭：写任务已退出，提交被拒绝")
+            }
+            Self::EmptyWriteBatch => write!(f, "空写批次：至少需要 1 条事件"),
+            Self::InvalidWriteQueueConfig { reason } => {
+                write!(f, "写队列配置非法: {reason}")
+            }
+            Self::InvalidStoredEvent { id, reason } => {
+                write!(f, "事件行无法重建信封（id={id}）: {reason}")
+            }
+            Self::Internal { reason } => write!(f, "存储内部错误: {reason}"),
         }
     }
 }
@@ -173,7 +243,95 @@ mod tests {
                 },
                 "UTF-8",
             ),
+            (
+                StoreError::StorageBackpressure {
+                    depth: 4_097,
+                    threshold: 4_096,
+                },
+                "storage_backpressure",
+            ),
+            (
+                StoreError::WriteTransactionFailed {
+                    code: Some(7_787),
+                    message: "database or disk is full".to_owned(),
+                },
+                "写事务失败",
+            ),
+            (StoreError::WriteQueueClosed, "已关闭"),
+            (StoreError::EmptyWriteBatch, "空写批次"),
+            (
+                StoreError::InvalidWriteQueueConfig {
+                    reason: "容量必须 >0".to_owned(),
+                },
+                "配置非法",
+            ),
+            (
+                StoreError::InvalidStoredEvent {
+                    id: "evt-1".to_owned(),
+                    reason: "payload 非法 JSON".to_owned(),
+                },
+                "无法重建信封",
+            ),
+            (
+                StoreError::Internal {
+                    reason: "锁中毒".to_owned(),
+                },
+                "内部错误",
+            ),
         ]
+    }
+
+    fn error_codes() -> Vec<(StoreError, &'static str)> {
+        let mut expected: Vec<&'static str> = vec![
+            "sqlite",
+            "io",
+            "migration_checksum_mismatch",
+            "schema_newer_than_program",
+            "invalid_migration_encoding",
+            "invalid_migration_set",
+            "safe_mode_write_refused",
+            "safe_mode_unavailable",
+            "backup_target_exists",
+            "non_utf8_path",
+            "storage_backpressure",
+            "write_transaction_failed",
+            "write_queue_closed",
+            "empty_write_batch",
+            "invalid_write_queue_config",
+            "invalid_stored_event",
+            "internal",
+        ];
+        let mut variants = all_variants();
+        assert_eq!(
+            variants.len(),
+            expected.len(),
+            "新增错误变体必须同步 code()"
+        );
+        variants
+            .drain(..)
+            .zip(expected.drain(..))
+            .map(|((variant, _), code)| (variant, code))
+            .collect()
+    }
+
+    #[test]
+    fn code_is_stable_and_unique() {
+        let pairs = error_codes();
+        let mut codes: Vec<&str> = pairs.iter().map(|(_, code)| *code).collect();
+        codes.sort_unstable();
+        let count = codes.len();
+        codes.dedup();
+        assert_eq!(codes.len(), count, "错误码必须唯一");
+        for (variant, expected) in pairs {
+            let actual = variant.code();
+            assert_eq!(actual, expected, "{variant:?} 错误码不一致");
+            assert!(
+                actual
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+                "错误码必须为 snake_case: {actual}"
+            );
+        }
     }
 
     #[test]

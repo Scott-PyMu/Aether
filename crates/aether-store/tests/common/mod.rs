@@ -1,9 +1,11 @@
-//! M1-03 测试公共辅助（各 DoD 测试文件共用）。
+//! M1-03/M1-04 测试公共辅助（各 DoD 测试文件共用）。
 #![allow(dead_code, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
+use aether_core::EventEnvelope;
 use aether_store::Store;
 use tempfile::TempDir;
 
@@ -54,4 +56,28 @@ pub fn corrupt_last_page(path: &Path) -> usize {
 /// 文件 sha256（十六进制）。
 pub fn sha256_file(path: &Path) -> String {
     aether_store::checksum(&fs::read(path).unwrap())
+}
+
+/// 构造测试用 `message.delta` 信封（M1-04 写队列/基准共用；`(session_id, seq)` 唯一）。
+pub fn delta_event(session_id: &str, seq: u64) -> EventEnvelope {
+    let text = format!(
+        r#"{{"v":1,"id":"{session_id}-evt-{seq}","session_id":"{session_id}","run_id":null,"runtime_id":"mock","seq":{seq},"ts":1760000000000,"type":"message.delta","payload":{{"message_id":"{session_id}-msg","text":"chunk-{seq}"}}}}"#
+    );
+    EventEnvelope::from_json_str(&text).unwrap()
+}
+
+/// 生成 `count` 条会话内 seq 连续的事件。
+pub fn delta_events(session_id: &str, start_seq: u64, count: usize) -> Vec<EventEnvelope> {
+    (0..count)
+        .map(|offset| delta_event(session_id, start_seq + offset as u64))
+        .collect()
+}
+
+/// 最近秩（nearest-rank）P95（基准/延迟断言共用）。
+pub fn percentile_95(samples: &[Duration]) -> Duration {
+    assert!(!samples.is_empty(), "P95 样本不能为空");
+    let mut sorted: Vec<Duration> = samples.to_vec();
+    sorted.sort_unstable();
+    let rank = ((sorted.len() as f64) * 0.95).ceil() as usize;
+    sorted[rank.saturating_sub(1).min(sorted.len() - 1)]
 }

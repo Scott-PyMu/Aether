@@ -5,6 +5,8 @@
 //! （[`migration`]：schema_migrations + 文件 sha256，禁用 `PRAGMA user_version`）、
 //! 附录 C DDL（`migrations/0001_init.sql`）、启动 `quick_check` 与安全模式
 //! （只读 + 备份/导出入口，[`store`]）。
+//! M1-04 交付：单写队列与 group commit（[`write_queue`]：`mpsc(4096)`、
+//! 16ms/256 条批量提交、4 读连接池、L1/L2 背压信号与 `storage_backpressure` 准入接口）。
 //!
 //! 硬约束（AGENTS.md §2.2）：禁止 `unwrap()` / `expect()` / `panic!()`
 //! （经 workspace clippy lint 强制；测试代码在 crate 级显式豁免）。
@@ -15,6 +17,7 @@ pub mod error;
 pub mod migration;
 pub mod pragma;
 pub mod store;
+pub mod write_queue;
 
 pub use error::StoreError;
 pub use migration::{
@@ -23,6 +26,11 @@ pub use migration::{
 };
 pub use pragma::PragmaSnapshot;
 pub use store::{quick_check, ExportReport, IntegrityReport, Store, StoreMode, TableExport};
+pub use write_queue::{
+    BatchTrigger, CommitReceipt, QueueMetrics, QueuePressureLevel, QueuePressurePhase, ReadPool,
+    StoreRuntime, WriteQueue, WriteQueueAlert, WriteQueueConfig, FLUSH_INTERVAL, L1_THRESHOLD,
+    L2_THRESHOLD, MAX_BATCH_ENTRIES, QUEUE_CAPACITY, READ_CONNECTION_COUNT,
+};
 
 #[cfg(test)]
 mod tests {

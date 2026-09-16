@@ -121,13 +121,24 @@ impl Store {
         Ok(conn)
     }
 
-    fn open_read_only(path: &Path) -> Result<Connection, StoreError> {
+    /// 只读打开（安全模式与 M1-04 读连接池共用）。
+    pub(crate) fn open_read_only(path: &Path) -> Result<Connection, StoreError> {
         let conn = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
         pragma::apply_read_only(&conn)?;
         Ok(conn)
+    }
+
+    /// 把完成迁移的读写连接移交给写队列运行时（M1-04）。
+    ///
+    /// 安全模式（只读）下拒绝移交：调用方应走 [`Store`] 的只读/备份/导出入口。
+    pub(crate) fn into_writer_connection(self) -> Result<(Connection, PathBuf), StoreError> {
+        match self.mode {
+            StoreMode::SafeMode { reason } => Err(StoreError::SafeModeWriteRefused { reason }),
+            StoreMode::ReadWrite => Ok((self.conn, self.path)),
+        }
     }
 
     fn enter_safe_mode(path: &Path, reason: String) -> Result<Self, StoreError> {
