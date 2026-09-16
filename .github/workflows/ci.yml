@@ -113,6 +113,31 @@ jobs:
       - name: M1-08 验证（单测矩阵 + 静态检查 + CSP/导航 E2E）
         run: node scripts/test/m1-08/verify-m1-08.mjs
 
+  # M1-09：线协议骨架与 Mock 适配器（D6/评审#6）——Bun 编译 Mock 单文件后，
+  # 一致性/健壮性集成测试与吞吐基准均针对真实进程执行。
+  wire-protocol-mock:
+    name: Wire protocol + Mock adapter (M1-09)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: M1-09 验证（编译 Mock + 单测 + 一致性/健壮性集成 + 吞吐基准）
+        run: pnpm verify:m1-09
+
   # DoD3：覆盖率门禁（Rust cargo-llvm-cov + TS vitest --coverage，行覆盖 <70% 失败）
   coverage:
     name: Coverage gate (>=70% lines)
@@ -134,9 +159,19 @@ jobs:
           components: llvm-tools-preview
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: Swatinem/rust-cache@v2
+
+      # M1-09：构建 Mock 适配器，使 aether-adapters 一致性/健壮性集成测试参与覆盖率统计。
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - name: 构建 Mock 适配器（M1-09 集成测试依赖）
+        run: bun build packages/adapter-mock/src/main.ts --compile --outfile "$RUNNER_TEMP/aether-mock-adapter"
       - name: Rust 覆盖率门禁（cargo-llvm-cov，行覆盖 >=70）
         # 壳层 aether-tauri 无业务逻辑，其验证为 Windows/macOS 构建+冒烟；
         # 该排除为 M1-01 常量级决策，已记录在任务证据中。
+        env:
+          AETHER_MOCK_ADAPTER: ${{ runner.temp }}/aether-mock-adapter
+          AETHER_REQUIRE_MOCK_ADAPTER: "1"
         run: cargo llvm-cov --workspace --exclude aether-tauri --fail-under-lines 70
 
   # DoD2：供应链门禁（依赖白名单 / 许可证 / 相似度 / SBOM）

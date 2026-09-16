@@ -1,14 +1,57 @@
 //! Aether 适配器宿主与监督器（设计 D5 / D6）。
 //!
 //! 依赖方向（AGENTS.md §2.1）：仅依赖 `aether-core`，禁止依赖其他内部 crate。
-//! 本里程碑（M1-01）仅建立 workspace 骨架；线协议与监督器自 M1-09 / M1-10 起落地。
+//! - M1-09：JSON-RPC 2.0 over stdio（JSON-Lines v1.0）线协议骨架、握手、超时表、
+//!   错误码、大行策略；Mock 适配器（`packages/adapter-mock`）驱动一致性/健壮性测试；
+//! - M1-10：进程监督（状态机、进程组、退避、台账、终止序列）自本 crate 延续。
+//!
+//! 硬约束：核心 crate 禁止 `unwrap()` / `expect()` / `panic!()`（测试代码显式豁免）。
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+pub mod connection;
+pub mod framing;
+pub mod process;
+pub mod protocol;
+
+pub use connection::{
+    AdapterConnection, AdapterNotification, ConnectionState, DisconnectReason, RequestError,
+    RpcError, NOTIFICATION_QUEUE_CAPACITY, OUTBOUND_QUEUE_CAPACITY, RECORDED_ERRORS_LIMIT,
+};
+pub use framing::{
+    AetherLineCodec, ChunkLimitedReader, FrameError, RawLine, ARTIFACT_REF_LIMIT,
+    ARTIFACT_REF_TYPE, MAX_FRAME_BYTES, READ_CHUNK_BYTES,
+};
+pub use process::{AdapterProcess, ProcessError, STDERR_TAIL_LINES};
+pub use protocol::{
+    code, notify, protocol_major, upgrade_hint, validate_hello, DisabledInfo, DisabledReason,
+    Hello, Method, RuntimeInfo, HANDSHAKE_TIMEOUT, INVALID_FRAME_UNHEALTHY_THRESHOLD,
+    PROTOCOL_MAJOR, PROTOCOL_MINOR, PROTOCOL_VERSION,
+};
+
+/// 适配器宿主版本号——取自单一版本来源（工作区 `Cargo.toml`）。
+pub fn version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn adapters_depend_on_core_with_single_version_source() {
         assert_eq!(aether_core::version(), env!("CARGO_PKG_VERSION"));
+        assert_eq!(version(), env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn constants_match_d6() {
+        assert_eq!(PROTOCOL_VERSION, "1.0");
+        assert_eq!(PROTOCOL_MAJOR, 1);
+        assert_eq!(HANDSHAKE_TIMEOUT.as_secs(), 10);
+        assert_eq!(INVALID_FRAME_UNHEALTHY_THRESHOLD, 20);
+        assert_eq!(MAX_FRAME_BYTES, 2 * 1024 * 1024);
+        assert_eq!(ARTIFACT_REF_LIMIT, 1024 * 1024);
+        assert_eq!(OUTBOUND_QUEUE_CAPACITY, 256);
     }
 }

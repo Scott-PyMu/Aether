@@ -1,0 +1,52 @@
+{
+  "task": "M1-09",
+  "description": "DoD 第 6 条：Mock 内置 5 类工具调用注入清单（权威定义，供 M2-02/M2-10 复用）。trigger 为 session.send 的 text；events 为对应事件的精确 type 序列；terminal 为该场景 run 的终态。",
+  "notes": [
+    "④⑤ 在 M1 阶段为事件序列预置：Mock 直接产出 permission.requested/permission.resolved（同时按 D6 发 permission.request 通知），决策来自 permission.resolve 请求，不经核心权限网关；M2 阶段由 M2-10 在真实回环中重放验证。",
+    "④⑤ 的事件序列按 DoD 字面定义从 permission.requested 起（不含 tool.call_started）。",
+    "每个场景包裹在 run 生命周期内：run.started →（工具/权限序列）→ terminal；③ 中断后以 run.cancelled 收口。"
+  ],
+  "scenarios": [
+    {
+      "id": "normal",
+      "label": "① 正常完成",
+      "trigger": "tool:normal",
+      "events": ["tool.call_started", "tool.call_completed"],
+      "terminal": "run.completed"
+    },
+    {
+      "id": "fail",
+      "label": "② 执行失败",
+      "trigger": "tool:fail",
+      "events": ["tool.call_started", "tool.call_failed"],
+      "errorCode": "tool_execution_failed",
+      "terminal": "run.completed"
+    },
+    {
+      "id": "timeout",
+      "label": "③ 超时中断",
+      "trigger": "tool:timeout",
+      "events": ["tool.call_started", "tool.call_failed"],
+      "errorCode": "timeout",
+      "interruption": "tool.call_started",
+      "terminal": "run.cancelled"
+    },
+    {
+      "id": "permission_allow",
+      "label": "④ 权限 ask→允许",
+      "trigger": "tool:permission-allow",
+      "events": ["permission.requested", "permission.resolved", "tool.call_completed"],
+      "decision": "allow",
+      "terminal": "run.completed"
+    },
+    {
+      "id": "permission_deny",
+      "label": "⑤ 权限 ask→拒绝",
+      "trigger": "tool:permission-deny",
+      "events": ["permission.requested", "permission.resolved", "tool.call_failed"],
+      "decision": "deny",
+      "errorCode": "denied",
+      "terminal": "run.completed"
+    }
+  ]
+}
