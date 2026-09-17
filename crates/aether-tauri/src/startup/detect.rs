@@ -485,14 +485,22 @@ fn drive_letter_of(text: &str) -> Option<String> {
 
 #[cfg(windows)]
 fn native_reparse_ancestor(candidate: &Path) -> Option<PathBuf> {
-    use std::os::windows::fs::MetadataExt;
+    use std::os::windows::fs::{FileTypeExt, MetadataExt};
 
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
     candidate
         .ancestors()
         .find(|ancestor| {
             std::fs::symlink_metadata(ancestor)
-                .map(|metadata| metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
+                .map(|metadata| {
+                    // 云占位/云文件仅置 REPARSE 属性；Junction/符号链接另有 is_symlink
+                    // （目录 Junction 亦为 true），或可由 read_link 解析。三者取或，
+                    // 避免个别 NT/文件系统仅报告其一（M1-06 CI 回归加固）。
+                    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+                        || metadata.file_type().is_symlink()
+                        || metadata.file_type().is_symlink_dir()
+                        || std::fs::read_link(ancestor).is_ok()
+                })
                 .unwrap_or(false)
         })
         .map(Path::to_path_buf)

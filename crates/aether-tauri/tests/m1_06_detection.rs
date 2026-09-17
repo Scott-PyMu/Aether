@@ -67,6 +67,20 @@ fn hit_ids(report: &DetectionReport) -> Vec<&'static str> {
 }
 
 fn assert_hit(report: &DetectionReport, id: &str, label: &str) {
+    // 逐样本输出判定摘要（CI 失败时仅凭日志即可定位样本，不依赖断言展开）。
+    println!(
+        "[m1-06] sample-result {label}: expect={id} verdict={:?} hits={:?}",
+        report.verdict,
+        hit_ids(report)
+    );
+    if report.verdict != Verdict::Reject || !hit_ids(report).contains(&id) {
+        for check in &report.checks {
+            println!(
+                "[m1-06] check id={} hit={} precision={:?} detail={}",
+                check.id, check.hit, check.precision, check.detail
+            );
+        }
+    }
     assert_eq!(
         report.verdict,
         Verdict::Reject,
@@ -121,6 +135,16 @@ fn windows_samples_are_all_detected() {
             .status()
             .expect("执行 mklink /J");
         assert!(status.success(), "Junction 创建失败（mklink /J）");
+        {
+            use std::os::windows::fs::{FileTypeExt, MetadataExt};
+            let metadata = std::fs::symlink_metadata(&link).expect("Junction 元数据");
+            println!(
+                "[m1-06] junction-meta attrs=0x{:X} is_symlink={} is_symlink_dir={}",
+                metadata.file_attributes(),
+                metadata.file_type().is_symlink(),
+                metadata.file_type().is_symlink_dir()
+            );
+        }
         let inside = link.join("Aether");
         std::fs::create_dir_all(&inside).expect("创建 Junction 内目录");
         let mut ctx = context(PlatformKind::Windows);
