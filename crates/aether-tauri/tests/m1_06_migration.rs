@@ -28,6 +28,22 @@ fn temp_dir(label: &str) -> PathBuf {
     dir
 }
 
+/// IPC 迁移目标的长路径形式（无 8.3 短名）。
+///
+/// CI 的 `%TEMP%` 形如 `C:\Users\RUNNER~1\...`；短名是 D9/T7 的**拒绝样本**，
+/// 而 `startup_migrate` 走 `validate_migration_target`（含 Windows 特殊形态拒绝）。
+/// 测试需以 canonicalize 后的长路径调用迁移（生产由目录选择器/用户输入保证）。
+fn long_path(path: &Path) -> String {
+    // 目标可能不存在（负样本）——canonicalize 失败时回退原始路径。
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let text = canonical.to_string_lossy().to_string();
+    #[cfg(windows)]
+    if let Some(stripped) = text.strip_prefix(r"\\?\") {
+        return stripped.to_string();
+    }
+    text
+}
+
 /// 允许上下文（无任何同步盘命中）。
 fn allow_context() -> DetectionContext {
     DetectionContext {
@@ -216,9 +232,7 @@ fn gate_blocks_then_migrates_and_locks_new_dir() {
 
     let target = root.join("local-target");
     std::fs::create_dir_all(&target).expect("创建迁移目标");
-    let migrated = gate
-        .migrate(target.to_string_lossy().as_ref())
-        .expect("迁移成功");
+    let migrated = gate.migrate(&long_path(&target)).expect("迁移成功");
     assert_eq!(migrated["phase"], "ready");
     assert_eq!(migrated["data_dir_source"], "migrated");
     assert!(migrated["migration"]["entries"]
@@ -233,7 +247,7 @@ fn gate_blocks_then_migrates_and_locks_new_dir() {
     );
     assert!(target.join("aether.db").is_file());
 
-    let second = gate.migrate(target.to_string_lossy().as_ref());
+    let second = gate.migrate(&long_path(&target));
     assert_eq!(
         second.expect_err("重复迁移必须拒绝").code.as_str(),
         "invalid_value"
@@ -255,7 +269,7 @@ fn gate_rejects_sync_or_non_empty_migration_target() {
     let sync_target = sync_root.join("still-synced");
     std::fs::create_dir_all(&sync_target).expect("创建同步盘目标");
     let rejected = gate
-        .migrate(sync_target.to_string_lossy().as_ref())
+        .migrate(&long_path(&sync_target))
         .expect_err("同步盘目标必须拒绝");
     assert_eq!(rejected.code.as_str(), "path_rejected");
 
@@ -263,13 +277,13 @@ fn gate_rejects_sync_or_non_empty_migration_target() {
     std::fs::create_dir_all(&occupied).expect("创建非空目标");
     std::fs::write(occupied.join("x.txt"), b"x").expect("写入占用文件");
     let rejected = gate
-        .migrate(occupied.to_string_lossy().as_ref())
+        .migrate(&long_path(&occupied))
         .expect_err("非空目标必须拒绝");
     assert_eq!(rejected.code.as_str(), "path_rejected");
 
     let missing = root.join("missing-target");
     let rejected = gate
-        .migrate(missing.to_string_lossy().as_ref())
+        .migrate(&long_path(&missing))
         .expect_err("不存在的目标必须拒绝");
     assert_eq!(rejected.code.as_str(), "path_rejected");
 

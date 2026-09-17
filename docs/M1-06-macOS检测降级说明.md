@@ -64,8 +64,14 @@
 ## 7. 验证状态（M1-06 DoD2 完成说明）
 
 - 本机（Windows）注入样本、命令层提示与前端渲染断言：**通过**（`pnpm verify:m1-06 --skip-e2e` 全绿，含降级文案静态与运行时断言）。
-- macOS 原生样本（mac runner）：**待 CI 跑绿后回填运行链接与结论**（本文件随代码提交触发 `data-dir-guard-macos`）。
-- 完成口径（回填后生效）：macOS DoD2 已由 macos-14 CI 验证通过；iCloud 标记 API 按风险条款降级为路径前缀 + 手动确认，UI 已明示。
+- **macOS 原生样本（macos-14 CI，job `macOS data dir samples (M1-06)`）：已连续 4 次跑绿**：
+  - run [35173358821](https://github.com/Scott-PyMu/Aether/actions/runs/35173358821)（首次修复非 Windows 编译后）
+  - run [35174078102](https://github.com/Scott-PyMu/Aether/actions/runs/35174078102)
+  - run [35174804590](https://github.com/Scott-PyMu/Aether/actions/runs/35174804590)
+  - run [35175425557](https://github.com/Scott-PyMu/Aether/actions/runs/35175425557)
+  - 证据 artifact：`m1-06-macos-evidence`（每次上传，含 `samples.json`、`cargo-test-m1_06-detection.txt`、`evidence.json`）
+- 完成口径：**macOS DoD2 已由 macos-14 CI 验证通过；iCloud 标记 API 按风险条款降级为路径前缀 + 手动确认，UI 已明示。**
+- Windows 侧（DoD1/DoD3/DoD4/DoD5）由同 workflow 的 `data-dir-guard` job 守护；本文件记录 macOS DoD2 的降级口径与证据。
 
 ## 8. 变更记录
 

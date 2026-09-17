@@ -144,6 +144,21 @@ fn make_source(root: &Path, name: &str) -> PathBuf {
     source
 }
 
+/// IPC 迁移目标的长路径形式（无 8.3 短名）。
+///
+/// CI 的 `%TEMP%` 形如 `C:\Users\RUNNER~1\...`；短名是 D9/T7 的**拒绝样本**，
+/// `startup_migrate` 会走 `validate_migration_target` 拒绝该形态；正样本须以
+/// canonicalize 后的长路径调用（生产由目录选择器保证）。
+fn long_path(path: &Path) -> String {
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let text = canonical.to_string_lossy().to_string();
+    #[cfg(windows)]
+    if let Some(stripped) = text.strip_prefix(r"\\?\") {
+        return stripped.to_string();
+    }
+    text
+}
+
 #[test]
 fn malformed_startup_migrate_samples_return_structured_errors() {
     let root = temp_dir("ipc-malformed");
@@ -292,7 +307,7 @@ fn startup_migrate_command_executes_and_locks_new_dir() {
     let migrated = invoke(
         &fixture.webview,
         "startup_migrate",
-        json!({ "target_dir": target.to_string_lossy() }),
+        json!({ "target_dir": long_path(&target) }),
     )
     .expect("迁移命令成功");
 
