@@ -9,15 +9,15 @@
 | 取代 | 无（对 D7 命令面的**增量登记**，不修改既有命令语义） |
 | 被取代 | 无 |
 | 回退条件 | 见 §6 |
-| 未对齐项 | 3 项（`app_exit` confirm；`startup_get`/`startup_pick_target` 严格无参数解析），见 §3.3 |
+| 未对齐项 | 3 处（v0.2 已补齐 2 处：无参严格解析；待对齐 1 处：`app_exit` confirm），见 §3.3 |
 
 ## 1. 背景
 
 1. **M1-06 引入启动阻断流程**：A4 实现级同步盘检测命中后，应用拒绝进入主界面，仅提供「迁移到本地目录」「退出」两个动作（A4 降级路径 / 评审 #9）。该流程需要一个**在主界面之前**即可工作的命令面。
-2. **现有 D7 命令面未覆盖启动阶段**：v1.5 的 P0 命令面（ADR-004 补齐后共 19 条）全部面向会话/运行时/备份等运行期能力；`runtimes_list` 等命令在启动门未就绪时被阻断，无法承担「读取启动状态、执行数据目录迁移、选择迁移目标、退出应用」职责。
+2. **现有 D7 命令面未覆盖启动阶段**：v1.5 的 P0 命令面（ADR-004 补齐后共 19 条：`settings_get/set` 计 1 条目；按可调用命令为 20 条，+ ADR-006 四命令后全集 24 条）全部面向会话/运行时/备份等运行期能力；`runtimes_list` 等命令在启动门未就绪时被阻断，无法承担「读取启动状态、执行数据目录迁移、选择迁移目标、退出应用」职责。
 3. **错误码契约扩展**：启动阻断与迁移失败需要独立的结构化错误码，供前端在拒绝启动页做分支（渲染门界面、提示「完成迁移」等）；内部错误需要兜底码。
 4. **接口即决策**：按 AGENTS §3 与实施计划 §8「变更控制」，新增命令与错误码属于设计文档未定义的接口决策，必须先走 ADR 并升版，再回流实施计划；未登记前 M1-08 DoD3 的 IPC 校验矩阵不完整，Gate 1 不应放行。
-5. **现状**：M1-06 已按上述需求实现 4 个命令与 3 个错误码（代码先于文档落地）。本 ADR 为**追溯登记**：以当前实现为契约基线，明确参数校验、capabilities 口径、bindings 与验收影响；未对齐项共 **3 项**——`app_exit` 的 `confirm` 参数，以及 `startup_get`/`startup_pick_target` 的**严格无参数解析**（两者当前未声明 payload，Tauri 对额外成员静默忽略；对齐方式同 `backup_list` 的 `Option<Value>` + `parse_no_params`）。详见 §3.3。
+5. **现状**：M1-06 已按上述需求实现 4 个命令与 3 个错误码（代码先于文档落地）。本 ADR 为**追溯登记**：以当前实现为契约基线，明确参数校验、capabilities 口径、bindings 与验收影响；未对齐项共 **3 处**（见 §3.3）：`app_exit` 的 `confirm` 参数；`startup_get`/`startup_pick_target` 的无参严格解析（unknown 成员拒绝，随本修订 v0.2 补齐）。
 
 ## 2. 决策
 
@@ -26,8 +26,8 @@
 | 1 | **D7 命令面新增 4 个启动迁移命令**：`startup_get`（无参数，返回启动状态快照）、`startup_migrate`（`{ target_dir: string }`，执行迁移）、`startup_pick_target`（无参数，系统目录选择器，返回 `{ target_dir: string \| null }`）、`app_exit`（`{ confirm: true }`，拒绝启动页退出）。契约明细见附录 A | 设计文档 D7；实施计划 M1-06（证据）/M1-08 DoD3（校验矩阵）/M4-04（验收清单） |
 | 2 | **错误码新增 3 个**：`startup_blocked`（启动门阻断）、`migration_failed`（迁移失败：复制/校验/原子替换/写指针/状态持久化/空间）、`internal`（内部不可达错误：序列化/任务调度/选择器调用）。语义与触发点见附录 B；迁移的**参数类**错误继续复用既有码（`path_rejected`/`invalid_value`/`invalid_format`/`missing_field`/`unknown_field`），不新增重复码 | 设计文档 D7；实施计划 M1-08 DoD3 |
 | 3 | **参数校验统一走 D7 强制校验框架**：serde 严格反序列化（`deny_unknown_fields`）→ 语义校验（长度上限 / 枚举白名单 / 格式）→ 路径 canonicalize 与形态拒绝（Windows 特殊路径：UNC/verbatim/ADS/8.3 短名/尾随点或空格/保留设备名）→ 启动门与迁移专属校验链（见附录 A.2）。校验失败一律结构化错误，不落库、不透传下游 | 设计文档 D7；实施计划 M1-08 DoD3 |
-| 4 | **capabilities 维持最小 allowlist（空权限集），不因本 ADR 变更**。技术依据：Tauri 2 权限（ACL）管辖**插件命令**与 `core:` 能力；**应用内命令（application commands）**在本地源（`tauri.localhost` / `tauri://localhost`）下不受 ACL 门控，仅当应用显式定义 app ACL manifest 或来源为远程时才启用校验（`tauri::ipc::authority` 行为）。若评审要求显式登记应用命令权限（启用 app manifest），须另立子决策并同步更新 `config.rs` 断言与 M1-08 DoD4；**未来若将任一命令下沉为插件命令，必须先登记权限**（写入本 ADR 约束） | 设计文档 D7 安全基线；实施计划 M1-08 DoD4；约束本 ADR §5 未决项 3 |
-| 5 | **M1-08 DoD3 校验矩阵扩展**：4 个新命令纳入畸形参数样本集（无参数命令的未知成员拒绝、`target_dir` 相对路径/不存在/文件/Windows 特殊形态、`app_exit` 的 `confirm` 缺失与 false）。**「无参数命令的未知成员拒绝」以严格无参数解析为前提**：`startup_get`/`startup_pick_target` 当前未声明 payload（额外成员被 Tauri 静默忽略），须按 `backup_list` 模式对齐（`payload: Option<Value>` + 空 DTO + `parse_no_params`）后，该矩阵项才可验证通过（见 §3.3 对齐动作）。样本先在 `crates/aether-tauri/tests/m1_06_*.rs` 落地，M1-08 矩阵并入 `tests/ipc_validation.rs` | 实施计划 M1-08 DoD3（附录 D.1） |
+| 4 | **capabilities 维持最小 allowlist（空权限集），不因本 ADR 变更**。技术依据：Tauri 2 权限（ACL）管辖**插件命令**与 `core:` 能力；**应用内命令（application commands）**在本地源（`tauri.localhost` / `tauri://localhost`）下不受 ACL 门控，仅当应用显式定义 app ACL manifest 或来源为远程时才启用校验（`tauri::ipc::authority` 行为）。若评审要求显式登记应用命令权限（启用 app manifest），须另立子决策并同步更新 `build.rs`（`tauri_build::Attributes::app_manifest`）与 `tests/security_baseline.rs` 断言（M1-08 DoD4）；**未来若将任一命令下沉为插件命令，必须先登记权限**（写入本 ADR 约束） | 设计文档 D7 安全基线；实施计划 M1-08 DoD4；约束本 ADR §5 未决项 3 |
+| 5 | **M1-08 DoD3 校验矩阵扩展**：4 个新命令纳入畸形参数样本集（无参数命令的未知成员拒绝、`target_dir` 相对路径/不存在/文件/Windows 特殊形态、`app_exit` 的 `confirm` 缺失与 false）。**「无参数命令的未知成员拒绝」以严格无参数解析为前提**：`startup_get`/`startup_pick_target` 已按 `backup_list` 模式对齐（`payload: Option<Value>` + 空 DTO + `parse_no_params`，v0.2 修订补齐），该矩阵项可验证；`app_exit` 的 `confirm` 仍待对齐（见 §3.3 对齐动作）。样本先在 `crates/aether-tauri/tests/m1_06_*.rs` 落地（两无参命令已完成），M1-08 矩阵并入 `tests/ipc_validation.rs` | 实施计划 M1-08 DoD3（附录 D.1） |
 | 6 | **M3-01 bindings 覆盖命令全集**：tauri-specta 生成物必须包含 4 个新命令；生成与 `git diff --exit-code` 校验（T14）在 M3-01 执行。bindings 未生成前，前端契约以 `apps/desktop/src/startup.ts` 的手工类型为准（M1-06 范围内） | 实施计划 M3-01（附录 D.2） |
 | 7 | **附录 E 不改动**：4 个命令均不读写数据库（迁移在存储层打开之前执行；指针文件与 `migration_state.json` 为壳层私有文件，不进线协议与数据库映射表）。验收口径：M4-04 验收清单登记命令面全集（附录 D.3） | 设计文档 附录 E（结论：无变更）；实施计划 M4-04 |
 
@@ -42,7 +42,7 @@
 ### 3.2 《实施计划与验收标准》v1.11 → v1.12（拟，合入文本见附录 D）
 
 - 修订记录追加 v1.12；头部计划版本/基线引用升 v1.12 / 设计文档 v1.6（含 ADR-001–006）。
-- M1-08 DoD3：七命令矩阵扩为十一命令；`app_exit` 的 `confirm:true` 校验；两无参命令（`startup_get`/`startup_pick_target`）的严格无参数解析样本。
+- M1-08 DoD3：七命令矩阵扩为十一命令；`app_exit` 的 `confirm:true` 校验；两无参命令（`startup_get`/`startup_pick_target`）的严格无参数解析样本（v0.2 修订已在 `m1_06_*.rs` 补齐，待并入 `ipc_validation.rs`）。
 - M3-01：描述补「bindings 覆盖启动迁移命令并 diff 校验」。
 - M4-04：**新增 DoD4「命令面完整性」**（不修改既有 DoD1–3 文本；见附录 D.3）。
 - §8 变更控制基线引用同步 v1.6。
@@ -52,18 +52,18 @@
 | 项 | 状态 | 证据 |
 |---|---|---|
 | `startup_migrate` | **已实现**：严格解析（`parse_strict`）+ 完整校验链/续跑，与附录 A 一致 | `crates/aether-tauri/src/ipc/commands.rs`（`startup_migrate`）；`tests/m1_06_startup_ipc.rs`、`tests/m1_06_migration.rs` |
-| `startup_get` | **部分对齐**：命令注册、返回契约（`StartupSnapshot`）与主路径已实现；**严格无参数解析待补**（当前未声明 payload，额外成员被 Tauri 静默忽略） | `commands.rs:215`；对齐动作见下 |
-| `startup_pick_target` | **部分对齐**：`DirectoryPicker` 抽象、返回契约与主路径已实现；**严格无参数解析待补**（同上） | `commands.rs:228`、`crates/aether-tauri/src/picker.rs`、`tests/m1_06_picker.rs`（5 项）；对齐动作见下 |
+| `startup_get` | **已实现**；无参严格解析按 v0.2 修订补齐（`payload: Option<Value>` + `parse_no_params`，同 `backup_list`） | `commands.rs`（`startup_get`）；`tests/m1_06_startup_ipc.rs`（新增 `startup_get_rejects_unknown_payload_members`） |
+| `startup_pick_target` | **已实现**；无参严格解析按 v0.2 修订补齐（证据：`m1_06_picker.rs` 新增用例） | `crates/aether-tauri/src/picker.rs`；`tests/m1_06_picker.rs`（含 `startup_pick_target_rejects_unknown_payload_members`） |
 | 3 个错误码 | **已实现** | `crates/aether-tauri/src/ipc/error.rs`（`startup_blocked`/`migration_failed`/`internal`） |
-| `app_exit` | **待对齐**：`{ confirm: true }` 缺失/false 结构化拒绝 + 严格解析（当前为无参数，额外成员静默忽略） | `commands.rs:266`；对齐动作见下 |
+| `app_exit` | **待对齐**：`{ confirm: true }` 缺失/false 结构化拒绝 + 严格解析（当前为无参数，额外成员静默忽略） | `commands.rs`（`app_exit`）；对齐动作见下 |
 | capabilities | **无需变更**（决策 4） | `tests/security_baseline.rs::capabilities_are_minimal_allowlist`（空权限集）持续通过；真实 E2E 在 `withGlobalTauri:false` 下调用应用命令成功 |
 | bindings | **待 M3-01**（T14 未落地） | 计划 M3-01；`apps/desktop/src/startup.ts` 为当前前端契约 |
 
-**对齐动作（ADR 通过后执行；未对齐项共 3 项，由 M1-08 DoD3 承接）**：
+**对齐动作（v0.2 已执行第 1 项；剩余由 M1-08 DoD3 承接）**：
 
-1. `startup_get` / `startup_pick_target`：命令签名改 `payload: Option<Value>`，以空 DTO（`#[serde(deny_unknown_fields)]`）经 `parse_no_params` 严格反序列化——与 `backup_list` 的实现完全一致（`commands.rs:127-133`：`payload: Option<Value>` + `parse_no_params(payload.unwrap_or(Value::Null))`）；任何成员返回 `unknown_field`。
-2. `app_exit`：新增 DTO `{ confirm: bool }`（`deny_unknown_fields`），`confirm != true` 返回 `invalid_value`；前端 `exitApp()` 改为 `invoke("app_exit", { payload: { confirm: true } })`。
-3. `tests/ipc_validation.rs` 校验矩阵并入上述 3 组畸形样本（额外成员 / `confirm` 缺失与 false）。
+1. ✅（v0.2 修订）`startup_get` / `startup_pick_target`：命令签名改 `payload: Option<Value>`，以空 DTO（`#[serde(deny_unknown_fields)]`）经 `parse_no_params` 严格反序列化——与 `backup_list` 的实现完全一致（`commands.rs` 的 `backup_list` 分支：`payload: Option<Value>` + `parse_no_params(payload.unwrap_or(Value::Null))`）；任何成员返回 `unknown_field`。新增用例：`startup_get_rejects_unknown_payload_members`、`startup_pick_target_rejects_unknown_payload_members`。
+2. ⏳ `app_exit`（挂 M1-08 DoD3）：新增 DTO `{ confirm: bool }`（`deny_unknown_fields`），`confirm != true` 返回 `invalid_value`；前端 `exitApp()` 改为 `invoke("app_exit", { payload: { confirm: true } })`。
+3. ⏳ `tests/ipc_validation.rs` 校验矩阵并入其余畸形样本（4 组：两无参命令的额外成员样本随本修订已有；`confirm` 缺失与 false 待并入）。
 4. 对齐完成后，§2 决策 5 与附录 D.1 的矩阵项方可验证；本表状态更新为「已实现」并关闭。
 
 ### 3.4 不影响的
@@ -81,9 +81,9 @@
 
 ## 5. 后续（未决项）
 
-1. **3 项实现对齐**：① `app_exit` 的 `confirm:true`；②③ `startup_get`/`startup_pick_target` 的严格无参数解析（`payload: Option<Value>` + 空 DTO（`deny_unknown_fields`）+ `parse_no_params`，与 `backup_list` 一致）。ADR 通过后由 M1-08 DoD3 承接（DTO/命令/前端/样本），完成后关闭 §3.3 待对齐项。
+1. **实现对齐（3 处，v0.2 已补齐 2 处）**：① `app_exit` 的 `confirm:true`（待对齐）；②③ `startup_get`/`startup_pick_target` 的严格无参数解析（`payload: Option<Value>` + 空 DTO（`deny_unknown_fields`）+ `parse_no_params`，与 `backup_list` 一致）——已按 v0.2 修订补齐（含新增用例，见 §3.3）。剩余项由 M1-08 DoD3 承接（`app_exit` DTO/命令/前端/样本 + 矩阵并入），完成后关闭 §3.3 待对齐项。
 2. **空间护栏原生探针**：迁移命令的空间校验当前由可注入探针提供（原生实现返回「未知 → 不阻断」）；真实磁盘探针按 ADR-003 决策 19 在 **M3-04**（备份/导出外部路径）统一接线，届时迁移复用同一探针。登记于 M1-06 证据与本文档，不视为本 ADR 的遗漏。
-3. **capabilities 显式登记诉求**：若评审要求启用应用 ACL manifest 并显式登记命令，须另立子决策（含 `config.rs` 常量与静态断言变更），不得静默修改。
+3. **capabilities 显式登记诉求**：若评审要求启用应用 ACL manifest 并显式登记命令，须另立子决策（含 `build.rs`（`tauri_build::Attributes::app_manifest`）与 `tests/security_baseline.rs` 断言变更），不得静默修改。
 4. **参数命名确认**：`startup_migrate` 采用 `target_dir`（与 `startup_pick_target` 返回字段、前端类型、E2E 一致）；任务草纲曾写作 `target_path`，以本 ADR 的实现契约为准。
 5. **幂等续跑**：`startup_get` 快照的 `pending_migration` 字段与 `migration_state.json` 为 M1-06 残余风险修复（指针写入失败窗口）的登记内容，随本 ADR 一并纳入 D7 契约；不改数据库。
 
@@ -98,14 +98,14 @@
 
 | 日期 | 评审人 | 结论 | 备注 |
 |---|---|---|---|
-| （待填） | | | 评审重点：决策 4（capabilities 口径）、决策 1 的 `app_exit` confirm、§3.3 三项对齐动作、未决项 2/4 |
+| 2026-09-17 | （留空待签） | 有条件通过；B1/B2 已修订，待复评 | 决策 4 口径采纳；`app_exit` confirm 挂 M1-08 DoD3；未决项 2/4 确认 |
 
 ## 8. 变更记录
 
 | 版本 | 日期 | 变更 | 作者 |
 |---|---|---|---|
 | v0.1 | 2026-09-17 | 创建：登记 M1-06 新增 4 命令与 3 错误码；拟设计文档 v1.6 / 实施计划 v1.12 修订；给出合入 diff 与实现对齐状态 | （文档维护） |
-| v0.2 | 2026-09-17 | 评审修订（B1/B2）：D.3 改为对 M4-04 **实际** DoD 的增补（新增 DoD4，不再修改不存在的旧文本）；A.1 参数列/决策 5/§3.3/§5 更正——无参数命令严格解析为第 2/3 项未对齐，未对齐项合计 3 项；补充 `commands.rs` 行号引用；全部 diff/text 锚点以脚本逐行核验（15/15 命中目标文档） | （文档维护） |
+| v0.2 | 2026-09-17 | 评审修订：D.3 合入文本对齐 M4-04 实际 DoD3；startup_get/pick_target 补无参严格解析（B2）；命令计数口径、决策 4 改动点、快照可缺省字段注记 | （文档维护） |
 
 ---
 
@@ -115,12 +115,12 @@
 
 | 命令 | 参数（严格） | 返回 | 可用阶段 | 说明 |
 |---|---|---|---|---|
-| `startup_get` | 无（`null`/缺省；**严格无参数解析待对齐**，见 §3.3） | `StartupSnapshot`（下） | 启动门任意阶段（含阻断态） | 拒绝启动页唯一查询入口 |
+| `startup_get` | 无（`null`/缺省；**严格无参：任何成员拒绝**） | `StartupSnapshot`（下） | 启动门任意阶段（含阻断态） | 拒绝启动页唯一查询入口 |
 | `startup_migrate` | `{ "target_dir": string }`（已严格） | `StartupSnapshot`（成功时 `phase=ready`、`data_dir_source=migrated`、`migration` 明细） | 仅 `blocked_sync_dir` | 迁移执行；幂等续跑 |
-| `startup_pick_target` | 无（**严格无参数解析待对齐**，见 §3.3） | `{ "target_dir": string \| null }`（null=取消） | 启动门任意阶段 | 系统目录选择器（Rust 侧，不经 WebView 权限面） |
+| `startup_pick_target` | 无（`null`/缺省；**严格无参：任何成员拒绝**） | `{ "target_dir": string \| null }`（null=取消） | 启动门任意阶段 | 系统目录选择器（Rust 侧，不经 WebView 权限面） |
 | `app_exit` | `{ "confirm": true }`（决策 1；**当前无参数，待对齐**，见 §3.3） | `{ "exiting": true }` | 启动门任意阶段 | 请求退出应用 |
 
-> **「严格无参数解析」口径与当前行为**：目标实现为命令签名声明 `payload: Option<Value>`，以空对象经 `parse_no_params` 严格反序列化（`deny_unknown_fields`），任何成员返回 `unknown_field`——与 `backup_list` 完全一致。**当前 `startup_get`/`startup_pick_target` 未声明 payload，Tauri 对 invoke 请求体中的额外成员静默忽略（不会报错）**；因此 §2 决策 5 / 附录 D.1 的「无参数命令的未知成员拒绝」矩阵项需在 §3.3 对齐动作完成后才可验证通过。`startup_migrate` 已走 `parse_strict`（严格）。
+> **「严格无参数解析」口径**：命令签名声明 `payload: Option<Value>`，以空对象经 `parse_no_params` 严格反序列化（`deny_unknown_fields`），任何成员返回 `unknown_field`——与 `backup_list` 完全一致。`startup_get`/`startup_pick_target` 已按此实现（v0.2 修订补齐；用例见 §3.3）；`startup_migrate` 走 `parse_strict`（严格）；`app_exit` 的 `confirm` 与严格解析仍待对齐（见 §3.3）。
 
 `StartupSnapshot`（`startup_get`/`startup_migrate` 返回）：
 
@@ -139,13 +139,13 @@
     "note": "（macOS 降级精度限制说明，仅 macOS 且为非空时出现）"
   },
   "message": "（blocked_error 时的原因，可缺省）",
-  "migration": {
+  "migration": {                                   // （迁移成功后返回，可缺省）
     "source": "…", "target": "…",
     "entries": [{ "relative": "aether.db", "sha256": "…", "bytes": 123 }],
     "total_bytes": 456,
     "manifest_digest": "…"
   },
-  "pending_migration": {
+  "pending_migration": {                           // （存在可续跑迁移时返回，可缺省）
     "migration_id": "01J…（ULID）", "target": "…",
     "phase": "copying | verified", "started_at": 1758092000000
   }
@@ -278,7 +278,7 @@
 | 错误码与线上形态 | `crates/aether-tauri/src/ipc/error.rs` |
 | 启动门/迁移/续跑状态机 | `crates/aether-tauri/src/startup/{mod,migrate,pointer,state}.rs` |
 | 目录选择器抽象 | `crates/aether-tauri/src/picker.rs` |
-| 命令层测试（含 `startup_get` 快照、迁移、续跑、选择器） | `crates/aether-tauri/tests/m1_06_{startup_ipc,picker,migration}.rs` |
+| 命令层测试（含 `startup_get` 快照、迁移、续跑、选择器、无参严格解析） | `crates/aether-tauri/tests/m1_06_{startup_ipc,picker,migration}.rs` |
 | 启动阻断/迁移/续跑/单实例 E2E（真实 WebView） | `scripts/test/m1-06/e2e-startup-guard.mjs` |
 | 验证入口（样本 + E2E + 静态断言） | `scripts/test/m1-06/verify-m1-06.mjs` |
 | 真实系统选择器冒烟记录 | `docs/M1-06-目录选择器与迁移主路径验证.md` §5 |
