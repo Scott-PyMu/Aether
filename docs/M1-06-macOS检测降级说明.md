@@ -70,7 +70,9 @@
   - run [35174804590](https://github.com/Scott-PyMu/Aether/actions/runs/35174804590)
   - run [35175425557](https://github.com/Scott-PyMu/Aether/actions/runs/35175425557)
   - **run [35179304882](https://github.com/Scott-PyMu/Aether/actions/runs/35179304882)**（commit `bfafc5b`，**全 workflow 9/9 job 全绿**：macOS job 步骤全绿，Windows `data-dir-guard` 同步全绿）
-  - 证据 artifact：`m1-06-macos-evidence`（每次上传；末次 sha256 `9891603da83a7470cb268678a61f53c3c825fed48378ff78f55ba9a8db6f4e7f`，含 `samples.json`、`cargo-test-m1_06-detection.txt`、`evidence.json`）
+  - run [35181029797](https://github.com/Scott-PyMu/Aether/actions/runs/35181029797)（commit `6f0df72`，E2E 慢机超时修复后）：两个 M1-06 job 均绿；整体 run 仅 `Coverage gate`（`cargo llvm-cov --workspace --exclude aether-tauri`）偶发失败——aether-tauri 被排除，与本任务改动无关，属并行任务（M1-04 基准）的在办项
+  - 证据 artifact：`m1-06-macos-evidence`（每次上传；含 `samples.json`、`cargo-test-m1_06-detection.txt`、`evidence.json`；`bfafc5b` run 摘要 sha256 `9891603da83a7470cb268678a61f53c3c825fed48378ff78f55ba9a8db6f4e7f`）
+- 本地证据归档（gitignore）：`scripts/test/.tmp/m1-06-ci/<run_id>/{run,jobs,check-runs,artifacts}.json`
 - CI 连带修复（由 mac/Windows 样本暴露并已回归）：非 Windows 目标编译错误（`REGISTRY_ACCOUNTS_PATH` cfg 门控）、映射网络盘形态不一致漏判、CI `%TEMP%` 8.3 短名与 D9 拒绝样本的测试口径。
 - 完成口径：**macOS DoD2 已由 macos-14 CI 验证通过；iCloud 标记 API 按风险条款降级为路径前缀 + 手动确认，UI 已明示。**
 - Windows 侧（DoD1/DoD3/DoD4/DoD5）由同 workflow 的 `data-dir-guard` job 守护；本文件记录 macOS DoD2 的降级口径与证据。
