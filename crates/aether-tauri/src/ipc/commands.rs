@@ -11,7 +11,8 @@ use super::dto::{
     ExportDiagnosticsRequest, MessagesPageRequest, PermissionResolveRequest,
     PermissionsPendingRequest, RunRetryRequest, RuntimeEnableRequest, RuntimeRetryRequest,
     SessionCreateRequest, SessionIdRequest, SessionListRequest, SessionSendRequest,
-    SettingsGetRequest, SettingsSetRequest, StartupMigrateRequest, WorkspaceSetRequest,
+    SettingsGetRequest, SettingsSetRequest, StartupGetRequest, StartupMigrateRequest,
+    StartupPickTargetRequest, WorkspaceSetRequest,
 };
 use super::error::{IpcError, IpcErrorCode};
 use super::path;
@@ -211,8 +212,13 @@ pub(crate) fn export_diagnostics(
 }
 
 /// M1-06：启动门快照（拒绝启动时仍可达；UI 据此渲染门界面）。
+/// ADR-006：无参数命令；缺省载荷等价空对象，任何成员都会被严格模式拒绝。
 #[tauri::command]
-pub(crate) fn startup_get(state: tauri::State<'_, IpcState>) -> Result<Value, IpcError> {
+pub(crate) fn startup_get(
+    state: tauri::State<'_, IpcState>,
+    payload: Option<Value>,
+) -> Result<Value, IpcError> {
+    let _request: StartupGetRequest = parse_no_params(payload.unwrap_or(Value::Null))?;
     let gate = state.startup().ok_or_else(|| {
         IpcError::new(
             IpcErrorCode::NotImplemented,
@@ -224,10 +230,13 @@ pub(crate) fn startup_get(state: tauri::State<'_, IpcState>) -> Result<Value, Ip
 
 /// M1-06：迁移目标目录选择（`DirectoryPicker` 抽象：生产为系统对话框，测试/E2E 注入替身；
 /// 不新增 WebView capability 权限面）。用户取消返回 `{ "target_dir": null }`。
+/// ADR-006：无参数命令；缺省载荷等价空对象，任何成员都会被严格模式拒绝。
 #[tauri::command]
 pub(crate) async fn startup_pick_target(
     state: tauri::State<'_, IpcState>,
+    payload: Option<Value>,
 ) -> Result<Value, IpcError> {
+    let _request: StartupPickTargetRequest = parse_no_params(payload.unwrap_or(Value::Null))?;
     let picker = state.picker().ok_or_else(|| {
         IpcError::new(
             IpcErrorCode::NotImplemented,

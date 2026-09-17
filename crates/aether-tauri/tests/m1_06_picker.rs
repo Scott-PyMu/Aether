@@ -177,6 +177,28 @@ fn startup_pick_target_returns_null_on_cancel() {
     assert_eq!(value["target_dir"], Value::Null);
 }
 
+/// ADR-006 决策 5（v0.2 修订）：严格无参命令——未知成员必须结构化拒绝，
+/// 合法无参调用不受影响。
+#[test]
+fn startup_pick_target_rejects_unknown_payload_members() {
+    let fixture = fixture(
+        "picker-strict",
+        Some(Arc::new(FixedDirectoryPicker::with_cancel())),
+    );
+    let error = invoke(
+        &fixture.webview,
+        "startup_pick_target",
+        json!({ "extra": true }),
+    )
+    .expect_err("严格无参命令必须拒绝 unknown 成员");
+    assert_eq!(error["code"], "unknown_field", "{error}");
+    assert_eq!(error["field"], "extra", "{error}");
+
+    let value = invoke(&fixture.webview, "startup_pick_target", Value::Null)
+        .expect("无参调用应成功");
+    assert_eq!(value["target_dir"], Value::Null);
+}
+
 #[test]
 fn startup_pick_target_maps_picker_error_to_structured_error() {
     let fixture = fixture(

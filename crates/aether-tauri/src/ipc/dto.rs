@@ -411,6 +411,20 @@ impl CommandRequest for StartupMigrateRequest {
     }
 }
 
+/// `startup_get`（ADR-006）：无参数命令；缺省载荷等价空对象，任何成员都会被严格模式拒绝。
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StartupGetRequest {}
+
+impl CommandRequest for StartupGetRequest {}
+
+/// `startup_pick_target`（ADR-006）：无参数命令；缺省载荷等价空对象，任何成员都会被严格模式拒绝。
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StartupPickTargetRequest {}
+
+impl CommandRequest for StartupPickTargetRequest {}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExportDiagnosticsRequest {

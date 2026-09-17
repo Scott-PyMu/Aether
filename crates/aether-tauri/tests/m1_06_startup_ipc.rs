@@ -261,6 +261,29 @@ fn blocked_gate_blocks_feature_commands_and_reports_snapshot() {
     assert_eq!(fixture.gate.snapshot().phase, StartupPhase::BlockedSyncDir);
 }
 
+/// ADR-006 决策 5（v0.2 修订）：严格无参命令——任何经 `payload` 传入的成员必须
+/// 结构化拒绝（`unknown_field`），且不影响合法无参调用。
+#[test]
+fn startup_get_rejects_unknown_payload_members() {
+    let root = temp_dir("ipc-strict-get");
+    let source = make_source(&root, "sync-root/Aether");
+    let gate = Arc::new(StartupGate::bootstrap_at(
+        source,
+        DataDirSource::Default,
+        sync_context(&root.join("sync-root")),
+        Some(root.join("config").join("data-location.json")),
+    ));
+    let fixture = fixture("strict-get", gate);
+
+    let error = invoke(&fixture.webview, "startup_get", json!({ "unexpected": 1 }))
+        .expect_err("严格无参命令必须拒绝 unknown 成员");
+    assert_eq!(error["code"], "unknown_field", "{error}");
+    assert_eq!(error["field"], "unexpected", "{error}");
+
+    let snapshot = invoke(&fixture.webview, "startup_get", Value::Null).expect("无参调用应成功");
+    assert_eq!(snapshot["phase"], "blocked_sync_dir", "{snapshot}");
+}
+
 /// DoD2 降级断言（UI 状态码/提示文本）：macOS 阻塞态快照必须携带精度限制文案，
 /// 供启动门 `startup-precision-note` 渲染（M1-06 风险条款）。
 #[test]
