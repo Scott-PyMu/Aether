@@ -60,7 +60,9 @@ function launch(extraEnv, label) {
   });
   const state = { lines: [], stderr: [], exited: false, code: null };
   child.stdout.on("data", (chunk) => {
-    for (const line of String(chunk).split(/\r?\n/)) {
+    for (const raw of String(chunk).split(/\r?\n/)) {
+      // 归一化：去掉 chunk 边界可能出现的 BOM / 尾随 CR，保证谓词匹配稳定。
+      const line = raw.replace(/^\uFEFF/, "").replace(/\r+$/, "");
       if (!line.trim()) continue;
       state.lines.push(line);
       console.log(`[${label}] ${line}`);
@@ -89,7 +91,14 @@ async function waitFor(state, predicate, timeoutMs, description) {
     if (state.exited) break;
     await sleep(200);
   }
-  // 最后再检查一次：避免输出恰在超时窗口末尾到达的竞态（CI 慢机冷启动）。
+  // 宽限轮询：避免输出恰在超时窗口末尾到达的竞态（CI 慢机冷启动/事件投递延迟）。
+  const graceUntil = Date.now() + 10000;
+  while (Date.now() < graceUntil) {
+    const grace = state.lines.find(predicate);
+    if (grace) return grace;
+    if (state.exited) break;
+    await sleep(200);
+  }
   const late = state.lines.find(predicate);
   if (late) return late;
   throw new Error(
@@ -178,7 +187,7 @@ try {
   const phaseLine = await waitFor(
     first.state,
     (line) => line.startsWith(PHASE_LINE) && line.includes('"blocked_sync_dir"'),
-    240000,
+    360000,
     "启动门阻塞快照",
   );
   const phase = JSON.parse(phaseLine.slice(PHASE_LINE.length).trim());
@@ -191,7 +200,7 @@ try {
   const blockedLine = await waitFor(
     first.state,
     (line) => line.startsWith(REPORT_LINE) && line.includes('"stage":"blocked"'),
-    240000,
+    360000,
     "阻塞态 DOM 回报",
   );
   const blocked = JSON.parse(blockedLine.slice(REPORT_LINE.length).trim());

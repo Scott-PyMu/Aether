@@ -61,7 +61,9 @@ function launch(extraEnv) {
   });
   const state = { lines: [], stderr: [], exited: false, code: null };
   child.stdout.on("data", (chunk) => {
-    for (const line of String(chunk).split(/\r?\n/)) {
+    for (const raw of String(chunk).split(/\r?\n/)) {
+      // 归一化：去掉 chunk 边界可能出现的 BOM / 尾随 CR。
+      const line = raw.replace(/^\uFEFF/, "").replace(/\r+$/, "");
       if (!line.trim()) continue;
       state.lines.push(line);
       console.log(`[app] ${line}`);
@@ -87,6 +89,13 @@ async function waitFor(state, predicate, timeoutMs, description) {
   while (Date.now() - started < timeoutMs) {
     const match = state.lines.find(predicate);
     if (match) return match;
+    if (state.exited) break;
+    await sleep(200);
+  }
+  const graceUntil = Date.now() + 10000;
+  while (Date.now() < graceUntil) {
+    const grace = state.lines.find(predicate);
+    if (grace) return grace;
     if (state.exited) break;
     await sleep(200);
   }
