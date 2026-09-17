@@ -123,13 +123,19 @@ jobs:
         shell: bash
         run: |
           {
-            echo "### M1-08 verify 失败输出（tail 80）"
+            echo "### M1-08 verify 失败输出（关键行 + tail 30）"
             echo '```text'
-            tail -80 m1-08-verify.log 2>/dev/null || true
+            grep -E "FAIL|失败|panicked|error:|Error|超时|timeout" m1-08-verify.log 2>/dev/null | tail -20 || true
+            echo '--- tail 30 ---'
+            tail -30 m1-08-verify.log 2>/dev/null || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          tail -60 m1-08-verify.log 2>/dev/null | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
-            echo "::error title=m1-08::$line"
+          # 关键行优先输出：GitHub 每步仅保留前 10 条 error annotation
+          grep -E "FAIL|失败|panicked|error:|Error|超时|timeout" m1-08-verify.log 2>/dev/null | tail -10 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m1-08-fail::$line"
+          done
+          tail -8 m1-08-verify.log 2>/dev/null | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m1-08-tail::$line"
           done
 
   # M1-09：线协议骨架与 Mock 适配器（D6/评审#6）——Bun 编译 Mock 单文件后，
@@ -184,13 +190,19 @@ jobs:
         shell: bash
         run: |
           {
-            echo "### M1-06 verify 失败输出（tail 80）"
+            echo "### M1-06 verify 失败输出（关键行 + tail 30）"
             echo '```text'
-            tail -80 m1-06-verify.log 2>/dev/null || true
+            grep -E "FAIL|失败|panicked|error:|Error|超时|timeout" m1-06-verify.log 2>/dev/null | tail -20 || true
+            echo '--- tail 30 ---'
+            tail -30 m1-06-verify.log 2>/dev/null || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          tail -60 m1-06-verify.log 2>/dev/null | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
-            echo "::error title=m1-06::$line"
+          # 关键行优先输出：GitHub 每步仅保留前 10 条 error annotation
+          grep -E "FAIL|失败|panicked|error:|Error|超时|timeout" m1-06-verify.log 2>/dev/null | tail -10 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m1-06-fail::$line"
+          done
+          tail -8 m1-06-verify.log 2>/dev/null | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m1-06-tail::$line"
           done
 
   # M1-06 DoD2：macOS 两类样本（mac runner 执行；iCloud 为风险条款允许的
@@ -225,13 +237,19 @@ jobs:
         shell: bash
         run: |
           {
-            echo "### M1-06 macOS verify 失败输出（tail 80）"
+            echo "### M1-06 macOS verify 失败输出（关键行 + tail 30）"
             echo '```text'
-            tail -80 m1-06-macos-verify.log 2>/dev/null || true
+            grep -E "FAIL|失败|panicked|error:|Error|超时|timeout" m1-06-macos-verify.log 2>/dev/null | tail -20 || true
+            echo '--- tail 30 ---'
+            tail -30 m1-06-macos-verify.log 2>/dev/null || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          tail -60 m1-06-macos-verify.log 2>/dev/null | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
-            echo "::error title=m1-06-macos::$line"
+          # 关键行优先输出：GitHub 每步仅保留前 10 条 error annotation
+          grep -E "FAIL|失败|panicked|error:|Error|超时|timeout" m1-06-macos-verify.log 2>/dev/null | tail -10 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m1-06-macos-fail::$line"
+          done
+          tail -8 m1-06-macos-verify.log 2>/dev/null | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m1-06-macos-tail::$line"
           done
 
       - name: 归档 Gate 1 证据（CI 日志与测试输出）

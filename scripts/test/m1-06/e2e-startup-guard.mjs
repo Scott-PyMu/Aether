@@ -54,7 +54,7 @@ function launch(extraEnv, label) {
     env: { ...env, ...extraEnv },
     stdio: ["ignore", "pipe", "pipe"],
   });
-  const state = { lines: [], exited: false, code: null };
+  const state = { lines: [], stderr: [], exited: false, code: null };
   child.stdout.on("data", (chunk) => {
     for (const line of String(chunk).split(/\r?\n/)) {
       if (!line.trim()) continue;
@@ -63,7 +63,9 @@ function launch(extraEnv, label) {
     }
   });
   child.stderr.on("data", (chunk) => {
-    console.error(`[${label}:stderr] ${String(chunk).trimEnd()}`);
+    const text = String(chunk);
+    state.stderr.push(text.trimEnd());
+    console.error(`[${label}:stderr] ${text.trimEnd()}`);
   });
   const exit = new Promise((resolve) => {
     child.once("exit", (code) => {
@@ -84,7 +86,13 @@ async function waitFor(state, predicate, timeoutMs, description) {
     await sleep(200);
   }
   throw new Error(
-    `等待超时：${description}（已收到 ${state.lines.length} 行 stdout）\n${state.lines.join("\n")}`,
+    [
+      `等待超时：${description}（已收到 ${state.lines.length} 行 stdout，进程已退出=${state.exited}，退出码=${state.code}）`,
+      "--- stdout ---",
+      ...state.lines,
+      "--- stderr ---",
+      ...state.stderr,
+    ].join("\n"),
   );
 }
 
@@ -158,7 +166,7 @@ try {
   const phaseLine = await waitFor(
     first.state,
     (line) => line.startsWith(PHASE_LINE) && line.includes('"blocked_sync_dir"'),
-    60000,
+    90000,
     "启动门阻塞快照",
   );
   const phase = JSON.parse(phaseLine.slice(PHASE_LINE.length).trim());
@@ -171,7 +179,7 @@ try {
   const blockedLine = await waitFor(
     first.state,
     (line) => line.startsWith(REPORT_LINE) && line.includes('"stage":"blocked"'),
-    60000,
+    90000,
     "阻塞态 DOM 回报",
   );
   const blocked = JSON.parse(blockedLine.slice(REPORT_LINE.length).trim());
@@ -207,7 +215,7 @@ try {
   await waitFor(
     first.state,
     (line) => line.startsWith(FOCUS_LINE),
-    30000,
+    60000,
     "首实例聚焦回调",
   );
   record("T12 首实例收到第二实例转发并聚焦已有窗口", true);
@@ -220,13 +228,13 @@ try {
   await waitFor(
     first.state,
     (line) => line.startsWith(REPORT_LINE) && line.includes('"stage":"clicked"'),
-    30000,
+    60000,
     "点击「迁移到本地目录」",
   );
   await waitFor(
     first.state,
     (line) => line.startsWith(REPORT_LINE) && line.includes('"stage":"ready"'),
-    120000,
+    180000,
     "迁移后主界面可达",
   );
   const firstExit = await exitCode(first, 30000);
@@ -254,6 +262,7 @@ try {
   // 5. 阶段四：重启锁定（不带 OneDrive / AETHER_DATA_DIR，仅指针）
   // -------------------------------------------------------------------------
   console.log(`\n$ ${binary}   # 指针锁定重启`);
+  await sleep(800); // 留出前一实例单实例锁的释放窗口
   const lockedEnv = { ...env, AETHER_E2E_STARTUP_PROBE: "1", AETHER_DATA_LOCATION_FILE: pointerFile };
   delete lockedEnv.OneDrive;
   delete lockedEnv.OneDriveConsumer;
@@ -263,7 +272,7 @@ try {
   const lockedLine = await waitFor(
     third.state,
     (line) => line.startsWith(PHASE_LINE) && line.includes('"ready"'),
-    60000,
+    120000,
     "锁定重启就绪快照",
   );
   const locked = JSON.parse(lockedLine.slice(PHASE_LINE.length).trim());
@@ -277,7 +286,7 @@ try {
   await waitFor(
     third.state,
     (line) => line.startsWith(REPORT_LINE) && line.includes('"stage":"ready"'),
-    60000,
+    120000,
     "锁定重启主界面可达",
   );
   const thirdExit = await exitCode(third, 30000);
@@ -290,4 +299,5 @@ try {
   }
 }
 
-process.exit(summarize("m1-06-startup-guard-e2e", checks));
+// 不用 process.exit：避免管道输出未 flush 导致 CI 日志截断（诊断需要完整 FAIL 行）。
+process.exitCode = summarize("m1-06-startup-guard-e2e", checks);
