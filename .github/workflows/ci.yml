@@ -200,12 +200,16 @@ jobs:
             tail -30 m1-06-verify.log 2>/dev/null || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          # 汇总表优先输出（GitHub 每步有 error annotation 上限，先发最高价值信息）
-          grep -A 30 "===== verify-m1-06 =====" m1-06-verify.log 2>/dev/null | tail -20 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
-            echo "::error title=m1-06-summary::$line"
+          # 失败明细最高优先（GitHub 每步有 error annotation 上限）：先发 failed-check
+          # 与 E2E 超时/错误细节，再发汇总表 FAIL 行与日志 tail。
+          grep -E "failed-check|等待超时|E2E 执行" m1-06-verify.log 2>/dev/null | head -12 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m1-06-detail::$line"
           done
-          grep -E "panicked|IpcError|assertion|应命中|left:|right:|超时" m1-06-verify.log 2>/dev/null | tail -4 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
-            echo "::error title=m1-06-assert::$line"
+          grep -B 1 -A 6 "failed-check" m1-06-verify.log 2>/dev/null | tail -12 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m1-06-context::$line"
+          done
+          grep -E "^FAIL |FAIL " m1-06-verify.log 2>/dev/null | tail -4 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m1-06-summary::$line"
           done
           tail -4 m1-06-verify.log 2>/dev/null | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
             echo "::error title=m1-06-tail::$line"

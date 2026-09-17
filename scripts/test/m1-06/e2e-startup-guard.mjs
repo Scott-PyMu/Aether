@@ -292,7 +292,12 @@ try {
   const thirdExit = await exitCode(third, 30000);
   record("锁定新目录后主界面可达并正常退出", thirdExit === 0, `exit=${thirdExit}`);
 } catch (error) {
-  record("E2E 执行", false, String(error && error.message ? error.message : error));
+  // 单行化：CI 诊断按行 grep/annotation，多行错误会丢上下文。
+  const message = String(error && error.message ? error.message : error).replace(
+    /\s*\r?\n\s*/g,
+    " | ",
+  );
+  record("E2E 执行", false, message);
 } finally {
   for (const ref of processes) {
     if (!ref.state.exited) ref.child.kill();
