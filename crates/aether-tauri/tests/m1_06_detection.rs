@@ -201,6 +201,16 @@ fn windows_samples_are_all_detected() {
             let report = detect_data_dir(std::path::Path::new(r"Z:\Aether"), &ctx);
             assert_hit(&report, WIN_NETWORK_CHECK, "映射网络盘 Z:");
             total += 1;
+            // 回归（M1-06 CI）：清单形态 `"Z:"` / `"z"` 也必须命中（规范化比较）。
+            let mut colon_ctx = context(PlatformKind::Windows);
+            colon_ctx.network_drives = NetworkDriveSource::Letters(vec!["z:".to_string()]);
+            let report = detect_data_dir(std::path::Path::new(r"Z:\Aether"), &colon_ctx);
+            assert_hit(
+                &report,
+                WIN_NETWORK_CHECK,
+                "映射网络盘 Z:（冒号/大小写规范化）",
+            );
+            total += 1;
         }
         let report = detect_data_dir(std::path::Path::new(r"\\server\share\Aether"), &ctx);
         assert_hit(&report, WIN_NETWORK_CHECK, "UNC 路径");

@@ -363,8 +363,11 @@ fn check_windows_network_drive(
     };
     let drive = drive_letter(raw).or_else(|| drive_letter(resolved));
     if let Some(drive) = &drive {
+        // 清单可能来自注入样本（`"Z"`）或注册表子键名（`"Z"`）；统一规范化后比较，
+        // 兼容带冒号形态（M1-06 CI 回归：形态不一致导致映射盘漏判）。
         let mapped = letters.iter().any(|letter| {
-            drive_letter_of(letter).is_some_and(|candidate| candidate.eq_ignore_ascii_case(drive))
+            normalize_drive_letter(letter)
+                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(drive))
         });
         if mapped {
             return reject(
@@ -468,19 +471,22 @@ fn drive_letter(path: &Path) -> Option<String> {
     use std::path::Component;
     match path.components().next() {
         Some(Component::Prefix(prefix)) => {
-            let text = prefix.as_os_str().to_string_lossy().to_string();
-            drive_letter_of(&text)
+            normalize_drive_letter(&prefix.as_os_str().to_string_lossy())
         }
         _ => None,
     }
 }
 
-fn drive_letter_of(text: &str) -> Option<String> {
-    let bytes = text.as_bytes();
-    if bytes.len() == 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
-        return Some((bytes[0] as char).to_ascii_uppercase().to_string());
+/// 规范化盘符：接受 `"Z"` 与 `"Z:"`（大小写不敏感），返回大写裸字母。
+fn normalize_drive_letter(value: &str) -> Option<String> {
+    let trimmed = value.trim_end_matches(':');
+    let mut chars = trimmed.chars();
+    match (chars.next(), chars.next()) {
+        (Some(letter), None) if letter.is_ascii_alphabetic() => {
+            Some(letter.to_ascii_uppercase().to_string())
+        }
+        _ => None,
     }
-    None
 }
 
 #[cfg(windows)]
@@ -548,7 +554,7 @@ fn native_network_drive_letters() -> Vec<String> {
         return letters;
     };
     for drive in network.enum_keys().flatten() {
-        if let Some(letter) = drive_letter_of(&drive) {
+        if let Some(letter) = normalize_drive_letter(&drive) {
             letters.push(letter);
         }
     }
