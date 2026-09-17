@@ -315,9 +315,10 @@ fn startup_migrate_command_executes_and_locks_new_dir() {
     assert_eq!(migrated["data_dir_source"], "migrated");
     assert!(target.join("aether.db").is_file());
     assert!(source.join("aether.db").is_file(), "源目录必须保留");
+    // 指针写入的是 canonicalize 长路径（CI 的 %TEMP% 为 8.3 短名）。
     assert_eq!(
         pointer::read_pointer(&pointer_file).expect("读取指针"),
-        Some(target.clone())
+        Some(PathBuf::from(long_path(&target)))
     );
 
     let listed = invoke(&fixture.webview, "session_list", json!({ "limit": 50 }))

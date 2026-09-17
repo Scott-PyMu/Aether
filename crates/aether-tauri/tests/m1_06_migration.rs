@@ -240,9 +240,10 @@ fn gate_blocks_then_migrates_and_locks_new_dir() {
         .is_some_and(|entries| entries.len() == 3));
 
     assert!(gate.ensure_ready().is_ok(), "迁移后业务命令应恢复");
+    // 指针写入的是 canonicalize 长路径（CI 的 %TEMP% 为 8.3 短名，写入长路径）。
     assert_eq!(
         pointer::read_pointer(&pointer_file).expect("读取指针"),
-        Some(target.clone()),
+        Some(PathBuf::from(long_path(&target))),
         "迁移成功后必须锁定新目录（指针原子替换）"
     );
     assert!(target.join("aether.db").is_file());
