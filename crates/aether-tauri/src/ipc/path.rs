@@ -69,14 +69,37 @@ pub fn validate_workspace_root(raw: &str) -> Result<PathBuf, IpcError> {
     Ok(canonical)
 }
 
-/// A4 同步盘预检（M1-08 最小集；完整检测由 M1-06 接管：注册表 `UserFolder`、父目录
-/// 重解析点、macOS File Provider、单实例锁）。
+/// 校验迁移目标目录（M1-06 `startup_migrate`）：绝对路径、存在且为目录。
+///
+/// 同步盘 / 源目录关系校验在 [`crate::startup::StartupGate::migrate`] 内用同一
+/// A4 检测上下文复核（目标自身也不得位于同步盘）。
+pub fn validate_migration_target(raw: &str) -> Result<PathBuf, IpcError> {
+    let canonical = canonicalize_checked(raw)?;
+    if !canonical.is_dir() {
+        return Err(IpcError::path_rejected("迁移目标必须是已存在的目录"));
+    }
+    Ok(canonical)
+}
+
+/// A4 同步盘预检：M1-08 路径段最小集 + M1-06 实现级检测（环境变量前缀、父目录
+/// 重解析点、注册表 `UserFolder`、macOS File Provider / iCloud、网络盘粗筛），
+/// 供 `workspace_set` 等路径入口复用。
 ///
 /// 命中即拒绝（A4：默认拒绝，不提供覆盖开关）。
 pub fn reject_cloud_sync_path(canonical: &Path) -> Result<(), IpcError> {
     if let Some(marker) = cloud_sync_marker(canonical) {
         return Err(IpcError::path_rejected(format!(
             "命中同步盘/云目录拒绝清单（{marker}）；数据目录必须位于本地磁盘（A4）"
+        )));
+    }
+    let report = crate::startup::detect::detect_data_dir(
+        canonical,
+        &crate::startup::detect::DetectionContext::native(),
+    );
+    if report.is_reject() {
+        return Err(IpcError::path_rejected(format!(
+            "命中 A4 实现级同步盘检测（M1-06）：{}",
+            report.reasons.join("；")
         )));
     }
     Ok(())

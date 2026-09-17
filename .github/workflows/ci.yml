@@ -141,6 +141,60 @@ jobs:
       - name: M1-09 验证（编译 Mock + 单测 + 一致性/健壮性集成 + 吞吐基准）
         run: pnpm verify:m1-09
 
+  # M1-06：数据目录检测/迁移流/单实例（A4/评审#9）——T13/T12 E2E 需要真实 WebView2。
+  data-dir-guard:
+    name: Data dir guard (M1-06)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: M1-06 验证（Win 三类样本 + 20 对照样本 + 拒绝启动/迁移/单实例 E2E）
+        run: pnpm verify:m1-06
+
+  # M1-06 DoD2：macOS 两类样本（mac runner 执行；iCloud 为风险条款允许的
+  # 路径前缀降级实现，精度限制在 UI/报告中明示）。样本由
+  # scripts/test/macos_sync_samples.sh 构造；验证器归档 Gate 1 证据并以
+  # artifact `m1-06-macos-evidence` 上传（CI 日志 + 测试输出 + 样本清单）。
+  data-dir-guard-macos:
+    name: macOS data dir samples (M1-06)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+      - name: 构建前端（tauri generate_context 需要 frontendDist）
+        run: pnpm -r --if-present build
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: macOS 两类样本 + 降级精度提示（DoD2）
+        run: node scripts/test/m1-06/verify-m1-06-macos.mjs
+
+      - name: 归档 Gate 1 证据（CI 日志与测试输出）
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: m1-06-macos-evidence
+          path: scripts/test/.tmp/m1-06-macos/
+          if-no-files-found: warn
+          retention-days: 30
+
   # DoD3：覆盖率门禁（Rust cargo-llvm-cov + TS vitest --coverage，行覆盖 <70% 失败）
   coverage:
     name: Coverage gate (>=70% lines)

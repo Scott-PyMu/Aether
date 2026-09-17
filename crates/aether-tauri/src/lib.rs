@@ -12,9 +12,13 @@
 pub mod config;
 pub mod ipc;
 pub mod nav;
+pub mod single_instance;
+pub mod startup;
 
 #[cfg(debug_assertions)]
 mod probe;
+#[cfg(debug_assertions)]
+mod startup_probe;
 
 /// 产品名（与 `tauri.conf.json` 的 productName 一致）。
 pub const APP_NAME: &str = "Aether";
@@ -56,20 +60,35 @@ where
 }
 
 /// 启动 Tauri 应用。
+///
+/// 启动序列（设计 D1；M1-06 落地前两步）：单实例锁 → 数据目录检测（A4）→ …。
+/// 检测命中时启动门进入 `BlockedSyncDir`：业务命令全部 `startup_blocked`，
+/// UI 只渲染「迁移到本地目录 / 退出」。
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let startup = std::sync::Arc::new(startup::StartupGate::bootstrap());
+    #[cfg(debug_assertions)]
+    startup_probe::record_phase(&startup);
+
     let backend: std::sync::Arc<dyn ipc::IpcBackend> =
         std::sync::Arc::new(ipc::backend::NotImplementedBackend);
-    // 路径白名单根目录随 M1-06（数据目录）/ M3-05（诊断导出）接入；未配置即默认拒绝。
-    let state = ipc::IpcState::new(backend, Vec::new());
+    // 路径白名单根目录随 M3-05（诊断导出）接入；未配置即默认拒绝。
+    let state = ipc::IpcState::with_startup(backend, Vec::new(), startup);
 
     tauri::Builder::default()
+        // T12：single-instance 必须是第一个注册的插件（第二实例转发后即退出）。
+        .plugin(single_instance::plugin())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(nav::plugin())
         .invoke_handler(ipc::handler())
         .manage(state)
         .setup(|app| {
+            use tauri::Manager;
+            app.state::<ipc::IpcState>()
+                .set_app_handle(app.handle().clone());
             #[cfg(debug_assertions)]
             {
                 probe::setup_window(app.handle())?;
+                startup_probe::start(app.handle().clone());
             }
             #[cfg(not(debug_assertions))]
             {

@@ -27,10 +27,23 @@ tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
 aether-core.workspace = true
+# D3/§2.2：数据目录定位（dirs::data_dir / data_local_dir）。
+dirs = "6"
+# 迁移复制校验（sha256 与 aether-store 同口径；两 crate 已在 Cargo.lock）。
+hex = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 tauri = { version = "2.11.5", features = [] }
+# D1 最小插件集：single-instance（T12 单实例锁）、dialog（迁移目标目录选择器）。
+tauri-plugin-dialog = "2.7.3"
+tauri-plugin-single-instance = "2.4.4"
 url = { version = "2", features = [] }
+
+# A4 ③：HKCU\Software\Microsoft\OneDrive\Accounts\* 的 UserFolder 比对（winreg 安全封装，
+# 工作区 lint 禁止 unsafe FFI；winreg 0.55 已是依赖图成员）。
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
 
 # `test` feature 仅用于测试目标（MockRuntime / get_ipc_response）。
 # 生产构建（cargo build）不合并 dev-dependencies 的 feature，产物不包含测试支撑。

@@ -26,3 +26,85 @@ body {
 .app-subtitle {
   color: #9aa0a6;
 }
+
+.app-data-dir {
+  color: #9aa0a6;
+  font-size: 0.85rem;
+}
+
+.startup-gate {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 46rem;
+  margin: 0 auto;
+  padding: 3rem 1.5rem;
+}
+
+.startup-gate-title {
+  color: #f6b26b;
+  margin: 0;
+}
+
+.startup-gate-message {
+  line-height: 1.6;
+  margin: 0;
+}
+
+.startup-gate-dir {
+  color: #9aa0a6;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 0.85rem;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.startup-gate-reasons {
+  margin: 0;
+  padding-left: 1.25rem;
+  color: #e8a7a7;
+}
+
+.startup-gate-note {
+  color: #9aa0a6;
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.startup-gate-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.startup-gate-field input {
+  background-color: #1d2026;
+  border: 1px solid #3a3f47;
+  border-radius: 4px;
+  color: inherit;
+  padding: 0.5rem 0.65rem;
+}
+
+.startup-gate-actions {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.startup-gate button {
+  background-color: #2a2f37;
+  border: 1px solid #3a3f47;
+  border-radius: 4px;
+  color: inherit;
+  cursor: pointer;
+  padding: 0.5rem 1rem;
+}
+
+.startup-gate button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.startup-gate-error {
+  color: #e8a7a7;
+  margin: 0;
+}

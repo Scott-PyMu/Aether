@@ -41,8 +41,16 @@ record(
 );
 record("verify-m1-07（密钥自检/脱敏/降级演练）", run(node, [path.join(repoRoot, "scripts", "test", "m1-07-verify.mjs")]));
 record(
+  "verify-m1-06（目录检测/迁移流/单实例；E2E 需真实 WebView，见 Windows CI）",
+  run(node, [path.join(repoRoot, "scripts", "test", "m1-06", "verify-m1-06.mjs"), "--skip-e2e"]),
+);
+record(
   "verify-m1-08（壳与安全基线单测矩阵/静态检查；E2E 需真实 WebView，见 Windows CI）",
   run(node, [path.join(repoRoot, "scripts", "test", "m1-08", "verify-m1-08.mjs"), "--skip-e2e"]),
+);
+record(
+  "verify-m1-10（监督器：状态机/退避熔断/心跳/台账三条件/终止序列/retry·enable）",
+  run(node, [path.join(repoRoot, "scripts", "test", "m1-10", "verify-m1-10.mjs")]),
 );
 
 if (!quick) {

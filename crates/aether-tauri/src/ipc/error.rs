@@ -32,6 +32,12 @@ pub enum IpcErrorCode {
     InvalidFormat,
     /// 路径校验失败（canonicalize / 白名单 / Windows 特殊路径）。
     PathRejected,
+    /// 启动门阻断（M1-06/A4：数据目录检测未通过，或启动自检未完成）。
+    StartupBlocked,
+    /// 数据目录迁移失败（复制/校验/原子替换/指针锁定，M1-06）。
+    MigrationFailed,
+    /// 内部错误（序列化/任务调度失败等不可达路径；M1-06 启动门与迁移接线）。
+    Internal,
     /// 命令尚未实现（框架就绪，实现随对应里程碑落地）。
     NotImplemented,
 }
@@ -49,6 +55,9 @@ impl IpcErrorCode {
             Self::OutOfRange => "out_of_range",
             Self::InvalidFormat => "invalid_format",
             Self::PathRejected => "path_rejected",
+            Self::StartupBlocked => "startup_blocked",
+            Self::MigrationFailed => "migration_failed",
+            Self::Internal => "internal",
             Self::NotImplemented => "not_implemented",
         }
     }
@@ -126,6 +135,21 @@ impl IpcError {
 
     pub fn path_rejected(message: impl Into<String>) -> Self {
         Self::new(IpcErrorCode::PathRejected, message)
+    }
+
+    /// M1-06/A4：启动门阻断（仅「迁移/退出」可达）。
+    pub fn startup_blocked(message: impl Into<String>) -> Self {
+        Self::new(IpcErrorCode::StartupBlocked, message)
+    }
+
+    /// M1-06：数据目录迁移失败。
+    pub fn migration_failed(message: impl Into<String>) -> Self {
+        Self::new(IpcErrorCode::MigrationFailed, message)
+    }
+
+    /// M1-06：内部不可达错误（序列化失败等）。
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self::new(IpcErrorCode::Internal, message)
     }
 
     pub fn not_implemented(command: &str) -> Self {

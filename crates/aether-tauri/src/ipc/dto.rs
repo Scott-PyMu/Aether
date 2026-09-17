@@ -395,6 +395,22 @@ impl CommandRequest for WorkspaceSetRequest {
     }
 }
 
+/// `startup_migrate`（M1-06/A4）：迁移目标目录。
+///
+/// 形态校验（绝对路径、存在目录、Windows 特殊路径）在命令内完成；目标自身的 A4
+/// 同步盘复核在启动门迁移流内执行（同一检测上下文）。
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StartupMigrateRequest {
+    pub target_dir: String,
+}
+
+impl CommandRequest for StartupMigrateRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        ensure_not_empty(&self.target_dir, "target_dir")
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExportDiagnosticsRequest {
