@@ -71,6 +71,20 @@ body {
   margin: 0;
 }
 
+.startup-gate-pending {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid #6b5a2e;
+  border-radius: 6px;
+  background-color: #241f14;
+}
+
+.startup-gate-pending button {
+  align-self: flex-start;
+}
+
 .startup-gate-field {
   display: flex;
   flex-direction: column;

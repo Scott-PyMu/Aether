@@ -66,7 +66,11 @@ where
 /// 检测命中时启动门进入 `BlockedSyncDir`：业务命令全部 `startup_blocked`，
 /// UI 只渲染「迁移到本地目录 / 退出」。
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let startup = std::sync::Arc::new(startup::StartupGate::bootstrap());
+    let gate = startup::StartupGate::bootstrap();
+    // E2E 探针可注入指针写入失败（复现「复制完成、写指针失败」窗口）。
+    #[cfg(debug_assertions)]
+    let gate = startup_probe::maybe_override_pointer_writer(gate);
+    let startup = std::sync::Arc::new(gate);
     #[cfg(debug_assertions)]
     startup_probe::record_phase(&startup);
 

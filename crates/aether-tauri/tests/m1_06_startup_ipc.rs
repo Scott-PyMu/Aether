@@ -20,6 +20,7 @@ use aether_tauri::startup::detect::{
     DetectionContext, NetworkDriveSource, PlatformKind, RegistrySource, ReparseSource,
     MAC_PRECISION_NOTE,
 };
+use aether_tauri::startup::pointer::FailingPointerWriter;
 use aether_tauri::startup::{pointer, DataDirSource, StartupGate, StartupPhase};
 use serde_json::{json, Value};
 use tauri::test::{mock_builder, mock_context, noop_assets, MockRuntime, INVOKE_KEY};
@@ -340,4 +341,67 @@ fn startup_migrate_command_executes_and_locks_new_dir() {
         .expect("迁移后业务命令恢复");
     assert_eq!(listed["recorded"], "session_list");
     assert_eq!(fixture.backend.calls(), vec!["session_list".to_string()]);
+}
+
+/// 指针写入失败窗口：错误可读 → `startup_get` 暴露待续跑迁移 → 同一目标重试成功。
+#[test]
+fn startup_get_exposes_pending_resumable_migration() {
+    let root = temp_dir("ipc-resume");
+    let source = make_source(&root, "sync-root/Aether");
+    let pointer_file = root.join("config").join("data-location.json");
+    let target = root.join("local-target");
+    std::fs::create_dir_all(&target).expect("创建迁移目标");
+    let gate = Arc::new(
+        StartupGate::bootstrap_at(
+            source.clone(),
+            DataDirSource::Default,
+            sync_context(&root.join("sync-root")),
+            Some(pointer_file.clone()),
+        )
+        .with_pointer_writer(Arc::new(FailingPointerWriter::new(1))),
+    );
+    let fixture = fixture("resume", gate);
+
+    let rejected = invoke(
+        &fixture.webview,
+        "startup_migrate",
+        json!({ "target_dir": long_path(&target) }),
+    )
+    .expect_err("指针写入失败必须报错");
+    assert_eq!(rejected["code"], "migration_failed", "{rejected}");
+    assert!(
+        rejected["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("完成迁移")),
+        "错误应提示「完成迁移」：{rejected}"
+    );
+
+    let snapshot = invoke(&fixture.webview, "startup_get", Value::Null).expect("startup_get");
+    assert_eq!(snapshot["phase"], "blocked_sync_dir", "{snapshot}");
+    assert_eq!(
+        snapshot["pending_migration"]["phase"], "verified",
+        "{snapshot}"
+    );
+    assert_eq!(
+        snapshot["pending_migration"]["target"].as_str(),
+        Some(long_path(&target).as_str()),
+        "{snapshot}"
+    );
+
+    // 「完成迁移」= 以记录的目标再次调用 startup_migrate（幂等续跑）。
+    let migrated = invoke(
+        &fixture.webview,
+        "startup_migrate",
+        json!({ "target_dir": long_path(&target) }),
+    )
+    .expect("续跑应成功");
+    assert_eq!(migrated["phase"], "ready");
+    assert!(
+        migrated["pending_migration"].is_null(),
+        "完成后不应再有待续跑"
+    );
+    assert_eq!(
+        pointer::read_pointer(&pointer_file).expect("读取指针"),
+        Some(PathBuf::from(long_path(&target)))
+    );
 }

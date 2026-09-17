@@ -41,6 +41,16 @@ export interface MigrationOutcome {
   total_bytes: number;
 }
 
+export type MigrationPhase = "copying" | "verified" | "pointer_written" | "done";
+
+/** 未完成迁移（指针写入失败窗口）：UI 提供「完成迁移」入口。 */
+export interface PendingMigration {
+  migration_id: string;
+  target: string;
+  phase: MigrationPhase;
+  started_at: number;
+}
+
 export interface StartupSnapshot {
   phase: StartupPhase;
   data_dir: string;
@@ -48,6 +58,7 @@ export interface StartupSnapshot {
   detection?: DetectionReport;
   message?: string;
   migration?: MigrationOutcome;
+  pending_migration?: PendingMigration;
 }
 
 export async function fetchStartup(): Promise<StartupSnapshot> {

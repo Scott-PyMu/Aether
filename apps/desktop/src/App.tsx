@@ -26,7 +26,7 @@ export function App() {
     };
   }, []);
 
-  const onMigrated = useCallback((snapshot: StartupSnapshot) => {
+  const onSnapshot = useCallback((snapshot: StartupSnapshot) => {
     setStartup(snapshot);
   }, []);
 
@@ -48,7 +48,7 @@ export function App() {
   }
 
   if (startup.phase !== "ready") {
-    return <StartupGate snapshot={startup} onMigrated={onMigrated} />;
+    return <StartupGate snapshot={startup} onSnapshot={onSnapshot} />;
   }
 
   return (

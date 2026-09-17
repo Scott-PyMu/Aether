@@ -20,6 +20,8 @@ use aether_tauri::startup::migrate::{
     ensure_dir_writable, migrate_data_dir, migrate_data_dir_with, required_free_bytes, sha256_file,
     MigrationError, MigrationErrorKind, MigrationProbe,
 };
+use aether_tauri::startup::pointer::FailingPointerWriter;
+use aether_tauri::startup::state::{self, MigrationPhase, MigrationState};
 use aether_tauri::startup::{pointer, DataDirSource, StartupGate, StartupPhase};
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -452,4 +454,161 @@ fn migration_rejects_insufficient_space() {
         .migrate(&long_path(&second_target))
         .expect_err("门层空间不足必须拒绝");
     assert_eq!(rejected.code.as_str(), "migration_failed");
+}
+
+#[test]
+fn migration_resumes_after_pointer_write_failure() {
+    let root = temp_dir("migrate-resume");
+    let source = make_source(&root);
+    let target = root.join("local-target");
+    std::fs::create_dir_all(&target).expect("创建目标目录");
+    let pointer_file = root.join("config").join("data-location.json");
+    let state_file = root.join("config").join("migration_state.json");
+
+    let writer = Arc::new(FailingPointerWriter::new(1));
+    let gate = StartupGate::bootstrap_at(
+        source.clone(),
+        DataDirSource::Default,
+        sync_context(&root.join("sync-root")),
+        Some(pointer_file.clone()),
+    )
+    .with_pointer_writer(writer.clone());
+
+    // 第一次：复制+校验成功、写指针失败 → 结构化错误；源保留；状态=verified；可续跑。
+    let error = gate
+        .migrate(&long_path(&target))
+        .expect_err("指针写入失败必须报错");
+    assert_eq!(error.code.as_str(), "migration_failed");
+    assert!(
+        error.message.contains("完成迁移"),
+        "错误应提示「完成迁移」入口：{}",
+        error.message
+    );
+    assert_eq!(writer.remaining_failures(), 0);
+    let persisted = state::read_state(&state_file)
+        .expect("读取状态")
+        .expect("状态文件应存在");
+    assert_eq!(persisted.phase, MigrationPhase::Verified);
+    assert!(
+        persisted.checksum.is_some(),
+        "verified 阶段必须记录清单摘要"
+    );
+    assert!(source.join("aether.db").is_file(), "源必须保留");
+    assert_eq!(
+        gate.snapshot().phase,
+        StartupPhase::BlockedSyncDir,
+        "门仍阻塞"
+    );
+    let pending = gate.snapshot().pending_migration.expect("应暴露待续跑迁移");
+    assert_eq!(pending.phase, MigrationPhase::Verified);
+    assert!(detect_target_same(&pending.target, &target));
+
+    // 改动源内容：续跑必须复用已复制副本，不得重新复制。
+    let copied_hash = sha256_file(&target.join("aether.db")).expect("目标摘要");
+    std::fs::write(source.join("aether.db"), b"source-changed-after-failure").expect("修改源");
+    assert_ne!(
+        sha256_file(&source.join("aether.db")).expect("源摘要"),
+        copied_hash
+    );
+
+    // 第二次：幂等续跑 → 直接写指针 → Ready；目标内容保持第一次副本。
+    let snapshot = gate.migrate(&long_path(&target)).expect("续跑应成功");
+    assert_eq!(snapshot["phase"], "ready");
+    assert_eq!(
+        snapshot["data_dir_source"], "migrated",
+        "续跑同样完成锁定：{snapshot}"
+    );
+    assert_eq!(
+        sha256_file(&target.join("aether.db")).expect("目标摘要"),
+        copied_hash,
+        "续跑不得重新复制（源已变化，目标应保持原副本）"
+    );
+    assert_eq!(
+        pointer::read_pointer(&pointer_file).expect("读取指针"),
+        Some(PathBuf::from(long_path(&target)))
+    );
+    let persisted = state::read_state(&state_file)
+        .expect("读取状态")
+        .expect("状态文件应存在");
+    assert_eq!(persisted.phase, MigrationPhase::Done);
+    assert!(gate.ensure_ready().is_ok(), "续跑成功后业务命令应恢复");
+}
+
+#[test]
+fn migration_resume_cleans_partial_copy_and_rejects_unknown_entries() {
+    let root = temp_dir("migrate-partial");
+    let source = make_source(&root);
+    let pointer_file = root.join("config").join("data-location.json");
+    let state_file = root.join("config").join("migration_state.json");
+
+    // 半套副本：目标含暂存目录 + 与源同名的条目（模拟提交中断）。
+    let partial_target = root.join("partial-target");
+    std::fs::create_dir_all(partial_target.join(".aether-migration-1-2")).expect("创建暂存目录");
+    std::fs::write(partial_target.join("aether.db"), b"partial").expect("写入半套主库");
+    std::fs::write(
+        partial_target.join(".aether-migration-1-2").join("tmp"),
+        b"tmp",
+    )
+    .expect("写入暂存文件");
+    let mut pending =
+        MigrationState::new(&source.to_string_lossy(), &partial_target.to_string_lossy());
+    pending.phase = MigrationPhase::Copying;
+    state::write_state(&state_file, &pending).expect("写入可续跑状态");
+
+    let gate = StartupGate::bootstrap_at(
+        source.clone(),
+        DataDirSource::Default,
+        sync_context(&root.join("sync-root")),
+        Some(pointer_file.clone()),
+    );
+    let snapshot = gate
+        .migrate(&long_path(&partial_target))
+        .expect("半套副本应清理后续跑成功");
+    assert_eq!(snapshot["phase"], "ready");
+    assert!(
+        !partial_target.join(".aether-migration-1-2").exists(),
+        "暂存应清理"
+    );
+    assert_eq!(
+        sha256_file(&partial_target.join("aether.db")).expect("主库摘要"),
+        sha256_file(&source.join("aether.db")).expect("源摘要"),
+        "重放复制后应为完整副本"
+    );
+    assert_eq!(target_entry_count(&partial_target), 3, "应为完整条目集");
+
+    // 含未知条目的目标：状态可续跑但无法安全判断归属 → 拒绝并提示另选目录。
+    // 使用新的门（第一次迁移成功后原门已 Ready，不再接受迁移）。
+    let unknown_target = root.join("unknown-target");
+    std::fs::create_dir_all(&unknown_target).expect("创建目标目录");
+    std::fs::write(unknown_target.join("user.txt"), b"keep me").expect("写入未知条目");
+    let pointer_file2 = root.join("config2").join("data-location.json");
+    let state_file2 = root.join("config2").join("migration_state.json");
+    let mut pending =
+        MigrationState::new(&source.to_string_lossy(), &unknown_target.to_string_lossy());
+    pending.phase = MigrationPhase::Copying;
+    state::write_state(&state_file2, &pending).expect("写入可续跑状态");
+    let gate2 = StartupGate::bootstrap_at(
+        source.clone(),
+        DataDirSource::Default,
+        sync_context(&root.join("sync-root")),
+        Some(pointer_file2),
+    );
+
+    let rejected = gate2
+        .migrate(&long_path(&unknown_target))
+        .expect_err("未知条目必须拒绝");
+    assert_eq!(rejected.code.as_str(), "path_rejected");
+    assert!(
+        rejected.message.contains("未知条目"),
+        "拒绝原因应可读：{}",
+        rejected.message
+    );
+    assert!(
+        unknown_target.join("user.txt").is_file(),
+        "不得删除用户内容"
+    );
+}
+
+fn detect_target_same(left: &str, right: &Path) -> bool {
+    std::fs::canonicalize(left).ok().as_deref() == std::fs::canonicalize(right).ok().as_deref()
 }

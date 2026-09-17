@@ -10,6 +10,7 @@ import { useCallback, useState } from "react";
 import {
   describeIpcError,
   exitApp,
+  fetchStartup,
   migrateDataDir,
   pickMigrationTarget,
   type StartupSnapshot,
@@ -17,14 +18,15 @@ import {
 
 interface StartupGateProps {
   snapshot: StartupSnapshot;
-  onMigrated: (snapshot: StartupSnapshot) => void;
+  onSnapshot: (snapshot: StartupSnapshot) => void;
 }
 
-export function StartupGate({ snapshot, onMigrated }: StartupGateProps) {
+export function StartupGate({ snapshot, onSnapshot }: StartupGateProps) {
   const [target, setTarget] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const isHardError = snapshot.phase === "blocked_error";
+  const pending = snapshot.pending_migration;
 
   const pick = useCallback(async () => {
     setError(null);
@@ -38,18 +40,38 @@ export function StartupGate({ snapshot, onMigrated }: StartupGateProps) {
     }
   }, []);
 
-  const migrate = useCallback(async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const migrated = await migrateDataDir(target.trim());
-      onMigrated(migrated);
-    } catch (migrateError) {
-      setError(describeIpcError(migrateError));
-    } finally {
-      setBusy(false);
+  const migrateTo = useCallback(
+    async (targetDir: string) => {
+      setBusy(true);
+      setError(null);
+      try {
+        const migrated = await migrateDataDir(targetDir);
+        onSnapshot(migrated);
+      } catch (migrateError) {
+        setError(describeIpcError(migrateError));
+        // 指针写入失败会留下可续跑的迁移状态：刷新快照以呈现「完成迁移」入口。
+        try {
+          onSnapshot(await fetchStartup());
+        } catch {
+          // 保持当前快照；错误信息已展示
+        }
+      } finally {
+        setBusy(false);
+      }
+    },
+    [onSnapshot],
+  );
+
+  const migrate = useCallback(
+    () => migrateTo(target.trim()),
+    [migrateTo, target],
+  );
+
+  const finishPending = useCallback(() => {
+    if (pending) {
+      void migrateTo(pending.target);
     }
-  }, [onMigrated, target]);
+  }, [migrateTo, pending]);
 
   const exit = useCallback(() => {
     void exitApp();
@@ -80,6 +102,24 @@ export function StartupGate({ snapshot, onMigrated }: StartupGateProps) {
             <p className="startup-gate-note" data-testid="startup-precision-note">
               {snapshot.detection.note}
             </p>
+          ) : null}
+          {pending ? (
+            <div className="startup-gate-pending" data-testid="startup-pending">
+              <p className="startup-gate-message">
+                检测到未完成的迁移（副本已就绪，阶段：{pending.phase}）：
+              </p>
+              <p className="startup-gate-dir" data-testid="startup-pending-target">
+                {pending.target}
+              </p>
+              <button
+                type="button"
+                data-testid="startup-finish-migration"
+                onClick={finishPending}
+                disabled={busy}
+              >
+                {busy ? "正在迁移…" : "完成迁移（继续锁定该目录）"}
+              </button>
+            </div>
           ) : null}
           <label className="startup-gate-field">
             <span>迁移目标目录（本地磁盘，必须为空目录）</span>

@@ -121,6 +121,11 @@ if (skipE2e) {
     e2eOutput.includes('"stage":"picked"'),
     e2eOutput.includes('"stage":"picked"') ? "picked" : "未观测到 picked 回报",
   );
+  recordOk(
+    "DoD3 幂等续跑：指针写入失败 →「完成迁移」→ 复用已复制副本",
+    e2eOutput.includes('"stage":"finish-clicked"') &&
+      e2eOutput.includes("续跑复用已复制副本"),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -217,6 +222,45 @@ if (skipE2e) {
       path.join(repoRoot, "crates", "aether-tauri", "src", "startup_probe.rs"),
       "utf8",
     ).includes("AETHER_E2E_PICK_DIR"),
+  );
+
+  // 幂等续跑（指针写入失败窗口）：状态机 / 注入写入器 / 续跑测试。
+  const stateSource = readFileSync(
+    path.join(repoRoot, "crates", "aether-tauri", "src", "startup", "state.rs"),
+    "utf8",
+  );
+  recordOk(
+    "迁移状态文件：phase 状态机（copying/verified/pointer_written/done）",
+    stateSource.includes("pub enum MigrationPhase") &&
+      stateSource.includes("Copying") &&
+      stateSource.includes("Verified") &&
+      stateSource.includes("PointerWritten") &&
+      stateSource.includes("Done"),
+  );
+  const migrationTestSource = readFileSync(
+    path.join(repoRoot, "crates", "aether-tauri", "tests", "m1_06_migration.rs"),
+    "utf8",
+  );
+  recordOk(
+    "幂等续跑测试：指针写入失败→续跑复用副本 / 半套清理 / 未知条目拒绝",
+    migrationTestSource.includes("migration_resumes_after_pointer_write_failure") &&
+      migrationTestSource.includes(
+        "migration_resume_cleans_partial_copy_and_rejects_unknown_entries",
+      ),
+  );
+  const probeSource = readFileSync(
+    path.join(repoRoot, "crates", "aether-tauri", "src", "startup_probe.rs"),
+    "utf8",
+  );
+  const e2eSource = readFileSync(
+    path.join(repoRoot, "scripts", "test", "m1-06", "e2e-startup-guard.mjs"),
+    "utf8",
+  );
+  recordOk(
+    "E2E 注入指针写入失败与「完成迁移」触发文件接线",
+    probeSource.includes("AETHER_E2E_FAIL_POINTER_WRITE") &&
+      e2eSource.includes("finishTriggerFile") &&
+      e2eSource.includes("finish-clicked"),
   );
 }
 

@@ -19,6 +19,7 @@ use tauri::{AppHandle, Manager, Runtime};
 use crate::ipc::error::IpcError;
 use crate::ipc::IpcErrorCode;
 use crate::picker::{DirectoryPicker, FixedDirectoryPicker};
+use crate::startup::pointer::FailingPointerWriter;
 use crate::startup::StartupGate;
 
 pub const PROBE_ENV: &str = "AETHER_E2E_STARTUP_PROBE";
@@ -30,6 +31,10 @@ pub const PICK_DIR_ENV: &str = "AETHER_E2E_PICK_DIR";
 pub const PICK_CANCEL_ENV: &str = "AETHER_E2E_PICK_CANCEL";
 /// 真实系统选择器冒烟模式（探针点击「选择目录…」，不注入替身）。
 pub const PICKER_SMOKE_ENV: &str = "AETHER_E2E_PICKER_SMOKE";
+/// 注入「指针写入失败」次数（复现「复制完成、写指针失败」窗口与幂等续跑；默认 1 次）。
+pub const FAIL_POINTER_WRITE_ENV: &str = "AETHER_E2E_FAIL_POINTER_WRITE";
+/// 「完成迁移」触发文件（存在时探针点击 `startup-finish-migration`）。
+pub const FINISH_TRIGGER_ENV: &str = "AETHER_E2E_FINISH_TRIGGER_FILE";
 pub const PHASE_LINE: &str = "AETHER_M1_06_PHASE";
 pub const REPORT_LINE: &str = "AETHER_M1_06_REPORT";
 pub const FOCUS_LINE: &str = "AETHER_M1_06_FOCUS";
@@ -72,6 +77,18 @@ pub fn injected_picker() -> Option<Arc<dyn DirectoryPicker>> {
     None
 }
 
+/// 探针模式下按环境变量注入指针写入失败（E2E 复现续跑路径）。
+pub fn maybe_override_pointer_writer(gate: StartupGate) -> StartupGate {
+    if !is_enabled() {
+        return gate;
+    }
+    let Some(raw) = std::env::var_os(FAIL_POINTER_WRITE_ENV) else {
+        return gate;
+    };
+    let failures = raw.to_string_lossy().parse::<usize>().unwrap_or(1);
+    gate.with_pointer_writer(Arc::new(FailingPointerWriter::new(failures)))
+}
+
 /// 启动时输出启动门快照（供 E2E 断言拒绝启动阶段）。
 pub fn record_phase(gate: &StartupGate) {
     if !is_enabled() {
@@ -97,6 +114,7 @@ pub fn start<R: Runtime>(app: AppHandle<R>) {
         return;
     }
     let trigger = std::env::var_os(TRIGGER_ENV).map(PathBuf::from);
+    let finish_trigger = std::env::var_os(FINISH_TRIGGER_ENV).map(PathBuf::from);
     let target = std::env::var(TARGET_ENV).unwrap_or_default();
     let picker_smoke = std::env::var_os(PICKER_SMOKE_ENV).is_some();
     std::thread::spawn(move || {
@@ -114,6 +132,8 @@ pub fn start<R: Runtime>(app: AppHandle<R>) {
             }
             let mode = if picker_smoke {
                 "picker"
+            } else if finish_trigger.as_ref().is_some_and(|path| path.exists()) {
+                "finish"
             } else if trigger.as_ref().is_some_and(|path| path.exists()) {
                 "migrate"
             } else {
@@ -233,10 +253,42 @@ const SCRIPT_TEMPLATE: &str = r#"
     }
     return;
   }
+  if (MODE === 'finish') {
+    // 幂等续跑：点击「完成迁移」（用已复制副本继续写指针）。
+    var finishButton = document.querySelector('[data-testid="startup-finish-migration"]');
+    if (finishButton && !S.finishClicked) {
+      S.finishClicked = true;
+      finishButton.click();
+      report({ stage: 'finish-clicked' });
+      return;
+    }
+    if (main && !S.readyReported) {
+      S.readyReported = true;
+      report({ stage: 'ready', main: true, gate: false });
+      return;
+    }
+    var finishError = document.querySelector('[data-testid="startup-error"]');
+    if (finishError) { report({ stage: 'finish-error', detail: finishError.textContent }); }
+    return;
+  }
   if (S.step === 2) {
     if (main) { S.step = 3; report({ stage: 'ready', main: true, gate: false }); return; }
     var error = document.querySelector('[data-testid="startup-error"]');
-    if (error) { S.step = 3; report({ stage: 'error', detail: error.textContent }); }
+    if (error && !S.errorReported) {
+      // 迁移失败（如注入的指针写入失败）：非终态，保留后续「完成迁移」路径。
+      S.errorReported = true;
+      report({ stage: 'migrate-error', detail: error.textContent });
+    }
+    var finishButton = document.querySelector('[data-testid="startup-finish-migration"]');
+    if (finishButton && !S.finishVisibleReported) {
+      // 前端刷新快照是异步的：「完成迁移」按钮出现后再回报一次。
+      S.finishVisibleReported = true;
+      var pendingTarget = document.querySelector('[data-testid="startup-pending-target"]');
+      report({
+        stage: 'finish-available',
+        target: pendingTarget ? pendingTarget.textContent.trim() : '',
+      });
+    }
   }
 })()
 "#;

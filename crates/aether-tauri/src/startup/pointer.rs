@@ -12,6 +12,7 @@
 //! 覆盖（E2E 隔离用）。写入采用「临时文件 + rename」原子替换。
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde::{Deserialize, Serialize};
 
@@ -61,6 +62,53 @@ pub fn env_data_dir() -> Option<Result<PathBuf, String>> {
 /// 缺省数据目录（D3）：`data_dir()/Aether`。
 pub fn default_data_dir() -> Option<PathBuf> {
     dirs::data_dir().map(|dir| dir.join(APP_DIR_NAME))
+}
+
+/// 数据目录指针写入器（可注入：覆盖「复制完成、写指针失败」窗口与幂等续跑）。
+pub trait PointerWriter: Send + Sync {
+    fn write(&self, pointer_file: &Path, data_dir: &Path) -> Result<(), String>;
+}
+
+/// 生产实现：原子替换写入 `data-location.json`。
+#[derive(Debug, Default)]
+pub struct NativePointerWriter;
+
+impl PointerWriter for NativePointerWriter {
+    fn write(&self, pointer_file: &Path, data_dir: &Path) -> Result<(), String> {
+        write_pointer(pointer_file, data_dir)
+    }
+}
+
+/// 测试替身：前 N 次写入返回错误，之后委托原生实现（复现指针写入失败窗口）。
+#[derive(Debug)]
+pub struct FailingPointerWriter {
+    remaining_failures: AtomicUsize,
+    inner: NativePointerWriter,
+}
+
+impl FailingPointerWriter {
+    pub fn new(failures: usize) -> Self {
+        Self {
+            remaining_failures: AtomicUsize::new(failures),
+            inner: NativePointerWriter,
+        }
+    }
+
+    pub fn remaining_failures(&self) -> usize {
+        self.remaining_failures.load(Ordering::SeqCst)
+    }
+}
+
+impl PointerWriter for FailingPointerWriter {
+    fn write(&self, pointer_file: &Path, data_dir: &Path) -> Result<(), String> {
+        let remaining = self.remaining_failures.load(Ordering::SeqCst);
+        if remaining > 0 {
+            self.remaining_failures
+                .store(remaining.saturating_sub(1), Ordering::SeqCst);
+            return Err("注入：数据目录指针写入失败（测试替身）".to_string());
+        }
+        self.inner.write(pointer_file, data_dir)
+    }
 }
 
 /// 迁移前置检查：指针文件所在目录可创建、可写（临时探针文件）。

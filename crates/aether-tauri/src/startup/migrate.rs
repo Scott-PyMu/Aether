@@ -46,6 +46,8 @@ pub enum MigrationErrorKind {
     TargetNotWritable,
     /// 目标可用空间不足（前置空间护栏；探针可注入）。
     InsufficientSpace,
+    /// 目标含与迁移状态不符的内容（无法安全续跑，需另选目录）。
+    StateConflict,
     Io,
 }
 
@@ -155,6 +157,121 @@ pub struct MigrationOutcome {
     pub target: String,
     pub entries: Vec<CopiedEntry>,
     pub total_bytes: u64,
+    /// 目标副本清单摘要（sha256；续跑校验口径，见 [`verify_target_manifest`]）。
+    pub manifest_digest: String,
+}
+
+/// 清单摘要：对「相对路径 + 文件 sha256」按路径排序后取 sha256（跨平台路径统一为 `/`）。
+pub fn digest_entries(entries: &[CopiedEntry]) -> String {
+    let mut lines: Vec<String> = entries
+        .iter()
+        .map(|entry| format!("{}\t{}\n", entry.relative.replace('\\', "/"), entry.sha256))
+        .collect();
+    lines.sort();
+    let mut hasher = Sha256::new();
+    for line in lines {
+        hasher.update(line.as_bytes());
+    }
+    hex::encode(hasher.finalize())
+}
+
+/// 扫描目标目录并计算清单摘要（忽略暂存目录 `.aether-migration-*`）。
+///
+/// 用于续跑校验：与状态文件记录的 `checksum` 比对，一致则目标已有完整副本。
+pub fn verify_target_manifest(target: &Path) -> Result<(String, Vec<CopiedEntry>), MigrationError> {
+    if !target.is_dir() {
+        return Err(MigrationError::new(
+            MigrationErrorKind::TargetInvalid,
+            format!("迁移目标必须是已存在的目录：{}", target.display()),
+        ));
+    }
+    let mut entries = Vec::new();
+    let mut stack = vec![target.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let listing = std::fs::read_dir(&dir)
+            .map_err(|error| io_error(MigrationErrorKind::Io, &dir, &error))?;
+        for item in listing {
+            let item = item.map_err(|error| io_error(MigrationErrorKind::Io, &dir, &error))?;
+            let name = item.file_name().to_string_lossy().to_string();
+            if dir == target && name.starts_with(STAGING_PREFIX) {
+                continue;
+            }
+            let path = item.path();
+            let metadata = std::fs::symlink_metadata(&path)
+                .map_err(|error| io_error(MigrationErrorKind::Io, &path, &error))?;
+            if metadata.is_dir() {
+                stack.push(path);
+            } else if metadata.is_file() {
+                let relative = path
+                    .strip_prefix(target)
+                    .map_err(|_| {
+                        MigrationError::new(
+                            MigrationErrorKind::Io,
+                            format!("无法计算相对路径：{}", path.display()),
+                        )
+                    })?
+                    .to_path_buf();
+                entries.push(CopiedEntry {
+                    relative: relative.display().to_string(),
+                    sha256: sha256_file(&path)?,
+                    bytes: metadata.len(),
+                });
+            } else {
+                return Err(MigrationError::new(
+                    MigrationErrorKind::UnsupportedEntry,
+                    format!("目标包含非普通文件条目：{}", path.display()),
+                ));
+            }
+        }
+    }
+    let digest = digest_entries(&entries);
+    Ok((digest, entries))
+}
+
+/// 清理目标中的「本应用迁移残留」，用于续跑重放复制。
+///
+/// 仅删除：① 暂存目录（`.aether-migration-*`）；② 顶层名称与源目录顶层条目同名的
+/// 条目（上一次提交的半套/完整副本）。出现任何未知条目 → [`MigrationErrorKind::StateConflict`]
+/// （无法安全判断归属，提示另选目录）。
+pub fn clean_migration_residue(source: &Path, target: &Path) -> Result<(), MigrationError> {
+    if !source.is_dir() || !target.is_dir() {
+        return Err(MigrationError::new(
+            MigrationErrorKind::TargetInvalid,
+            "清理迁移残留要求源与目标均为已存在目录",
+        ));
+    }
+    let mut source_names: Vec<String> = Vec::new();
+    let listing = std::fs::read_dir(source)
+        .map_err(|error| io_error(MigrationErrorKind::Io, source, &error))?;
+    for item in listing {
+        let item = item.map_err(|error| io_error(MigrationErrorKind::Io, source, &error))?;
+        source_names.push(item.file_name().to_string_lossy().to_string());
+    }
+
+    let listing = std::fs::read_dir(target)
+        .map_err(|error| io_error(MigrationErrorKind::Io, target, &error))?;
+    for item in listing {
+        let item = item.map_err(|error| io_error(MigrationErrorKind::Io, target, &error))?;
+        let name = item.file_name().to_string_lossy().to_string();
+        let path = item.path();
+        if name.starts_with(STAGING_PREFIX) || source_names.contains(&name) {
+            let metadata = std::fs::symlink_metadata(&path)
+                .map_err(|error| io_error(MigrationErrorKind::Io, &path, &error))?;
+            if metadata.is_dir() && !metadata.file_type().is_symlink() {
+                std::fs::remove_dir_all(&path)
+                    .map_err(|error| io_error(MigrationErrorKind::Io, &path, &error))?;
+            } else {
+                std::fs::remove_file(&path)
+                    .map_err(|error| io_error(MigrationErrorKind::Io, &path, &error))?;
+            }
+            continue;
+        }
+        return Err(MigrationError::new(
+            MigrationErrorKind::StateConflict,
+            format!("迁移目标包含未知条目「{name}」，无法安全续跑；请另选目录或清理该条目后重试"),
+        ));
+    }
+    Ok(())
 }
 
 /// `sha256` 文件摘要（与 aether-store 迁移 checksum 同口径）。
@@ -265,7 +382,7 @@ pub fn migrate_data_dir_with(
         return Err(MigrationError::new(
             MigrationErrorKind::TargetNotEmpty,
             format!(
-                "迁移目标必须为空目录（避免覆盖既有数据）：{}",
+                "迁移目标必须为空目录（避免覆盖既有数据）：{}；请另选目录",
                 target.display()
             ),
         ));
@@ -303,11 +420,13 @@ fn run_migration(
     std::fs::remove_dir_all(staging)
         .map_err(|error| io_error(MigrationErrorKind::Io, staging, &error))?;
 
+    let manifest_digest = digest_entries(&entries);
     Ok(MigrationOutcome {
         source: source.to_string_lossy().to_string(),
         target: target.to_string_lossy().to_string(),
         entries,
         total_bytes,
+        manifest_digest,
     })
 }
 

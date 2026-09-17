@@ -6,7 +6,9 @@
  *      主界面（app-version）不可达，业务命令返回 startup_blocked；
  *   2. 二次启动 → 第二进程退出、首实例收到聚焦回调；
  *   3. 点击「选择目录…」（注入的 DirectoryPicker 返回预设路径）→ 点击「迁移到本地目录」
- *      → 复制 → sha256 校验 → 原子替换 → 指针锁定新目录；
+ *      → 复制 → sha256 校验 → 原子替换；随后注入的指针写入失败（复现「复制完成、
+ *      写指针失败」窗口）→ 修改源文件 → 点击「完成迁移」幂等续跑（跳过复制、直接写
+ *      指针）→ 断言目标保持首轮副本（未重新复制）；
  *   4. 重启（不带模拟 OneDrive / 数据目录环境变量）→ 以指针目录启动，主界面可达。
  *
  * 用法：node scripts/test/m1-06/e2e-startup-guard.mjs [--skip-frontend-build] [--skip-rust-build]
@@ -41,6 +43,7 @@ const targetDir = path.join(workDir, "local-target");
 const configDir = path.join(workDir, "config");
 const pointerFile = path.join(configDir, "data-location.json");
 const triggerFile = path.join(workDir, "migrate.trigger");
+const finishTriggerFile = path.join(workDir, "finish.trigger");
 
 const env = buildEnv();
 const checks = [];
@@ -162,6 +165,9 @@ try {
     AETHER_E2E_TRIGGER_FILE: triggerFile,
     // 迁移主路径：注入固定目录选择器（点击「选择目录…」返回该路径）。
     AETHER_E2E_PICK_DIR: targetDir,
+    // 幂等续跑：首次写指针注入失败，随后经「完成迁移」续跑锁定。
+    AETHER_E2E_FAIL_POINTER_WRITE: "1",
+    AETHER_E2E_FINISH_TRIGGER_FILE: finishTriggerFile,
   };
 
   // -------------------------------------------------------------------------
@@ -249,18 +255,58 @@ try {
     180000,
     "点击「迁移到本地目录」",
   );
+
+  // 注入的指针写入失败：复制已完成、锁定失败 → 错误可读 + 保留续跑入口。
+  const migrateErrorLine = await waitFor(
+    first.state,
+    (line) => line.startsWith(REPORT_LINE) && line.includes('"stage":"migrate-error"'),
+    300000,
+    "指针写入失败错误回报",
+  );
+  const migrateError = JSON.parse(migrateErrorLine.slice(REPORT_LINE.length).trim());
+  record(
+    "指针写入失败：错误提示「完成迁移」入口",
+    typeof migrateError.detail === "string" && migrateError.detail.includes("完成迁移"),
+    String(migrateError.detail),
+  );
+  const finishAvailableLine = await waitFor(
+    first.state,
+    (line) => line.startsWith(REPORT_LINE) && line.includes('"stage":"finish-available"'),
+    120000,
+    "「完成迁移」按钮出现（待续跑迁移状态）",
+  );
+  const finishAvailable = JSON.parse(finishAvailableLine.slice(REPORT_LINE.length).trim());
+  record(
+    "检出待续跑迁移并呈现「完成迁移」入口",
+    finishAvailable.target === targetDir,
+    `target=${finishAvailable.target}`,
+  );
+  // 第一次复制后（源被修改前）记录目标摘要，用于证明续跑未重新复制。
+  const firstCopyHash = sha256(path.join(targetDir, "aether.db"));
+  writeFileSync(path.join(sourceDir, "aether.db"), "source-changed-after-pointer-failure");
+
+  // 触发「完成迁移」（幂等续跑：直接写指针）。
+  console.log(`\n$ finish trigger ${finishTriggerFile}`);
+  writeFileSync(finishTriggerFile, "finish");
+  await waitFor(
+    first.state,
+    (line) => line.startsWith(REPORT_LINE) && line.includes('"stage":"finish-clicked"'),
+    120000,
+    "点击「完成迁移」",
+  );
   await waitFor(
     first.state,
     (line) => line.startsWith(REPORT_LINE) && line.includes('"stage":"ready"'),
     300000,
-    "迁移后主界面可达",
+    "续跑后主界面可达",
   );
   const firstExit = await exitCode(first, 60000);
   record("迁移后应用正常退出（探针）", firstExit === 0, `exit=${firstExit}`);
   record(
-    "迁移目标包含主库且与源 sha256 一致",
+    "续跑复用已复制副本（源已变更，目标保持首轮内容）",
     existsSync(path.join(targetDir, "aether.db")) &&
-      sha256(path.join(targetDir, "aether.db")) === sha256(path.join(sourceDir, "aether.db")),
+      sha256(path.join(targetDir, "aether.db")) === firstCopyHash &&
+      sha256(path.join(sourceDir, "aether.db")) !== firstCopyHash,
   );
   record(
     "迁移目标包含备份子目录（目录结构保持）",
