@@ -34,11 +34,12 @@ use crate::ipc::path::is_within;
 pub const WINDOWS_ENV_VARIABLES: &[&str] = &["OneDrive", "OneDriveConsumer", "OneDriveCommercial"];
 
 /// 注册表 OneDrive 账户根路径（A4 ③）。
-#[cfg(windows)]
+///
+/// 常量本身跨平台声明：`check_windows_registry` 在所有平台编译（Windows 分支才使用），
+/// 声明加 `#[cfg(windows)]` 会导致非 Windows 目标编译失败（M1-06 CI 回归修复）。
 pub const REGISTRY_ACCOUNTS_PATH: &str = r"Software\Microsoft\OneDrive\Accounts";
 
 /// 注册表网络映射盘根路径（网络盘粗筛，HKCU\Network\<盘符>）。
-#[cfg(windows)]
 pub const REGISTRY_NETWORK_PATH: &str = r"Network";
 
 pub const CHECK_WIN_ENV_PREFIX: &str = "win.one_drive_env_prefix";

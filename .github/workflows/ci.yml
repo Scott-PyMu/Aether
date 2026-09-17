@@ -114,7 +114,23 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: M1-08 验证（单测矩阵 + 静态检查 + CSP/导航 E2E）
-        run: node scripts/test/m1-08/verify-m1-08.mjs
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/test/m1-08/verify-m1-08.mjs 2>&1 | tee m1-08-verify.log
+      - name: 失败诊断（公开 annotation，便于无凭据取证）
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "### M1-08 verify 失败输出（tail 80）"
+            echo '```text'
+            tail -80 m1-08-verify.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          tail -60 m1-08-verify.log 2>/dev/null | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m1-08::$line"
+          done
 
   # M1-09：线协议骨架与 Mock 适配器（D6/评审#6）——Bun 编译 Mock 单文件后，
   # 一致性/健壮性集成测试与吞吐基准均针对真实进程执行。
@@ -159,7 +175,23 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: M1-06 验证（Win 三类样本 + 20 对照样本 + 拒绝启动/迁移/单实例 E2E）
-        run: pnpm verify:m1-06
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/test/m1-06/verify-m1-06.mjs 2>&1 | tee m1-06-verify.log
+      - name: 失败诊断（公开 annotation，便于无凭据取证）
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "### M1-06 verify 失败输出（tail 80）"
+            echo '```text'
+            tail -80 m1-06-verify.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          tail -60 m1-06-verify.log 2>/dev/null | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m1-06::$line"
+          done
 
   # M1-06 DoD2：macOS 两类样本（mac runner 执行；iCloud 为风险条款允许的
   # 路径前缀降级实现，精度限制在 UI/报告中明示）。样本由
@@ -184,7 +216,23 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: macOS 两类样本 + 降级精度提示（DoD2）
-        run: node scripts/test/m1-06/verify-m1-06-macos.mjs
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/test/m1-06/verify-m1-06-macos.mjs 2>&1 | tee m1-06-macos-verify.log
+      - name: 失败诊断（公开 annotation，便于无凭据取证）
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "### M1-06 macOS verify 失败输出（tail 80）"
+            echo '```text'
+            tail -80 m1-06-macos-verify.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          tail -60 m1-06-macos-verify.log 2>/dev/null | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m1-06-macos::$line"
+          done
 
       - name: 归档 Gate 1 证据（CI 日志与测试输出）
         if: always()

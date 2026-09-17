@@ -167,13 +167,17 @@ fn windows_samples_are_all_detected() {
         let _ = RegKey::predef(HKEY_CURRENT_USER).delete_subkey_all(&sandbox);
     }
 
-    // ④ 网络盘粗筛（UNC + 映射盘注入）。
+    // ④ 网络盘粗筛（UNC 全平台；映射盘符依赖 Windows 路径语义，仅 Win 宿主）。
     {
         let mut ctx = context(PlatformKind::Windows);
         ctx.network_drives = NetworkDriveSource::Letters(vec!["Z".to_string()]);
-        let report = detect_data_dir(std::path::Path::new(r"Z:\Aether"), &ctx);
-        assert_hit(&report, WIN_NETWORK_CHECK, "映射网络盘 Z:");
-        total += 1;
+        // `Component::Prefix` 是 Windows 专属路径语义：非 Windows 宿主无法构造盘符样本。
+        #[cfg(windows)]
+        {
+            let report = detect_data_dir(std::path::Path::new(r"Z:\Aether"), &ctx);
+            assert_hit(&report, WIN_NETWORK_CHECK, "映射网络盘 Z:");
+            total += 1;
+        }
         let report = detect_data_dir(std::path::Path::new(r"\\server\share\Aether"), &ctx);
         assert_hit(&report, WIN_NETWORK_CHECK, "UNC 路径");
         total += 1;
