@@ -12,6 +12,7 @@
 pub mod config;
 pub mod ipc;
 pub mod nav;
+pub mod picker;
 pub mod single_instance;
 pub mod startup;
 
@@ -72,6 +73,15 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let backend: std::sync::Arc<dyn ipc::IpcBackend> =
         std::sync::Arc::new(ipc::backend::NotImplementedBackend);
     // 路径白名单根目录随 M3-05（诊断导出）接入；未配置即默认拒绝。
+    // debug + E2E 探针可注入固定目录选择器（迁移主路径自动化）；生产用系统选择器。
+    #[cfg(debug_assertions)]
+    let state = match startup_probe::injected_picker() {
+        Some(picker) => {
+            ipc::IpcState::with_startup_and_picker(backend, Vec::new(), startup, picker)
+        }
+        None => ipc::IpcState::with_startup(backend, Vec::new(), startup),
+    };
+    #[cfg(not(debug_assertions))]
     let state = ipc::IpcState::with_startup(backend, Vec::new(), startup);
 
     tauri::Builder::default()

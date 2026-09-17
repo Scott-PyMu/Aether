@@ -222,30 +222,23 @@ pub(crate) fn startup_get(state: tauri::State<'_, IpcState>) -> Result<Value, Ip
     gate.snapshot_json()
 }
 
-/// M1-06：迁移目标目录选择（Rust 侧系统对话框；不新增 WebView capability 权限面）。
+/// M1-06：迁移目标目录选择（`DirectoryPicker` 抽象：生产为系统对话框，测试/E2E 注入替身；
+/// 不新增 WebView capability 权限面）。用户取消返回 `{ "target_dir": null }`。
 #[tauri::command]
 pub(crate) async fn startup_pick_target(
     state: tauri::State<'_, IpcState>,
 ) -> Result<Value, IpcError> {
-    let handle = state.app_handle().cloned().ok_or_else(|| {
+    let picker = state.picker().ok_or_else(|| {
         IpcError::new(
             IpcErrorCode::NotImplemented,
-            "应用句柄未接线（仅生产运行形态）",
+            "目录选择器未接线（仅生产运行形态；测试需注入 DirectoryPicker）",
         )
     })?;
-    let picked = tauri::async_runtime::spawn_blocking(move || {
-        use tauri_plugin_dialog::DialogExt;
-        handle
-            .dialog()
-            .file()
-            .set_title("选择 Aether 数据目录（本地磁盘）")
-            .blocking_pick_folder()
-    })
-    .await
-    .map_err(|error| IpcError::migration_failed(format!("目录选择器调用失败：{error}")))?;
-    let target_dir = picked
-        .and_then(|file| file.into_path().ok())
-        .map(|path| path.to_string_lossy().to_string());
+    let picked = tauri::async_runtime::spawn_blocking(move || picker.pick_directory())
+        .await
+        .map_err(|error| IpcError::internal(format!("目录选择器调用失败：{error}")))?
+        .map_err(|error| IpcError::internal(format!("目录选择器错误：{error}")))?;
+    let target_dir = picked.map(|path| path.to_string_lossy().to_string());
     Ok(serde_json::json!({ "target_dir": target_dir }))
 }
 

@@ -28,6 +28,10 @@ pub const STAGING_PREFIX: &str = ".aether-migration-";
 pub const MAIN_DB_NAME: &str = "aether.db";
 const COPY_BUFFER_BYTES: usize = 64 * 1024;
 
+/// 空间护栏系数（ADR-003 决策 19：可用空间 ≥ 当前 `db+wal` × 1.2）。
+pub const SPACE_MARGIN_NUMERATOR: u64 = 6;
+pub const SPACE_MARGIN_DENOMINATOR: u64 = 5;
+
 /// 迁移失败分类（命令层据此映射结构化错误码）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MigrationErrorKind {
@@ -38,6 +42,10 @@ pub enum MigrationErrorKind {
     SyncTarget,
     UnsupportedEntry,
     ChecksumMismatch,
+    /// 目标目录不可写（前置探针失败）。
+    TargetNotWritable,
+    /// 目标可用空间不足（前置空间护栏；探针可注入）。
+    InsufficientSpace,
     Io,
 }
 
@@ -48,11 +56,79 @@ pub struct MigrationError {
 }
 
 impl MigrationError {
-    fn new(kind: MigrationErrorKind, message: impl Into<String>) -> Self {
+    pub fn new(kind: MigrationErrorKind, message: impl Into<String>) -> Self {
         Self {
             kind,
             message: message.into(),
         }
+    }
+}
+
+/// 迁移前置探针（可注入；生产默认 [`NativeMigrationProbe`]）。
+///
+/// - 可写校验：原生实现为「创建并删除探针文件」；
+/// - 空间护栏：`Ok(None)` 表示未知（不阻断）——原生实现暂返回未知，真实磁盘探针
+///   按 ADR-003 决策 19 在 M3-04（备份/导出）统一接线；测试替身可返回固定值以覆盖
+///   「空间不足」分支。
+pub trait MigrationProbe: Send + Sync {
+    fn ensure_target_writable(&self, target: &Path) -> Result<(), MigrationError> {
+        ensure_dir_writable(target)
+    }
+
+    fn available_bytes(&self, target: &Path) -> Result<Option<u64>, String> {
+        let _ = target;
+        Ok(None)
+    }
+}
+
+/// 原生迁移探针：真实可写校验 + 空间未知（待 M3-04 接线）。
+pub struct NativeMigrationProbe;
+
+impl MigrationProbe for NativeMigrationProbe {}
+
+/// 目标目录可写性探针（创建并删除隐藏探针文件）。
+pub fn ensure_dir_writable(dir: &Path) -> Result<(), MigrationError> {
+    let probe = dir.join(format!(".aether-write-probe-{}", std::process::id()));
+    std::fs::write(&probe, b"probe").map_err(|error| {
+        MigrationError::new(
+            MigrationErrorKind::TargetNotWritable,
+            format!("迁移目标不可写（{}）：{error}", dir.display()),
+        )
+    })?;
+    std::fs::remove_file(&probe)
+        .map_err(|error| io_error(MigrationErrorKind::Io, &probe, &error))?;
+    Ok(())
+}
+
+/// 源目录所需可用空间（全部文件字节数上取整 ×1.2）。
+pub fn required_free_bytes(source: &Path) -> Result<u64, MigrationError> {
+    let mut total = 0u128;
+    let mut stack = vec![source.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let listing = std::fs::read_dir(&dir)
+            .map_err(|error| io_error(MigrationErrorKind::Io, &dir, &error))?;
+        for item in listing {
+            let item = item.map_err(|error| io_error(MigrationErrorKind::Io, &dir, &error))?;
+            let path = item.path();
+            let metadata = std::fs::symlink_metadata(&path)
+                .map_err(|error| io_error(MigrationErrorKind::Io, &path, &error))?;
+            if metadata.file_type().is_symlink() {
+                continue;
+            }
+            if metadata.is_dir() {
+                stack.push(path);
+            } else if metadata.is_file() {
+                total += metadata.len() as u128;
+            }
+        }
+    }
+    let numerator = u128::from(SPACE_MARGIN_NUMERATOR);
+    let denominator = u128::from(SPACE_MARGIN_DENOMINATOR);
+    let required = (total * numerator).div_ceil(denominator);
+    match u64::try_from(required) {
+        // 饱和：超过 u64 的空间需求等价于不可满足，交由空间检查判失败。
+        Err(_) => Ok(u64::MAX),
+        Ok(bytes) => Ok(bytes),
     }
 }
 
@@ -99,11 +175,21 @@ pub fn sha256_file(path: &Path) -> Result<String, MigrationError> {
     Ok(hex::encode(hasher.finalize()))
 }
 
-/// 执行迁移；成功后源目录保持不变，调用方负责持久化指针并切换运行状态。
+/// 执行迁移（原生前置探针）；成功后源目录保持不变，调用方负责持久化指针并切换运行状态。
 pub fn migrate_data_dir(
     source: &Path,
     target: &Path,
     ctx: &DetectionContext,
+) -> Result<MigrationOutcome, MigrationError> {
+    migrate_data_dir_with(source, target, ctx, &NativeMigrationProbe)
+}
+
+/// 执行迁移（可注入前置探针：可写校验 / 空间护栏）。
+pub fn migrate_data_dir_with(
+    source: &Path,
+    target: &Path,
+    ctx: &DetectionContext,
+    probe: &dyn MigrationProbe,
 ) -> Result<MigrationOutcome, MigrationError> {
     if !source.is_dir() {
         return Err(MigrationError::new(
@@ -147,6 +233,29 @@ pub fn migrate_data_dir(
                 target_report.reasons.join("；")
             ),
         ));
+    }
+
+    // 前置探针：目标可写 + 空间护栏（可注入；见 [`MigrationProbe`]）。
+    probe.ensure_target_writable(target)?;
+    match probe.available_bytes(target) {
+        Ok(Some(available)) => {
+            let required = required_free_bytes(source)?;
+            if available < required {
+                return Err(MigrationError::new(
+                    MigrationErrorKind::InsufficientSpace,
+                    format!(
+                        "迁移目标可用空间不足：可用 {available} 字节 < 需求 {required} 字节（源总量 ×1.2）"
+                    ),
+                ));
+            }
+        }
+        Ok(None) => {}
+        Err(message) => {
+            return Err(MigrationError::new(
+                MigrationErrorKind::Io,
+                format!("可用空间探测失败：{message}"),
+            ));
+        }
     }
 
     clean_stale_staging(target)?;

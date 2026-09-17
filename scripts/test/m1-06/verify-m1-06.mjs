@@ -27,6 +27,8 @@ import { buildEnv } from "../m1-08/env.mjs";
 const args = process.argv.slice(2);
 const skipE2e = args.includes("--skip-e2e");
 const skipE2eBuild = args.includes("--skip-e2e-build");
+// 真实系统选择器冒烟需交互桌面（前台校验 + 键盘注入），默认不在 CI 运行。
+const withPickerSmoke = args.includes("--with-picker-smoke");
 
 const env = buildEnv();
 const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -103,16 +105,22 @@ console.log(`[m1-06] 样本报告已归档：${path.join(outDir, "sample-report.
 // ---------------------------------------------------------------------------
 // 3. E2E：拒绝启动流 + 迁移 + 锁定 + 单实例（真实 WebView2）
 // ---------------------------------------------------------------------------
+let e2eOutput = "";
 if (skipE2e) {
   recordOk("DoD3/DoD5 E2E（拒绝启动→迁移→锁定新目录 + 单实例聚焦）", true, "跳过（--skip-e2e）");
 } else {
   const e2eArgs = [path.join(repoRoot, "scripts", "test", "m1-06", "e2e-startup-guard.mjs")];
   if (skipE2eBuild) e2eArgs.push("--skip-frontend-build", "--skip-rust-build");
   const e2e = spawnSync(process.execPath, e2eArgs, { cwd: repoRoot, env, encoding: "utf8" });
-  const e2eOutput = `${e2e.stdout ?? ""}\n${e2e.stderr ?? ""}`;
+  e2eOutput = `${e2e.stdout ?? ""}\n${e2e.stderr ?? ""}`;
   writeFileSync(path.join(outDir, "e2e-startup-guard.txt"), e2eOutput);
   process.stdout.write(e2eOutput);
   record("DoD3/DoD5 E2E（拒绝启动→迁移→锁定新目录 + 单实例聚焦）", e2e.status ?? 1);
+  recordOk(
+    "DoD3 迁移主路径：注入 DirectoryPicker → picked 回报出现在 E2E 输出",
+    e2eOutput.includes('"stage":"picked"'),
+    e2eOutput.includes('"stage":"picked"') ? "picked" : "未观测到 picked 回报",
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -167,6 +175,69 @@ if (skipE2e) {
     workflow.includes("verify-m1-06-macos.mjs") &&
       workflow.includes("m1-06-macos-evidence") &&
       workflow.includes("macos-14"),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 6. 静态：目录选择器抽象与迁移分支测试接线
+// ---------------------------------------------------------------------------
+{
+  const pickerSource = readFileSync(
+    path.join(repoRoot, "crates", "aether-tauri", "src", "picker.rs"),
+    "utf8",
+  );
+  recordOk(
+    "picker.rs：DirectoryPicker trait + 生产/替身实现",
+    pickerSource.includes("pub trait DirectoryPicker") &&
+      pickerSource.includes("TauriDialogPicker") &&
+      pickerSource.includes("FixedDirectoryPicker"),
+  );
+
+  const migrationTest = readFileSync(
+    path.join(repoRoot, "crates", "aether-tauri", "tests", "m1_06_migration.rs"),
+    "utf8",
+  );
+  const branches = [
+    "migration_rejects_non_directory_target",
+    "migration_rejects_unwritable_target",
+    "migration_rejects_insufficient_space",
+    "migration_rejects_invalid_and_sync_targets",
+    "gate_rejects_sync_or_non_empty_migration_target",
+  ];
+  const missingBranches = branches.filter((name) => !migrationTest.includes(name));
+  recordOk(
+    "迁移校验分支测试：不存在/非目录/不可写/空间不足/同步盘/目标非空",
+    missingBranches.length === 0,
+    missingBranches.join(","),
+  );
+
+  recordOk(
+    "E2E 注入选择器环境变量（AETHER_E2E_PICK_DIR）接线",
+    readFileSync(
+      path.join(repoRoot, "crates", "aether-tauri", "src", "startup_probe.rs"),
+      "utf8",
+    ).includes("AETHER_E2E_PICK_DIR"),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 7. 真实系统选择器冒烟（opt-in：需交互桌面）
+// ---------------------------------------------------------------------------
+if (withPickerSmoke) {
+  const smokeArgs = [
+    path.join(repoRoot, "scripts", "test", "m1-06", "manual-picker-smoke.mjs"),
+  ];
+  if (skipE2eBuild) smokeArgs.push("--skip-frontend-build", "--skip-rust-build");
+  const smoke = spawnSync(process.execPath, smokeArgs, { cwd: repoRoot, env, encoding: "utf8" });
+  const smokeOutput = `${smoke.stdout ?? ""}\n${smoke.stderr ?? ""}`;
+  writeFileSync(path.join(outDir, "manual-picker-smoke.txt"), smokeOutput);
+  process.stdout.write(smokeOutput);
+  record("真实系统选择器冒烟（opt-in；截图与日志归档）", smoke.status ?? 1);
+} else {
+  recordOk(
+    "真实系统选择器冒烟（opt-in；--with-picker-smoke）",
+    true,
+    "跳过（需交互桌面）",
   );
 }
 

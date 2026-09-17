@@ -10,6 +10,7 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -17,11 +18,18 @@ use tauri::{AppHandle, Manager, Runtime};
 
 use crate::ipc::error::IpcError;
 use crate::ipc::IpcErrorCode;
+use crate::picker::{DirectoryPicker, FixedDirectoryPicker};
 use crate::startup::StartupGate;
 
 pub const PROBE_ENV: &str = "AETHER_E2E_STARTUP_PROBE";
 pub const TARGET_ENV: &str = "AETHER_E2E_MIGRATE_TARGET";
 pub const TRIGGER_ENV: &str = "AETHER_E2E_TRIGGER_FILE";
+/// E2E 注入的固定选择目录（迁移主路径：点击「选择目录…」返回该路径）。
+pub const PICK_DIR_ENV: &str = "AETHER_E2E_PICK_DIR";
+/// E2E 注入的「用户取消」选择器。
+pub const PICK_CANCEL_ENV: &str = "AETHER_E2E_PICK_CANCEL";
+/// 真实系统选择器冒烟模式（探针点击「选择目录…」，不注入替身）。
+pub const PICKER_SMOKE_ENV: &str = "AETHER_E2E_PICKER_SMOKE";
 pub const PHASE_LINE: &str = "AETHER_M1_06_PHASE";
 pub const REPORT_LINE: &str = "AETHER_M1_06_REPORT";
 pub const FOCUS_LINE: &str = "AETHER_M1_06_FOCUS";
@@ -32,9 +40,36 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(600);
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 static TERMINAL: AtomicBool = AtomicBool::new(false);
+/// 选择器冒烟：对话框已打开（此后不再抢焦点，避免主窗口把对话框顶到后台）。
+static PICKER_OPENED: AtomicBool = AtomicBool::new(false);
 
 pub fn is_enabled() -> bool {
     std::env::var(PROBE_ENV).is_ok_and(|value| value == "1")
+}
+
+/// 注入目录选择器替身（仅探针启用时）：
+/// - `AETHER_E2E_PICK_DIR=<abs>`：返回固定路径（迁移主路径 E2E）；
+/// - `AETHER_E2E_PICK_CANCEL=1`：返回取消；
+/// - 未设置：不注入（生产/冒烟走真实系统选择器）。
+pub fn injected_picker() -> Option<Arc<dyn DirectoryPicker>> {
+    if !is_enabled() {
+        return None;
+    }
+    if let Some(dir) = std::env::var_os(PICK_DIR_ENV) {
+        let path = PathBuf::from(dir);
+        if path.is_absolute() {
+            return Some(Arc::new(FixedDirectoryPicker::with_path(path)));
+        }
+        eprintln!(
+            "[aether] {PICK_DIR_ENV} 必须是绝对路径，已忽略：{}",
+            path.display()
+        );
+        return None;
+    }
+    if std::env::var_os(PICK_CANCEL_ENV).is_some() {
+        return Some(Arc::new(FixedDirectoryPicker::with_cancel()));
+    }
+    None
 }
 
 /// 启动时输出启动门快照（供 E2E 断言拒绝启动阶段）。
@@ -63,6 +98,7 @@ pub fn start<R: Runtime>(app: AppHandle<R>) {
     }
     let trigger = std::env::var_os(TRIGGER_ENV).map(PathBuf::from);
     let target = std::env::var(TARGET_ENV).unwrap_or_default();
+    let picker_smoke = std::env::var_os(PICKER_SMOKE_ENV).is_some();
     std::thread::spawn(move || {
         let started = Instant::now();
         loop {
@@ -76,13 +112,21 @@ pub fn start<R: Runtime>(app: AppHandle<R>) {
                 app.exit(3);
                 return;
             }
-            let mode = if trigger.as_ref().is_some_and(|path| path.exists()) {
+            let mode = if picker_smoke {
+                "picker"
+            } else if trigger.as_ref().is_some_and(|path| path.exists()) {
                 "migrate"
             } else {
                 "observe"
             };
             if let Some(window) = app.get_webview_window(crate::single_instance::MAIN_WINDOW_LABEL)
             {
+                if picker_smoke && !PICKER_OPENED.load(Ordering::SeqCst) {
+                    // 冒烟需要原生对话框位于前台（本机桌面会话由外部自动化按键/截图）。
+                    let _ = window.unminimize();
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
                 let _ = window.eval(script(mode, &target));
             }
             std::thread::sleep(POLL_INTERVAL);
@@ -104,6 +148,9 @@ pub fn e2e_startup_report(payload: Value) -> Result<(), IpcError> {
         .get("stage")
         .and_then(Value::as_str)
         .unwrap_or_default();
+    if stage == "picker-open" || stage == "picked" {
+        PICKER_OPENED.store(true, Ordering::SeqCst);
+    }
     if stage == "ready" || stage == "error" {
         TERMINAL.store(true, Ordering::SeqCst);
     }
@@ -149,16 +196,40 @@ const SCRIPT_TEMPLATE: &str = r#"
       return;
     }
   }
+  if (MODE === 'picker') {
+    // 真实系统选择器冒烟：只点击「选择目录…」，由外部（键盘自动化）完成选择/取消。
+    if (S.step === 1) {
+      var smokePick = document.querySelector('[data-testid="startup-pick"]');
+      if (smokePick) { S.step = 2; smokePick.click(); report({ stage: 'picker-open' }); }
+      return;
+    }
+    if (S.step === 2) {
+      var smokeInput = document.querySelector('[data-testid="startup-target"]');
+      // 持续观察输入框：冒烟脚本可能多次尝试选择，每次变化都回报。
+      if (smokeInput && smokeInput.value && smokeInput.value !== S.lastValue) {
+        S.lastValue = smokeInput.value;
+        report({ stage: 'picked', value: smokeInput.value });
+      }
+      return;
+    }
+    return;
+  }
   if (S.step === 1 && MODE === 'migrate') {
+    // 迁移主路径：不直接填输入框，改为点击「选择目录…」，由注入的 DirectoryPicker
+    // 返回固定路径，验证 选择器 → UI → startup_migrate 全链路。
     var input = document.querySelector('[data-testid="startup-target"]');
+    var pickButton = document.querySelector('[data-testid="startup-pick"]');
     var migrateButton = document.querySelector('[data-testid="startup-migrate"]');
-    if (input && migrateButton) {
+    if (input && pickButton && migrateButton) {
       S.step = 2;
-      var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-      setter.call(input, TARGET);
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      setTimeout(function () { migrateButton.click(); }, 80);
-      report({ stage: 'clicked', target: TARGET });
+      pickButton.click();
+      setTimeout(function () {
+        report({ stage: 'picked', value: input.value, expected: TARGET });
+        setTimeout(function () {
+          migrateButton.click();
+          report({ stage: 'clicked', target: input.value });
+        }, 120);
+      }, 200);
     }
     return;
   }

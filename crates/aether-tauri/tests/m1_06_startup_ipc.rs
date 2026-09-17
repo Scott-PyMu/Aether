@@ -26,6 +26,13 @@ use tauri::test::{mock_builder, mock_context, noop_assets, MockRuntime, INVOKE_K
 use tauri::webview::InvokeRequest;
 use tauri::{App, WebviewWindow, WebviewWindowBuilder};
 
+/// Mock invoke 的本地源 URL：Tauri 自定义协议在 Windows 为 `http://tauri.localhost`，
+/// 其他平台为 `tauri://localhost`；用错会被 ACL 判定为远端来源而拒绝（可移植性修复）。
+#[cfg(windows)]
+const INVOKE_URL: &str = "http://tauri.localhost";
+#[cfg(not(windows))]
+const INVOKE_URL: &str = "tauri://localhost";
+
 static COUNTER: AtomicU32 = AtomicU32::new(0);
 
 fn temp_dir(label: &str) -> PathBuf {
@@ -124,7 +131,7 @@ fn invoke(
             cmd: command.into(),
             callback: tauri::ipc::CallbackFn(0),
             error: tauri::ipc::CallbackFn(1),
-            url: "http://tauri.localhost".parse().expect("URL"),
+            url: INVOKE_URL.parse().expect("URL"),
             body,
             headers: Default::default(),
             invoke_key: INVOKE_KEY.to_string(),
@@ -172,9 +179,17 @@ fn malformed_startup_migrate_samples_return_structured_errors() {
     ));
     let fixture = fixture("malformed", gate);
     let missing = root.join("missing-target");
+    // 非目录样本（M1-06 参数校验分支：存在但是文件）。
+    let file_target = root.join("not-a-directory");
+    std::fs::write(&file_target, b"x").expect("写入文件目标");
 
     let samples: Vec<(Value, &str, Option<&str>)> = vec![
         (json!({}), "missing_field", Some("target_dir")),
+        (
+            json!({ "target_dir": file_target.to_string_lossy() }),
+            "path_rejected",
+            None,
+        ),
         (
             json!({ "target_dir": "" }),
             "invalid_format",

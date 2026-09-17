@@ -21,13 +21,16 @@ pub use backend::IpcBackend;
 pub use commands::handler;
 pub use error::{IpcError, IpcErrorCode};
 
+use crate::picker::{DirectoryPicker, TauriDialogPicker};
 use crate::startup::StartupGate;
 
-/// 命令层共享状态：后端实现 + 路径白名单根目录 + 启动门（M1-06）。
+/// 命令层共享状态：后端实现 + 路径白名单根目录 + 启动门（M1-06）
+/// + 目录选择器（M1-06 迁移主路径可测试性）。
 pub struct IpcState {
     backend: Arc<dyn IpcBackend>,
     allowed_roots: Vec<PathBuf>,
     startup: Option<Arc<StartupGate>>,
+    picker: OnceLock<Arc<dyn DirectoryPicker>>,
     app: OnceLock<tauri::AppHandle>,
 }
 
@@ -38,6 +41,7 @@ impl IpcState {
             backend,
             allowed_roots,
             startup: None,
+            picker: OnceLock::new(),
             app: OnceLock::new(),
         }
     }
@@ -52,8 +56,21 @@ impl IpcState {
             backend,
             allowed_roots,
             startup: Some(startup),
+            picker: OnceLock::new(),
             app: OnceLock::new(),
         }
+    }
+
+    /// 生产构造 + 预置目录选择器（E2E 注入固定路径 / 集成测试替身）。
+    pub fn with_startup_and_picker(
+        backend: Arc<dyn IpcBackend>,
+        allowed_roots: Vec<PathBuf>,
+        startup: Arc<StartupGate>,
+        picker: Arc<dyn DirectoryPicker>,
+    ) -> Self {
+        let state = Self::with_startup(backend, allowed_roots, startup);
+        let _ = state.picker.set(picker);
+        state
     }
 
     pub fn startup(&self) -> Option<&StartupGate> {
@@ -64,13 +81,21 @@ impl IpcState {
         self.startup.clone()
     }
 
-    /// setup 阶段登记应用句柄（`app_exit` / 目录选择器使用）。
+    /// setup 阶段登记应用句柄（`app_exit` 使用）；未预置选择器时安装真实 Tauri 选择器。
     pub fn set_app_handle(&self, handle: tauri::AppHandle) {
+        let _ = self
+            .picker
+            .set(Arc::new(TauriDialogPicker::new(handle.clone())));
         let _ = self.app.set(handle);
     }
 
     pub(crate) fn app_handle(&self) -> Option<&tauri::AppHandle> {
         self.app.get()
+    }
+
+    /// 目录选择器（生产：Tauri dialog；测试/E2E：注入替身）。
+    pub(crate) fn picker(&self) -> Option<Arc<dyn DirectoryPicker>> {
+        self.picker.get().cloned()
     }
 
     /// 业务命令入口：启动门未 Ready 时阻断（主界面不可达的命令层兜底）。

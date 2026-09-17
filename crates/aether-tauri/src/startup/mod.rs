@@ -12,7 +12,7 @@ pub mod migrate;
 pub mod pointer;
 
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde::Serialize;
 
@@ -20,7 +20,10 @@ use crate::ipc::error::{IpcError, IpcErrorCode};
 use crate::ipc::path;
 
 use detect::{detect_data_dir, DetectionContext, DetectionReport};
-use migrate::{migrate_data_dir, MigrationErrorKind, MigrationOutcome};
+use migrate::{
+    migrate_data_dir_with, MigrationErrorKind, MigrationOutcome, MigrationProbe,
+    NativeMigrationProbe,
+};
 
 pub use detect::{CheckOutcome, PlatformKind, Precision, Verdict};
 pub use migrate::CopiedEntry;
@@ -90,6 +93,7 @@ pub struct StartupGate {
     inner: Mutex<GateInner>,
     pointer_file: Option<PathBuf>,
     context: DetectionContext,
+    migration_probe: Arc<dyn MigrationProbe>,
 }
 
 impl StartupGate {
@@ -141,7 +145,15 @@ impl StartupGate {
             }),
             pointer_file,
             context,
+            migration_probe: Arc::new(NativeMigrationProbe),
         }
+    }
+
+    /// 注入迁移前置探针（测试覆盖可写/空间分支；生产默认原生探针）。
+    #[must_use]
+    pub fn with_migration_probe(mut self, probe: Arc<dyn MigrationProbe>) -> Self {
+        self.migration_probe = probe;
+        self
     }
 
     fn blocked_error(
@@ -161,6 +173,7 @@ impl StartupGate {
             }),
             pointer_file,
             context,
+            migration_probe: Arc::new(NativeMigrationProbe),
         }
     }
 
@@ -232,8 +245,13 @@ impl StartupGate {
         let _guard = MigratingGuard { gate: self };
 
         let source = self.lock().data_dir.clone();
-        let outcome =
-            migrate_data_dir(&source, &target, &self.context).map_err(map_migration_error)?;
+        let outcome = migrate_data_dir_with(
+            &source,
+            &target,
+            &self.context,
+            self.migration_probe.as_ref(),
+        )
+        .map_err(map_migration_error)?;
 
         let detection = detect_data_dir(&target, &self.context);
         if detection.is_reject() {
@@ -328,10 +346,12 @@ fn map_migration_error(error: migrate::MigrationError) -> IpcError {
         MigrationErrorKind::SyncTarget => IpcErrorCode::PathRejected,
         MigrationErrorKind::TargetInvalid
         | MigrationErrorKind::TargetInsideSource
-        | MigrationErrorKind::TargetNotEmpty => IpcErrorCode::PathRejected,
+        | MigrationErrorKind::TargetNotEmpty
+        | MigrationErrorKind::TargetNotWritable => IpcErrorCode::PathRejected,
         MigrationErrorKind::SourceInvalid
         | MigrationErrorKind::UnsupportedEntry
         | MigrationErrorKind::ChecksumMismatch
+        | MigrationErrorKind::InsufficientSpace
         | MigrationErrorKind::Io => IpcErrorCode::MigrationFailed,
     };
     IpcError::new(code, error.message)

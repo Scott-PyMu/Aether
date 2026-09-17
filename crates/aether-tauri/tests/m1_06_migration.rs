@@ -3,16 +3,23 @@
 //! 迁移 E2E（真实 WebView 的拒绝启动流）在 `scripts/test/m1-06/e2e-startup-guard.mjs`；
 //! 本文件覆盖可注入上下文的确定性断言：sha256 校验、失败路径、指针原子替换、
 //! 门状态机（阻塞 → 迁移 → Ready → 锁定新目录）。
+//!
+//! 迁移参数校验分支（M1-06 DoD3）：不存在 / 非目录 / 不可写 / 空间不足 / 同步盘 /
+//! 目标非空，全部分支断言结构化错误且失败不产生副本。
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 
 use aether_tauri::startup::detect::{
     DetectionContext, NetworkDriveSource, PlatformKind, RegistrySource, ReparseSource,
 };
-use aether_tauri::startup::migrate::{migrate_data_dir, sha256_file, MigrationErrorKind};
+use aether_tauri::startup::migrate::{
+    ensure_dir_writable, migrate_data_dir, migrate_data_dir_with, required_free_bytes, sha256_file,
+    MigrationError, MigrationErrorKind, MigrationProbe,
+};
 use aether_tauri::startup::{pointer, DataDirSource, StartupGate, StartupPhase};
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -290,4 +297,159 @@ fn gate_rejects_sync_or_non_empty_migration_target() {
 
     // 失败不改变门状态：仍为阻塞，仍可重试迁移。
     assert_eq!(gate.snapshot().phase, StartupPhase::BlockedSyncDir);
+}
+
+/// 可注入迁移探针（覆盖「不可写 / 空间不足」分支）。
+struct ScriptedProbe {
+    writable: bool,
+    available: Option<u64>,
+}
+
+impl MigrationProbe for ScriptedProbe {
+    fn ensure_target_writable(&self, target: &Path) -> Result<(), MigrationError> {
+        if self.writable {
+            ensure_dir_writable(target)
+        } else {
+            Err(MigrationError::new(
+                MigrationErrorKind::TargetNotWritable,
+                "注入：目标不可写",
+            ))
+        }
+    }
+
+    fn available_bytes(&self, _target: &Path) -> Result<Option<u64>, String> {
+        Ok(self.available)
+    }
+}
+
+fn target_entry_count(target: &Path) -> usize {
+    std::fs::read_dir(target)
+        .expect("读取目标目录")
+        .filter_map(Result::ok)
+        .count()
+}
+
+#[test]
+fn migration_rejects_non_directory_target() {
+    let root = temp_dir("migrate-file-target");
+    let source = make_source(&root);
+    let file_target = root.join("target-file");
+    std::fs::write(&file_target, b"x").expect("写入文件目标");
+
+    let error =
+        migrate_data_dir(&source, &file_target, &allow_context()).expect_err("非目录目标必须拒绝");
+    assert_eq!(error.kind, MigrationErrorKind::TargetInvalid);
+}
+
+#[test]
+fn migration_rejects_unwritable_target() {
+    let root = temp_dir("migrate-unwritable");
+    let source = make_source(&root);
+    let target = root.join("local-target");
+    std::fs::create_dir_all(&target).expect("创建目标目录");
+
+    // 1) 原生探针：经由普通文件的路径无法落探针文件 → TargetNotWritable（跨平台确定）。
+    let through_file = {
+        let file = root.join("not-a-dir");
+        std::fs::write(&file, b"x").expect("写入文件");
+        file.join("child")
+    };
+    let error = ensure_dir_writable(&through_file).expect_err("经由文件的目录必须不可写");
+    assert_eq!(error.kind, MigrationErrorKind::TargetNotWritable);
+
+    // 2) 注入探针：可写校验失败 → TargetNotWritable，且不产生任何副本。
+    let probe = ScriptedProbe {
+        writable: false,
+        available: None,
+    };
+    let error = migrate_data_dir_with(&source, &target, &allow_context(), &probe)
+        .expect_err("注入不可写必须拒绝");
+    assert_eq!(error.kind, MigrationErrorKind::TargetNotWritable);
+    assert_eq!(target_entry_count(&target), 0, "失败不得留下条目");
+
+    // 3) 门层：同一失败映射为 path_rejected，且门仍可重试。
+    let gate = StartupGate::bootstrap_at(
+        source,
+        DataDirSource::Default,
+        sync_context(&root.join("sync-root")),
+        Some(root.join("config").join("data-location.json")),
+    )
+    .with_migration_probe(Arc::new(ScriptedProbe {
+        writable: false,
+        available: None,
+    }));
+    let rejected = gate
+        .migrate(&long_path(&target))
+        .expect_err("门层不可写必须拒绝");
+    assert_eq!(rejected.code.as_str(), "path_rejected");
+    assert_eq!(gate.snapshot().phase, StartupPhase::BlockedSyncDir);
+}
+
+/// Unix 原生不可写用例（Windows CI 不执行；注释：以 root 运行会绕过权限位，故跳过）。
+#[cfg(unix)]
+#[test]
+fn migration_rejects_unwritable_target_native_unix() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = temp_dir("migrate-unwritable-unix");
+    let source = make_source(&root);
+    let target = root.join("local-target");
+    std::fs::create_dir_all(&target).expect("创建目标目录");
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o555))
+        .expect("设置只读权限");
+
+    let result = migrate_data_dir(&source, &target, &allow_context());
+    // 还原权限以便清理/复跑。
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).expect("还原权限");
+
+    let error = result.expect_err("只读目标必须拒绝");
+    assert_eq!(error.kind, MigrationErrorKind::TargetNotWritable);
+}
+
+#[test]
+fn migration_rejects_insufficient_space() {
+    let root = temp_dir("migrate-space");
+    let source = make_source(&root);
+    let target = root.join("local-target");
+    std::fs::create_dir_all(&target).expect("创建目标目录");
+
+    let required = required_free_bytes(&source).expect("计算源体积");
+    assert!(required >= 36, "源体积至少包含夹具字节：{required}");
+
+    // 差一字节 → InsufficientSpace，且不产生副本。
+    let probe = ScriptedProbe {
+        writable: true,
+        available: Some(required - 1),
+    };
+    let error = migrate_data_dir_with(&source, &target, &allow_context(), &probe)
+        .expect_err("空间不足必须拒绝");
+    assert_eq!(error.kind, MigrationErrorKind::InsufficientSpace);
+    assert_eq!(target_entry_count(&target), 0, "失败不得留下条目");
+
+    // 恰好满足（源总量 ×1.2 上取整）→ 迁移成功。
+    let probe = ScriptedProbe {
+        writable: true,
+        available: Some(required),
+    };
+    let outcome =
+        migrate_data_dir_with(&source, &target, &allow_context(), &probe).expect("空间足够应成功");
+    assert_eq!(outcome.entries.len(), 3);
+
+    // 门层：空间不足映射为 migration_failed。
+    let second_target = root.join("local-target-2");
+    std::fs::create_dir_all(&second_target).expect("创建第二个目标目录");
+    let gate = StartupGate::bootstrap_at(
+        source,
+        DataDirSource::Default,
+        sync_context(&root.join("sync-root")),
+        Some(root.join("config").join("data-location.json")),
+    )
+    .with_migration_probe(Arc::new(ScriptedProbe {
+        writable: true,
+        available: Some(0),
+    }));
+    let rejected = gate
+        .migrate(&long_path(&second_target))
+        .expect_err("门层空间不足必须拒绝");
+    assert_eq!(rejected.code.as_str(), "migration_failed");
 }

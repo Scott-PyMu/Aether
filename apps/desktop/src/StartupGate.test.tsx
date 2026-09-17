@@ -80,6 +80,18 @@ describe("StartupGate", () => {
     });
   });
 
+  it("选择器取消时保留已输入的目标（不覆盖）", async () => {
+    pickMock.mockResolvedValue(null);
+    render(<StartupGate snapshot={blockedSnapshot} onMigrated={vi.fn()} />);
+    const input = screen.getByTestId("startup-target") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "D:\\Typed" } });
+    fireEvent.click(screen.getByTestId("startup-pick"));
+    await waitFor(() => {
+      expect(pickMock).toHaveBeenCalledTimes(1);
+    });
+    expect(input.value).toBe("D:\\Typed");
+  });
+
   it("输入为空时迁移按钮禁用", () => {
     render(<StartupGate snapshot={blockedSnapshot} onMigrated={vi.fn()} />);
     expect(

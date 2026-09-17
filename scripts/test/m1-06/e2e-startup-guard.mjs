@@ -5,7 +5,8 @@
  *   1. 模拟 OneDrive 环境变量命中 → 真实 WebView 中只渲染「迁移/退出」，
  *      主界面（app-version）不可达，业务命令返回 startup_blocked；
  *   2. 二次启动 → 第二进程退出、首实例收到聚焦回调；
- *   3. 点击「迁移到本地目录」→ 复制 → sha256 校验 → 原子替换 → 指针锁定新目录；
+ *   3. 点击「选择目录…」（注入的 DirectoryPicker 返回预设路径）→ 点击「迁移到本地目录」
+ *      → 复制 → sha256 校验 → 原子替换 → 指针锁定新目录；
  *   4. 重启（不带模拟 OneDrive / 数据目录环境变量）→ 以指针目录启动，主界面可达。
  *
  * 用法：node scripts/test/m1-06/e2e-startup-guard.mjs [--skip-frontend-build] [--skip-rust-build]
@@ -159,6 +160,8 @@ try {
     AETHER_E2E_STARTUP_PROBE: "1",
     AETHER_E2E_MIGRATE_TARGET: targetDir,
     AETHER_E2E_TRIGGER_FILE: triggerFile,
+    // 迁移主路径：注入固定目录选择器（点击「选择目录…」返回该路径）。
+    AETHER_E2E_PICK_DIR: targetDir,
   };
 
   // -------------------------------------------------------------------------
@@ -226,8 +229,20 @@ try {
   // -------------------------------------------------------------------------
   // 4. 阶段三：点击迁移（复制 → 校验 → 原子替换 → 锁定新目录）
   // -------------------------------------------------------------------------
-  console.log(`\n$ trigger ${triggerFile}`);
+  console.log(`\n$ trigger ${triggerFile}   # 选择器注入：${targetDir}`);
   writeFileSync(triggerFile, "migrate");
+  const pickedLine = await waitFor(
+    first.state,
+    (line) => line.startsWith(REPORT_LINE) && line.includes('"stage":"picked"'),
+    240000,
+    "点击「选择目录…」并由注入选择器回填路径",
+  );
+  const picked = JSON.parse(pickedLine.slice(REPORT_LINE.length).trim());
+  record(
+    "DoD3 迁移主路径：注入 DirectoryPicker → 「选择目录…」回填目标输入框",
+    picked.value === targetDir && picked.expected === targetDir,
+    `value=${picked.value} expected=${picked.expected}`,
+  );
   await waitFor(
     first.state,
     (line) => line.startsWith(REPORT_LINE) && line.includes('"stage":"clicked"'),
