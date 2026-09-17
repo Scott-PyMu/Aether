@@ -64,12 +64,14 @@
 ## 7. 验证状态（M1-06 DoD2 完成说明）
 
 - 本机（Windows）注入样本、命令层提示与前端渲染断言：**通过**（`pnpm verify:m1-06 --skip-e2e` 全绿，含降级文案静态与运行时断言）。
-- **macOS 原生样本（macos-14 CI，job `macOS data dir samples (M1-06)`）：已连续 4 次跑绿**：
+- **macOS 原生样本（macos-14 CI，job `macOS data dir samples (M1-06)`）：自首次修复（run 35173358821）起连续 8 次跑绿，关键节点**：
   - run [35173358821](https://github.com/Scott-PyMu/Aether/actions/runs/35173358821)（首次修复非 Windows 编译后）
   - run [35174078102](https://github.com/Scott-PyMu/Aether/actions/runs/35174078102)
   - run [35174804590](https://github.com/Scott-PyMu/Aether/actions/runs/35174804590)
   - run [35175425557](https://github.com/Scott-PyMu/Aether/actions/runs/35175425557)
-  - 证据 artifact：`m1-06-macos-evidence`（每次上传，含 `samples.json`、`cargo-test-m1_06-detection.txt`、`evidence.json`）
+  - **run [35179304882](https://github.com/Scott-PyMu/Aether/actions/runs/35179304882)**（commit `bfafc5b`，**全 workflow 9/9 job 全绿**：macOS job 步骤全绿，Windows `data-dir-guard` 同步全绿）
+  - 证据 artifact：`m1-06-macos-evidence`（每次上传；末次 sha256 `9891603da83a7470cb268678a61f53c3c825fed48378ff78f55ba9a8db6f4e7f`，含 `samples.json`、`cargo-test-m1_06-detection.txt`、`evidence.json`）
+- CI 连带修复（由 mac/Windows 样本暴露并已回归）：非 Windows 目标编译错误（`REGISTRY_ACCOUNTS_PATH` cfg 门控）、映射网络盘形态不一致漏判、CI `%TEMP%` 8.3 短名与 D9 拒绝样本的测试口径。
 - 完成口径：**macOS DoD2 已由 macos-14 CI 验证通过；iCloud 标记 API 按风险条款降级为路径前缀 + 手动确认，UI 已明示。**
 - Windows 侧（DoD1/DoD3/DoD4/DoD5）由同 workflow 的 `data-dir-guard` job 守护；本文件记录 macOS DoD2 的降级口径与证据。
 
