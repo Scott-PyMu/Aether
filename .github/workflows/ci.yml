@@ -130,11 +130,14 @@ jobs:
             tail -30 m1-08-verify.log 2>/dev/null || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          # 断言细节优先输出：GitHub 每步仅保留前 10 条 error annotation
-          grep -E "panicked|IpcError|assertion|应命中|left:|right:|sample-result" m1-08-verify.log 2>/dev/null | tail -8 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+          # 汇总表优先输出（GitHub 每步有 error annotation 上限，先发最高价值信息）
+          grep -A 30 "===== verify-m1-08 =====" m1-08-verify.log 2>/dev/null | tail -20 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m1-08-summary::$line"
+          done
+          grep -E "panicked|IpcError|assertion|应命中|left:|right:|超时" m1-08-verify.log 2>/dev/null | tail -4 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
             echo "::error title=m1-08-assert::$line"
           done
-          tail -6 m1-08-verify.log 2>/dev/null | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+          tail -4 m1-08-verify.log 2>/dev/null | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
             echo "::error title=m1-08-tail::$line"
           done
 
@@ -197,11 +200,14 @@ jobs:
             tail -30 m1-06-verify.log 2>/dev/null || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          # 断言细节优先输出：GitHub 每步仅保留前 10 条 error annotation
-          grep -E "panicked|IpcError|assertion|应命中|left:|right:|sample-result" m1-06-verify.log 2>/dev/null | tail -8 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+          # 汇总表优先输出（GitHub 每步有 error annotation 上限，先发最高价值信息）
+          grep -A 30 "===== verify-m1-06 =====" m1-06-verify.log 2>/dev/null | tail -20 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m1-06-summary::$line"
+          done
+          grep -E "panicked|IpcError|assertion|应命中|left:|right:|超时" m1-06-verify.log 2>/dev/null | tail -4 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
             echo "::error title=m1-06-assert::$line"
           done
-          tail -6 m1-06-verify.log 2>/dev/null | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+          tail -4 m1-06-verify.log 2>/dev/null | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
             echo "::error title=m1-06-tail::$line"
           done
 

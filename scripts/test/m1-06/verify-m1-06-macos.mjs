@@ -140,5 +140,10 @@ writeFileSync(
 console.log(`[m1-06-macos] 证据归档：${outDir}`);
 console.log(`[m1-06-macos] ${(swVers.stdout ?? "").trim()}`);
 
+// 失败项单行输出（CI 日志 tail 可捕获）。
+for (const check of checks) {
+  const failed = !check.skip && (check.expect === "nonzero" ? check.exit === 0 : check.exit !== check.expect);
+  if (failed) console.log(`[m1-06-macos] failed-check ${check.name}`);
+}
 // 不用 process.exit：避免管道输出未 flush 导致 CI 日志截断（诊断需要完整 FAIL 行）。
 process.exitCode = summarize("verify-m1-06-macos", checks);
