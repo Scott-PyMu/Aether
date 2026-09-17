@@ -85,6 +85,9 @@ async function waitFor(state, predicate, timeoutMs, description) {
     if (state.exited) break;
     await sleep(200);
   }
+  // 最后再检查一次：避免输出恰在超时窗口末尾到达的竞态（CI 慢机冷启动）。
+  const late = state.lines.find(predicate);
+  if (late) return late;
   throw new Error(
     [
       `等待超时：${description}（已收到 ${state.lines.length} 行 stdout，进程已退出=${state.exited}，退出码=${state.code}）`,
@@ -166,7 +169,7 @@ try {
   const phaseLine = await waitFor(
     first.state,
     (line) => line.startsWith(PHASE_LINE) && line.includes('"blocked_sync_dir"'),
-    90000,
+    240000,
     "启动门阻塞快照",
   );
   const phase = JSON.parse(phaseLine.slice(PHASE_LINE.length).trim());
@@ -179,7 +182,7 @@ try {
   const blockedLine = await waitFor(
     first.state,
     (line) => line.startsWith(REPORT_LINE) && line.includes('"stage":"blocked"'),
-    90000,
+    240000,
     "阻塞态 DOM 回报",
   );
   const blocked = JSON.parse(blockedLine.slice(REPORT_LINE.length).trim());
@@ -203,7 +206,7 @@ try {
   // -------------------------------------------------------------------------
   console.log(`\n$ ${binary}   # 第二实例（同环境）`);
   const second = start(blockedEnv, "app2");
-  const secondExit = await exitCode(second, 30000);
+  const secondExit = await exitCode(second, 60000);
   record("T12 第二实例退出", secondExit === 0, `exit=${secondExit}`);
   const secondReports = second.state.lines.filter((line) => line.startsWith(REPORT_LINE));
   record(
@@ -215,7 +218,7 @@ try {
   await waitFor(
     first.state,
     (line) => line.startsWith(FOCUS_LINE),
-    60000,
+    180000,
     "首实例聚焦回调",
   );
   record("T12 首实例收到第二实例转发并聚焦已有窗口", true);
@@ -228,16 +231,16 @@ try {
   await waitFor(
     first.state,
     (line) => line.startsWith(REPORT_LINE) && line.includes('"stage":"clicked"'),
-    60000,
+    180000,
     "点击「迁移到本地目录」",
   );
   await waitFor(
     first.state,
     (line) => line.startsWith(REPORT_LINE) && line.includes('"stage":"ready"'),
-    180000,
+    300000,
     "迁移后主界面可达",
   );
-  const firstExit = await exitCode(first, 30000);
+  const firstExit = await exitCode(first, 60000);
   record("迁移后应用正常退出（探针）", firstExit === 0, `exit=${firstExit}`);
   record(
     "迁移目标包含主库且与源 sha256 一致",
@@ -272,7 +275,7 @@ try {
   const lockedLine = await waitFor(
     third.state,
     (line) => line.startsWith(PHASE_LINE) && line.includes('"ready"'),
-    120000,
+    300000,
     "锁定重启就绪快照",
   );
   const locked = JSON.parse(lockedLine.slice(PHASE_LINE.length).trim());
@@ -286,10 +289,10 @@ try {
   await waitFor(
     third.state,
     (line) => line.startsWith(REPORT_LINE) && line.includes('"stage":"ready"'),
-    120000,
+    300000,
     "锁定重启主界面可达",
   );
-  const thirdExit = await exitCode(third, 30000);
+  const thirdExit = await exitCode(third, 60000);
   record("锁定新目录后主界面可达并正常退出", thirdExit === 0, `exit=${thirdExit}`);
 } catch (error) {
   // 单行化：CI 诊断按行 grep/annotation，多行错误会丢上下文。

@@ -27,7 +27,8 @@ pub const REPORT_LINE: &str = "AETHER_M1_06_REPORT";
 pub const FOCUS_LINE: &str = "AETHER_M1_06_FOCUS";
 pub const EXIT_LINE: &str = "AETHER_M1_06_EXIT";
 
-const PROBE_TIMEOUT: Duration = Duration::from_secs(180);
+// CI 慢机冷启动可能 >90s（Defender 扫描/VM 负载）；给足窗口，避免探针提前退出。
+const PROBE_TIMEOUT: Duration = Duration::from_secs(600);
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 static TERMINAL: AtomicBool = AtomicBool::new(false);
