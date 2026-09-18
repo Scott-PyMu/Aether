@@ -1,15 +1,15 @@
 //! 持久化降级状态机（D4；ADR-003/ADR-004 边界澄清）。
 //!
 //! ```text
-//! normal ──写事务重试 3 次均失败──→ persist_degraded（只读）
+//! normal ──连续 3 次写事务尝试失败（含首次）──→ persist_degraded（只读）
 //!   ▲                                        │
 //!   └──修复外部条件 + 核心重启 + 启动自检通过──┘   （P0 无运行期热恢复）
 //! ```
 //!
-//! 关键边界（ADR-004 决策 1）：
-//! - 触发源仅三类：写事务连续失败（重试 3 次）、空间护栏（剩余 <500MB）、完整性失败
-//!   （`quick_check` 不过）；**写队列临时高水位（≤L2）不进入本状态**（D8 背压，
-//!   毫秒级回落，队列回落即恢复）；
+//! 关键边界（ADR-004 决策 1；重试口径 ADR-007 决策 2）：
+//! - 触发源仅三类：写事务连续尝试失败（`MAX_WRITE_ATTEMPTS = 3`，含首次）、
+//!   空间护栏（剩余 <500MB）、完整性失败（`quick_check` 不过）；
+//!   **写队列临时高水位（≤L2）不进入本状态**（D8 背压，毫秒级回落，队列回落即恢复）；
 //! - 恢复仅经「修复外部条件 + 重启核心 + 启动自检通过」：本模块**不提供运行期热恢复
 //!   API**——新进程用 [`StorageStateMachine::from_startup_check`] 依据自检报告重建状态；
 //! - 降级期语义：拒绝新写入/新 run；读查询、诊断导出、备份/导出保持可用。
@@ -50,7 +50,7 @@ impl StorageState {
 /// 降级触发源（仅记录差异，状态语义相同；写入诊断包）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DegradeTrigger {
-    /// 写事务连续失败（重试 3 次均失败）。
+    /// 写事务连续尝试失败（`MAX_WRITE_ATTEMPTS = 3`，含首次）。
     WriteFailure { attempts: u32, last_error: String },
     /// 空间护栏：剩余磁盘低于 500MB。
     SpaceGuard { free_bytes: u64 },
@@ -74,7 +74,7 @@ impl DegradeTrigger {
             Self::WriteFailure {
                 attempts,
                 last_error,
-            } => format!("写事务连续失败 {attempts} 次（重试耗尽）：{last_error}"),
+            } => format!("写事务连续尝试失败 {attempts} 次（含首次）：{last_error}"),
             Self::SpaceGuard { free_bytes } => {
                 format!("空间护栏触发：剩余 {free_bytes} 字节 < {SPACE_GUARD_MIN_FREE_BYTES}（D3）")
             }

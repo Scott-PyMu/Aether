@@ -57,8 +57,10 @@ pub const BROADCAST_CAPACITY: usize = 4_096;
 pub const RUN_INTERRUPT_CAPACITY: usize = 256;
 /// `evt.id` 去重缓存容量（有界；更早的重复由 `events.id` 主键兜底）。
 pub const DEDUP_CAPACITY: usize = 100_000;
-/// 持久化尝试次数（D4：写事务**连续失败重试 3 次**均失败 → `persist_degraded`）。
-pub const PERSIST_ATTEMPTS: usize = 3;
+/// 写事务最大尝试次数（ADR-007 决策 2：**总尝试次数含首次**；重试 = 2 次）。
+///
+/// D4：连续 3 次写事务尝试失败（含首次）→ `persist_degraded`。
+pub const MAX_WRITE_ATTEMPTS: usize = 3;
 /// 持久化重试间隔（常量级调参；测试注入 0）。
 pub const PERSIST_RETRY_DELAY: Duration = Duration::from_millis(25);
 /// 补读缺口上限（D4：>10k 拒绝自动补发）。
@@ -69,8 +71,8 @@ pub const READBACK_PAGE_SIZE: usize = 500;
 /// 管线运行参数（默认值即 D4 约定；测试/故障注入可参数化）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PipelineConfig {
-    /// 持久化尝试次数（默认 3）。
-    pub persist_attempts: usize,
+    /// 写事务最大尝试次数（默认 3，含首次；重试 2 次；ADR-007 决策 2）。
+    pub max_write_attempts: usize,
     /// 持久化重试间隔（默认 25ms；测试可置 0）。
     pub persist_retry_delay: Duration,
     /// delta 合并窗口（默认 16ms）。
@@ -88,7 +90,7 @@ pub struct PipelineConfig {
 impl Default for PipelineConfig {
     fn default() -> Self {
         Self {
-            persist_attempts: PERSIST_ATTEMPTS,
+            max_write_attempts: MAX_WRITE_ATTEMPTS,
             persist_retry_delay: PERSIST_RETRY_DELAY,
             delta_flush_interval: DELTA_FLUSH_INTERVAL,
             delta_flush_bytes: DELTA_FLUSH_BYTES,
@@ -107,8 +109,8 @@ impl PipelineConfig {
                 reason: reason.to_owned(),
             })
         };
-        if self.persist_attempts == 0 {
-            return invalid("persist_attempts 必须 >0");
+        if self.max_write_attempts == 0 {
+            return invalid("max_write_attempts 必须 >0");
         }
         if self.delta_flush_interval.is_zero() {
             return invalid("delta_flush_interval 必须 >0");
@@ -964,13 +966,14 @@ impl Actor {
         }
     }
 
-    /// 落盘重试（D4：写事务重试 3 次均失败 → `persist_degraded`）。
+    /// 落盘重试（ADR-007 决策 2：`MAX_WRITE_ATTEMPTS = 3` **含首次**，重试 2 次；
+    /// 连续 3 次写事务尝试失败 → `persist_degraded`；每次失败输出 `attempt=n/3`）。
     async fn write_with_retry(
         &mut self,
         events: Vec<EventEnvelope>,
         dropped_units: usize,
     ) -> Result<WriteOutcome, PipelineError> {
-        let attempts_limit = self.config.persist_attempts;
+        let attempts_limit = self.config.max_write_attempts;
         let mut attempts: usize = 0;
         let mut backpressure_waits: usize = 0;
         loop {
@@ -995,6 +998,22 @@ impl Actor {
                         // D4：重复 seq 视为管线 bug，计入诊断并按持久化失败路径处理。
                         bump(&self.counters.duplicate_seq_bugs, 1);
                     }
+                    // ADR-007 决策 2：每次失败尝试输出 `attempt=n/3`（含最终失败的一次）。
+                    // 日志经 `tracing::warn!` 发出；验证由测试侧订阅器捕获完成
+                    // （ADR-007 增量修订 1 决策 2：`health` 不承载日志内容）。
+                    let attempt_line =
+                        format!("attempt={attempts}/{attempts_limit}: {}", error.describe());
+                    tracing::warn!(
+                        attempt = attempts,
+                        max_attempts = attempts_limit,
+                        error = %error.describe(),
+                        "持久化写事务失败（{attempt_line}），{}",
+                        if attempts >= attempts_limit {
+                            "进入 persist_degraded（只读）"
+                        } else {
+                            "将重试"
+                        }
+                    );
                     if attempts >= attempts_limit {
                         let origin = events
                             .first()
@@ -1010,7 +1029,7 @@ impl Actor {
                         )
                         .await;
                         return Err(PipelineError::PersistDegraded {
-                            reason: format!("{last_error}；重试 {attempts} 次均失败"),
+                            reason: format!("{last_error}；连续 {attempts} 次尝试均失败（含首次）"),
                         });
                     }
                     self.sleep_retry().await;
@@ -1146,7 +1165,8 @@ mod tests {
     #[test]
     fn default_config_matches_design_constants() {
         let config = PipelineConfig::default();
-        assert_eq!(config.persist_attempts, 3, "D4：重试 3 次均失败");
+        assert_eq!(config.max_write_attempts, 3, "ADR-007：总尝试 3 次含首次");
+        assert_eq!(config.max_write_attempts - 1, 2, "ADR-007：重试次数 = 2");
         assert_eq!(
             config.delta_flush_interval,
             Duration::from_millis(16),
@@ -1164,7 +1184,7 @@ mod tests {
     fn invalid_config_is_rejected() {
         let cases = [
             PipelineConfig {
-                persist_attempts: 0,
+                max_write_attempts: 0,
                 ..PipelineConfig::default()
             },
             PipelineConfig {

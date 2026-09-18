@@ -35,7 +35,7 @@ pub use journal::{
 pub use normalizer::{Normalizer, PendingEvent};
 pub use pipeline::{
     EventPipeline, PipelineConfig, PipelineHealth, ReadbackFrame, RunInterrupt, SubmitOutcome,
-    BROADCAST_CAPACITY, DEDUP_CAPACITY, PERSIST_ATTEMPTS, PERSIST_RETRY_DELAY, READBACK_MAX_GAP,
+    BROADCAST_CAPACITY, DEDUP_CAPACITY, MAX_WRITE_ATTEMPTS, PERSIST_RETRY_DELAY, READBACK_MAX_GAP,
     READBACK_PAGE_SIZE, RUN_INTERRUPT_CAPACITY, RUN_INTERRUPT_REASON_DEGRADED,
     SUBMIT_QUEUE_CAPACITY,
 };
