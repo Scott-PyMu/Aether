@@ -136,7 +136,28 @@ jobs:
           # Windows 上 bun --compile 产物自动追加 .exe。
           AETHER_MOCK_ADAPTER: ${{ runner.temp }}/aether-mock-adapter${{ runner.os == 'Windows' && '.exe' || '' }}
           AETHER_REQUIRE_MOCK_ADAPTER: "1"
-        run: cargo test -p aether-adapters
+        run: |
+          set -o pipefail
+          cargo test -p aether-adapters --no-fail-fast 2>&1 | tee adapters-test.log
+
+      - name: 失败诊断（公开 annotation，便于无凭据取证）
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "### aether-adapters 测试失败（关键行 + tail 40）"
+            echo '```text'
+            grep -E "FAILED|panicked|assertion|test result: FAILED|---- .* stdout" adapters-test.log 2>/dev/null | tail -20 || true
+            echo '--- tail 40 ---'
+            tail -40 adapters-test.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -E "FAILED|panicked|assertion|test result: FAILED|---- .* stdout" adapters-test.log 2>/dev/null | tail -12 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=adapters-test::$line"
+          done
+          tail -6 adapters-test.log 2>/dev/null | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=adapters-tail::$line"
+          done
 
       - name: 平台机制证据（M1-10 DoD3：setsid/pgrp 与 Job Object 机制序列）
         shell: bash
