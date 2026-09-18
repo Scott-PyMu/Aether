@@ -95,6 +95,44 @@ jobs:
       - name: 冒烟（--version / --aether-diagnostics）
         run: node scripts/test/smoke-desktop.mjs
 
+  # M1-10 DoD3：三平台适配器测试矩阵——Unix `setsid`/pgrp 与 Windows
+  # Job Object/CREATE_NEW_PROCESS_GROUP 断言必须在各自 runner 上真实执行
+  # （本机 Windows 只能覆盖 Windows 分支）。
+  # M1-01 缺口修复：原 CI 无任何平台的 `cargo test`（仅 check/构建/覆盖率），
+  # 导致 M1-10 平台断言在 Gate 1 前无三平台证据。
+  adapters-platform-tests:
+    name: Adapters tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # M1-09 集成测试需要真实 Mock 进程（缺失时测试会 SKIP；矩阵要求全量执行）。
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - name: 构建 Mock 适配器
+        shell: bash
+        run: bun build packages/adapter-mock/src/main.ts --compile --outfile "$RUNNER_TEMP/aether-mock-adapter"
+
+      - name: cargo test -p aether-adapters（全量：单测 + M1-09/M1-10 集成 + 平台断言）
+        shell: bash
+        env:
+          # Windows 上 bun --compile 产物自动追加 .exe。
+          AETHER_MOCK_ADAPTER: ${{ runner.temp }}/aether-mock-adapter${{ runner.os == 'Windows' && '.exe' || '' }}
+          AETHER_REQUIRE_MOCK_ADAPTER: "1"
+        run: cargo test -p aether-adapters
+
+      - name: 平台机制证据（M1-10 DoD3：setsid/pgrp 与 Job Object 机制序列）
+        shell: bash
+        run: cargo test -p aether-adapters --test m1_10_termination -- --nocapture
+
   # M1-08：Tauri 壳与安全基线（CSP 真实阻断、外链导航拦截、IPC 参数校验矩阵、
   # capabilities 最小 allowlist、devtools 仅 debug）——E2E 需要真实 WebView2。
   security-baseline:

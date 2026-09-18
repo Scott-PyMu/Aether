@@ -219,9 +219,42 @@ async fn linux_spawn_uses_setsid_process_group() {
     let _ = process.try_status();
 }
 
-#[cfg(not(target_os = "linux"))]
+/// macOS：会话/进程组 id == 子进程 pid（`setsid` 平台断言，`ps -o pgid=` 交叉验证）。
+#[cfg(target_os = "macos")]
 #[tokio::test]
-async fn non_linux_platform_assertion_is_explicitly_skipped() {
-    // 平台断言仅覆盖 Windows（Job Object）与 Linux（/proc pgrp）；macOS 由 CI 矩阵补足。
-    eprintln!("SKIP：当前平台无 /proc pgrp 断言（macOS 由 CI 矩阵补充）");
+async fn macos_spawn_uses_setsid_process_group() {
+    let (mut process, pid, _child, _pid_file) = spawn_tree_process().await;
+    assert_eq!(
+        process.process_group_id(),
+        Some(pid),
+        "ProcessSession 断言 pgid == pid"
+    );
+
+    // 独立读取 `ps -o pgid= -p <pid>` 交叉验证（macOS 无 /proc）。
+    let output = std::process::Command::new("ps")
+        .args(["-o", "pgid=", "-p", &pid.to_string()])
+        .output()
+        .expect("执行 ps");
+    assert!(
+        output.status.success(),
+        "ps 退出码异常：{:?}",
+        output.status
+    );
+    let observed_pgid: u32 = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse()
+        .expect("解析 pgid");
+    assert_eq!(observed_pgid, pid, "ps 报告的 pgid 必须等于 pid（setsid）");
+
+    process.force_kill().expect("清理");
+    let _ = process.try_status();
+}
+
+/// 其它平台（当前仅 Windows 进入）：Unix `setsid`/pgrp 断言不适用；
+/// Windows 的 Job Object / `CREATE_NEW_PROCESS_GROUP` 断言位于
+/// `termination_sequence_platform_mechanisms_reap_whole_tree` 的 `#[cfg(windows)]` 分支。
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[tokio::test]
+async fn non_unix_platform_assertion_is_explicitly_skipped() {
+    eprintln!("SKIP：本平台无 setsid/pgrp 断言（Windows 由 Job Object 整树回收断言覆盖）");
 }
