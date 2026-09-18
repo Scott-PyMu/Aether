@@ -247,6 +247,16 @@ pub struct BackupListRequest {}
 
 impl CommandRequest for BackupListRequest {}
 
+/// `health`（ADR-007 决策 1）：无参数命令（严格解析：任何成员拒绝）。
+///
+/// 仅本地 IPC 查询：不落库、不产生事件；返回 `HealthReport`
+/// （`storage_state` / `write_queue_depth` / `runtimes` 摘要 / `ts`）。
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HealthRequest {}
+
+impl CommandRequest for HealthRequest {}
+
 /// 备份来源（ADR-004 `backup_restore`）：内部备份 id 枚举 或 外部 `.db` 路径。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]

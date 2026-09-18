@@ -9,7 +9,12 @@
 //!
 //! 测试统一位于 `tests/`（见 `Cargo.toml` 的说明）。
 
+// 核心 crate 禁止 unwrap/expect/panic（AGENTS §2.2）；lib 内单元测试显式豁免
+// （与 aether-core/store/adapters/control 同口径；集成测试各自在文件级豁免）。
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+
 pub mod config;
+pub mod core_health;
 pub mod ipc;
 pub mod nav;
 pub mod picker;
@@ -62,9 +67,13 @@ where
 
 /// 启动 Tauri 应用。
 ///
-/// 启动序列（设计 D1；M1-06 落地前两步）：单实例锁 → 数据目录检测（A4）→ …。
-/// 检测命中时启动门进入 `BlockedSyncDir`：业务命令全部 `startup_blocked`，
-/// UI 只渲染「迁移到本地目录 / 退出」。
+/// 启动序列（设计 D1/D2）：单实例锁 → 数据目录检测（A4）→ 库打开 + `quick_check` →
+/// 事件管线（ADR-007 `health` 接线）→ …。检测命中时启动门进入 `BlockedSyncDir`：
+/// 业务命令全部 `startup_blocked`，UI 只渲染「迁移到本地目录 / 退出」。
+///
+/// 状态管理分两步（保证窗口加载期与 T12 顺序）：
+/// 1. Builder 阶段以「延迟后端」`manage` 状态（`startup_*` 门命令不依赖后端，窗口加载期可用）；
+/// 2. `setup` 阶段（即单实例插件初始化、第二实例退出之后）打开存储/管线并注入真实后端。
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let gate = startup::StartupGate::bootstrap();
     // E2E 探针可注入指针写入失败（复现「复制完成、写指针失败」窗口）。
@@ -73,20 +82,19 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let startup = std::sync::Arc::new(gate);
     #[cfg(debug_assertions)]
     startup_probe::record_phase(&startup);
+    let startup_for_boot = std::sync::Arc::clone(&startup);
 
-    let backend: std::sync::Arc<dyn ipc::IpcBackend> =
-        std::sync::Arc::new(ipc::backend::NotImplementedBackend);
     // 路径白名单根目录随 M3-05（诊断导出）接入；未配置即默认拒绝。
     // debug + E2E 探针可注入固定目录选择器（迁移主路径自动化）；生产用系统选择器。
     #[cfg(debug_assertions)]
     let state = match startup_probe::injected_picker() {
         Some(picker) => {
-            ipc::IpcState::with_startup_and_picker(backend, Vec::new(), startup, picker)
+            ipc::IpcState::with_startup_deferred_and_picker(Vec::new(), startup, picker)
         }
-        None => ipc::IpcState::with_startup(backend, Vec::new(), startup),
+        None => ipc::IpcState::with_startup_deferred(Vec::new(), startup),
     };
     #[cfg(not(debug_assertions))]
-    let state = ipc::IpcState::with_startup(backend, Vec::new(), startup);
+    let state = ipc::IpcState::with_startup_deferred(Vec::new(), startup);
 
     tauri::Builder::default()
         // T12：single-instance 必须是第一个注册的插件（第二实例转发后即退出）。
@@ -95,8 +103,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .plugin(nav::plugin())
         .invoke_handler(ipc::handler())
         .manage(state)
-        .setup(|app| {
+        .setup(move |app| {
             use tauri::Manager;
+
+            // 单实例插件已初始化：此处才做「库打开 + quick_check」与管线启动（D2 顺序），
+            // 并注入已 manage 的状态（窗口加载期状态始终可用）。
+            let backend = build_backend(&startup_for_boot);
+            let _ = app.state::<ipc::IpcState>().install_backend(backend);
             app.state::<ipc::IpcState>()
                 .set_app_handle(app.handle().clone());
             #[cfg(debug_assertions)]
@@ -112,4 +125,26 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         })
         .run(tauri::generate_context!())?;
     Ok(())
+}
+
+/// 构造命令后端（ADR-007 `health` 真实接线）。
+///
+/// - 启动门 Ready：打开存储（`quick_check` + 迁移）→ 事件管线 → [`core_health::CoreHealthBackend`]；
+/// - 启动失败（安全模式等）：按 D3 只读语义呈现为 `persist_degraded`（`degraded_backend`），
+///   不回退 `not_implemented`；
+/// - 启动门阻断（A4 同步盘检测）：核心不启动；业务命令由启动门返回 `startup_blocked`。
+fn build_backend(
+    startup: &std::sync::Arc<startup::StartupGate>,
+) -> std::sync::Arc<dyn ipc::IpcBackend> {
+    if startup.ensure_ready().is_err() {
+        return std::sync::Arc::new(ipc::backend::NotImplementedBackend);
+    }
+    let data_dir = std::path::PathBuf::from(startup.snapshot().data_dir);
+    match core_health::boot_core_health(&data_dir, tauri::async_runtime::handle().inner()) {
+        Ok(core) => std::sync::Arc::new(core),
+        Err(error) => {
+            tracing::error!(error = %error, "核心健康源启动失败：按只读降级呈现 health");
+            std::sync::Arc::new(core_health::degraded_backend(&error.to_string()))
+        }
+    }
 }

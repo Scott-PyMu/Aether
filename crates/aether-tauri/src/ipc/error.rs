@@ -38,6 +38,9 @@ pub enum IpcErrorCode {
     MigrationFailed,
     /// 内部错误（序列化/任务调度失败等不可达路径；M1-06 启动门与迁移接线）。
     Internal,
+    /// 核心后端尚未就绪（ADR-007 增量 2）：Builder 阶段以延迟后端管理状态，
+    /// `setup`（单实例插件之后）完成存储/管线注入前的过渡窗口可达。
+    CoreNotReady,
     /// 命令尚未实现（框架就绪，实现随对应里程碑落地）。
     NotImplemented,
 }
@@ -58,6 +61,7 @@ impl IpcErrorCode {
             Self::StartupBlocked => "startup_blocked",
             Self::MigrationFailed => "migration_failed",
             Self::Internal => "internal",
+            Self::CoreNotReady => "core_not_ready",
             Self::NotImplemented => "not_implemented",
         }
     }
@@ -150,6 +154,14 @@ impl IpcError {
     /// M1-06：内部不可达错误（序列化失败等）。
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(IpcErrorCode::Internal, message)
+    }
+
+    /// ADR-007 增量 2：核心后端未就绪（启动序列尚未完成存储/管线注入）。
+    ///
+    /// 触发窗口：Builder 阶段以延迟后端 `manage` 状态、`setup` 注入真实后端之前。
+    /// 门命令（`startup_*`）不依赖后端，该窗口内仍可用。
+    pub fn core_not_ready(message: impl Into<String>) -> Self {
+        Self::new(IpcErrorCode::CoreNotReady, message)
     }
 
     pub fn not_implemented(command: &str) -> Self {

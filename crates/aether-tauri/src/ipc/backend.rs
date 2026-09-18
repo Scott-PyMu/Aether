@@ -23,6 +23,14 @@ pub trait IpcBackend: Send + Sync + 'static {
         Err(IpcError::not_implemented("runtimes_list"))
     }
 
+    /// ADR-007 决策 1：核心健康查询（无参数；`HealthReport`；不落库、不产生事件）。
+    ///
+    /// 真实实现归属 M2-07：映射 `EventPipeline::health()` 的 `storage_state` /
+    /// `write_queue_depth` 与监督器 runtime 摘要；默认未接线返回 `not_implemented`。
+    fn health(&self) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("health"))
+    }
+
     fn session_list(&self, _request: &SessionListRequest) -> Result<Value, IpcError> {
         Err(IpcError::not_implemented("session_list"))
     }

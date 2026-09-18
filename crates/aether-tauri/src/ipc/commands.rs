@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use super::dto::{
     AppRestartRequest, BackupCreateRequest, BackupListRequest, BackupRestoreRequest,
-    ExportDiagnosticsRequest, MessagesPageRequest, PermissionResolveRequest,
+    ExportDiagnosticsRequest, HealthRequest, MessagesPageRequest, PermissionResolveRequest,
     PermissionsPendingRequest, RunRetryRequest, RuntimeEnableRequest, RuntimeRetryRequest,
     SessionCreateRequest, SessionIdRequest, SessionListRequest, SessionSendRequest,
     SettingsGetRequest, SettingsSetRequest, StartupGetRequest, StartupMigrateRequest,
@@ -131,6 +131,20 @@ pub(crate) fn backup_list(
 ) -> Result<Value, IpcError> {
     let _request: BackupListRequest = parse_no_params(payload.unwrap_or(Value::Null))?;
     state.backend_ready()?.backup_list()
+}
+
+/// ADR-007 决策 1：核心健康查询（无参数；严格解析拒绝未知成员）。
+///
+/// 返回 `HealthReport`（`storage_state` / `write_queue_depth` / `runtimes` 摘要 / `ts`）；
+/// 仅本地 IPC，不落库、不产生事件。UI 每 5s 轮询，15s 无响应显示「核心未响应」+ 重启入口。
+/// 真实数据接线归属 M2-07（`EventPipeline::health()` + 监督器状态）。
+#[tauri::command]
+pub(crate) fn health(
+    state: tauri::State<'_, IpcState>,
+    payload: Option<Value>,
+) -> Result<Value, IpcError> {
+    let _request: HealthRequest = parse_no_params(payload.unwrap_or(Value::Null))?;
+    state.backend_ready()?.health()
 }
 
 /// ADR-004/D13：外部候选先 canonicalize（存在性 + `.db` 后缀）再进入恢复七步。
@@ -311,6 +325,7 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         runtime_enable,
         workspace_set,
         export_diagnostics,
+        health,
         startup_get,
         startup_pick_target,
         startup_migrate,
@@ -344,6 +359,7 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         runtime_enable,
         workspace_set,
         export_diagnostics,
+        health,
         startup_get,
         startup_pick_target,
         startup_migrate,
