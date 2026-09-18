@@ -8,9 +8,9 @@
 //! aether-adapter-fixture --mode stderr-crash --lines 60 --exit-code 7
 //! aether-adapter-fixture --mode deaf   --seconds 60   # hello + initialize 后不响应心跳
 //! aether-adapter-fixture --mode silent --seconds 60   # 存活但不发 hello（握手超时）
-//! # M1-10 资源告警夹具（M4-01 复用）：真实分配内存并可按阶段回落/再分配
-//! aether-adapter-fixture --mode deaf --seconds 30 --mb 128 \
-//!     --release-after-secs 3 --realloc-after-secs 6 [--launch-token T]
+//! # M1-10 资源告警夹具（M4-01 复用）：真实分配内存，按跨重启计数交替超限/回落
+//! aether-adapter-fixture --mode deaf --seconds 30 --mb 160 \
+//!     --mb-cycle-file <path> [--launch-token T]
 //! ```
 //!
 //! 说明：bin 目标不打入产品路径，仅用于监督器集成测试与故障注入演练；
@@ -57,10 +57,10 @@ struct Args {
     launch_token: Option<String>,
     /// 资源夹具：真实分配的内存（MiB；0 = 不分配）。
     mb: u64,
-    /// 资源夹具：分配后多少秒释放（0 = 不释放）。
-    release_after_secs: u64,
-    /// 资源夹具：释放后多少秒再次分配（0 = 不再分配）。
-    realloc_after_secs: u64,
+    /// 资源夹具：跨重启计数文件（可选）。启动时读取计数 N、回写 N+1，
+    /// 仅当 N 为偶数时按 `--mb` 分配——用于「超限 / 回落」跨进程交替
+    /// （释放内存后宿主可能保留物理页，进程级回落不受影响）。
+    mb_cycle_file: Option<std::path::PathBuf>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -72,8 +72,7 @@ fn parse_args() -> Result<Args, String> {
         pid_file: None,
         launch_token: None,
         mb: 0,
-        release_after_secs: 0,
-        realloc_after_secs: 0,
+        mb_cycle_file: None,
     };
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let mut index = 0;
@@ -108,16 +107,7 @@ fn parse_args() -> Result<Args, String> {
                     .parse::<u64>()
                     .map_err(|error| format!("--mb 非法：{error}"))?
             }
-            "--release-after-secs" => {
-                args.release_after_secs = value()?
-                    .parse::<u64>()
-                    .map_err(|error| format!("--release-after-secs 非法：{error}"))?
-            }
-            "--realloc-after-secs" => {
-                args.realloc_after_secs = value()?
-                    .parse::<u64>()
-                    .map_err(|error| format!("--realloc-after-secs 非法：{error}"))?
-            }
+            "--mb-cycle-file" => args.mb_cycle_file = Some(value()?.into()),
             "--launch-token" => args.launch_token = Some(value()?),
             other if other.starts_with("--launch-token=") => {
                 // D5 spawn 注入形式：`--launch-token=<ULID>`（单参数）。
@@ -169,32 +159,43 @@ fn sleep_seconds(seconds: u64) {
     std::thread::sleep(Duration::from_secs(seconds));
 }
 
-/// 资源夹具（M1-10 增量 / M4-01 复用）：真实分配 `--mb` MiB 并逐页触写；
-/// 可选在 `--release-after-secs` 后释放（内存回落），再在 `--realloc-after-secs`
-/// 后重新分配（用于验证告警复位后的二次触发）。
+/// 资源夹具（M1-10 增量 / M4-01 复用）：真实分配 `--mb` MiB 并逐页触写。
+///
+/// `--mb-cycle-file <path>` 提供跨重启交替：读取计数 N、回写 N+1，N 为偶数才分配。
+/// 由于宿主释放大块内存后可能保留物理页（macOS 实测 RSS 不回落），集成测试
+/// 用「崩溃 → 监督器重启」切换进程来实现真实回落：run#1 fat → run#2 lean → run#3 fat。
 fn start_memory_profile(args: &Args) {
     if args.mb == 0 {
         return;
     }
+    let allocate = match &args.mb_cycle_file {
+        Some(path) => next_cycle_allocates(path),
+        None => true,
+    };
+    if !allocate {
+        return;
+    }
     let mb = args.mb;
-    let release_after_secs = args.release_after_secs;
-    let realloc_after_secs = args.realloc_after_secs;
     std::thread::spawn(move || {
-        let mut held = allocate_memory(mb);
-        if release_after_secs > 0 {
-            std::thread::sleep(Duration::from_secs(release_after_secs));
-            held = Vec::new();
-        }
-        if realloc_after_secs > 0 {
-            std::thread::sleep(Duration::from_secs(realloc_after_secs));
-            held = allocate_memory(mb);
-        }
+        let held = allocate_memory(mb);
         // 持有分配内存直到进程退出（RSS 采样可观测）。
         loop {
             std::hint::black_box(&held);
             std::thread::sleep(MEMORY_HOLD_TICK);
         }
     });
+}
+
+/// 读取并推进计数文件；返回是否本次应分配（偶数计数 → 分配）。
+fn next_cycle_allocates(path: &std::path::Path) -> bool {
+    let count = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .unwrap_or(0);
+    if let Err(error) = std::fs::write(path, count.saturating_add(1).to_string()) {
+        eprintln!("[fixture] mb-cycle-file 写入失败（按首次分配继续）：{error}");
+    }
+    count % 2 == 0
 }
 
 /// 分配并逐页写入（触发物理页提交，保证 RSS 真实上升）。

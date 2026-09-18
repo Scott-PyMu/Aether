@@ -1,8 +1,13 @@
 //! M1-10 资源告警集成（env 阈值钩子 + 真实内存分配；M4-01「核心 OOM / 输出洪水」复用）。
 //!
 //! 链路：低阈值（`AETHER_TEST_RSS_THRESHOLD_MB=50`）+ 夹具真实分配 160MiB
-//! → 持续 `AETHER_TEST_SUSTAIN_SECS=1` 触发 RSS 告警 → 同一超限区间不重复告警（告警去重/限流）
-//! → 夹具释放内存后回落复位 → 再次分配后二次告警（证明复位生效）→ 全程不自动杀进程（D5）。
+//! → 持续 `AETHER_TEST_SUSTAIN_SECS=1` 触发 RSS 告警 → 同一超限区间不重复告警（告警限流）
+//! → 注入崩溃并由监督器重启到「lean」进程（计数文件交替：偶数分配 / 奇数不分配），
+//!   新进程 RSS 低 → 监视器回落复位 → 再次崩溃重启到「fat」进程 → 二次告警（证明复位生效）
+//! → 全程不自动杀进程（D5）。
+//!
+//! 说明：宿主释放大块内存后可能保留物理页（macOS 实测 RSS 不回落），因此「回落」
+//! 以进程切换实现（监督器真实重启路径），跨平台确定。
 //!
 //! 环境变量仅在本测试进程内显式设置；未设置时生产路径严格等于 D5 默认。
 //!
@@ -17,11 +22,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use aether_adapters::supervisor::{
-    AdapterLedger, AdmissionPolicy, HeartbeatConfig, ResourceConfig, ResourceLimitKind,
-    RuntimeManifest, RuntimeSpec, StartOutcome, Supervisor, SupervisorConfig, SysinfoProbe,
-    SysinfoSampler, SystemTreeKiller, TerminationBudget, ENV_CPU_THRESHOLD_PCT,
-    ENV_RSS_THRESHOLD_MB, ENV_SUSTAIN_SECS,
+    kill_tree_system, AdapterLedger, AdmissionPolicy, HeartbeatConfig, MonitorOutcome,
+    ResourceConfig, ResourceLimitKind, RestartOutcome, RuntimeManifest, RuntimeSpec, StartOutcome,
+    Supervisor, SupervisorConfig, SysinfoProbe, SysinfoSampler, SystemTreeKiller,
+    TerminationBudget, ENV_CPU_THRESHOLD_PCT, ENV_RSS_THRESHOLD_MB, ENV_SUSTAIN_SECS,
 };
+use aether_adapters::DisabledReason;
 use common::{fixture_binary, unique_temp_dir, RecordingObserver};
 
 const RSS_THRESHOLD_MB: u64 = 50;
@@ -68,9 +74,10 @@ async fn rss_breach_alerts_dedups_resets_then_realerts_without_kill() {
     );
     assert_eq!(config.breach_sustain, Duration::from_secs(SUSTAIN_SECS));
 
-    // 2) 启动夹具：160MiB 真实分配 → 3s 后释放 → 再 3s 后重新分配。
+    // 2) 启动夹具：run#1（计数 0，偶数）真实分配 160MiB。
     let observer = Arc::new(RecordingObserver::new());
     let dir = unique_temp_dir("m1-10-resources");
+    let cycle_file = dir.join("mb-cycle.txt");
     let ledger = Arc::new(tokio::sync::Mutex::new(
         AdapterLedger::load(dir.join("adapters.json")).unwrap(),
     ));
@@ -81,10 +88,8 @@ async fn rss_breach_alerts_dedups_resets_then_realerts_without_kill() {
         "30",
         "--mb",
         ALLOC_MB,
-        "--release-after-secs",
-        "3",
-        "--realloc-after-secs",
-        "3",
+        "--mb-cycle-file",
+        cycle_file.to_str().unwrap_or("mb-cycle.txt"),
     ]));
     let supervisor = Supervisor::new(
         vec![spec],
@@ -143,32 +148,71 @@ async fn rss_breach_alerts_dedups_resets_then_realerts_without_kill() {
     assert!(runtime.is_running().await);
     println!("[m1-10-resources] 持续超限 3 次采样未重复告警（告警限流）");
 
-    // 5) 回落复位：夹具释放内存，监督器喂入低于阈值的采样。
+    // 5) 回落复位：注入崩溃 → 监督器重启到 run#2（计数 1，奇数 → 不分配），
+    //    新进程 RSS 低 → 喂入低于阈值的采样触发监视器复位。
+    kill_tree_system(pid).expect("崩溃注入#1");
+    let observed = common::wait_for_async(
+        || async {
+            matches!(
+                runtime.monitor_once().await,
+                MonitorOutcome::ProcessExited { .. }
+            )
+        },
+        Duration::from_secs(10),
+    )
+    .await;
+    assert!(observed, "应观测到 run#1 进程退出");
+    let outcome = runtime
+        .restart(DisabledReason::Crashed, "资源夹具：回落重启")
+        .await;
+    assert_eq!(outcome, RestartOutcome::Ready, "run#2 应进入 ready");
+    let pid2 = runtime.current_pid().await.expect("run#2 PID");
+    assert_ne!(pid2, pid, "重启必须是新进程");
+
     let sampler = SysinfoSampler::new();
     let drop_deadline = Instant::now() + Duration::from_secs(15);
-    let mut dropped = false;
     let mut low_rss = 0_u64;
+    let mut reset_observed = false;
     while Instant::now() < drop_deadline {
+        // 喂采样：run#2 低 RSS → 监视器复位。
         let _ = runtime.sample_resources().await;
         let rss = sampler
-            .sample(pid)
+            .sample(pid2)
             .map(|sample| sample.rss_bytes)
-            .unwrap_or(0);
+            .unwrap_or(u64::MAX);
         if rss < RSS_THRESHOLD_MB * 1024 * 1024 / 2 {
-            dropped = true;
             low_rss = rss;
+            reset_observed = true;
             break;
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
-    assert!(dropped, "夹具释放内存后 RSS 应真实回落");
+    assert!(reset_observed, "run#2（lean）RSS 应低于阈值/2");
     assert_eq!(observer.snapshot().alerts.len(), 1, "回落过程不产生新告警");
     println!(
-        "[m1-10-resources] RSS 回落至 {}MiB（< 阈值/2）→ 监视器复位",
+        "[m1-10-resources] run#2 RSS 回落至 {}MiB（< 阈值/2）→ 监视器复位",
         low_rss / (1024 * 1024)
     );
 
-    // 6) 复位后二次超限：再次分配 → 二次告警（证明 reported 复位生效）。
+    // 6) 复位后二次超限：再次崩溃重启到 run#3（计数 2，偶数 → 分配），
+    //    持续超限后产生第二次告警（证明 reported 复位生效）。
+    kill_tree_system(pid2).expect("崩溃注入#2");
+    let observed = common::wait_for_async(
+        || async {
+            matches!(
+                runtime.monitor_once().await,
+                MonitorOutcome::ProcessExited { .. }
+            )
+        },
+        Duration::from_secs(10),
+    )
+    .await;
+    assert!(observed, "应观测到 run#2 进程退出");
+    let outcome = runtime
+        .restart(DisabledReason::Crashed, "资源夹具：二次超限重启")
+        .await;
+    assert_eq!(outcome, RestartOutcome::Ready, "run#3 应进入 ready");
+
     let second_deadline = Instant::now() + Duration::from_secs(15);
     while observer.snapshot().alerts.len() < 2 {
         assert!(Instant::now() < second_deadline, "复位后二次 RSS 告警超时");
@@ -188,7 +232,7 @@ async fn rss_breach_alerts_dedups_resets_then_realerts_without_kill() {
         alerts[1].rss_bytes / (1024 * 1024),
         alerts[1].sustained_ms
     );
-    println!("[m1-10-resources] 链路证据：告警 → 限流 → 回落复位 → 二次告警 → 全程不杀");
+    println!("[m1-10-resources] 链路证据：告警 → 限流 → 崩溃重启回落复位 → 二次告警 → 全程不杀");
 
     supervisor.shutdown_all().await;
 }
