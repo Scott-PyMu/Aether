@@ -56,7 +56,7 @@ if (!skipTests) {
 }
 
 {
-  // DoD3（ADR-004）：七命令必须同时存在于命令定义与 debug/release 两个 handler 注册列表。
+  // DoD3（ADR-004 + ADR-007）：命令必须同时存在于命令定义与 debug/release 两个 handler 注册列表。
   const source = readFileSync(
     path.join(repoRoot, "crates", "aether-tauri", "src", "ipc", "commands.rs"),
     "utf8",
@@ -69,6 +69,8 @@ if (!skipTests) {
     "runtime_retry",
     "runtime_enable",
     "workspace_set",
+    // ADR-007 决策 1：health（无参数；真实数据接线归 M2-07）。
+    "health",
   ];
   const problems = [];
   for (const command of required) {
@@ -80,7 +82,41 @@ if (!skipTests) {
   }
   if (problems.length > 0) console.error(problems.join("\n"));
   record(
-    "ADR-004 七命令（backup_list/backup_restore/app_restart/run_retry/runtime_retry/runtime_enable/workspace_set）定义与注册",
+    "ADR-004 七命令 + ADR-007 health 定义与注册",
+    problems.length === 0 ? 0 : 1,
+  );
+}
+
+{
+  // ADR-007 增量 2：T12 顺序过渡窗口错误码 core_not_ready 在案；
+  // health 真实返回测试（normal/persist_degraded/core_not_ready/wired-runtimes）已签入。
+  const errorSource = readFileSync(
+    path.join(repoRoot, "crates", "aether-tauri", "src", "ipc", "error.rs"),
+    "utf8",
+  );
+  const healthTest = readFileSync(
+    path.join(repoRoot, "crates", "aether-tauri", "tests", "health_command.rs"),
+    "utf8",
+  );
+  const problems = [];
+  if (!/CoreNotReady/.test(errorSource) || !/"core_not_ready"/.test(errorSource)) {
+    problems.push("error.rs 缺少 core_not_ready 错误码（ADR-007 增量 2）");
+  }
+  for (const test of [
+    "core_not_ready_until_backend_installed",
+    "health_passes_through_wired_runtime_summaries",
+  ]) {
+    if (!healthTest.includes(`fn ${test}(`)) problems.push(`health_command.rs 缺少用例 ${test}`);
+  }
+  if (!/install_backend/.test(readFileSync(
+    path.join(repoRoot, "crates", "aether-tauri", "src", "ipc", "mod.rs"),
+    "utf8",
+  ))) {
+    problems.push("ipc/mod.rs 缺少延迟后端注入 install_backend（T12 顺序）");
+  }
+  if (problems.length > 0) console.error(problems.join("\n"));
+  record(
+    "ADR-007 增量 2：core_not_ready 与 runtimes 语义（T12 顺序测试在案）",
     problems.length === 0 ? 0 : 1,
   );
 }

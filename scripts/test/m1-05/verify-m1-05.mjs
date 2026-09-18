@@ -21,8 +21,10 @@
  *        L2 高水位保持 normal；health.storage_state=persist_degraded）；
  *      → m1_05_store_integration: 启动自检失败 → 只读 → 重启恢复。
  *
- * 另有静态检查：D4 常量（3 次重试 / 16ms / 8KB / 10k 上限 / 4096 队列与广播）、
+ * 另有静态检查：D4 常量（3 次尝试含首次 / 16ms / 8KB / 10k 上限 / 4096 队列与广播）、
  * 先日志后广播调用点、`persist_degraded`/`readback_gap_too_large` 错误码、
+ * attempt 日志经 tracing 且 health 无日志字段（ADR-007 增量决策 2）、
+ * ULID 使用设计选型 `ulid` crate + 生成/解析边界（ADR-007 增量决策 3）、
  * 核心 crate 无 unwrap/expect/panic 逃逸（src 非测试代码）。
  *
  * 证据归档：`scripts/test/.tmp/m1-05/<timestamp>/`（逐命令 stdout/stderr + summary.txt）。
@@ -78,7 +80,7 @@ try {
   const error = readSource("error.rs");
   const storage = readSource("storage_state.rs");
   const required = [
-    [pipeline, /PERSIST_ATTEMPTS:\s*usize\s*=\s*3\s*;/, "D4：写事务重试 3 次常量"],
+    [pipeline, /MAX_WRITE_ATTEMPTS:\s*usize\s*=\s*3\s*;/, "ADR-007：最大写尝试 3 次（含首次）"],
     [pipeline, /READBACK_MAX_GAP:\s*u64\s*=\s*10_?000\s*;/, "D4：补读上限 10k 常量"],
     [pipeline, /BROADCAST_CAPACITY:\s*usize\s*=\s*4_?096\s*;/, "D8：broadcast(4096)"],
     [pipeline, /SUBMIT_QUEUE_CAPACITY:\s*usize\s*=\s*4_?096\s*;/, "管线入站队列 4096"],
@@ -92,9 +94,15 @@ try {
     [storage, /SPACE_GUARD_MIN_FREE_BYTES:\s*u64\s*=\s*500\s*\*\s*1024\s*\*\s*1024\s*;/, "D3：空间护栏 500MB"],
     [error, /readback_gap_too_large/, "补读错误码"],
     [error, /persist_degraded/, "降级错误码"],
+    [pipeline, /tracing::warn!\(/, "写失败尝试日志（tracing；ADR-007 决策 2）"],
+    [pipeline, /attempt=\{attempts\}\/\{attempts_limit\}/, "attempt=n/3 日志占位"],
   ];
   for (const [source, pattern, label] of required) {
     if (!pattern.test(source)) throw new Error(`缺少：${label}`);
+  }
+  // ADR-007 增量修订 1 决策 2：health 为只读查询，不承载验证用日志内容。
+  if (/persist_attempt_log/.test(pipeline)) {
+    throw new Error("pipeline.rs 不得再出现 persist_attempt_log（health 不承载日志）");
   }
   // 先日志后广播：广播只出现在 persist_pending/enter_degraded（append 成功之后）。
   const broadcasts = [...pipeline.matchAll(/self\.events\.send\(/g)].length;
@@ -102,17 +110,57 @@ try {
     throw new Error(`events.send 调用点应为 2 处（落盘成功后/降级通知落盘成功后），实际 ${broadcasts}`);
   }
   const staticReport =
-    "D4 常量与关键路径在案：3 次重试 / 16ms / 8KB / 10k 上限 / 4096 广播 / 500MB 护栏 / 先日志后广播";
+    "D4 常量与关键路径在案：3 次尝试（含首次）/ 16ms / 8KB / 10k 上限 / 4096 广播 / " +
+    "500MB 护栏 / 先日志后广播 / attempt=n/3 经 tracing（health 无日志字段）";
   writeFileSync(path.join(outDir, "static-constants.txt"), `${staticReport}\n`, "utf8");
   evidence.push("static-constants.txt");
   console.log(`[static] ${staticReport}`);
-  record("静态：D4 常量与先日志后广播调用点", 0);
+  record("静态：D4 常量、先日志后广播与 attempt 日志边界", 0);
 } catch (error) {
   console.error(`[static] 失败：${error.message}`);
-  record("静态：D4 常量与先日志后广播调用点", 1);
+  record("静态：D4 常量、先日志后广播与 attempt 日志边界", 1);
 }
 
-// ===== 静态检查 2：核心 crate 非测试代码无 unwrap/expect/panic 逃逸 =====
+// ===== 静态检查 2：ULID 实现恢复设计选型（ADR-007 决策 3 + 增量边界） =====
+
+try {
+  const manifest = readFileSync(
+    path.join(repoRoot, "crates", "aether-control", "Cargo.toml"),
+    "utf8",
+  );
+  const ulidSource = readSource("ulid.rs");
+  if (!/^ulid\s*=\s*"=?1\.1\.3"/m.test(manifest)) {
+    throw new Error("Cargo.toml 缺少 ulid = \"=1.1.3\"（ADR-007 决策 3 选型恢复）");
+  }
+  if (!/use ulid::Ulid;/.test(ulidSource) || !/Ulid::new\(\)\.to_string\(\)/.test(ulidSource)) {
+    throw new Error("ulid.rs 必须使用 ulid crate 生成（Ulid::new）");
+  }
+  if (!/Ulid::from_string/.test(ulidSource)) {
+    throw new Error("ulid.rs 缺少解析测试（Ulid::from_string）");
+  }
+  // 增量修订 1 决策 3：生成侧 10 万次属性测试 + 解析侧首字符 >7 行为显式断言。
+  if (!/first_char_fits_128_bits_over_100k_generations/.test(ulidSource)) {
+    throw new Error("ulid.rs 缺少生成侧 10 万次首字符 ≤7 属性测试");
+  }
+  if (!/parsed_overflow[\s\S]{0,200}"0"\.repeat\(26\)/.test(ulidSource)) {
+    throw new Error("ulid.rs 缺少解析侧首字符 >7「丢弃高位→全零」显式断言");
+  }
+  if (!/tracing-subscriber/.test(manifest)) {
+    throw new Error("Cargo.toml 缺少 dev-dependency tracing-subscriber（测试侧日志捕获）");
+  }
+  const staticReport =
+    "ULID 使用设计选型 ulid crate（1.1.3）；生成侧 10 万次首字符≤7；" +
+    "解析侧 >7 丢弃高位行为显式断言；attempt 日志由测试侧 tracing-subscriber 捕获";
+  writeFileSync(path.join(outDir, "static-ulid.txt"), `${staticReport}\n`, "utf8");
+  evidence.push("static-ulid.txt");
+  console.log(`[static] ${staticReport}`);
+  record("静态：ULID 选型与边界（ADR-007 增量决策 3）", 0);
+} catch (error) {
+  console.error(`[static] 失败：${error.message}`);
+  record("静态：ULID 选型与边界（ADR-007 增量决策 3）", 1);
+}
+
+// ===== 静态检查 3：核心 crate 非测试代码无 unwrap/expect/panic 逃逸 =====
 
 try {
   const violations = [];
@@ -170,6 +218,21 @@ record(
     "aether-control",
     "--test",
     "m1_05_degraded",
+    "--",
+    "--nocapture",
+  ]),
+);
+
+// ===== DoD2：attempt=n/3 的测试侧 tracing 捕获（ADR-007 增量决策 2） =====
+
+record(
+  "cargo test -p aether-control --test m1_05_attempt_log（tracing 捕获 attempt=1/3…3/3）",
+  cargoTest("m1-05-attempt-log", [
+    "test",
+    "-p",
+    "aether-control",
+    "--test",
+    "m1_05_attempt_log",
     "--",
     "--nocapture",
   ]),

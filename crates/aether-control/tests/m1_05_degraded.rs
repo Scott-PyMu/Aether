@@ -121,6 +121,59 @@ async fn dod2_write_failure_retries_three_times_then_persist_degraded() {
     );
 }
 
+/// ADR-007 决策 1：`health` 返回 `normal` 与 `persist_degraded` 两态
+/// （命令层 `health` 接线与 E2E 归 M2-07；本用例锁定管线侧契约）。
+#[tokio::test]
+async fn adr007_health_reports_both_storage_states() {
+    let journal = FakeJournal::new();
+    let pipeline = start_pipeline(&journal);
+    let normal = pipeline.health();
+    assert_eq!(normal.storage_state_code(), "normal");
+    assert!(normal.degrade_trigger.is_none());
+
+    pipeline
+        .signal_degraded(DegradeTrigger::SpaceGuard { free_bytes: 1 })
+        .await
+        .unwrap();
+    let degraded = pipeline.health();
+    assert_eq!(degraded.storage_state_code(), "persist_degraded");
+    assert_eq!(
+        degraded.degrade_trigger.as_ref().map(DegradeTrigger::code),
+        Some("space_guard")
+    );
+    assert!(degraded.degraded_since_ms.is_some());
+    // 降级期健康查询仍可用（读路径不写库）。
+    assert_eq!(degraded.journal_queue_depth, 0);
+}
+
+/// ADR-007 决策 2：第 1、2 次失败、第 3 次成功 → **不降级**，attempt 日志止于 2/3。
+#[tokio::test]
+async fn dod2_two_failures_then_success_does_not_degrade() {
+    let journal = FakeJournal::new();
+    let pipeline = start_pipeline(&journal);
+    journal.script([
+        Behavior::fail("第一次失败"),
+        Behavior::fail("第二次失败"),
+        Behavior::Ok,
+    ]);
+    let outcome = pipeline
+        .submit(log_event("01J0000000000000000000A01", SESSION_A))
+        .await
+        .unwrap();
+    assert!(
+        outcome.is_persisted(),
+        "第 3 次尝试成功必须落盘: {outcome:?}"
+    );
+    assert_eq!(outcome.seq(), Some(1));
+    assert_eq!(journal.call_count(), 3, "共 3 次尝试（含首次）");
+
+    let health = pipeline.health();
+    assert_eq!(health.storage_state, StorageState::Normal, "不得降级");
+    assert_eq!(health.persist_retries, 2, "失败尝试记录 2 次");
+    assert_eq!(journal.persisted().len(), 1, "事件正常落盘一次");
+    assert_eq!(pipeline.health().dropped_events, 0, "无未落盘事件");
+}
+
 /// DoD②（另一分支）：降级 error 事件也落盘失败 → 不广播，仅经 health 呈现。
 #[tokio::test]
 async fn dod2_degraded_notice_not_broadcast_when_error_event_cannot_persist() {

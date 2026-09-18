@@ -39,6 +39,10 @@ record(
   "verify-m1-04（单写队列/group commit/读连接池；含 release 基准）",
   run(node, [path.join(repoRoot, "scripts", "test", "m1-04", "verify-m1-04.mjs")]),
 );
+record(
+  "verify-m1-05（事件管线：sequencer/先日志后广播/delta/补读/降级与重试口径；含证据归档）",
+  run(node, [path.join(repoRoot, "scripts", "test", "m1-05", "verify-m1-05.mjs")]),
+);
 record("verify-m1-07（密钥自检/脱敏/降级演练）", run(node, [path.join(repoRoot, "scripts", "test", "m1-07-verify.mjs")]));
 record(
   "verify-m1-06（目录检测/迁移流/单实例；E2E 需真实 WebView，见 Windows CI）",

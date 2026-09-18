@@ -113,6 +113,11 @@ impl IpcBackend for RecordingBackend {
         self.record("backup_list")
     }
 
+    /// ADR-007 决策 1：health（无参数；记录下游调用以便断言）。
+    fn health(&self) -> Result<Value, IpcError> {
+        self.record("health")
+    }
+
     fn backup_restore(
         &self,
         _request: &BackupRestoreRequest,
@@ -519,6 +524,13 @@ fn malformed_samples_return_structured_errors_and_do_not_reach_backend() {
             "invalid_json",
             None,
         ),
+        // ===== ADR-007 决策 1：health 无参数严格解析（任何成员拒绝） =====
+        (
+            "health",
+            json!({ "unexpected": 1 }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
     ];
 
     for (command, payload, code, field) in samples {
@@ -619,6 +631,9 @@ fn valid_requests_reach_backend_exactly_once() {
             json!({ "target_dir": inside }),
             "export_diagnostics",
         ),
+        // ADR-007 决策 1：health 无参数（缺省载荷与空对象两种合法调用方式）。
+        ("health", Value::Null, "health"),
+        ("health", json!({}), "health"),
     ];
 
     for (command, payload, expected) in samples {
@@ -668,6 +683,8 @@ fn valid_requests_reach_backend_exactly_once() {
         "workspace_set",
         "workspace_set",
         "export_diagnostics",
+        "health",
+        "health",
     ]
     .into_iter()
     .map(str::to_string)
