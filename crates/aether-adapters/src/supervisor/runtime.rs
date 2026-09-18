@@ -756,14 +756,16 @@ pub fn kill_tree_system(pid: u32) -> Result<(), String> {
     }
     #[cfg(unix)]
     {
+        // `--` 必须显式给出：GNU/BSD kill 会把 `-<pgid>` 误当选项解析，
+        // 且 GNU kill 在该误解析下仍以退出码 0 结束（CI Linux 实测），会静默漏杀。
         let status = std::process::Command::new("kill")
-            .args(["-KILL", &format!("-{pid}")])
+            .args(["-KILL", "--", &format!("-{pid}")])
             .status()
             .map_err(|error| format!("kill 不可用：{error}"))?;
         if status.success() {
             Ok(())
         } else {
-            Err(format!("kill -KILL -{pid} 退出码 {status}"))
+            Err(format!("kill -KILL -- -{pid} 退出码 {status}"))
         }
     }
     #[cfg(not(any(unix, windows)))]

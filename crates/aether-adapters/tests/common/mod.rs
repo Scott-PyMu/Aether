@@ -348,17 +348,29 @@ pub fn fixture_binary() -> &'static str {
 }
 
 /// 启动一个常驻夹具进程（std 直启；台账/终止测试用），返回子进程句柄。
+///
+/// Unix：新建独立进程组（`process_group(0)`，pgid == pid），与生产侧
+/// `ProcessSession`/`setsid` 的适配器进程模型一致——台账整树回收
+/// （`kill -KILL -<pgid>`）依赖该前提。
 pub fn spawn_fixture(args: &[&str]) -> std::process::Child {
-    Command::new(fixture_binary())
+    let mut command = Command::new(fixture_binary());
+    command
         .args(args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .expect("启动 aether-adapter-fixture")
+        .stderr(std::process::Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    command.spawn().expect("启动 aether-adapter-fixture")
 }
 
 /// 判断 PID 是否存活（跨平台：Windows `tasklist`，Unix `kill -0`）。
+///
+/// Unix 僵尸进程（已退出未 reap）对 `kill -0` 仍返回成功，必须显式判死：
+/// Linux 读 `/proc/<pid>/stat` 状态位，macOS 读 `ps -o state=`。
 pub fn pid_alive(pid: u32) -> bool {
     #[cfg(windows)]
     {
@@ -372,6 +384,25 @@ pub fn pid_alive(pid: u32) -> bool {
     }
     #[cfg(unix)]
     {
+        #[cfg(target_os = "linux")]
+        if let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            if let Some(after_comm) = stat.rsplit(')').next() {
+                if after_comm.trim_start().starts_with('Z') {
+                    return false;
+                }
+            }
+        }
+        #[cfg(target_os = "macos")]
+        if let Ok(output) = Command::new("ps")
+            .args(["-o", "state=", "-p", &pid.to_string()])
+            .output()
+        {
+            let state = String::from_utf8_lossy(&output.stdout);
+            let state = state.trim();
+            if state.is_empty() || state.starts_with('Z') {
+                return false;
+            }
+        }
         Command::new("kill")
             .args(["-0", &pid.to_string()])
             .status()
