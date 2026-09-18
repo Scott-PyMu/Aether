@@ -10,9 +10,11 @@
  * | ⑤ 权限 ask→拒绝 | `tool:permission-deny` | `permission.requested` → `permission.resolved(deny)` + `tool.call_failed`（denied） |
  *
  * 说明（M1 阶段口径，与实施计划 M1-09 DoD6 / M2-10 一致）：
- * - ④⑤ 在 M1 阶段为**事件序列预置**：Mock 直接产出 `permission.requested` /
- *   `permission.resolved` 事件（同时按 D6 发 `permission.request` 通知），决策来自测试侧
- *   `permission.resolve` 请求；**不经核心权限网关**。M2 阶段由 M2-10 在真实回环中重放验证。
+ * - ④⑤ 在 M1 阶段为**事件序列预置**：Mock 自包含产出
+ *   `permission.requested` → `permission.resolved` → 工具终态，**不发送**
+ *   `permission.request` 通知、不等待 `permission.resolve`、不经核心权限网关
+ *   （边界 B1，见 `docs/M1-09-证据.md`；M2 阶段由 M2-10 在真实回环中重放验证）。
+ * - 预置决策值固定在 [`TOOL_CALL_SCENARIOS`]（禁止由测试侧注入，保证「Mock 侧直接产出」）。
  * - ④⑤ 的事件序列按 DoD 字面定义从 `permission.requested` 起（不含 `tool.call_started`）。
  * - 每个场景包在 run 生命周期内：`run.started` →（工具/权限序列）→ `run.completed`
  *   （③ 在中断后以 `run.cancelled` 收口）。
@@ -45,6 +47,7 @@ export const TOOL_CALL_SCENARIOS = {
     trigger: "tool:permission-allow",
     label: "④ 权限 ask→允许",
     events: ["permission.requested", "permission.resolved", "tool.call_completed"],
+    decision: "allow",
     toolName: "mock.write_file",
   },
   permission_deny: {
@@ -52,6 +55,7 @@ export const TOOL_CALL_SCENARIOS = {
     trigger: "tool:permission-deny",
     label: "⑤ 权限 ask→拒绝",
     events: ["permission.requested", "permission.resolved", "tool.call_failed"],
+    decision: "deny",
     toolName: "mock.write_file",
   },
 } as const;

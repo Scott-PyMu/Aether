@@ -166,13 +166,19 @@ pub fn protocol_major(protocol: &str) -> Option<u32> {
 }
 
 /// D5/ADR-002 `status_reason` 词典（`runtimes.status_reason` TEXT，无 CHECK）。
+///
+/// 覆盖 `disabled` 与 `degraded` 两类转移原因：
+/// - `disabled`：`handshake_timeout` / `version_mismatch` / `start_failed` /
+///   `protocol_error` / `crash_loop` / `untrusted`（D5、ADR-002/评审 #1）；
+/// - `degraded`：`heartbeat_failed`（10s×3 连续失败）/ `crashed`（运行中崩溃）/
+///   `storage_backpressure`（ADR-003，D8 熔断隔离，M1-05 触发）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DisabledReason {
     /// 启动 10s 内未收到 `hello`。
     HandshakeTimeout,
     /// `hello` major 不匹配（D6/ADR-002 口径一致）。
     VersionMismatch,
-    /// 启动即崩或启动期退出。
+    /// 启动即崩或启动期退出（含 `initialize` 失败）。
     StartFailed,
     /// 首帧不是合法 `hello` 或帧违反协议约束。
     ProtocolError,
@@ -180,9 +186,28 @@ pub enum DisabledReason {
     CrashLoop,
     /// 非官方 manifest（D5/评审 #1，M1-10 监督器置位）。
     Untrusted,
+    /// 心跳连续 3 次失败（D5：ready→degraded，监督器自动重启）。
+    HeartbeatFailed,
+    /// 运行中崩溃/意外退出（D5 失败表「运行中崩溃」：ready→degraded）。
+    Crashed,
+    /// 存储背压熔断隔离（ADR-003/ADR-004；D8，`persist_degraded` 与临时背压的边界）。
+    StorageBackpressure,
 }
 
 impl DisabledReason {
+    /// 词典全集（D5「如」清单 + ADR-003/ADR-004 补充值）。
+    pub const ALL: [Self; 9] = [
+        Self::HandshakeTimeout,
+        Self::VersionMismatch,
+        Self::StartFailed,
+        Self::ProtocolError,
+        Self::CrashLoop,
+        Self::Untrusted,
+        Self::HeartbeatFailed,
+        Self::Crashed,
+        Self::StorageBackpressure,
+    ];
+
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::HandshakeTimeout => "handshake_timeout",
@@ -191,20 +216,16 @@ impl DisabledReason {
             Self::ProtocolError => "protocol_error",
             Self::CrashLoop => "crash_loop",
             Self::Untrusted => "untrusted",
+            Self::HeartbeatFailed => "heartbeat_failed",
+            Self::Crashed => "crashed",
+            Self::StorageBackpressure => "storage_backpressure",
         }
     }
 
     pub fn parse(value: &str) -> Option<Self> {
-        [
-            Self::HandshakeTimeout,
-            Self::VersionMismatch,
-            Self::StartFailed,
-            Self::ProtocolError,
-            Self::CrashLoop,
-            Self::Untrusted,
-        ]
-        .into_iter()
-        .find(|reason| reason.as_str() == value)
+        Self::ALL
+            .into_iter()
+            .find(|reason| reason.as_str() == value)
     }
 }
 
@@ -376,6 +397,9 @@ mod tests {
 
     #[test]
     fn disabled_reason_dictionary_round_trips() {
+        for reason in DisabledReason::ALL {
+            assert_eq!(DisabledReason::parse(reason.as_str()), Some(reason));
+        }
         for value in [
             "handshake_timeout",
             "version_mismatch",
@@ -383,6 +407,9 @@ mod tests {
             "protocol_error",
             "crash_loop",
             "untrusted",
+            "heartbeat_failed",
+            "crashed",
+            "storage_backpressure",
         ] {
             let reason = DisabledReason::parse(value).unwrap();
             assert_eq!(reason.as_str(), value);

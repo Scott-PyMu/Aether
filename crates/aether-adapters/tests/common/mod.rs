@@ -37,6 +37,9 @@ pub struct MockHarness {
     process: AdapterProcess,
     pub connection: AdapterConnection,
     pub events: Vec<EventEnvelope>,
+    /// B3 边界证据（非功能验证）：M1 预置 ④⑤ 期间收到的 `permission.request` 通知。
+    /// 预置路径应为空；M2-10 真实回环接入后此断言随之演进。
+    pub permission_requests: Vec<Value>,
 }
 
 impl MockHarness {
@@ -52,6 +55,7 @@ impl MockHarness {
             process,
             connection,
             events: Vec::new(),
+            permission_requests: Vec::new(),
         })
     }
 
@@ -110,17 +114,16 @@ impl MockHarness {
             .expect("session.interrupt（5s 超时内）")
     }
 
-    /// 继续收集事件直到指定事件出现（含）；权限请求按 `permission` 自动应答。
+    /// 继续收集事件直到指定事件出现（含）。
     pub async fn wait_for_event(
         &mut self,
         run_id: &str,
         event_type: EventType,
-        permission: Option<(&str, &str)>,
         timeout: Duration,
     ) -> Result<(), String> {
         let deadline = tokio::time::Instant::now() + timeout;
         loop {
-            let envelope = self.next_event(permission, deadline).await?;
+            let envelope = self.next_event(deadline).await?;
             if envelope.run_id.as_ref().map(|id| id.as_str()) == Some(run_id)
                 && envelope.event_type() == event_type
             {
@@ -129,16 +132,11 @@ impl MockHarness {
         }
     }
 
-    /// 收集 run 事件直到终态（completed/failed/cancelled）；权限请求按需应答。
-    pub async fn drive_run(
-        &mut self,
-        run_id: &str,
-        permission: Option<(&str, &str)>,
-        timeout: Duration,
-    ) -> Result<(), String> {
+    /// 收集 run 事件直到终态（completed/failed/cancelled）。
+    pub async fn drive_run(&mut self, run_id: &str, timeout: Duration) -> Result<(), String> {
         let deadline = tokio::time::Instant::now() + timeout;
         loop {
-            let envelope = self.next_event(permission, deadline).await?;
+            let envelope = self.next_event(deadline).await?;
             if envelope.run_id.as_ref().map(|id| id.as_str()) != Some(run_id) {
                 continue;
             }
@@ -153,7 +151,6 @@ impl MockHarness {
 
     async fn next_event(
         &mut self,
-        permission: Option<(&str, &str)>,
         deadline: tokio::time::Instant,
     ) -> Result<EventEnvelope, String> {
         loop {
@@ -178,23 +175,8 @@ impl MockHarness {
                     return Ok(envelope);
                 }
                 AdapterNotification::PermissionRequest(params) => {
-                    let (decision, scope) = permission
-                        .ok_or_else(|| "收到 permission.request 但测试未配置决策".to_owned())?;
-                    let request_id = params
-                        .get("request_id")
-                        .and_then(Value::as_str)
-                        .ok_or_else(|| "permission.request 缺少 request_id".to_owned())?;
-                    self.connection
-                        .request(
-                            Method::PermissionResolve,
-                            json!({
-                                "request_id": request_id,
-                                "decision": decision,
-                                "scope": scope,
-                            }),
-                        )
-                        .await
-                        .map_err(|error| format!("permission.resolve 失败: {error}"))?;
+                    // 边界 B3：M1 预置 ④⑤ 不应产生该通知；记录后继续（不代答网关）。
+                    self.permission_requests.push(params);
                 }
                 AdapterNotification::Log(_) | AdapterNotification::Other { .. } => {}
             }
@@ -281,4 +263,240 @@ pub async fn wait_until<F: Fn() -> bool>(condition: F, timeout: Duration) -> boo
 /// 断言错误码（用于 `Result<Value, RequestError>`）。
 pub fn rpc_code(error: &RequestError) -> i64 {
     error.code()
+}
+
+// ===== M1-09 DoD6 权威夹具（与 TS / Node 共用同一份 JSON）=====
+
+/// DoD6 权威场景（`scripts/test/m1-09/fixtures/tool-call-scenarios.json`）。
+#[derive(Debug, Clone)]
+pub struct FixtureScenario {
+    pub id: String,
+    pub label: String,
+    pub trigger: String,
+    pub events: Vec<String>,
+    pub terminal: String,
+    pub decision: Option<String>,
+    pub error_code: Option<String>,
+    pub interruption: Option<String>,
+}
+
+/// 读取全部权威场景（夹具为权威定义，供 M2-02/M2-10 复用）。
+pub fn fixture_scenarios() -> Vec<FixtureScenario> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scripts/test/m1-09/fixtures/tool-call-scenarios.json");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("读取权威夹具失败 {}: {error}", path.display()));
+    let value: Value = serde_json::from_str(&text).expect("权威夹具 JSON 解析");
+    value["scenarios"]
+        .as_array()
+        .expect("scenarios 数组")
+        .iter()
+        .map(|scenario| FixtureScenario {
+            id: str_field(scenario, "id"),
+            label: str_field(scenario, "label"),
+            trigger: str_field(scenario, "trigger"),
+            events: scenario["events"]
+                .as_array()
+                .expect("events 数组")
+                .iter()
+                .map(|event| event.as_str().unwrap_or_default().to_owned())
+                .collect(),
+            terminal: str_field(scenario, "terminal"),
+            decision: scenario
+                .get("decision")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            error_code: scenario
+                .get("errorCode")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            interruption: scenario
+                .get("interruption")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        })
+        .collect()
+}
+
+/// 按 id 取权威场景（缺失即失败，防止测试与夹具漂移）。
+pub fn fixture_scenario(id: &str) -> FixtureScenario {
+    fixture_scenarios()
+        .into_iter()
+        .find(|scenario| scenario.id == id)
+        .unwrap_or_else(|| panic!("权威夹具缺少场景 {id}"))
+}
+
+fn str_field(value: &Value, field: &str) -> String {
+    value[field]
+        .as_str()
+        .unwrap_or_else(|| panic!("夹具字段 {field} 缺失"))
+        .to_owned()
+}
+
+// ===== M1-10 监督器测试支持 =====
+
+use aether_adapters::supervisor::{
+    AuditKind, AuditRecord, ResourceEvent, StatusChange, SupervisorObserver,
+};
+use aether_core::RuntimeStatus;
+use std::process::Command;
+use std::sync::Mutex;
+
+/// M1-10 故障注入夹具路径（Cargo 为同包集成测试注入 `CARGO_BIN_EXE_*`）。
+pub fn fixture_binary() -> &'static str {
+    env!("CARGO_BIN_EXE_aether-adapter-fixture")
+}
+
+/// 启动一个常驻夹具进程（std 直启；台账/终止测试用），返回子进程句柄。
+pub fn spawn_fixture(args: &[&str]) -> std::process::Child {
+    Command::new(fixture_binary())
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("启动 aether-adapter-fixture")
+}
+
+/// 判断 PID 是否存活（跨平台：Windows `tasklist`，Unix `kill -0`）。
+pub fn pid_alive(pid: u32) -> bool {
+    #[cfg(windows)]
+    {
+        let output = Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+            .output();
+        match output {
+            Ok(output) => String::from_utf8_lossy(&output.stdout).contains(&format!("\"{pid}\"")),
+            Err(_) => false,
+        }
+    }
+    #[cfg(unix)]
+    {
+        Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
+}
+
+/// 强杀夹具（std 子进程；测试清理用，含整树）。
+pub fn kill_fixture(child: &mut std::process::Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// 记录型观察者（M1-10 集成断言：状态转移/审计/资源告警）。
+#[derive(Debug, Default)]
+pub struct ObserverLog {
+    pub status_changes: Vec<StatusChange>,
+    pub audits: Vec<AuditRecord>,
+    pub alerts: Vec<ResourceEvent>,
+}
+
+#[derive(Debug, Default)]
+pub struct RecordingObserver {
+    log: Mutex<ObserverLog>,
+}
+
+impl RecordingObserver {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn snapshot(&self) -> ObserverLog {
+        match self.log.lock() {
+            Ok(log) => ObserverLog {
+                status_changes: log.status_changes.clone(),
+                audits: log.audits.clone(),
+                alerts: log.alerts.clone(),
+            },
+            Err(poisoned) => {
+                let log = poisoned.into_inner();
+                ObserverLog {
+                    status_changes: log.status_changes.clone(),
+                    audits: log.audits.clone(),
+                    alerts: log.alerts.clone(),
+                }
+            }
+        }
+    }
+
+    /// 转移序列（from → to）。
+    pub fn transitions(&self) -> Vec<(RuntimeStatus, RuntimeStatus)> {
+        self.snapshot()
+            .status_changes
+            .into_iter()
+            .map(|change| (change.from, change.to))
+            .collect()
+    }
+
+    /// 转移原因序列（None 保留）。
+    pub fn reasons(&self) -> Vec<Option<String>> {
+        self.snapshot()
+            .status_changes
+            .into_iter()
+            .map(|change| change.reason.map(|reason| reason.as_str().to_owned()))
+            .collect()
+    }
+
+    pub fn has_audit(&self, kind: AuditKind) -> bool {
+        self.snapshot()
+            .audits
+            .iter()
+            .any(|record| record.kind() == kind)
+    }
+}
+
+impl SupervisorObserver for RecordingObserver {
+    fn on_status_changed(&self, change: &StatusChange) {
+        if let Ok(mut log) = self.log.lock() {
+            log.status_changes.push(change.clone());
+        }
+    }
+
+    fn on_audit(&self, record: &AuditRecord) {
+        if let Ok(mut log) = self.log.lock() {
+            log.audits.push(record.clone());
+        }
+    }
+
+    fn on_resource_alert(&self, alert: &ResourceEvent) {
+        if let Ok(mut log) = self.log.lock() {
+            log.alerts.push(alert.clone());
+        }
+    }
+}
+
+/// M1-10 临时目录（每个测试用例唯一，避免并发互踩）。
+pub fn unique_temp_dir(tag: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir()
+        .join("aether-m1-10-tests")
+        .join(format!("{tag}-{}-{}", std::process::id(), unique_counter()));
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+fn unique_counter() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    COUNTER.fetch_add(1, Ordering::SeqCst)
+}
+
+/// 轮询等待异步条件。
+pub async fn wait_for_async<F, Fut>(mut condition: F, timeout: Duration) -> bool
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if condition().await {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }

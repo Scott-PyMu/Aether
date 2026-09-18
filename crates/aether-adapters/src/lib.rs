@@ -3,7 +3,8 @@
 //! 依赖方向（AGENTS.md §2.1）：仅依赖 `aether-core`，禁止依赖其他内部 crate。
 //! - M1-09：JSON-RPC 2.0 over stdio（JSON-Lines v1.0）线协议骨架、握手、超时表、
 //!   错误码、大行策略；Mock 适配器（`packages/adapter-mock`）驱动一致性/健壮性测试；
-//! - M1-10：进程监督（状态机、进程组、退避、台账、终止序列）自本 crate 延续。
+//! - M1-10：进程监督（状态机、进程组/Job Object、心跳、退避/熔断、PID 台账、准入白名单、
+//!   资源采样、`runtime_retry`/`runtime_enable`），见 [`supervisor`]。
 //!
 //! 硬约束：核心 crate 禁止 `unwrap()` / `expect()` / `panic!()`（测试代码显式豁免）。
 
@@ -13,6 +14,7 @@ pub mod connection;
 pub mod framing;
 pub mod process;
 pub mod protocol;
+pub mod supervisor;
 
 pub use connection::{
     AdapterConnection, AdapterNotification, ConnectionState, DisconnectReason, RequestError,
@@ -22,7 +24,7 @@ pub use framing::{
     AetherLineCodec, ChunkLimitedReader, FrameError, RawLine, ARTIFACT_REF_LIMIT,
     ARTIFACT_REF_TYPE, MAX_FRAME_BYTES, READ_CHUNK_BYTES,
 };
-pub use process::{AdapterProcess, ProcessError, STDERR_TAIL_LINES};
+pub use process::{AdapterProcess, ProcessError, ProcessTerminationTarget, STDERR_TAIL_LINES};
 pub use protocol::{
     code, notify, protocol_major, upgrade_hint, validate_hello, DisabledInfo, DisabledReason,
     Hello, Method, RuntimeInfo, HANDSHAKE_TIMEOUT, INVALID_FRAME_UNHEALTHY_THRESHOLD,

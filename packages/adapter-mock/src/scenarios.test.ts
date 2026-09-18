@@ -5,7 +5,14 @@ import { describe, expect, it } from "vitest";
 import { scenarioForText, TOOL_CALL_SCENARIOS } from "./scenarios";
 
 interface Fixture {
-  scenarios: Array<{ id: string; label: string; trigger: string; events: string[] }>;
+  scenarios: Array<{
+    id: string;
+    label: string;
+    trigger: string;
+    events: string[];
+    decision?: "allow" | "deny";
+    errorCode?: string;
+  }>;
 }
 
 const fixtureUrl = new URL(
@@ -23,6 +30,9 @@ describe("工具调用注入清单（DoD6 权威定义）", () => {
       expect(actual.label).toBe(scenario.label);
       expect(actual.trigger).toBe(scenario.trigger);
       expect(actual.events, scenario.id).toEqual(scenario.events);
+      // ④⑤ 的预置决策必须与权威夹具一致（边界 B1：决策固定在场景定义中）。
+      const actualDecision = "decision" in actual ? actual.decision : undefined;
+      expect(actualDecision, `${scenario.id} 决策`).toBe(scenario.decision);
     }
   });
 

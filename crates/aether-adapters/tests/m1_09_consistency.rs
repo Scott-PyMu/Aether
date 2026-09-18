@@ -46,7 +46,7 @@ async fn streaming_deltas_seq_monotonic_and_completed_matches() {
     let session_id = harness.open_session().await;
     let run_id = harness.send(&session_id, "流式测试", "m1-09-stream").await;
     harness
-        .drive_run(&run_id, None, Duration::from_secs(10))
+        .drive_run(&run_id, Duration::from_secs(10))
         .await
         .expect("run 必须到达终态");
 
@@ -113,12 +113,7 @@ async fn interrupt_stops_run_within_5s() {
     let run_id = harness.send(&session_id, "long", "m1-09-interrupt").await;
 
     harness
-        .wait_for_event(
-            &run_id,
-            EventType::MessageDelta,
-            None,
-            Duration::from_secs(5),
-        )
+        .wait_for_event(&run_id, EventType::MessageDelta, Duration::from_secs(5))
         .await
         .expect("长流必须产生 delta");
 
@@ -131,7 +126,7 @@ async fn interrupt_stops_run_within_5s() {
     );
 
     harness
-        .drive_run(&run_id, None, Duration::from_secs(5))
+        .drive_run(&run_id, Duration::from_secs(5))
         .await
         .expect("中断后必须收口");
     let types = harness.run_types(&run_id);
@@ -200,30 +195,46 @@ async fn unknown_method_gets_32601_without_disconnect() {
     assert!(status.success());
 }
 
-// ===== DoD6：5 类工具调用注入清单（真实 Mock 进程）=====
+// ===== DoD6：5 类工具调用注入清单（真实 Mock 进程，期望值取自权威夹具）=====
+
+/// 统一驱动：发送夹具触发器 → 可选中断 → 收口，返回 (run_id, 工具序列, 全序列, 终态)。
+async fn run_fixture_scenario(
+    harness: &mut MockHarness,
+    scenario: &common::FixtureScenario,
+    client_msg_id: &str,
+) -> (String, Vec<String>, Vec<String>, String) {
+    let session_id = harness.open_session().await;
+    let run_id = harness
+        .send(&session_id, &scenario.trigger, client_msg_id)
+        .await;
+    if scenario.interruption.as_deref() == Some("tool.call_started") {
+        harness
+            .wait_for_event(&run_id, EventType::ToolCallStarted, Duration::from_secs(5))
+            .await
+            .expect("tool.call_started");
+        let interrupted = harness.interrupt(&session_id).await;
+        assert_eq!(interrupted["interrupted"], true);
+    }
+    harness
+        .drive_run(&run_id, Duration::from_secs(10))
+        .await
+        .expect("终态");
+    let types = harness.run_types(&run_id);
+    let terminal = types.last().cloned().unwrap_or_default();
+    let tool = harness.tool_sequence(&run_id);
+    (run_id, tool, types, terminal)
+}
 
 #[tokio::test]
 async fn tool_scenario_1_normal_completion() {
     let Some(mut harness) = MockHarness::launch_ready(&[]).await else {
         return;
     };
-    let session_id = harness.open_session().await;
-    let run_id = harness
-        .send(&session_id, "tool:normal", "m1-09-tool-1")
-        .await;
-    harness
-        .drive_run(&run_id, None, Duration::from_secs(10))
-        .await
-        .expect("终态");
-    assert_eq!(
-        harness.tool_sequence(&run_id),
-        vec!["tool.call_started", "tool.call_completed"],
-        "① 正常完成序列"
-    );
-    assert_eq!(
-        harness.run_types(&run_id).last().map(String::as_str),
-        Some("run.completed")
-    );
+    let scenario = common::fixture_scenario("normal");
+    let (_run_id, tool, _types, terminal) =
+        run_fixture_scenario(&mut harness, &scenario, "m1-09-tool-1").await;
+    assert_eq!(tool, scenario.events, "① 正常完成序列（权威夹具）");
+    assert_eq!(terminal, scenario.terminal);
     harness.shutdown().await;
 }
 
@@ -232,22 +243,28 @@ async fn tool_scenario_2_execution_failure() {
     let Some(mut harness) = MockHarness::launch_ready(&[]).await else {
         return;
     };
+    let scenario = common::fixture_scenario("fail");
     let session_id = harness.open_session().await;
-    let run_id = harness.send(&session_id, "tool:fail", "m1-09-tool-2").await;
+    let run_id = harness
+        .send(&session_id, &scenario.trigger, "m1-09-tool-2")
+        .await;
     harness
-        .drive_run(&run_id, None, Duration::from_secs(10))
+        .drive_run(&run_id, Duration::from_secs(10))
         .await
         .expect("终态");
     assert_eq!(
         harness.tool_sequence(&run_id),
-        vec!["tool.call_started", "tool.call_failed"],
+        scenario.events,
         "② 执行失败序列"
     );
     let failed = harness
         .payload_of(&run_id, EventType::ToolCallFailed)
         .expect("tool.call_failed");
     if let EventPayload::ToolCallFailed(payload) = &failed.payload {
-        assert_eq!(payload.error.code, "tool_execution_failed");
+        assert_eq!(
+            Some(payload.error.code.as_str()),
+            scenario.error_code.as_deref()
+        );
         assert!(payload.error.recoverable);
     } else {
         panic!("payload 类型不符");
@@ -260,35 +277,19 @@ async fn tool_scenario_3_timeout_interrupted() {
     let Some(mut harness) = MockHarness::launch_ready(&[]).await else {
         return;
     };
-    let session_id = harness.open_session().await;
-    let run_id = harness
-        .send(&session_id, "tool:timeout", "m1-09-tool-3")
-        .await;
-    harness
-        .wait_for_event(
-            &run_id,
-            EventType::ToolCallStarted,
-            None,
-            Duration::from_secs(5),
-        )
-        .await
-        .expect("tool.call_started");
-    let interrupted = harness.interrupt(&session_id).await;
-    assert_eq!(interrupted["interrupted"], true);
-    harness
-        .drive_run(&run_id, None, Duration::from_secs(5))
-        .await
-        .expect("中断收口");
-    assert_eq!(
-        harness.tool_sequence(&run_id),
-        vec!["tool.call_started", "tool.call_failed"],
-        "③ 超时中断序列"
-    );
+    let scenario = common::fixture_scenario("timeout");
+    let (run_id, tool, _types, terminal) =
+        run_fixture_scenario(&mut harness, &scenario, "m1-09-tool-3").await;
+    assert_eq!(tool, scenario.events, "③ 超时中断序列");
+    assert_eq!(terminal, scenario.terminal, "③ 终态");
     let failed = harness
         .payload_of(&run_id, EventType::ToolCallFailed)
         .expect("tool.call_failed");
     if let EventPayload::ToolCallFailed(payload) = &failed.payload {
-        assert_eq!(payload.error.code, "timeout");
+        assert_eq!(
+            Some(payload.error.code.as_str()),
+            scenario.error_code.as_deref()
+        );
         assert!(
             payload.error.message.contains("abort"),
             "超时错误需体现 abort"
@@ -296,10 +297,6 @@ async fn tool_scenario_3_timeout_interrupted() {
     } else {
         panic!("payload 类型不符");
     }
-    assert_eq!(
-        harness.run_types(&run_id).last().map(String::as_str),
-        Some("run.cancelled")
-    );
     harness.shutdown().await;
 }
 
@@ -308,23 +305,11 @@ async fn tool_scenario_4_permission_allow() {
     let Some(mut harness) = MockHarness::launch_ready(&[]).await else {
         return;
     };
-    let session_id = harness.open_session().await;
-    let run_id = harness
-        .send(&session_id, "tool:permission-allow", "m1-09-tool-4")
-        .await;
-    harness
-        .drive_run(&run_id, Some(("allow", "once")), Duration::from_secs(10))
-        .await
-        .expect("终态");
-    assert_eq!(
-        harness.tool_sequence(&run_id),
-        vec![
-            "permission.requested",
-            "permission.resolved",
-            "tool.call_completed"
-        ],
-        "④ 权限允许序列（M1 预置口径）"
-    );
+    let scenario = common::fixture_scenario("permission_allow");
+    let (run_id, tool, _types, terminal) =
+        run_fixture_scenario(&mut harness, &scenario, "m1-09-tool-4").await;
+    assert_eq!(tool, scenario.events, "④ 权限允许序列（M1 预置口径）");
+    assert_eq!(terminal, scenario.terminal);
     let resolved = harness
         .payload_of(&run_id, EventType::PermissionResolved)
         .expect("permission.resolved");
@@ -333,6 +318,12 @@ async fn tool_scenario_4_permission_allow() {
     } else {
         panic!("payload 类型不符");
     }
+    // 边界验证（B3，非功能验证）：M1 预置不经核心权限网关。
+    assert!(
+        harness.permission_requests.is_empty(),
+        "④ 预置路径不得产生 permission.request 通知（B3）: {:?}",
+        harness.permission_requests
+    );
     harness.shutdown().await;
 }
 
@@ -341,23 +332,11 @@ async fn tool_scenario_5_permission_deny() {
     let Some(mut harness) = MockHarness::launch_ready(&[]).await else {
         return;
     };
-    let session_id = harness.open_session().await;
-    let run_id = harness
-        .send(&session_id, "tool:permission-deny", "m1-09-tool-5")
-        .await;
-    harness
-        .drive_run(&run_id, Some(("deny", "once")), Duration::from_secs(10))
-        .await
-        .expect("终态");
-    assert_eq!(
-        harness.tool_sequence(&run_id),
-        vec![
-            "permission.requested",
-            "permission.resolved",
-            "tool.call_failed"
-        ],
-        "⑤ 权限拒绝序列（M1 预置口径）"
-    );
+    let scenario = common::fixture_scenario("permission_deny");
+    let (run_id, tool, _types, terminal) =
+        run_fixture_scenario(&mut harness, &scenario, "m1-09-tool-5").await;
+    assert_eq!(tool, scenario.events, "⑤ 权限拒绝序列（M1 预置口径）");
+    assert_eq!(terminal, scenario.terminal);
     let resolved = harness
         .payload_of(&run_id, EventType::PermissionResolved)
         .expect("permission.resolved");
@@ -370,9 +349,18 @@ async fn tool_scenario_5_permission_deny() {
         .payload_of(&run_id, EventType::ToolCallFailed)
         .expect("tool.call_failed");
     if let EventPayload::ToolCallFailed(payload) = &failed.payload {
-        assert_eq!(payload.error.code, "denied");
+        assert_eq!(
+            Some(payload.error.code.as_str()),
+            scenario.error_code.as_deref()
+        );
     } else {
         panic!("payload 类型不符");
     }
+    // 边界验证（B3，非功能验证）：M1 预置不经核心权限网关。
+    assert!(
+        harness.permission_requests.is_empty(),
+        "⑤ 预置路径不得产生 permission.request 通知（B3）: {:?}",
+        harness.permission_requests
+    );
     harness.shutdown().await;
 }

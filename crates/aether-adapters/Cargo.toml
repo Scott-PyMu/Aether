@@ -19,6 +19,7 @@ tokio = { version = "1", features = [
     "process",
     "sync",
     "time",
+    "fs",
 ] }
 tokio-util = { version = "0.7", features = ["codec"] }
 # Framed 的 Stream/Sink 适配（已在 Cargo.lock，MIT/Apache-2.0）。
@@ -27,6 +28,26 @@ bytes = "1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2"
+# D5 进程组（Unix setsid）/ Windows Job Object（TerminateJobObject）：
+# 安全封装（MIT OR Apache-2.0，MSRV 1.77 ≤ 1.80；工作区 lint 禁止 unsafe，自写 FFI 不可行）。
+process-wrap = { version = "8.0.1", default-features = false, features = [
+    "tokio1",
+    "process-session",
+    "job-object",
+    "creation-flags",
+] }
+# D5 资源监控（5s 采样 RSS/CPU）与 PID 台账（存活 + 启动时间 + 命令行核对）。
+sysinfo = { version = "0.30.13", default-features = false }
+
+# D5 Windows 进程创建标志类型（CREATE_NEW_PROCESS_GROUP；与 process-wrap 同源版本，
+# 已在 Cargo.lock；仅类型，不引入 FFI 调用——工作区 lint 禁止 unsafe）。
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = ["Win32_System_Threading"] }
+
+# M1-10 故障注入夹具（启动即崩/进程树/不响应心跳；T5a/T5b/M2-08/M4-01 复用）。
+[[bin]]
+name = "aether-adapter-fixture"
+path = "src/bin/aether-adapter-fixture.rs"
 
 [lints]
 workspace = true

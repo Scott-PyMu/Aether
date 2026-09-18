@@ -10,6 +10,20 @@ authors.workspace = true
 
 [dependencies]
 aether-core.workspace = true
+# D4：事件经 aether-store 单写队列（M1-04 journal）落盘；补读走 4 读连接池。
+aether-store.workspace = true
+# 归一化输入（适配器事件 JSON）与严格校验（D4）。
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# D2/D4：会话 sequencer 与管线 actor 运行在核心 tokio 多线程运行时上（M1-05）。
+# 仅需 rt/sync/time（运行时框架由上层提供，同 M1-04 口径）。
+tokio = { version = "1", features = ["rt", "sync", "time"] }
+
+[dev-dependencies]
+# 集成测试用临时库文件（已在 Cargo.lock 中，MIT/Apache-2.0）。
+tempfile = "3"
+# 集成测试需要多线程运行时与 #[tokio::test] 宏。
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 
 [lints]
 workspace = true

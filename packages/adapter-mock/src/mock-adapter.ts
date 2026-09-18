@@ -4,6 +4,8 @@
  * - 正常路径：initialize / session.create / session.send（流式）/ session.interrupt /
  *   session.dispose / tools.list / permission.resolve / health.ping / shutdown；
  * - 5 类工具调用注入清单（权威定义见 `scenarios.ts`，供 M2-02/M2-10 复用）；
+ *   ④⑤ 为自包含**预置**（不经核心权限网关、不发 permission.request 通知；边界 B1，
+ *   见 `docs/M1-09-证据.md`，M2-10 在真实回环中重放）；
  * - 故障注入：half-line / bad-json / stdout-log / oversized-line（1–2MiB 非引用行）/
  *   line-over-2mib（>2MiB 断连）/ artifact-line（<1MiB 引用帧）/
  *   artifact-line-over-limit（1–2MiB 声称引用 → 契约违约）/
@@ -122,12 +124,6 @@ interface MockSession {
   activeRun?: ActiveRun;
 }
 
-interface PendingPermission {
-  requestId: string;
-  settle: (decision: { decision: "allow" | "deny"; scope: "once" | "session" } | undefined) => void;
-  interrupt: () => void;
-}
-
 function emptyUsage(): Record<string, number> {
   return { input_tokens: 0, output_tokens: 0, total_tokens: 0 };
 }
@@ -153,7 +149,6 @@ export class MockAdapter {
   > & { protocol?: string; sendHello: boolean };
 
   private readonly sessions = new Map<string, MockSession>();
-  private readonly pendingPermissions = new Map<string, PendingPermission>();
   private readonly startedAt = Date.now();
   private sessionCounter = 0;
 
@@ -397,19 +392,11 @@ export class MockAdapter {
           ],
         };
       })
-      .handle("permission.resolve", (params) => {
-        const input = params as {
-          request_id?: string;
-          decision?: "allow" | "deny";
-          scope?: "once" | "session";
-        };
-        const pending = input.request_id ? this.pendingPermissions.get(input.request_id) : undefined;
-        if (!pending || !input.decision) {
-          throw new RpcError(ERROR_CODES.INVALID_PARAMS, "未知或非法的 permission.resolve 参数");
-        }
-        this.pendingPermissions.delete(pending.requestId);
-        pending.settle({ decision: input.decision, scope: input.scope ?? "once" });
-        return { resolved: true };
+      .handle("permission.resolve", () => {
+        // 边界 B1（M1-09 证据）：M1 预置路径不产生待决权限请求——Mock 自包含产出
+        // ④⑤ 事件序列，由场景固定决策，不发送 permission.request 通知，也不依赖本方法。
+        // M2-10 真实回环（mock-only 路径）在本方法内登记/结算 pending 状态。
+        return { resolved: false, reason: "m1-preset（不走核心权限网关，见 B1）" };
       })
       .handle("health.ping", () => {
         if (this.options.injections.includes("hang")) {
@@ -436,10 +423,6 @@ export class MockAdapter {
       session.disposed = true;
       session.activeRun?.interrupt();
     }
-    for (const pending of this.pendingPermissions.values()) {
-      pending.interrupt();
-    }
-    this.pendingPermissions.clear();
     this.sessions.clear();
   }
 
@@ -600,6 +583,12 @@ export class MockAdapter {
       }
       case "permission_allow":
       case "permission_deny": {
+        // 边界 B1（M1-09 证据 / DoD6）：M1 阶段为事件序列**预置**——Mock 自包含产出
+        // permission.requested → permission.resolved → 工具终态：
+        // - 不发送 `permission.request` 通知（B3 断言其为 0）；
+        // - 不等待 `permission.resolve`（决策固定在场景定义中）；
+        // - 不经核心权限网关、不写任何存储（M1-09 链路无 DB 依赖，B3 静态断言）。
+        // M2-10 在真实回环中重放：适配器发 permission.request → 核心网关 → permission.resolve。
         const requestId = ulid();
         const requestPayload = {
           request_id: requestId,
@@ -607,41 +596,20 @@ export class MockAdapter {
           action: "write",
           target: "notes.md",
         };
-        const decisionPromise = new Promise<{ decision: "allow" | "deny"; scope: "once" | "session" } | undefined>(
-          (resolve) => {
-            this.pendingPermissions.set(requestId, {
-              requestId,
-              settle: resolve,
-              interrupt: () => resolve(undefined),
-            });
-          },
-        );
-        await this.adapter.emitPermissionRequest({ ...requestPayload });
+        const presetDecision = TOOL_CALL_SCENARIOS[scenario].decision;
         await this.emit(context, "permission.requested", buildPermissionRequested(requestPayload));
-        const decision = await Promise.race([decisionPromise, this.waitForInterrupt(run).then(() => undefined)]);
-        this.pendingPermissions.delete(requestId);
-        if (!decision) {
-          await this.emit(context, "run.cancelled", { run_id: run.runId, reason: "interrupted" });
-          return;
-        }
-        const scope = decision.scope;
-        if (decision.decision === "allow") {
-          await this.emit(
-            context,
-            "permission.resolved",
-            buildPermissionResolved(requestId, "allow", scope),
-          );
+        await this.emit(
+          context,
+          "permission.resolved",
+          buildPermissionResolved(requestId, presetDecision, "once"),
+        );
+        if (presetDecision === "allow") {
           await this.emit(
             context,
             "tool.call_completed",
             buildToolCallCompleted(toolCallId, toolName, 9),
           );
         } else {
-          await this.emit(
-            context,
-            "permission.resolved",
-            buildPermissionResolved(requestId, "deny", scope),
-          );
           await this.emit(
             context,
             "tool.call_failed",

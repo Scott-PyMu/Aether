@@ -64,6 +64,32 @@ pub enum StoreError {
 }
 
 impl StoreError {
+    /// 写事务失败是否命中 `events.id` 主键冲突（D4：`evt.id` 幂等去重，非持久化故障）。
+    ///
+    /// M1-05 管线用：命中时按「重复事件丢弃 + 计数」处理，**不**走持久化降级路径。
+    pub fn is_duplicate_event_id(&self) -> bool {
+        matches!(
+            self,
+            Self::WriteTransactionFailed {
+                code: Some(code),
+                ..
+            } if *code == rusqlite::ffi::SQLITE_CONSTRAINT_PRIMARYKEY
+        )
+    }
+
+    /// 写事务失败是否命中 `events UNIQUE(session_id, seq)` 兜底（D4：重复 seq 视为管线 bug）。
+    ///
+    /// M1-05 管线用：命中时计入诊断 **并按持久化失败路径处理**（D4 失败场景表）。
+    pub fn is_duplicate_seq(&self) -> bool {
+        matches!(
+            self,
+            Self::WriteTransactionFailed {
+                code: Some(code),
+                ..
+            } if *code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE
+        )
+    }
+
     /// 稳定错误码（命令层 / 审计 / 诊断使用；`storage_backpressure` 为 D8 约定错误码）。
     pub const fn code(&self) -> &'static str {
         match self {
@@ -355,5 +381,42 @@ mod tests {
             reason: "x".to_owned(),
         };
         assert!(logic.source().is_none());
+    }
+
+    #[test]
+    fn write_failure_classification_distinguishes_id_and_seq() {
+        let duplicate_id = StoreError::WriteTransactionFailed {
+            code: Some(rusqlite::ffi::SQLITE_CONSTRAINT_PRIMARYKEY),
+            message: "UNIQUE constraint failed: events.id".to_owned(),
+        };
+        assert!(
+            duplicate_id.is_duplicate_event_id(),
+            "主键冲突 = evt.id 去重"
+        );
+        assert!(!duplicate_id.is_duplicate_seq());
+
+        let duplicate_seq = StoreError::WriteTransactionFailed {
+            code: Some(rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE),
+            message: "UNIQUE constraint failed: events.session_id, events.seq".to_owned(),
+        };
+        assert!(duplicate_seq.is_duplicate_seq(), "UNIQUE 冲突 = seq 兜底");
+        assert!(!duplicate_seq.is_duplicate_event_id());
+
+        let disk_full = StoreError::WriteTransactionFailed {
+            code: Some(rusqlite::ffi::SQLITE_FULL),
+            message: "database or disk is full".to_owned(),
+        };
+        assert!(!disk_full.is_duplicate_event_id());
+        assert!(!disk_full.is_duplicate_seq());
+
+        let non_sqlite = StoreError::WriteTransactionFailed {
+            code: None,
+            message: "payload 序列化失败".to_owned(),
+        };
+        assert!(!non_sqlite.is_duplicate_event_id());
+        assert!(!non_sqlite.is_duplicate_seq());
+
+        assert!(!StoreError::WriteQueueClosed.is_duplicate_event_id());
+        assert!(!StoreError::WriteQueueClosed.is_duplicate_seq());
     }
 }

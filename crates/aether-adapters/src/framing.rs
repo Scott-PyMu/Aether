@@ -1,14 +1,19 @@
 //! D6 帧层：LF 分隔、单帧硬上限 2MiB、`artifact_ref` <1MiB 契约（ADR-003/ADR-004）。
 //!
-//! 与 `tokio_util::codec::LinesCodec` 同语义（LF 分隔、容忍 CRLF、解码 UTF-8），
-//! 但叠加 D6 的有界增量读取策略：
+//! **为什么自定义有界增量读取器（而非原样 `LinesCodec`）**：`LinesCodec` 会先把整行
+//! 缓冲到 `max_length` 才判定/返回，无法在「超过帧上限时立即停止缓冲」，也无法在
+//! 缓冲过程中探测 `artifact_ref` 并执行其 <1MiB 契约；若沿用 LinesCodec，2MiB 上限
+//! 之下的越界引用帧与超限普通行都会先完整入内存（反事实见 `docs/M1-09-证据.md` §2.1）。
+//! 因此本模块保留 LinesCodec 的**行语义**（LF 分隔、容忍 CRLF、UTF-8 校验），
+//! 叠加有界策略：
 //! - 行 ≤2MiB：正常缓冲解析（1–2MiB 的非引用行同样正常解析）；
 //! - 行 >2MiB（任意类型）：**不继续缓冲**，立即返回错误并由宿主断连记错；
 //! - `artifact_ref` 引用帧：本身必须 **<1MiB**（D6）；≥1MiB 仍在 2MiB 内声称
 //!   `artifact_ref` 的帧视为契约违约，按断连处理（数据体不得进入线协议）。
 //!
 //! 探测器只读取已缓冲前缀：判别键 `"type":"artifact_ref"` 必须出现在前缀内，
-//! 否则按非引用类消息处理（不阻塞正常大行）。
+//! 否则按非引用类消息处理（不阻塞正常大行）。误报/漏报边界见
+//! [`probe_artifact_ref`] 文档与 `docs/M1-09-证据.md` §2.3。
 
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -24,6 +29,10 @@ pub const MAX_FRAME_BYTES: usize = 2 * 1024 * 1024;
 pub const ARTIFACT_REF_LIMIT: usize = 1024 * 1024;
 /// 单次读取块上限：保证「>2MiB 行不继续缓冲」的硬边界
 /// （缓冲上限 = 帧上限 + 本值；不依赖操作系统管道一次可读多少）。
+///
+/// 反事实（常量级决策，证据 §2.2）：不限流时 `FramedRead` 的读缓冲随 `reserve`
+/// 翻倍，Windows 匿名管道一次 `ReadFile` 可返回整行（实测 >1.5MiB 被一次性读入），
+/// 使「超限即停」策略失效；64KiB 同时高于常见 4–64KiB 管道块，无额外往返代价。
 pub const READ_CHUNK_BYTES: usize = 64 * 1024;
 /// 附件引用行判别值（D6；行顶层 `"type"` 字段）。
 pub const ARTIFACT_REF_TYPE: &str = "artifact_ref";
@@ -282,6 +291,14 @@ impl Encoder<String> for AetherLineCodec {
 /// - 只看顶层对象（嵌套对象的同名键不命中）；
 /// - 字符串整体消费，字符串内的 `"type":"artifact_ref"` 不命中；
 /// - 前缀不完整（键/值尚未出现）→ `false`（按非引用类处置，防缓冲膨胀）。
+///
+/// **边界（常量级决策 ③，证据 §2.3）**：
+/// - 漏报：判别键出现在 >2MiB 位置的行会在被探测到之前先以 `LineTooLong` 断连
+///   （上限内则每轮增量探测，最终可命中，见 `artifact_probe_detects_discriminator_late_in_line`）；
+/// - 误报：普通 1–2MiB 行若在顶层携带 `"type":"artifact_ref"` 会被判契约违约并断连
+///   （接受该误报——内存上界仍为 2MiB，且合法引用帧按契约远小于 1MiB；
+///   见 `artifact_ref_claim_false_positive_is_memory_bounded`）；
+/// - 嵌套/字符串形态不误报（`artifact_probe_only_matches_top_level_type`）。
 pub fn probe_artifact_ref(prefix: &[u8]) -> bool {
     let mut index = 0usize;
     let mut depth: i32 = 0;
@@ -569,6 +586,132 @@ mod tests {
     }
 
     #[test]
+    fn custom_reader_matches_lines_codec_for_normal_frames() {
+        use tokio_util::codec::{Decoder as _, LinesCodec};
+
+        // 常量级决策 ①（证据 §2.1）：≤上限帧的行语义必须与 LinesCodec 一致。
+        let payload = b"{\"a\":1}\r\n{\"b\":2}\n{\"c\":3}\n";
+        let mut custom = AetherLineCodec::default();
+        let mut stock = LinesCodec::new();
+        let mut custom_buffer = BytesMut::from(&payload[..]);
+        let mut stock_buffer = BytesMut::from(&payload[..]);
+
+        let mut custom_lines: Vec<String> = Vec::new();
+        while let Some(line) = custom.decode(&mut custom_buffer).unwrap() {
+            custom_lines.push(line.text);
+        }
+        let mut stock_lines: Vec<String> = Vec::new();
+        while let Some(line) = stock.decode(&mut stock_buffer).unwrap() {
+            stock_lines.push(line);
+        }
+        assert_eq!(
+            custom_lines, stock_lines,
+            "行语义（LF/CRLF/UTF-8）必须与 LinesCodec 一致"
+        );
+    }
+
+    #[test]
+    fn stock_lines_codec_would_buffer_line_that_custom_reader_rejects() {
+        use tokio_util::codec::{Decoder as _, LinesCodec};
+
+        // 反事实（常量级决策 ①/②，证据 §2.1–2.2）：stock LinesCodec 会完整缓冲并产出
+        // >2MiB 行；自定义读取器 + 读块限流在帧上限处立即报错，缓冲上界受控。
+        let line = format!("{{\"pad\":\"{}\"}}", "x".repeat(2 * 1024 * 1024 + 4096));
+        let mut stock = LinesCodec::new();
+        let mut stock_buffer = BytesMut::from(format!("{line}\n").as_bytes());
+        assert!(
+            stock.decode(&mut stock_buffer).unwrap().is_some(),
+            "反事实：stock LinesCodec 会完整缓冲并产出 >2MiB 行"
+        );
+
+        let mut custom = AetherLineCodec::default();
+        let bytes = format!("{line}\n").into_bytes();
+        let mut buffer = BytesMut::new();
+        let mut fed = 0usize;
+        let mut error = None;
+        while fed < bytes.len() && error.is_none() {
+            let end = (fed + READ_CHUNK_BYTES).min(bytes.len());
+            buffer.extend_from_slice(&bytes[fed..end]);
+            fed = end;
+            match custom.decode(&mut buffer) {
+                Ok(None) => {}
+                Ok(Some(_)) => panic!("不得产出 >2MiB 完整行"),
+                Err(err) => error = Some(err),
+            }
+        }
+        let error = error.expect("自定义读取器必须立即报错");
+        assert!(matches!(
+            error,
+            FrameError::LineTooLong { limit } if limit == MAX_FRAME_BYTES
+        ));
+        assert!(
+            buffer.len() <= MAX_FRAME_BYTES + READ_CHUNK_BYTES,
+            "缓冲上界必须为 帧上限 + READ_CHUNK_BYTES（实际 {}）",
+            buffer.len()
+        );
+        assert!(buffer.len() < bytes.len(), "不得缓冲完整超限行");
+    }
+
+    #[test]
+    fn artifact_probe_detects_discriminator_late_in_line() {
+        // 边界 ③ 漏报侧（证据 §2.3）：判别键位于 1MiB 之后但仍在帧上限内时，
+        // 增量探测在读到键的当轮命中，不得放行。
+        let artifact_limit = 256 * 1024;
+        let max_frame = 1024 * 1024;
+        let mut codec = AetherLineCodec::new(max_frame, artifact_limit);
+        let padding = "p".repeat(512 * 1024);
+        let line = format!("{{\"pad\":\"{padding}\",\"type\":\"artifact_ref\"}}\n");
+        assert!(line.len() > artifact_limit && line.len() < max_frame);
+
+        let bytes = line.as_bytes();
+        let mut buffer = BytesMut::new();
+        let mut error = None;
+        for chunk in bytes.chunks(64 * 1024) {
+            buffer.extend_from_slice(chunk);
+            if let Err(err) = codec.decode(&mut buffer) {
+                error = Some(err);
+                break;
+            }
+        }
+        assert!(
+            matches!(error, Some(FrameError::ArtifactRefContractViolation { .. })),
+            "晚出现的判别键必须被增量探测命中: {error:?}"
+        );
+    }
+
+    #[test]
+    fn artifact_ref_claim_false_positive_is_memory_bounded() {
+        // 边界 ③ 误报侧（接受，证据 §2.3）：普通 1–2MiB 行若在顶层携带
+        // `"type":"artifact_ref"`，按契约违约断连；内存上界仍为 帧上限 + 读取块。
+        let max_frame = 1024 * 1024;
+        let artifact_limit = 256 * 1024;
+        let mut codec = AetherLineCodec::new(max_frame, artifact_limit);
+        let padding = "q".repeat(512 * 1024);
+        let line = format!("{{\"type\":\"artifact_ref\",\"pad\":\"{padding}\"}}\n");
+        let bytes = line.as_bytes();
+        let mut buffer = BytesMut::new();
+        let mut fed = 0usize;
+        let mut error = None;
+        while fed < bytes.len() && error.is_none() {
+            let end = (fed + 64 * 1024).min(bytes.len());
+            buffer.extend_from_slice(&bytes[fed..end]);
+            fed = end;
+            if let Err(err) = codec.decode(&mut buffer) {
+                error = Some(err);
+            }
+        }
+        assert!(matches!(
+            error,
+            Some(FrameError::ArtifactRefContractViolation { .. })
+        ));
+        assert!(
+            buffer.len() <= max_frame + 64 * 1024,
+            "误报路径同样受内存上界约束（实际 {}）",
+            buffer.len()
+        );
+    }
+
+    #[test]
     fn encoder_appends_lf_and_rejects_injection() {
         let mut codec = AetherLineCodec::default();
         let mut buffer = BytesMut::new();
@@ -593,6 +736,11 @@ mod tests {
         assert_eq!(MAX_FRAME_BYTES, 2 * 1024 * 1024);
         assert_eq!(ARTIFACT_REF_LIMIT, 1024 * 1024);
         assert_eq!(ARTIFACT_REF_TYPE, "artifact_ref");
+        assert_eq!(
+            READ_CHUNK_BYTES,
+            64 * 1024,
+            "读块上限为常量级决策（证据 §2.2）：缓冲上界 = 帧上限 + 本值"
+        );
     }
 
     #[test]

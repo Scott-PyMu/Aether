@@ -11,11 +11,16 @@
  *   5) Mock 吞吐基准 ≥1000 delta/s（Node 驱动编译产物实测）；
  *   6) 5 类工具调用注入清单（权威夹具 ↔ 真实 Mock 事件序列逐项对齐）；
  *   7) Mock「不响应模式」：停止响应 health/请求且不退出（脚本断言）。
+ *   边界（非功能验证，见 docs/M1-09-证据.md B1–B5）：
+ *   B3）预置 ④⑤ 零 permission.request 通知 + M1-09 链路无存储依赖（permissions 表不可达）；
+ *   B4）M1-09 基线 process.rs 不含进程生命周期关键词；当前树含关键词时必须有 M1-10 承接。
  *
  * 环境：
  *   - Bun（AETHER_BUN 或 ~/.bun/bin/bun[.exe]）用于编译 Mock 单文件；
- *   - Cargo / pnpm 经 scripts/test/lib/exec.mjs 解析。
+ *   - Cargo / pnpm 经 scripts/test/lib/exec.mjs 解析；
+ *   - B4 基线检查需要 git 历史（CI checkout 需 fetch-depth: 0；浅克隆时 SKIP）。
  */
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -96,6 +101,139 @@ record(
   run(pnpm.command, [...pnpm.prefix, "--filter", "@aether/adapter-mock", "test"]) === 0,
 );
 
+// ===== 3.5 边界静态检查（B3/B4；边界验证，不是功能验证） =====
+
+const PROCESS_BASELINE_COMMIT = process.env.AETHER_M1_09_COMMIT ?? "962de37";
+const PROCESS_LIFECYCLE_KEYWORDS = [
+  "setsid",
+  "CREATE_NEW_PROCESS_GROUP",
+  "JobObject",
+  "TerminateJobObject",
+  "台账",
+  "backoff",
+  "crash_loop",
+  "launch_token",
+];
+
+function gitOutput(args) {
+  const result = spawnSync("git", args, { cwd: repoRoot, encoding: "utf8" });
+  return result.status === 0 ? result.stdout : null;
+}
+
+/**
+ * 剥离 Rust 注释（行注释 + 可嵌套块注释），仅保留可执行代码。
+ * 边界 B4 断言的是「未实现生命周期管理」而不是「未提及」：M1-09 基线注释中
+ * 用于声明「属 M1-10 范围」的关键词（如「台账」）不应被计为违规。
+ */
+function stripRustComments(source) {
+  let result = "";
+  let blockDepth = 0;
+  for (const line of source.split(/\r?\n/)) {
+    let kept = "";
+    let index = 0;
+    while (index < line.length) {
+      if (blockDepth > 0) {
+        const open = line.indexOf("/*", index);
+        const close = line.indexOf("*/", index);
+        if (close === -1) {
+          index = line.length;
+          break;
+        }
+        if (open !== -1 && open < close) {
+          blockDepth += 1;
+          index = open + 2;
+          continue;
+        }
+        blockDepth -= 1;
+        index = close + 2;
+        continue;
+      }
+      const lineComment = line.indexOf("//", index);
+      const blockOpen = line.indexOf("/*", index);
+      if (lineComment === -1 && blockOpen === -1) {
+        kept += line.slice(index);
+        break;
+      }
+      if (lineComment !== -1 && (blockOpen === -1 || lineComment < blockOpen)) {
+        kept += line.slice(index, lineComment);
+        index = line.length;
+      } else {
+        kept += line.slice(index, blockOpen);
+        blockDepth = 1;
+        index = blockOpen + 2;
+      }
+    }
+    result += `${kept}\n`;
+  }
+  return result;
+}
+
+// B3（边界验证，不是功能验证）：M1-09 链路不得依赖存储——permissions 表在本链路不可达。
+function checkBoundaryB3NoStoreDependency() {
+  const manifest = readFileSync(
+    path.join(repoRoot, "crates", "aether-adapters", "Cargo.toml"),
+    "utf8",
+  );
+  const hits = ["aether-store", "rusqlite"].filter((name) =>
+    new RegExp(`^\\s*${name}[\\s.]`, "m").test(manifest),
+  );
+  console.log(
+    `[boundary B3] aether-adapters 依赖中的存储项 = ${JSON.stringify(hits)}（应为空 → permissions 表不可达）`,
+  );
+  return hits.length === 0;
+}
+
+// B4（边界验证，不是功能验证）：
+// - 基线断言（字面口径）：M1-09 基线提交的 process.rs **可执行代码**不含生命周期关键词
+//   （注释中声明「属 M1-10」的措辞不计入，见 stripRustComments）；
+// - 当前树演化守护：若当前 process.rs 已含关键词，则必须存在 M1-10 承接（supervisor/）。
+function checkBoundaryB4ProcessBaseline() {
+  const baseline = gitOutput([
+    "show",
+    `${PROCESS_BASELINE_COMMIT}:crates/aether-adapters/src/process.rs`,
+  ]);
+  if (baseline === null) {
+    console.log(
+      `[boundary B4] 基线提交 ${PROCESS_BASELINE_COMMIT} 不可用（浅克隆？）→ SKIP；CI 需 fetch-depth: 0`,
+    );
+    return true;
+  }
+  const baselineCode = stripRustComments(baseline);
+  const baselineHits = PROCESS_LIFECYCLE_KEYWORDS.filter((keyword) =>
+    baselineCode.includes(keyword),
+  );
+  console.log(
+    `[boundary B4] M1-09 基线 process.rs 可执行代码关键词命中 = ${JSON.stringify(baselineHits)}`,
+  );
+  if (baselineHits.length > 0) return false;
+
+  const current = readFileSync(
+    path.join(repoRoot, "crates", "aether-adapters", "src", "process.rs"),
+    "utf8",
+  );
+  const currentHits = PROCESS_LIFECYCLE_KEYWORDS.filter((keyword) =>
+    stripRustComments(current).includes(keyword),
+  );
+  const supervisorExists = existsSync(
+    path.join(repoRoot, "crates", "aether-adapters", "src", "supervisor", "mod.rs"),
+  );
+  const takeoverOk = currentHits.length === 0 || supervisorExists;
+  console.log(
+    `[boundary B4] 当前树 process.rs 可执行代码关键词命中 = ${JSON.stringify(currentHits)}；` +
+      `M1-10 承接（supervisor/mod.rs）= ${supervisorExists} → ${takeoverOk ? "OK" : "缺少承接"}`,
+  );
+  return takeoverOk;
+}
+
+record(
+  "边界验证（这是边界验证，不是功能验证）：B3 aether-adapters 无存储依赖（permissions 表不可达）",
+  checkBoundaryB3NoStoreDependency(),
+);
+record(
+  "边界验证（这是边界验证，不是功能验证）：B4 M1-09 基线 process.rs 不含生命周期关键词（当前树须有 M1-10 承接）",
+  checkBoundaryB4ProcessBaseline(),
+);
+
 // ===== 4. Node 独立驱动：DoD5 吞吐基准 + DoD6 事件序列 + 握手/dispose e2e =====
 
 async function nodeDrivenChecks() {
@@ -119,10 +257,11 @@ async function nodeDrivenChecks() {
     record("e2e 未知方法回 -32601 且连接可用", unknownOk && pong.status === "ok");
 
     // DoD6：5 类工具调用注入清单逐项对齐权威夹具
+    // ④⑤ 为 Mock 自包含预置（边界 B1/B3）：不经核心权限网关、不发 permission.request。
+    let permissionNotifyCount = 0;
     for (const scenario of fixture.scenarios) {
       const result = await client.runScenario({
         trigger: scenario.trigger,
-        decision: scenario.decision,
         interruption: scenario.interruption,
         clientMsgId: `verify-${scenario.id}`,
       });
@@ -135,15 +274,31 @@ async function nodeDrivenChecks() {
           .find((event) => event.type === "tool.call_failed");
         errorCodeMatches = failed?.payload?.error?.code === scenario.errorCode;
       }
+      let decisionMatches = true;
+      if (scenario.decision) {
+        decisionMatches = result.resolvedPayload?.decision === scenario.decision;
+      }
       const terminal = result.types.at(-1);
       console.log(
         `[e2e] ${scenario.label}：${result.toolSequence.join(" → ")}；终态=${terminal}`,
       );
       record(
-        `e2e ${scenario.label}：事件序列 == ${scenario.events.join(" → ")}${scenario.errorCode ? `（error.code=${scenario.errorCode}）` : ""}，终态=${scenario.terminal}`,
-        sequenceMatches && errorCodeMatches && terminal === scenario.terminal,
+        `e2e ${scenario.label}：事件序列 == ${scenario.events.join(" → ")}${scenario.errorCode ? `（error.code=${scenario.errorCode}）` : ""}${scenario.decision ? `（预置决策=${scenario.decision}）` : ""}，终态=${scenario.terminal}`,
+        sequenceMatches && errorCodeMatches && decisionMatches && terminal === scenario.terminal,
       );
+      if (scenario.decision) {
+        permissionNotifyCount = client.permissionRequests.length;
+      }
     }
+
+    // 边界验证（B3，非功能验证）：M1 预置 ④⑤ 不得产生 permission.request 通知。
+    console.log(
+      `[e2e] B3：预置 ④⑤ 期间 permission.request 通知数 = ${permissionNotifyCount}`,
+    );
+    record(
+      "边界 B3（非功能验证）：预置 ④⑤ 零 permission.request 通知（不经核心权限网关）",
+      permissionNotifyCount === 0,
+    );
 
     // DoD5：吞吐基准
     const bench = await client.benchmarkDeltas(5000);

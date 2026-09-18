@@ -264,19 +264,13 @@ describe("Mock 适配器：5 类工具调用注入清单（DoD6 权威序列）"
     expect(error.code).toBe("timeout");
   });
 
-  it("④ 权限 ask→允许：permission.requested → permission.resolved(allow) + tool.call_completed", async () => {
+  it("④ 权限 ask→允许：预置 permission.requested → permission.resolved(allow) + tool.call_completed", async () => {
+    // 边界验证（B3，非功能验证）：M1 预置不经核心权限网关——不发明细 permission.request、
+    // 不依赖 permission.resolve；决策固定为场景定义（见 docs/M1-09-证据.md B1）。
     const harness = new Harness();
     await harness.start();
     const sessionId = await harness.createSession();
     const runId = await harness.sendMessage(sessionId, "tool:permission-allow");
-    const requested = await harness.waitForEvent("permission.requested");
-    expect(harness.frames.some((frame) => frame.method === "permission.request")).toBe(true);
-    const requestId = (requested.params?.payload as { request_id: string }).request_id;
-    await harness.requestResult("permission.resolve", {
-      request_id: requestId,
-      decision: "allow",
-      scope: "once",
-    });
     await harness.waitForEvent("run.completed");
     expect(toolEventTypes(eventTypesBetween(harness, runId))).toEqual([
       "permission.requested",
@@ -285,20 +279,18 @@ describe("Mock 适配器：5 类工具调用注入清单（DoD6 权威序列）"
     ]);
     const resolved = harness.events().find((frame) => frame.params?.type === "permission.resolved");
     expect((resolved?.params?.payload as { decision: string }).decision).toBe("allow");
+    expect(
+      harness.frames.some((frame) => frame.method === "permission.request"),
+      "预置路径不得发送 permission.request 通知（B3）",
+    ).toBe(false);
   });
 
-  it("⑤ 权限 ask→拒绝：permission.requested → permission.resolved(deny) + tool.call_failed(denied)", async () => {
+  it("⑤ 权限 ask→拒绝：预置 permission.requested → permission.resolved(deny) + tool.call_failed(denied)", async () => {
+    // 边界验证（B3，非功能验证）：同 ④，拒绝决策由场景预置直接产出。
     const harness = new Harness();
     await harness.start();
     const sessionId = await harness.createSession();
     const runId = await harness.sendMessage(sessionId, "tool:permission-deny");
-    const requested = await harness.waitForEvent("permission.requested");
-    const requestId = (requested.params?.payload as { request_id: string }).request_id;
-    await harness.requestResult("permission.resolve", {
-      request_id: requestId,
-      decision: "deny",
-      scope: "once",
-    });
     await harness.waitForEvent("run.completed");
     expect(toolEventTypes(eventTypesBetween(harness, runId))).toEqual([
       "permission.requested",
@@ -307,6 +299,23 @@ describe("Mock 适配器：5 类工具调用注入清单（DoD6 权威序列）"
     ]);
     const failed = harness.events().find((frame) => frame.params?.type === "tool.call_failed");
     expect((failed?.params?.payload as { error: { code: string } }).error.code).toBe("denied");
+    const resolved = harness.events().find((frame) => frame.params?.type === "permission.resolved");
+    expect((resolved?.params?.payload as { decision: string }).decision).toBe("deny");
+    expect(
+      harness.frames.some((frame) => frame.method === "permission.request"),
+      "预置路径不得发送 permission.request 通知（B3）",
+    ).toBe(false);
+  });
+
+  it("permission.resolve 在 M1 预置路径下返回 resolved=false（不产生网关副作用）", async () => {
+    const harness = new Harness();
+    await harness.start();
+    const result = await harness.requestResult("permission.resolve", {
+      request_id: "does-not-exist",
+      decision: "allow",
+      scope: "once",
+    });
+    expect(result.resolved).toBe(false);
   });
 });
 

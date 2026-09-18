@@ -13,6 +13,8 @@ export class MockClient {
 
   frames = [];
   events = [];
+  /** 收到的 `permission.request` 通知（B3 边界：M1 预置 ④⑤ 应为 0 条）。 */
+  permissionRequests = [];
   invalidLines = 0;
   exitCode = null;
   exitPromise;
@@ -59,6 +61,7 @@ export class MockClient {
     }
     this.frames.push(frame);
     if (frame.method === "event") this.events.push(frame.params);
+    if (frame.method === "permission.request") this.permissionRequests.push(frame.params);
     if (frame.id !== undefined && (frame.result !== undefined || frame.error !== undefined)) {
       const pending = this.#pending.get(frame.id);
       if (pending) {
@@ -159,23 +162,10 @@ export class MockClient {
     );
   }
 
-  /** 执行一个工具调用场景（含权限决策与中断注入）。 */
-  async runScenario({ trigger, decision, interruption, clientMsgId }) {
+  /** 执行一个工具调用场景（含中断注入）；④⑤ 为 Mock 自包含预置（B1/B3）。 */
+  async runScenario({ trigger, interruption, clientMsgId }) {
     const sessionId = await this.createSession();
     const runId = await this.send(sessionId, trigger, clientMsgId);
-    if (decision) {
-      await this.waitFor(
-        () => this.runTypes(runId).includes("permission.requested"),
-        5000,
-        "permission.requested",
-      );
-      const requested = this.runEvents(runId).find((event) => event.type === "permission.requested");
-      await this.request("permission.resolve", {
-        request_id: requested.payload.request_id,
-        decision,
-        scope: "once",
-      });
-    }
     if (interruption === "tool.call_started") {
       await this.waitFor(
         () => this.runTypes(runId).includes("tool.call_started"),
@@ -191,6 +181,9 @@ export class MockClient {
       types: this.runTypes(runId),
       toolSequence: this.toolSequence(runId),
       lastEvent: this.runEvents(runId).at(-1)?.payload,
+      resolvedPayload: this.runEvents(runId).find(
+        (event) => event.type === "permission.resolved",
+      )?.payload,
     };
   }
 
