@@ -110,6 +110,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # bun --compile 需要工作区依赖链接（@aether/adapter-sdk workspace:*）。
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
