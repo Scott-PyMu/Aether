@@ -22,7 +22,7 @@ use super::ledger::{
     cmdline_hash, AdapterLedger, CleanupReport, LedgerRecord, LedgerVerdict, ProcessProbe,
     TreeKiller,
 };
-use super::resources::{ResourceMonitor, SysinfoSampler, RESOURCE_SAMPLE_INTERVAL};
+use super::resources::{ResourceConfig, ResourceMonitor, SysinfoSampler, RESOURCE_SAMPLE_INTERVAL};
 use super::state::{
     now_ms, AuditKind, AuditRecord, ResourceEvent, ResourceLimitKind, StateCore, StatusChange,
     SupervisorObserver,
@@ -215,7 +215,8 @@ impl RuntimeSupervisor {
                 fsm: StateCore::new(runtime_id),
                 restart: RestartPolicy::new(clock),
                 heartbeat: HeartbeatMonitor::new(config.heartbeat),
-                resource: ResourceMonitor::new(),
+                // M1-10 增量：测试阈值 env 钩子（未设置时严格等于 D5 默认）。
+                resource: ResourceMonitor::with_config(ResourceConfig::from_env()),
                 running: None,
                 ready_since_ms: None,
             }),

@@ -119,4 +119,19 @@ record(
   run(cargo, ["test", "-p", "aether-adapters", "--test", "m1_10_supervisor"]) === 0,
 );
 
+// ===== 6. 集成：资源告警（env 阈值 + 真实内存分配；M4-01 复用） =====
+
+record(
+  "m1_10_resources（低阈值 RSS 告警 → 告警限流 → 回落复位 → 二次告警；全程不杀，链路日志见输出）",
+  run(cargo, [
+    "test",
+    "-p",
+    "aether-adapters",
+    "--test",
+    "m1_10_resources",
+    "--",
+    "--nocapture",
+  ]) === 0,
+);
+
 process.exit(summarize("verify-m1-10", checks));

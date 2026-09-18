@@ -36,7 +36,8 @@ pub use ledger::{
     LEDGER_FILE_NAME, LEDGER_RELATIVE_PATH,
 };
 pub use resources::{
-    ResourceMonitor, ResourceObservation, ResourceSample, SysinfoSampler, RESOURCE_BREACH_SUSTAIN,
+    ResourceConfig, ResourceMonitor, ResourceObservation, ResourceSample, SysinfoSampler,
+    ENV_CPU_THRESHOLD_PCT, ENV_RSS_THRESHOLD_MB, ENV_SUSTAIN_SECS, RESOURCE_BREACH_SUSTAIN,
     RESOURCE_CPU_LIMIT_PERCENT, RESOURCE_RSS_LIMIT_BYTES, RESOURCE_SAMPLE_INTERVAL,
 };
 pub use runtime::{
