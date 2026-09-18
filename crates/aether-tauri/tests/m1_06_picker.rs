@@ -194,8 +194,8 @@ fn startup_pick_target_rejects_unknown_payload_members() {
     assert_eq!(error["code"], "unknown_field", "{error}");
     assert_eq!(error["field"], "extra", "{error}");
 
-    let value = invoke(&fixture.webview, "startup_pick_target", Value::Null)
-        .expect("无参调用应成功");
+    let value =
+        invoke(&fixture.webview, "startup_pick_target", Value::Null).expect("无参调用应成功");
     assert_eq!(value["target_dir"], Value::Null);
 }
 
