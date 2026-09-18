@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use aether_core::EventEnvelope;
@@ -193,6 +193,8 @@ pub struct AdapterConnection {
     invalid_frame_streak: Arc<AtomicU32>,
     dropped_notifications: Arc<AtomicU64>,
     recorded_errors: Arc<Mutex<Vec<String>>>,
+    /// 首次解析成功的 `hello`（含其后降级/断连场景），握手竞态兜底。
+    hello_seen: Arc<OnceLock<Hello>>,
     next_id: AtomicU64,
     reader_task: JoinHandle<()>,
     writer_task: JoinHandle<()>,
@@ -222,6 +224,7 @@ impl AdapterConnection {
         let invalid_frame_streak = Arc::new(AtomicU32::new(0));
         let dropped_notifications = Arc::new(AtomicU64::new(0));
         let recorded_errors = Arc::new(Mutex::new(Vec::new()));
+        let hello_seen = Arc::new(OnceLock::new());
 
         let reader_ctx = Arc::new(ReaderContext {
             state_tx,
@@ -232,6 +235,7 @@ impl AdapterConnection {
             invalid_frame_streak: Arc::clone(&invalid_frame_streak),
             dropped_notifications: Arc::clone(&dropped_notifications),
             recorded_errors: Arc::clone(&recorded_errors),
+            hello_seen: Arc::clone(&hello_seen),
             invalid_frame_threshold,
         });
 
@@ -252,6 +256,7 @@ impl AdapterConnection {
             invalid_frame_streak,
             dropped_notifications,
             recorded_errors,
+            hello_seen,
             next_id: AtomicU64::new(1),
             reader_task,
             writer_task,
@@ -259,6 +264,10 @@ impl AdapterConnection {
     }
 
     /// 握手：等待 `hello`（10s 超时），major 不匹配返回 `Disabled` 信息（D6/DoD4）。
+    ///
+    /// 竞态兜底（CI 三平台矩阵暴露）：reader 可能在握手方观察到 `Ready` 之前就把状态
+    /// 推进到 `Degraded`（hello 后混入无效帧）或 `Disconnected`（hello 后契约违约）——
+    /// 只要 `hello` 曾按首帧解析成功，握手即视为成功；连接健康度由调用方按状态处理。
     pub async fn handshake(&self) -> Result<Hello, DisabledInfo> {
         self.handshake_with_timeout(crate::protocol::HANDSHAKE_TIMEOUT)
             .await
@@ -272,23 +281,38 @@ impl AdapterConnection {
                 let current = state.borrow_and_update().clone();
                 match current {
                     ConnectionState::Ready(hello) => return Ok(hello),
+                    ConnectionState::Degraded { hello, .. } => return Ok(hello),
                     ConnectionState::Disconnected(reason) => {
-                        return Err(DisabledInfo::protocol_error(format!(
-                            "连接在握手完成前断开: {reason}"
-                        )))
+                        return match self.recorded_hello() {
+                            Some(hello) => Ok(hello),
+                            None => Err(DisabledInfo::protocol_error(format!(
+                                "连接在握手完成前断开: {reason}"
+                            ))),
+                        };
                     }
-                    ConnectionState::Connecting | ConnectionState::Degraded { .. } => {}
+                    ConnectionState::Connecting => {}
                 }
                 if state.changed().await.is_err() {
-                    return Err(DisabledInfo::protocol_error("连接状态通道关闭"));
+                    return match self.recorded_hello() {
+                        Some(hello) => Ok(hello),
+                        None => Err(DisabledInfo::protocol_error("连接状态通道关闭")),
+                    };
                 }
             }
         };
         match tokio::time::timeout(timeout, wait).await {
             Ok(Ok(hello)) => validate_hello(&hello).map(|()| hello),
             Ok(Err(disabled)) => Err(disabled),
-            Err(_) => Err(DisabledInfo::handshake_timeout(timeout)),
+            Err(_) => match self.recorded_hello() {
+                Some(hello) => validate_hello(&hello).map(|()| hello),
+                None => Err(DisabledInfo::handshake_timeout(timeout)),
+            },
         }
+    }
+
+    /// 首次解析成功的 `hello`（即使连接其后降级/断连也不丢失）。
+    fn recorded_hello(&self) -> Option<Hello> {
+        self.hello_seen.get().cloned()
     }
 
     /// 按 D6 方法表超时发送请求。
@@ -459,11 +483,16 @@ struct ReaderContext {
     invalid_frame_streak: Arc<AtomicU32>,
     dropped_notifications: Arc<AtomicU64>,
     recorded_errors: Arc<Mutex<Vec<String>>>,
+    hello_seen: Arc<OnceLock<Hello>>,
     invalid_frame_threshold: u32,
 }
 
 impl ReaderContext {
     fn set_state(&self, state: ConnectionState) {
+        // 首次 hello 记录：握手方可能错过 `Ready` 窗口（状态很快推进到 Degraded/断连）。
+        if let ConnectionState::Ready(hello) | ConnectionState::Degraded { hello, .. } = &state {
+            let _ = self.hello_seen.set(hello.clone());
+        }
         let _ = self.state_tx.send(state);
     }
 
@@ -872,6 +901,46 @@ mod tests {
         assert_eq!(error.status, aether_core::RuntimeStatus::Disabled);
         assert_eq!(error.status_reason.as_str(), "handshake_timeout");
         assert!(error.upgrade_hint.is_none());
+    }
+
+    #[tokio::test]
+    async fn handshake_succeeds_when_ready_degrades_before_observation() {
+        // CI 三平台矩阵（macOS 时序）暴露的竞态：hello 后紧跟无效帧，reader 可能在
+        // 握手方观察到 `Ready` 前就把状态推进到 `Degraded`；只认 `Ready` 会误报
+        // handshake_timeout（D6：stdout 混入日志不得推翻已到达的 hello）。
+        let (conn, mut peer) = connected(20);
+        peer.hello().await;
+        peer.send_line("[info] 适配器日志误入 stdout").await;
+        wait_until(|| matches!(conn.state(), ConnectionState::Degraded { .. })).await;
+
+        let hello = conn
+            .handshake_with_timeout(Duration::from_millis(500))
+            .await
+            .expect("hello 已到达，其后无效帧不得推翻握手");
+        assert_eq!(hello.runtime.name, "stub");
+        assert_eq!(hello.protocol, "1.0");
+    }
+
+    #[tokio::test]
+    async fn handshake_succeeds_when_disconnect_follows_hello() {
+        // 阈值 1：hello 后第一条无效帧即断连；hello 仍需被握手方取回（首帧契约达成）。
+        let (mut conn, mut peer) = connected(1);
+        peer.hello().await;
+        peer.send_line("not json").await;
+        let reason = conn
+            .wait_for_disconnect(Duration::from_secs(2))
+            .await
+            .expect("阈值 1 应立即断连");
+        assert!(matches!(
+            reason,
+            DisconnectReason::InvalidFrameStreak { .. }
+        ));
+
+        let hello = conn
+            .handshake_with_timeout(Duration::from_millis(500))
+            .await
+            .expect("断连发生在 hello 之后，握手应成功");
+        assert_eq!(hello.runtime.name, "stub");
     }
 
     #[tokio::test]
