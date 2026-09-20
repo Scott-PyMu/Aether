@@ -125,8 +125,13 @@ impl PathGuard {
     /// - 相对路径按工作区根拼接（工具上报相对路径的容错口径）；
     /// - 返回 canonical 目标（软链接/Junction 已解析）；
     /// - 任一逃逸/特殊路径 → [`PathViolation`]。
+    ///
+    /// 检查分层（CI 实测修正）：输入形态检查（UNC/扩展前缀、ADS、drive-relative、
+    /// NUL/控制字符）对原始 target 全量执行；组件形态检查（8.3 短名、保留设备名、
+    /// 尾随点/空格）只作用于 **canonical 目标的「工作区内相对段」**——工作区祖先路径
+    /// 可能本身含短名（如 CI 的 `RUNNER~1` 临时目录），属可信环境，不得误伤。
     pub fn resolve(&self, raw: &str) -> Result<PathBuf, PathViolation> {
-        check_textual(raw)?;
+        check_input_form(raw)?;
         let candidate = self.absolute_candidate(raw);
         let resolved = canonicalize_with_nonexistent_tail(&candidate).map_err(|error| {
             PathViolation::CanonicalizeFailed {
@@ -140,6 +145,7 @@ impl PathGuard {
                 root: self.root.clone(),
             });
         }
+        check_component_specials(&relative_tail(&self.root, &resolved))?;
         Ok(resolved)
     }
 
@@ -276,8 +282,10 @@ fn canonicalize_with_nonexistent_tail(path: &Path) -> Result<PathBuf, String> {
     }
 }
 
-/// 文本层 Windows 特殊路径拒绝（跨平台统一执行，防 Windows 特殊路径在任一侧误用）。
-fn check_textual(raw: &str) -> Result<(), PathViolation> {
+/// 输入形态检查（对原始 target 全量执行）：NUL/控制字符、UNC/扩展前缀、ADS、
+/// drive-relative。8.3/保留设备名/尾随点空格等「组件形态」检查见
+/// [`check_component_specials`]（仅作用于 canonical 目标的工作区内相对段）。
+fn check_input_form(raw: &str) -> Result<(), PathViolation> {
     if raw.is_empty() {
         return Err(PathViolation::Malformed {
             reason: "空路径".to_owned(),
@@ -304,13 +312,18 @@ fn check_textual(raw: &str) -> Result<(), PathViolation> {
         // 非盘符却含冒号：POSIX 下冒号合法，但作为工具 target 一律按 ADS 形态拒绝。
         return Err(special("ads", raw.to_owned()));
     }
+    Ok(())
+}
 
-    for component in split_components(raw) {
-        if component.is_empty() {
+/// 组件形态检查（Windows 特殊路径拒绝清单的组件级规则；跨平台统一执行）：
+/// 尾随点/空格、保留设备名（含带扩展名变体）、8.3 短名。
+fn check_component_specials(tail: &str) -> Result<(), PathViolation> {
+    for component in split_components(tail) {
+        if component.is_empty() || component == "." || component == ".." {
             continue;
         }
         let trimmed_dots = component.trim_end_matches(['.', ' ']);
-        if trimmed_dots.len() != component.len() && component != "." && component != ".." {
+        if trimmed_dots.len() != component.len() {
             return Err(special("trailing_dot_or_space", component.to_owned()));
         }
         let stem = component.split('.').next().unwrap_or(component);
@@ -322,6 +335,13 @@ fn check_textual(raw: &str) -> Result<(), PathViolation> {
         }
     }
     Ok(())
+}
+
+/// canonical 目标相对工作区根的尾段（`contains` 已保证前缀匹配；根自身 → 空串）。
+fn relative_tail(root: &Path, resolved: &Path) -> String {
+    let root_len = root.components().count();
+    let tail: PathBuf = resolved.components().skip(root_len).collect();
+    tail.to_string_lossy().to_string()
 }
 
 fn special(pattern: &'static str, detail: String) -> PathViolation {
