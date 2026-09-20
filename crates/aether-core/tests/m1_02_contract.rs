@@ -26,6 +26,10 @@ use aether_core::{
 use serde_json::{json, Value};
 
 const MIGRATION_SQL: &str = include_str!("../../../migrations/0001_init.sql");
+/// 已发布的增量迁移（ADR-004/ADR-005）：0002 为 `messages` 增加 `client_msg_id` 列
+/// 与唯一约束。结构解析仍以 0001 的 CREATE TABLE 为基，增量列在此数据驱动叠加，
+/// 保持「实体字段 ↔ 有效 schema」的契约断言不因增量迁移而失真。
+const MIGRATION_0002_SQL: &str = include_str!("../../../migrations/0002_unique_keys.sql");
 
 // ===== 附录 C DDL 静态解析（无 DB 依赖，Windows 本地可运行） =====
 
@@ -139,7 +143,37 @@ fn check_values(table: &str, column: &str) -> Vec<String> {
 }
 
 fn columns_set(table: &str) -> BTreeSet<String> {
-    table_columns(table).into_iter().collect()
+    let mut columns: BTreeSet<String> = table_columns(table).into_iter().collect();
+    columns.extend(incremental_columns(table));
+    columns
+}
+
+/// 解析 0002+ 增量迁移中的 `ALTER TABLE <t> ADD COLUMN <name> ...`（数据驱动叠加）。
+fn incremental_columns(table: &str) -> BTreeSet<String> {
+    let mut columns = BTreeSet::new();
+    let without_comments: String = MIGRATION_0002_SQL
+        .lines()
+        .map(|line| match line.find("--") {
+            Some(index) => &line[..index],
+            None => line,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    for statement in without_comments.split(';') {
+        let Some(rest) = statement.trim().strip_prefix("ALTER TABLE") else {
+            continue;
+        };
+        let mut tokens = rest.split_whitespace();
+        if tokens.next() != Some(table) {
+            continue;
+        }
+        if tokens.next() == Some("ADD") && tokens.next() == Some("COLUMN") {
+            if let Some(name) = tokens.next() {
+                columns.insert(name.to_string());
+            }
+        }
+    }
+    columns
 }
 
 fn json_object_keys(value: &Value) -> BTreeSet<String> {
@@ -956,6 +990,7 @@ fn sample_message() -> Message {
         id: MessageId::new("msg-1").unwrap(),
         session_id: SessionId::new("sess-1").unwrap(),
         run_id: Some(RunId::new("run-1").unwrap()),
+        client_msg_id: Some("01J000000000000000000000CM".to_string()),
         role: MessageRole::User,
         content: "hi".to_string(),
         content_parts: None,

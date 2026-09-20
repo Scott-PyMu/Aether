@@ -18,6 +18,7 @@ pub mod core_health;
 pub mod ipc;
 pub mod nav;
 pub mod picker;
+pub mod runtime_control;
 pub mod single_instance;
 pub mod startup;
 
@@ -127,9 +128,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// 构造命令后端（ADR-007 `health` 真实接线）。
+/// 构造命令后端（ADR-007 `health` 真实接线 + M2-01 `runtime_*` 接线）。
 ///
 /// - 启动门 Ready：打开存储（`quick_check` + 迁移）→ 事件管线 → [`core_health::CoreHealthBackend`]；
+/// - 监督器（M2-01 空注册表；M2-02 注册真实适配器）：接线 `runtime_retry`/`runtime_enable`；
+///   台账初始化失败时降级为未接线（命令回 `core_not_ready`），不影响 `health`；
 /// - 启动失败（安全模式等）：按 D3 只读语义呈现为 `persist_degraded`（`degraded_backend`），
 ///   不回退 `not_implemented`；
 /// - 启动门阻断（A4 同步盘检测）：核心不启动；业务命令由启动门返回 `startup_blocked`。
@@ -140,11 +143,28 @@ fn build_backend(
         return std::sync::Arc::new(ipc::backend::NotImplementedBackend);
     }
     let data_dir = std::path::PathBuf::from(startup.snapshot().data_dir);
-    match core_health::boot_core_health(&data_dir, tauri::async_runtime::handle().inner()) {
-        Ok(core) => std::sync::Arc::new(core),
-        Err(error) => {
-            tracing::error!(error = %error, "核心健康源启动失败：按只读降级呈现 health");
-            std::sync::Arc::new(core_health::degraded_backend(&error.to_string()))
-        }
-    }
+    let handle = tauri::async_runtime::handle().inner().clone();
+    let health: std::sync::Arc<dyn ipc::IpcBackend> =
+        match core_health::boot_core_health(&data_dir, &handle) {
+            Ok(core) => std::sync::Arc::new(core),
+            Err(error) => {
+                tracing::error!(error = %error, "核心健康源启动失败：按只读降级呈现 health");
+                std::sync::Arc::new(core_health::degraded_backend(&error.to_string()))
+            }
+        };
+    let control: Option<std::sync::Arc<dyn runtime_control::RuntimeControl>> =
+        match runtime_control::boot_empty_supervisor(None) {
+            Ok(supervisor) => Some(std::sync::Arc::new(
+                runtime_control::SupervisorControl::new(
+                    std::sync::Arc::new(supervisor),
+                    handle,
+                    runtime_control::RUNTIME_CONTROL_TIMEOUT,
+                ),
+            )),
+            Err(error) => {
+                tracing::warn!(error = %error, "监督器台账初始化失败：runtime 控制命令回 core_not_ready");
+                None
+            }
+        };
+    std::sync::Arc::new(runtime_control::RuntimeControlBackend::new(health, control))
 }

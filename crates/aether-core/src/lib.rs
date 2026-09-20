@@ -11,6 +11,7 @@ pub mod domain;
 pub mod error;
 pub mod event;
 pub mod ids;
+pub mod session_state;
 
 pub use domain::{
     LogLevel, Message, MessageRole, PermissionDecision, PermissionScope, PermissionStatus, Run,
@@ -30,6 +31,10 @@ pub use event::{
 pub use ids::{
     EventId, MessageId, PermissionRequestId, RunId, RuntimeId, SessionId, ToolCallId,
     WorkflowRunId, WorkspaceId,
+};
+pub use session_state::{
+    session_status_is_terminal, session_transition_allowed, SessionFsm, SessionStatusChange,
+    SessionTransitionError,
 };
 
 /// 核心层版本号——取自单一版本来源（工作区 `Cargo.toml`）。

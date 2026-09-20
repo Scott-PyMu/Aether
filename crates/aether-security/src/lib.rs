@@ -15,6 +15,7 @@ mod encrypted_file;
 mod error;
 mod keyring_store;
 mod manager;
+pub mod permission;
 mod redact;
 mod reference;
 mod store;
@@ -27,6 +28,12 @@ pub use keyring_store::{KeyringStore, KEYRING_SERVICE_PREFIX};
 pub use manager::{
     apply_base_env_allowlist, resolve_env, AdapterSecretPlan, SecretEnv, SecretEnvVar,
     SecurityConfig, SecurityManager, SecurityStatus, BASE_ENV_ALLOWLIST,
+};
+pub use permission::{
+    case_insensitive_platform, expand_t7_sample, ApprovalQueue, ApprovalTicket, PathGuard,
+    PathGuardError, PathViolation, PermissionResource, PolicyDecision, PolicyEngine, PolicyRequest,
+    PolicyVerdict, APPROVAL_TIMEOUT_MS, MEMORY_FILE_MAX_BYTES, MEMORY_FILE_NAMES,
+    T7_TEXTUAL_SAMPLES,
 };
 pub use redact::{RedactKind, Redactor};
 pub use reference::{

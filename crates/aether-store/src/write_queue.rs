@@ -23,6 +23,7 @@ use tokio::sync::{broadcast, mpsc, oneshot, Semaphore};
 use tokio::task::JoinHandle;
 
 use crate::error::StoreError;
+use crate::ops::{apply_command, StoreCommand, StoreOutcome};
 use crate::store::Store;
 
 /// 写队列容量（D3：`mpsc::channel(4096)`）。
@@ -143,6 +144,8 @@ pub enum BatchTrigger {
     Count,
     /// 16ms 提交窗口到期（定时触发）。
     Timer,
+    /// 批次收集期间到达领域写命令（命令优先级：先提交事件批次，再执行命令，保持 FIFO）。
+    Command,
     /// 关停 drain 触发的最后一批。
     Shutdown,
 }
@@ -201,6 +204,13 @@ enum WriteMessage {
         reply: oneshot::Sender<Result<CommitReceipt, StoreError>>,
         submitted_at_ms: i64,
     },
+    /// 领域写命令（M2-01/M2-03：消息/run/会话/权限/审计；单命令单事务）。
+    Command {
+        /// 盒装以缩小 `WriteMessage` 尺寸（clippy::large_enum_variant）。
+        command: Box<StoreCommand>,
+        reply: oneshot::Sender<Result<StoreOutcome, StoreError>>,
+        submitted_at_ms: i64,
+    },
     /// 关停 drain 标记（FIFO：此前入队的消息先提交完成）。
     Shutdown { reply: oneshot::Sender<()> },
 }
@@ -209,6 +219,8 @@ impl WriteMessage {
     fn entry_count(&self) -> usize {
         match self {
             Self::Events { events, .. } => events.len(),
+            // 命令按 1 条计（准入水位与队列容量口径统一）。
+            Self::Command { .. } => 1,
             Self::Shutdown { .. } => 0,
         }
     }
@@ -285,6 +297,39 @@ impl WriteQueue {
     /// 当前队列深度（待提交条目数，含在途批次）。
     pub fn depth(&self) -> usize {
         depth_of(&self.counters)
+    }
+
+    /// 领域写命令入队并等待执行（M2-01/M2-03；单写者串行，返回即已提交）。
+    ///
+    /// - 队列满时 await 容量（与事件 journal 共用唯一的 D8 反压例外）；
+    /// - 命令在写任务内独立事务执行：成功 = `COMMIT` 已返回；
+    /// - 与事件批次的顺序保持 FIFO（命令到达前的批次先提交）。
+    pub async fn execute(&self, command: StoreCommand) -> Result<StoreOutcome, StoreError> {
+        let (reply, reply_rx) = oneshot::channel();
+        self.counters
+            .submitted_entries
+            .fetch_add(1, Ordering::AcqRel);
+        let message = WriteMessage::Command {
+            command: Box::new(command),
+            reply,
+            submitted_at_ms: now_ms(),
+        };
+        if self.sender.send(message).await.is_err() {
+            self.counters
+                .resolved_entries
+                .fetch_add(1, Ordering::AcqRel);
+            return Err(StoreError::WriteQueueClosed);
+        }
+        review_pressure(&self.counters, &self.config, &self.alerts);
+        match reply_rx.await {
+            Ok(result) => result,
+            Err(_) => {
+                self.counters
+                    .resolved_entries
+                    .fetch_add(1, Ordering::AcqRel);
+                Err(StoreError::WriteQueueClosed)
+            }
+        }
     }
 
     /// 诊断快照。
@@ -543,20 +588,46 @@ async fn writer_loop(
     counters: Arc<QueueCounters>,
     alerts: broadcast::Sender<WriteQueueAlert>,
 ) {
+    // 上一轮批次收集期间到达的命令/关停消息（保持 FIFO，避免重排）。
+    let mut deferred: Option<WriteMessage> = None;
     loop {
         let mut batch: Vec<WriteMessage> = Vec::new();
         let mut pending_shutdown: Option<oneshot::Sender<()>> = None;
         let mut batch_entries = 0usize;
 
-        let Some(first) = receiver.recv().await else {
+        let first = match deferred.take() {
+            Some(message) => Some(message),
+            None => receiver.recv().await,
+        };
+        let Some(first) = first else {
             break;
         };
-        if let WriteMessage::Shutdown { reply } = first {
-            let _ = reply.send(());
-            break;
+        match first {
+            WriteMessage::Shutdown { reply } => {
+                let _ = reply.send(());
+                break;
+            }
+            WriteMessage::Command {
+                command,
+                reply,
+                submitted_at_ms,
+            } => {
+                // 命令独立事务立即执行（不参与事件批次，保持到达顺序）。
+                execute_command_message(
+                    &mut connection,
+                    &counters,
+                    *command,
+                    reply,
+                    submitted_at_ms,
+                );
+                review_pressure(&counters, &config, &alerts);
+                continue;
+            }
+            events @ WriteMessage::Events { .. } => {
+                batch_entries += events.entry_count();
+                batch.push(events);
+            }
         }
-        batch_entries += first.entry_count();
-        batch.push(first);
 
         let deadline = tokio::time::Instant::now() + config.flush_interval;
         let trigger = loop {
@@ -572,6 +643,11 @@ async fn writer_loop(
                     WriteMessage::Shutdown { reply } => {
                         pending_shutdown = Some(reply);
                         break BatchTrigger::Shutdown;
+                    }
+                    command @ WriteMessage::Command { .. } => {
+                        // 命令到达：先提交已收集的事件批次（FIFO），命令留待下轮。
+                        deferred = Some(command);
+                        break BatchTrigger::Command;
                     }
                 },
                 Ok(None) => break BatchTrigger::Shutdown,
@@ -654,6 +730,35 @@ async fn writer_loop(
         }
     }
     counters.pending_batch_entries.store(0, Ordering::Release);
+}
+
+/// 执行一条领域写命令并回执（单写任务内串行；成功 = `COMMIT` 已返回）。
+fn execute_command_message(
+    connection: &mut Connection,
+    counters: &QueueCounters,
+    command: StoreCommand,
+    reply: oneshot::Sender<Result<StoreOutcome, StoreError>>,
+    _submitted_at_ms: i64,
+) {
+    let started = std::time::Instant::now();
+    let outcome = apply_command(connection, &command);
+    let commit_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    counters.last_commit_ms.store(commit_ms, Ordering::Relaxed);
+    counters
+        .max_commit_ms
+        .fetch_max(commit_ms, Ordering::Relaxed);
+    match outcome {
+        Ok(outcome) => {
+            counters.committed_entries.fetch_add(1, Ordering::Relaxed);
+            counters.resolved_entries.fetch_add(1, Ordering::AcqRel);
+            let _ = reply.send(Ok(outcome));
+        }
+        Err(error) => {
+            counters.failed_entries.fetch_add(1, Ordering::AcqRel);
+            counters.resolved_entries.fetch_add(1, Ordering::AcqRel);
+            let _ = reply.send(Err(error));
+        }
+    }
 }
 
 /// 单事务写入一批事件（D4 信封 9 字段 ↔ `events` 列一一对应）。

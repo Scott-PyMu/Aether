@@ -27,9 +27,12 @@ tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
 aether-core.workspace = true
-# ADR-007：`health` 命令真实接线——持有 EventPipeline 的健康句柄与存储运行时。
+# ADR-007：`health` 命令真实数据源（EventPipeline 与存储运行时）。
 aether-control.workspace = true
 aether-store.workspace = true
+# M2-01 DoD6：`runtime_retry`/`runtime_enable` 薄适配到 M1-10 监督器（服务契约冻结于
+# docs/M1-10-证据.md §6；本层只做 DTO → 服务 → Value/IpcError 映射）。
+aether-adapters.workspace = true
 # D3/§2.2：数据目录定位（dirs::data_dir / data_local_dir）。
 dirs = "6"
 # 迁移复制校验（sha256 与 aether-store 同口径；两 crate 已在 Cargo.lock）。

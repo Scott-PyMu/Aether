@@ -324,6 +324,10 @@ pub struct Message {
     pub id: MessageId,
     pub session_id: SessionId,
     pub run_id: Option<RunId>,
+    /// 幂等键（`messages.client_msg_id`，ADR-005）：用户消息必填，系统/助手消息为 `None`；
+    /// 持久化去重由 `UNIQUE(session_id, client_msg_id)` 兜底（NULL 互不冲突）。
+    #[serde(default)]
+    pub client_msg_id: Option<String>,
     pub role: MessageRole,
     pub content: String,
     pub content_parts: Option<serde_json::Value>,

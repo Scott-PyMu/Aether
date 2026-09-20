@@ -10,8 +10,12 @@ authors.workspace = true
 
 [dependencies]
 aether-core.workspace = true
-# D4：事件经 aether-store 单写队列（M1-04 journal）落盘；补读走 4 读连接池。
+# D4：事件 journal 与补读经 aether-store 的写队列/读连接池（M1-04）。
 aether-store.workspace = true
+# M2-03：权限策略矩阵/路径校验/审批队列（纯决策层）在 aether-security；
+# 本 crate 承接持久化、审计与超时巡检（编排层）。依赖方向 core → security/store → control，
+# 无环、无反向依赖（AGENTS §2.1）。
+aether-security.workspace = true
 # 归一化输入（适配器事件 JSON）与严格校验（D4）。
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

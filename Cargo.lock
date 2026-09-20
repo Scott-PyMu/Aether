@@ -51,6 +51,7 @@ name = "aether-control"
 version = "0.1.0"
 dependencies = [
  "aether-core",
+ "aether-security",
  "aether-store",
  "serde",
  "serde_json",
@@ -103,6 +104,7 @@ dependencies = [
 name = "aether-tauri"
 version = "0.1.0"
 dependencies = [
+ "aether-adapters",
  "aether-control",
  "aether-core",
  "aether-store",

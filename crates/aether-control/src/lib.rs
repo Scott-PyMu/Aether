@@ -16,10 +16,13 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+pub mod clock;
 pub mod delta;
 pub mod error;
 pub mod journal;
+pub mod lifecycle;
 pub mod normalizer;
+pub mod permission;
 pub mod pipeline;
 pub mod sequencer;
 pub mod source;
@@ -27,12 +30,22 @@ pub mod storage_state;
 mod time;
 mod ulid;
 
+pub use clock::{Clock, ManualClock, SharedClock, SystemClock};
 pub use delta::{DeltaBuffer, DELTA_FLUSH_BYTES, DELTA_FLUSH_INTERVAL};
 pub use error::{JournalError, NormalizeError, PipelineError, SourceError};
 pub use journal::{
     JournalFuture, JournalMetrics, JournalReceipt, JournalWriter, PressureLevel, StoreJournal,
 };
+pub use lifecycle::{
+    run_is_retryable, ExecutorFuture, ExecutorOutcome, InterruptReport, LifecycleConfig,
+    LifecycleError, RunCancelToken, RunExecutor, RunRequest, SendAck, SessionManager,
+    MAX_WAITING_RUNS_PER_SESSION, RUN_STREAM_TIMEOUT_CODE, RUN_STREAM_TIMEOUT_MS, WATCHDOG_TICK,
+};
 pub use normalizer::{Normalizer, PendingEvent};
+pub use permission::{
+    path_violation_code, PermissionConfig, PermissionError, PermissionRequest,
+    PermissionResolution, PermissionService,
+};
 pub use pipeline::{
     EventPipeline, PipelineConfig, PipelineHealth, ReadbackFrame, RunInterrupt, SubmitOutcome,
     BROADCAST_CAPACITY, DEDUP_CAPACITY, MAX_WRITE_ATTEMPTS, PERSIST_RETRY_DELAY, READBACK_MAX_GAP,

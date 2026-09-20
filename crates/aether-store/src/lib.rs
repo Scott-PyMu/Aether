@@ -15,6 +15,7 @@
 
 pub mod error;
 pub mod migration;
+pub mod ops;
 pub mod pragma;
 pub mod store;
 pub mod write_queue;
@@ -24,6 +25,7 @@ pub use migration::{
     checksum, migrate, migrate_with, AppliedMigration, MigrationFile, EMBEDDED_MIGRATIONS,
     MIGRATIONS_TABLE,
 };
+pub use ops::{AuditLogRecord, PermissionRecord, SessionQuery, StoreCommand, StoreOutcome};
 pub use pragma::PragmaSnapshot;
 pub use store::{quick_check, ExportReport, IntegrityReport, Store, StoreMode, TableExport};
 pub use write_queue::{

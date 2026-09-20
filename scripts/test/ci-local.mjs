@@ -57,8 +57,16 @@ record(
   run(node, [path.join(repoRoot, "scripts", "test", "m1-09", "verify-m1-09.mjs")]),
 );
 record(
-  "verify-m1-10（监督器：状态机/退避熔断/心跳/台账三条件/终止序列/retry·enable）",
+  "verify-m1-10（适配器监督器：状态机/心跳/进程组/台账三条件/终止序列/资源告警/retry·enable）",
   run(node, [path.join(repoRoot, "scripts", "test", "m1-10", "verify-m1-10.mjs")]),
+);
+record(
+  "verify-m2-01（生命周期：状态机/run 串行/幂等重启重放/ack 快路径/120s 断流/runtime_* IPC）",
+  run(node, [path.join(repoRoot, "scripts", "test", "m2-01", "verify-m2-01.mjs")]),
+);
+record(
+  "verify-m2-03（权限网关：策略矩阵/T7 路径逃逸 100% deny+审计/300s 超时/T6 100 并发）",
+  run(node, [path.join(repoRoot, "scripts", "test", "m2-03", "verify-m2-03.mjs")]),
 );
 
 if (!quick) {
