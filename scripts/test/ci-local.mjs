@@ -53,6 +53,10 @@ record(
   run(node, [path.join(repoRoot, "scripts", "test", "m1-08", "verify-m1-08.mjs"), "--skip-e2e"]),
 );
 record(
+  "verify-m1-09（线协议/Mock：握手/流式/中断/dispose/健壮性注入/2MiB 契约/吞吐基准；需 Bun，见 CI wire-protocol-mock job）",
+  run(node, [path.join(repoRoot, "scripts", "test", "m1-09", "verify-m1-09.mjs")]),
+);
+record(
   "verify-m1-10（监督器：状态机/退避熔断/心跳/台账三条件/终止序列/retry·enable）",
   run(node, [path.join(repoRoot, "scripts", "test", "m1-10", "verify-m1-10.mjs")]),
 );

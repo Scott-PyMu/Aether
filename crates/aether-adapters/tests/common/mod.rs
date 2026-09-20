@@ -500,10 +500,23 @@ impl SupervisorObserver for RecordingObserver {
 }
 
 /// M1-10 临时目录（每个测试用例唯一，避免并发互踩）。
+///
+/// 目录名 = tag + 进程 id + 单调计数 + UNIX 纳秒 nonce。仅用 `pid-counter` 不够：
+/// OS 会回收进程 id，上一轮运行遗留的目录会被同名复用，其中的旧产物（如 pid-file）
+/// 可能被本轮当成新结果读取（Gate 1 `m1_10_termination` PID 断言 flaky 根因）。
+/// 命中已存在目录时先清空，保证调用方拿到干净目录。
 pub fn unique_temp_dir(tag: &str) -> std::path::PathBuf {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_nanos());
     let dir = std::env::temp_dir()
         .join("aether-m1-10-tests")
-        .join(format!("{tag}-{}-{}", std::process::id(), unique_counter()));
+        .join(format!(
+            "{tag}-{}-{}-{nonce}",
+            std::process::id(),
+            unique_counter()
+        ));
+    let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::create_dir_all(&dir);
     dir
 }

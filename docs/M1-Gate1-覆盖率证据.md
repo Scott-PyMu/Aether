@@ -114,3 +114,89 @@ PASS  期望=nonzero 实际=1  TS：夹具覆盖率 < 阈值时必须阻断（�
 - 复现命令：`pnpm ci:local`（全量）；或单跑覆盖率门禁
   `cargo llvm-cov --workspace --exclude aether-tauri --fail-under-lines 70` +
   `AETHER_COVERAGE_LINES=70 pnpm -r --if-present coverage`。
+
+---
+
+## 6. 复验补记（2026-09-20，Gate 1 验收评审复跑，HEAD `0ba5fa6`）
+
+| 项 | 内容 |
+|---|---|
+| 目的 | Gate 1 验收评审：原始证据（§1–§5）基于 `a0af5c6`，其后 HEAD 前进 3 个提交（含 2 个 M1-10 代码提交 `b8cb8b4`/`2dc6f5d`），在 HEAD 独立复跑批次出口门禁，闭合证据链 |
+| 代码版本 | `0ba5fa6`（工作区干净） |
+| 执行环境 | Windows x64；rustc 1.98.1（host `x86_64-pc-windows-msvc`）；cargo-llvm-cov 0.9.1；Node v24.14.1；pnpm 10.34.5 |
+| 执行命令 | ① `pnpm ci:local`（全量，未使用 `--quick`）；② 定向复跑 `cargo llvm-cov -p aether-adapters --test m1_10_termination --no-report -- --nocapture`；③ 全量复跑 `cargo llvm-cov --workspace --exclude aether-tauri --fail-under-lines 70` |
+| 判定 | **门禁在 HEAD 复跑通过**（Rust 行覆盖 88.50% / TS 各包 ≥88.6%）；首跑 1 项失败为不稳定性用例（见 §6.2），复跑即绿，不影响覆盖率达标结论 |
+
+### 6.1 `pnpm ci:local`（全量）结果：21/22 PASS
+
+fmt / clippy / check / test（排除壳层）/ version:check / typecheck / test / build / 相似度扫描 /
+npm 许可证 / cargo deny / verify-version-sync / verify-m1-02 / 03 / 04 / 05 / 07 / 06 / 08 / 10 /
+smoke-desktop 共 21 步 **PASS**；**FAIL 1 步**：`verify-coverage-gate`（详见 §6.2）。
+
+其中 TS 覆盖率（`AETHER_COVERAGE_LINES=70`，真实包）在本次运行中实测：
+
+| 包 | Lines | 判定 |
+|---|---|---|
+| `packages/protocol` | 100% | PASS |
+| `packages/adapter-sdk` | 93.43% | PASS |
+| `packages/adapter-mock` | 88.6% | PASS |
+| `apps/desktop` | 99.05% | PASS |
+
+门禁反向夹具 2 例（Rust `uncovered-crate` 阻断、TS `coverage-fail-ts` 阻断）均按预期非零退出。
+
+### 6.2 首跑失败：`m1_10_termination` 在 llvm-cov 插桩环境下偶发 PID 断言失败（不稳定性记录）
+
+- 现象：`cargo llvm-cov --workspace …` 中 `m1_10_termination` 2 个用例失败（exit 101）——
+  - `termination_sequence_platform_mechanisms_reap_whole_tree`（`tests/m1_10_termination.rs:90`）：
+    `assert_eq!(process.id(), Some(parent))`，left `Some(25572)` ≠ right `Some(25368)`；
+  - `force_kill_reaps_tree_via_job_object_or_process_group`（`tests/m1_10_termination.rs:149`）：
+    left `Some(30864)` ≠ right `Some(34008)`。
+- 同一次 `ci:local` 内**未插桩**的 verify-m1-10（同一测试文件）数分钟前全绿；随后
+  ② 定向复跑 4/4 PASS；③ 全量门禁复跑 PASS（见 §6.3）。三次复跑均未再现。
+- 定性：**flaky**——仅在高并发/插桩负载下偶发一次，与覆盖率数值无关（同运行中 TS 门禁与
+  反向夹具均正常）。已作为 Gate 1 验收记录事项登记：建议 M2-01 前排查修复
+  （方向：高负载下 Job Object/`CREATE_SUSPENDED` spawn 路径或 pid-file 读写时序），
+  修复前若批次出口门禁再遇此失败，按「定向复跑确认 + 全量重跑」处理并留痕。
+
+### 6.3 全量门禁复跑结果（PASS）
+
+命令：`cargo llvm-cov --workspace --exclude aether-tauri --fail-under-lines 70`（exit 0）
+
+```
+TOTAL   13424  1607  88.03%  |  1112  157  85.88%  |  9046  1040  88.50%  |  0  0  -
+        （Regions / Missed / Cover | Functions | Lines / Missed / Cover | Branches）
+
+Rust 行覆盖率 = 9046 行，1040 行未覆盖 = 88.50%（≥70%）
+```
+
+（较 §2 的 88.75% 略有回落，源于 `a0af5c6 → 0ba5fa6` 间新增的 M1-10 资源告警夹具/集成测试
+代码与 `docs/evidence` 归档，仍显著高于门禁阈值。）
+
+### 6.4 复验结论
+
+- **Gate 1 覆盖率条件在 HEAD `0ba5fa6` 依然成立**：Rust 88.50%、TS 每包 ≥88.6%，均 ≥70%；
+  §1–§5 原始证据与本节复验共同构成批次出口证据链；
+- 记录事项（见 §6.2）移交 M2-01 跟踪，不阻塞 Gate 1 放行。
+
+### 6.5 记录事项关闭（2026-09-20，M2-01 前）+ ci:local 批次出口补项
+
+**① §6.2 flaky 根因查明并修复（非 Job Object/`CREATE_SUSPENDED` 路径）**
+
+- 根因：测试临时目录跨运行同名复用 + 轮询接受旧 pid-file。失败轮测试进程 PID 16544 的目录
+  `termination-16544-{0,1,2}` 创建于 2026-09-17 00:03:58，`tree.txt` 最后写入 2026-09-18 23:03:45
+  ——Windows 回收测试进程 PID 且 `unique_counter()` 每轮归零，目录被复用；断言 right 值
+  25368/34008 为上一轮夹具写入的旧 parent，left 25572/30864 为本轮夹具 PID（现存文件已被
+  本轮覆盖为 left 值，闭环）。高负载/插桩只放大了读取窗口，与进程创建/终止机制无关。
+- 修复（仅测试支持层，产品代码零改动）：`unique_temp_dir` 目录名追加 UNIX 纳秒 nonce +
+  命中复用目录先清空；`spawn_tree_process` spawn 前删除残留 pid-file。
+- 验证：定向连跑 5 次 4/4 PASS；llvm-cov 插桩复跑 4/4 PASS；`pnpm ci:local` 全绿。
+  详见《M1-10-证据》§8。
+
+**② ci:local 补入 verify-m1-09 具名步骤（闭合批次出口口径）**
+
+- `scripts/test/ci-local.mjs` 新增 `verify-m1-09`（与 CI `wire-protocol-mock` job 等价入口：
+  线协议握手/流式/中断/dispose/健壮性注入/2MiB 契约/吞吐基准；需 Bun）。
+- 复验：`pnpm ci:local`（全量，含覆盖率门禁与冒烟）**23/23 PASS**，Rust 行覆盖 88.50%；
+  日志 `scripts/test/.tmp/m1-gate1/ci-local-m2-01-precheck.log`。
+- 结论：§6.2 记录事项已在 M2-01 前关闭，无需 M2-01 承接；批次出口检查项由 22 项增至 23 项
+  （§6.1 为历史运行记录，保持原口径）。

@@ -35,6 +35,9 @@ fn test_budget() -> TerminationBudget {
 async fn spawn_tree_process() -> (AdapterProcess, u32, u32, std::path::PathBuf) {
     let dir = unique_temp_dir("termination");
     let pid_file = dir.join("tree.txt");
+    // 轮询只接受本轮 spawn 夹具写出的内容：先移除任何残留 pid-file，
+    // 否则复用目录中的旧内容会在夹具写入前被读走（Gate 1 flaky 根因）。
+    let _ = std::fs::remove_file(&pid_file);
     let process = AdapterProcess::spawn(
         fixture_binary(),
         [
@@ -67,7 +70,11 @@ async fn spawn_tree_process() -> (AdapterProcess, u32, u32, std::path::PathBuf) 
                 break (parent, child);
             }
         }
-        assert!(Instant::now() < deadline, "等待 pid-file 超时");
+        assert!(
+            Instant::now() < deadline,
+            "等待 pid-file 超时：{}",
+            pid_file.display()
+        );
         tokio::time::sleep(Duration::from_millis(20)).await;
     };
     (process, parent, child, pid_file)
