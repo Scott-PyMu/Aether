@@ -22,6 +22,10 @@ use tokio::runtime::Handle;
 use tokio::sync::{broadcast, mpsc, oneshot, Semaphore};
 use tokio::task::JoinHandle;
 
+use crate::checkpoint::{
+    checkpoint_truncate_with_backoff, CheckpointConfig, CheckpointReport,
+    WAL_FORCE_CHECKPOINT_BYTES,
+};
 use crate::error::StoreError;
 use crate::ops::{apply_command, StoreCommand, StoreOutcome};
 use crate::store::Store;
@@ -38,6 +42,10 @@ pub const L1_THRESHOLD: usize = 1_024;
 pub const L2_THRESHOLD: usize = 4_096;
 /// 读连接数（D3：4 个读连接）。
 pub const READ_CONNECTION_COUNT: usize = 4;
+/// 关闭序列写队列 drain 上限（D2：3s；放弃 delta、保留控制事件）。
+pub const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
+/// 关闭序列读连接关闭等待上限（D2 硬超时口径；常量级参数，证据记录）。
+pub const SHUTDOWN_READ_CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 /// 告警广播通道容量（边沿通知，慢消费者丢旧值不影响正确性）。
 const ALERT_CHANNEL_CAPACITY: usize = 64;
 
@@ -146,6 +154,8 @@ pub enum BatchTrigger {
     Timer,
     /// 批次收集期间到达领域写命令（命令优先级：先提交事件批次，再执行命令，保持 FIFO）。
     Command,
+    /// 批次收集期间到达 checkpoint 请求（M2-06；先提交事件批次，保持 FIFO）。
+    Checkpoint,
     /// 关停 drain 触发的最后一批。
     Shutdown,
 }
@@ -211,8 +221,14 @@ enum WriteMessage {
         reply: oneshot::Sender<Result<StoreOutcome, StoreError>>,
         submitted_at_ms: i64,
     },
-    /// 关停 drain 标记（FIFO：此前入队的消息先提交完成）。
+    /// 关闭序列阶段 1（M2-06）：FIFO drain 在途消息；随后写任务在 checkpoint 待命态
+    /// 等待阶段 3 的 [`WriteMessage::Checkpoint`]（写连接保持打开）。
     Shutdown { reply: oneshot::Sender<()> },
+    /// `wal_checkpoint(TRUNCATE)` 请求（运行期强制 checkpoint 与关闭序列阶段 3 共用）。
+    Checkpoint {
+        config: CheckpointConfig,
+        reply: oneshot::Sender<CheckpointReport>,
+    },
 }
 
 impl WriteMessage {
@@ -221,7 +237,7 @@ impl WriteMessage {
             Self::Events { events, .. } => events.len(),
             // 命令按 1 条计（准入水位与队列容量口径统一）。
             Self::Command { .. } => 1,
-            Self::Shutdown { .. } => 0,
+            Self::Shutdown { .. } | Self::Checkpoint { .. } => 0,
         }
     }
 }
@@ -379,12 +395,46 @@ impl WriteQueue {
         }
         Ok(())
     }
+
+    /// 在写连接上执行 `wal_checkpoint(TRUNCATE)`（运行期强制 checkpoint 入口；M2-06）。
+    ///
+    /// 读锁未释放时按 [`CheckpointConfig`] 退避重试并返回诊断（`succeeded=false` 为
+    /// 结果数据而非调用错误，由调用方记录诊断）；写任务已退出时返回
+    /// [`StoreError::WriteQueueClosed`]。
+    pub async fn checkpoint_truncate(
+        &self,
+        config: CheckpointConfig,
+    ) -> Result<CheckpointReport, StoreError> {
+        config.validate()?;
+        let (reply, reply_rx) = oneshot::channel();
+        self.sender
+            .send(WriteMessage::Checkpoint { config, reply })
+            .await
+            .map_err(|_| StoreError::WriteQueueClosed)?;
+        reply_rx.await.map_err(|_| StoreError::WriteQueueClosed)
+    }
+}
+
+/// 读连接关闭报告（M2-06 关闭序列步骤 2 的诊断；进 shadow 日志）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReadPoolCloseReport {
+    /// 配置的读连接数。
+    pub connections: usize,
+    /// 实际拆除的读连接数。
+    pub closed: usize,
+    /// 是否未在超时内取得全部许可（存在长期占用的读操作）。
+    pub timed_out: bool,
 }
 
 /// 读连接池（D3：4 个只读连接；WAL 下读写并发）。
+///
+/// 关闭语义（M2-06）：[`ReadPool::close`] 拆除全部当前读连接（checkpoint 前置条件，
+/// 释放 WAL 读锁）；此后读取按需惰性重开只读连接（降级/退出后的诊断与备份读取仍可用，
+/// D4 降级期读语义）。
 #[derive(Clone)]
 pub struct ReadPool {
-    connections: Vec<Arc<Mutex<Connection>>>,
+    path: Arc<PathBuf>,
+    connections: Arc<Vec<Arc<Mutex<Option<Connection>>>>>,
     permits: Arc<Semaphore>,
     cursor: Arc<AtomicUsize>,
 }
@@ -393,18 +443,27 @@ impl ReadPool {
     fn open(path: &Path, size: usize) -> Result<Self, StoreError> {
         let mut connections = Vec::with_capacity(size);
         for _ in 0..size {
-            connections.push(Arc::new(Mutex::new(Store::open_read_only(path)?)));
+            connections.push(Arc::new(Mutex::new(Some(Store::open_read_only(path)?))));
         }
         Ok(Self {
-            connections,
+            path: Arc::new(path.to_path_buf()),
+            connections: Arc::new(connections),
             permits: Arc::new(Semaphore::new(size)),
             cursor: Arc::new(AtomicUsize::new(0)),
         })
     }
 
-    /// 读连接数。
+    /// 读连接数（配置值）。
     pub fn connection_count(&self) -> usize {
         self.connections.len()
+    }
+
+    /// 当前已建立的读连接数（诊断/断言；`close` 后为 0，惰性重开后 >0）。
+    pub fn open_connection_count(&self) -> usize {
+        self.connections
+            .iter()
+            .filter(|slot| slot.lock().map(|guard| guard.is_some()).unwrap_or(false))
+            .count()
     }
 
     /// 借用一个读连接执行查询（信号量限流 4 并发；阻塞查询在 blocking 线程执行）。
@@ -425,12 +484,21 @@ impl ReadPool {
             .await
             .map_err(|_| StoreError::WriteQueueClosed)?;
         let index = self.cursor.fetch_add(1, Ordering::Relaxed) % self.connections.len();
-        let connection = Arc::clone(&self.connections[index]);
+        let slot = Arc::clone(&self.connections[index]);
+        let path = Arc::clone(&self.path);
         let result = tokio::task::spawn_blocking(move || {
-            let guard = connection.lock().map_err(|_| StoreError::Internal {
+            let mut guard = slot.lock().map_err(|_| StoreError::Internal {
                 reason: "读连接互斥锁中毒".to_owned(),
             })?;
-            operation(&guard)
+            if guard.is_none() {
+                *guard = Some(Store::open_read_only(&path)?);
+            }
+            match guard.as_ref() {
+                Some(connection) => operation(connection),
+                None => Err(StoreError::Internal {
+                    reason: "读连接不可用".to_owned(),
+                }),
+            }
         })
         .await
         .map_err(|_| StoreError::Internal {
@@ -438,6 +506,52 @@ impl ReadPool {
         })?;
         drop(permit);
         result
+    }
+
+    /// 关闭全部读连接（M2-06 关闭序列步骤 2）：等待在途读操作完成后拆除连接。
+    ///
+    /// - `timeout` 内未取得全部读连接许可（存在长期占用）→ 记录 `timed_out`，
+    ///   尽力拆除当前空闲连接（退出优先，D2）；
+    /// - 返回报告供 shadow 日志记录。
+    pub async fn close(&self, timeout: Duration) -> ReadPoolCloseReport {
+        let total = self.connections.len();
+        let mut report = ReadPoolCloseReport {
+            connections: total,
+            closed: 0,
+            timed_out: false,
+        };
+        if total == 0 {
+            return report;
+        }
+        let Ok(count) = u32::try_from(total) else {
+            report.timed_out = true;
+            report.closed = self.take_idle_connections();
+            return report;
+        };
+        match tokio::time::timeout(timeout, self.permits.clone().acquire_many_owned(count)).await {
+            Ok(Ok(permits)) => {
+                report.closed = self.take_idle_connections();
+                drop(permits);
+            }
+            _ => {
+                report.timed_out = true;
+                report.closed = self.take_idle_connections();
+            }
+        }
+        report
+    }
+
+    /// 拆除当前空闲的读连接（在途读持有的连接跳过）；返回拆除数。
+    fn take_idle_connections(&self) -> usize {
+        let mut closed = 0;
+        for slot in self.connections.iter() {
+            if let Ok(mut guard) = slot.try_lock() {
+                if guard.take().is_some() {
+                    closed += 1;
+                }
+            }
+        }
+        closed
     }
 
     /// 会话事件计数（诊断/基准）。
@@ -492,6 +606,145 @@ impl ReadPool {
         let session = session_id.as_str().to_owned();
         self.with_connection(move |conn| read_events_page(conn, &session, after_seq, limit))
             .await
+    }
+}
+
+/// 关闭序列步骤（D2：`写队列 drain → 关闭全部读连接 → wal_checkpoint(TRUNCATE)
+/// → 关闭写连接 → 退出`；M2-06 收口存储侧）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShutdownStep {
+    /// 写队列 drain（D2：3s 上限；放弃未落盘 delta、保留已入队控制事件）。
+    DrainWriteQueue,
+    /// 关闭全部读连接（checkpoint 前置条件：无其他连接持有 WAL 读锁）。
+    CloseReadConnections,
+    /// `wal_checkpoint(TRUNCATE)`。
+    WalCheckpointTruncate,
+    /// 关闭写连接。
+    CloseWriteConnection,
+    /// 退出（关闭序列完成）。
+    Exit,
+}
+
+impl ShutdownStep {
+    /// D2 冻结顺序（五步）。
+    pub const D2_ORDER: [ShutdownStep; 5] = [
+        ShutdownStep::DrainWriteQueue,
+        ShutdownStep::CloseReadConnections,
+        ShutdownStep::WalCheckpointTruncate,
+        ShutdownStep::CloseWriteConnection,
+        ShutdownStep::Exit,
+    ];
+
+    /// 诊断字段值（稳定 snake_case）。
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::DrainWriteQueue => "drain_write_queue",
+            Self::CloseReadConnections => "close_read_connections",
+            Self::WalCheckpointTruncate => "wal_checkpoint_truncate",
+            Self::CloseWriteConnection => "close_write_connection",
+            Self::Exit => "exit",
+        }
+    }
+}
+
+/// shadow 日志条目（关闭序列顺序断言与诊断导出；M3-05 消费）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShutdownStepRecord {
+    /// 步骤标识。
+    pub step: ShutdownStep,
+    /// 稳定字符串码（`step.code()`）。
+    pub code: &'static str,
+    /// 步骤开始时间（Unix epoch 毫秒）。
+    pub at_ms: i64,
+    /// 步骤耗时（毫秒）。
+    pub duration_ms: u64,
+    /// 步骤诊断（不含密钥）。
+    pub detail: String,
+}
+
+/// 关闭序列配置（默认值即 D2/D3 约定；故障注入可参数化）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShutdownConfig {
+    /// 写队列 drain 上限（D2：3s）。
+    pub drain_timeout: Duration,
+    /// 关闭读连接的等待上限（在途读操作完成）。
+    pub read_close_timeout: Duration,
+    /// checkpoint 退避（D3：读锁失败 → 退避重试并记录诊断）。
+    pub checkpoint: CheckpointConfig,
+}
+
+impl Default for ShutdownConfig {
+    fn default() -> Self {
+        Self {
+            drain_timeout: SHUTDOWN_DRAIN_TIMEOUT,
+            read_close_timeout: SHUTDOWN_READ_CLOSE_TIMEOUT,
+            checkpoint: CheckpointConfig::default(),
+        }
+    }
+}
+
+impl ShutdownConfig {
+    /// 校验（超时为正值；checkpoint 配置合法）。
+    pub fn validate(&self) -> Result<(), StoreError> {
+        if self.drain_timeout.is_zero() {
+            return Err(StoreError::InvalidShutdownConfig {
+                reason: "drain_timeout 必须 >0".to_owned(),
+            });
+        }
+        if self.read_close_timeout.is_zero() {
+            return Err(StoreError::InvalidShutdownConfig {
+                reason: "read_close_timeout 必须 >0".to_owned(),
+            });
+        }
+        self.checkpoint.validate()
+    }
+}
+
+/// 关闭序列报告（含 shadow 日志；DoD1 顺序断言的唯一来源）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShutdownReport {
+    /// shadow 日志（五步顺序与每步诊断）。
+    pub steps: Vec<ShutdownStepRecord>,
+    /// 写队列是否在 drain 上限内完成。
+    pub drained: bool,
+    /// drain 是否超时（超时 = 终止写任务后以临时写连接完成 checkpoint）。
+    pub drain_timed_out: bool,
+    /// 读连接关闭报告。
+    pub read_close: ReadPoolCloseReport,
+    /// checkpoint 结果（drain 超时且临时连接失败时为 `None`）。
+    pub checkpoint: Option<CheckpointReport>,
+    /// 关闭序列整体耗时（毫秒）。
+    pub duration_ms: u64,
+}
+
+impl ShutdownReport {
+    /// 实际步骤顺序。
+    pub fn order(&self) -> Vec<ShutdownStep> {
+        self.steps.iter().map(|record| record.step).collect()
+    }
+
+    /// 步骤顺序是否与 D2 完全一致（五步）。
+    pub fn matches_d2_order(&self) -> bool {
+        self.order() == ShutdownStep::D2_ORDER.to_vec()
+    }
+
+    /// 取指定步骤记录。
+    pub fn step(&self, step: ShutdownStep) -> Option<&ShutdownStepRecord> {
+        self.steps.iter().find(|record| record.step == step)
+    }
+
+    /// shadow 日志单行摘要（诊断展示）。
+    pub fn shadow_log(&self) -> String {
+        self.steps
+            .iter()
+            .map(|record| {
+                format!(
+                    "{}[{}ms] {}",
+                    record.code, record.duration_ms, record.detail
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" → ")
     }
 }
 
@@ -559,9 +812,78 @@ impl StoreRuntime {
         &self.reads
     }
 
-    /// 关停：drain 在途队列（FIFO 关停标记）→ 等待写任务退出（M2-06 关闭序列的存储侧步骤）。
-    pub async fn shutdown(mut self) -> Result<(), StoreError> {
+    /// `-wal` 文件路径（SQLite 侧车文件命名）。
+    pub fn wal_path(&self) -> PathBuf {
+        sqlite_sidecar_path(&self.path, "-wal")
+    }
+
+    /// `-shm` 文件路径（SQLite 侧车文件命名）。
+    pub fn shm_path(&self) -> PathBuf {
+        sqlite_sidecar_path(&self.path, "-shm")
+    }
+
+    /// `-wal` 当前字节数（文件不存在 → 0）。
+    pub fn wal_size_bytes(&self) -> u64 {
+        std::fs::metadata(self.wal_path())
+            .map(|metadata| metadata.len())
+            .unwrap_or(0)
+    }
+
+    /// 运行期 checkpoint 请求（经写任务在写连接上执行；不判断阈值）。
+    pub async fn checkpoint_truncate(
+        &self,
+        config: CheckpointConfig,
+    ) -> Result<CheckpointReport, StoreError> {
+        self.queue.checkpoint_truncate(config).await
+    }
+
+    /// 运行期强制 checkpoint（D3：WAL > 阈值 → `wal_checkpoint(TRUNCATE)`）。
+    ///
+    /// WAL 未超阈值返回 `None`；超阈值返回报告（读锁失败时含退避重试诊断）。
+    pub async fn checkpoint_if_wal_exceeds(
+        &self,
+        threshold: u64,
+        config: CheckpointConfig,
+    ) -> Result<Option<CheckpointReport>, StoreError> {
+        config.validate()?;
+        if self.wal_size_bytes() <= threshold {
+            return Ok(None);
+        }
+        self.checkpoint_truncate(config).await.map(Some)
+    }
+
+    /// D3 默认运行期入口：WAL >256MB 强制 checkpoint（失败退避重试 + 诊断）。
+    pub async fn maintenance_checkpoint(&self) -> Result<Option<CheckpointReport>, StoreError> {
+        self.checkpoint_if_wal_exceeds(WAL_FORCE_CHECKPOINT_BYTES, CheckpointConfig::default())
+            .await
+    }
+
+    /// 完整关闭序列（M2-06；D2 存储侧五步，默认配置）：
+    /// drain → 关闭全部读连接 → `wal_checkpoint(TRUNCATE)` → 关闭写连接 → 退出。
+    pub async fn shutdown(self) -> Result<ShutdownReport, StoreError> {
+        self.shutdown_with(ShutdownConfig::default()).await
+    }
+
+    /// 完整关闭序列（参数化：故障注入/超时口径）。
+    ///
+    /// - 步骤 1（drain）超时：终止写任务并放弃在途写入（无成功回执），以临时写连接
+    ///   完成 checkpoint（D2「保证能退出优先」）；
+    /// - 步骤 3 checkpoint 失败（读锁/临时连接失败）：记录诊断后继续关闭（不阻断退出）；
+    /// - 返回的 [`ShutdownReport`] 携带 shadow 日志与各步诊断。
+    pub async fn shutdown_with(
+        mut self,
+        config: ShutdownConfig,
+    ) -> Result<ShutdownReport, StoreError> {
+        config.validate()?;
+        let started = std::time::Instant::now();
+        let mut steps: Vec<ShutdownStepRecord> = Vec::with_capacity(5);
+
+        // 步骤 1：写队列 drain（D2：3s 上限；放弃 delta、保留控制事件）
+        let step_started = std::time::Instant::now();
+        let depth_before = self.queue.depth();
         let (reply, reply_rx) = oneshot::channel();
+        let mut drained = false;
+        let mut drain_timed_out = false;
         if self
             .queue
             .sender
@@ -569,14 +891,143 @@ impl StoreRuntime {
             .await
             .is_ok()
         {
-            let _ = reply_rx.await;
+            match tokio::time::timeout(config.drain_timeout, reply_rx).await {
+                Ok(Ok(())) => drained = true,
+                Ok(Err(_closed)) => {}
+                Err(_elapsed) => drain_timed_out = true,
+            }
         }
+        let depth_after = self.queue.depth();
+        steps.push(step_record(
+            ShutdownStep::DrainWriteQueue,
+            step_started,
+            format!(
+                "depth {depth_before}→{depth_after}; drained={drained}; timed_out={drain_timed_out}; timeout={}ms",
+                config.drain_timeout.as_millis()
+            ),
+        ));
+
+        // 步骤 2：关闭全部读连接（checkpoint 要求无其他连接持有 WAL 读锁）
+        let step_started = std::time::Instant::now();
+        let read_close = self.reads.close(config.read_close_timeout).await;
+        steps.push(step_record(
+            ShutdownStep::CloseReadConnections,
+            step_started,
+            format!(
+                "closed={}/{}; timed_out={}",
+                read_close.closed, read_close.connections, read_close.timed_out
+            ),
+        ));
+
+        // 步骤 3：wal_checkpoint(TRUNCATE)
+        let step_started = std::time::Instant::now();
+        let wal_before = self.wal_size_bytes();
+        let (checkpoint, checkpoint_detail) = if drained {
+            match self
+                .queue
+                .checkpoint_truncate(config.checkpoint.clone())
+                .await
+            {
+                Ok(report) => {
+                    let detail = report.diagnostic_summary();
+                    (Some(report), detail)
+                }
+                Err(error) => self.checkpoint_via_temporary_connection(
+                    &config.checkpoint,
+                    format!("写任务已退出（{error}）"),
+                ),
+            }
+        } else {
+            // drain 未完成：终止写任务（放弃未落盘事件，无成功回执），临时写连接兜底。
+            if let Some(writer) = self.writer.take() {
+                writer.abort();
+                let _ = writer.await;
+            }
+            self.checkpoint_via_temporary_connection(
+                &config.checkpoint,
+                "drain 未完成：写任务已终止".to_owned(),
+            )
+        };
+        let wal_after = self.wal_size_bytes();
+        steps.push(step_record(
+            ShutdownStep::WalCheckpointTruncate,
+            step_started,
+            format!("wal_bytes {wal_before}→{wal_after}；{checkpoint_detail}"),
+        ));
+
+        // 步骤 4：关闭写连接（等待写任务退出；连接随任务结束释放）
+        let step_started = std::time::Instant::now();
+        let mut writer_error: Option<String> = None;
         if let Some(writer) = self.writer.take() {
-            writer.await.map_err(|_| StoreError::Internal {
-                reason: "写任务异常退出".to_owned(),
-            })?;
+            if writer.await.is_err() {
+                writer_error = Some("写任务已终止（drain 超时）".to_owned());
+            }
         }
-        Ok(())
+        steps.push(step_record(
+            ShutdownStep::CloseWriteConnection,
+            step_started,
+            match &writer_error {
+                Some(error) => format!("closed=true; {error}"),
+                None => "closed=true".to_owned(),
+            },
+        ));
+
+        // 步骤 5：退出
+        steps.push(step_record(
+            ShutdownStep::Exit,
+            std::time::Instant::now(),
+            "关闭序列完成".to_owned(),
+        ));
+
+        Ok(ShutdownReport {
+            steps,
+            drained,
+            drain_timed_out,
+            read_close,
+            checkpoint,
+            duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        })
+    }
+
+    /// drain 未完成/写任务已退出时的 checkpoint 兜底：临时写连接执行后立即关闭。
+    fn checkpoint_via_temporary_connection(
+        &self,
+        config: &CheckpointConfig,
+        context: String,
+    ) -> (Option<CheckpointReport>, String) {
+        match Store::open_writer_connection(&self.path) {
+            Ok(connection) => {
+                let report = checkpoint_truncate_with_backoff(&connection, config);
+                let detail = format!("{context}；临时写连接：{}", report.diagnostic_summary());
+                (Some(report), detail)
+            }
+            Err(error) => (
+                None,
+                format!("{context}；临时写连接打开失败，checkpoint 未执行：{error}"),
+            ),
+        }
+    }
+}
+
+/// SQLite 侧车文件路径（`<db>-wal` / `<db>-shm`）。
+fn sqlite_sidecar_path(path: &Path, suffix: &str) -> PathBuf {
+    let mut value = path.as_os_str().to_owned();
+    value.push(suffix);
+    PathBuf::from(value)
+}
+
+/// 构造 shadow 日志条目。
+fn step_record(
+    step: ShutdownStep,
+    started: std::time::Instant,
+    detail: String,
+) -> ShutdownStepRecord {
+    ShutdownStepRecord {
+        step,
+        code: step.code(),
+        at_ms: now_ms(),
+        duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        detail,
     }
 }
 
@@ -588,7 +1039,7 @@ async fn writer_loop(
     counters: Arc<QueueCounters>,
     alerts: broadcast::Sender<WriteQueueAlert>,
 ) {
-    // 上一轮批次收集期间到达的命令/关停消息（保持 FIFO，避免重排）。
+    // 上一轮批次收集期间到达的命令/checkpoint 消息（保持 FIFO，避免重排）。
     let mut deferred: Option<WriteMessage> = None;
     loop {
         let mut batch: Vec<WriteMessage> = Vec::new();
@@ -604,8 +1055,18 @@ async fn writer_loop(
         };
         match first {
             WriteMessage::Shutdown { reply } => {
+                // M2-06：drain 已确认 → 保持写连接打开，等待关闭序列阶段 3 的 checkpoint。
                 let _ = reply.send(());
+                let _ = await_shutdown_checkpoint(connection, &mut receiver).await;
                 break;
+            }
+            WriteMessage::Checkpoint {
+                config: checkpoint_config,
+                reply,
+            } => {
+                let report = checkpoint_truncate_with_backoff(&connection, &checkpoint_config);
+                let _ = reply.send(report);
+                continue;
             }
             WriteMessage::Command {
                 command,
@@ -643,6 +1104,11 @@ async fn writer_loop(
                     WriteMessage::Shutdown { reply } => {
                         pending_shutdown = Some(reply);
                         break BatchTrigger::Shutdown;
+                    }
+                    checkpoint @ WriteMessage::Checkpoint { .. } => {
+                        // checkpoint 到达：先提交已收集的事件批次（FIFO），checkpoint 留待下轮。
+                        deferred = Some(checkpoint);
+                        break BatchTrigger::Checkpoint;
                     }
                     command @ WriteMessage::Command { .. } => {
                         // 命令到达：先提交已收集的事件批次（FIFO），命令留待下轮。
@@ -726,10 +1192,47 @@ async fn writer_loop(
 
         if let Some(reply) = pending_shutdown.take() {
             let _ = reply.send(());
+            let _ = await_shutdown_checkpoint(connection, &mut receiver).await;
             break;
         }
     }
     counters.pending_batch_entries.store(0, Ordering::Release);
+}
+
+/// 关闭序列：drain 确认后在写连接上等待并执行 checkpoint（M2-06 / D2）。
+///
+/// 取走写连接所有权（`Connection` 为 `Send`，等待期间不跨线程共享；checkpoint 完成后
+/// 连接随函数返回释放，即 D2 步骤 4「关闭写连接」）。返回是否执行了 checkpoint：
+/// 发送端全部关闭（未收到 checkpoint）时返回 `false`，写连接随任务退出关闭。
+/// 待命期间到达的写入一律以 [`StoreError::WriteQueueClosed`] 拒绝
+/// （关停后不得再产生成功收据）。
+async fn await_shutdown_checkpoint(
+    connection: Connection,
+    receiver: &mut mpsc::Receiver<WriteMessage>,
+) -> bool {
+    loop {
+        match receiver.recv().await {
+            Some(WriteMessage::Checkpoint {
+                config: checkpoint_config,
+                reply,
+            }) => {
+                let report = checkpoint_truncate_with_backoff(&connection, &checkpoint_config);
+                let _ = reply.send(report);
+                return true;
+            }
+            Some(WriteMessage::Events { reply, .. }) => {
+                let _ = reply.send(Err(StoreError::WriteQueueClosed));
+            }
+            Some(WriteMessage::Command { reply, .. }) => {
+                let _ = reply.send(Err(StoreError::WriteQueueClosed));
+            }
+            Some(WriteMessage::Shutdown { reply }) => {
+                // 重复关停标记：幂等确认（drain 已完成）。
+                let _ = reply.send(());
+            }
+            None => return false,
+        }
+    }
 }
 
 /// 执行一条领域写命令并回执（单写任务内串行；成功 = `COMMIT` 已返回）。
@@ -1073,5 +1576,44 @@ mod tests {
             threshold: 4_096,
         };
         assert_eq!(error.code(), "storage_backpressure");
+    }
+
+    #[test]
+    fn shutdown_step_order_matches_d2() {
+        assert_eq!(
+            ShutdownStep::D2_ORDER.map(ShutdownStep::code),
+            [
+                "drain_write_queue",
+                "close_read_connections",
+                "wal_checkpoint_truncate",
+                "close_write_connection",
+                "exit",
+            ],
+            "D2 五步顺序与稳定码必须一一对应"
+        );
+        assert_eq!(ShutdownStep::D2_ORDER.len(), 5);
+    }
+
+    #[test]
+    fn shutdown_config_validation_rejects_zero_timeouts() {
+        let error = ShutdownConfig {
+            drain_timeout: Duration::ZERO,
+            ..ShutdownConfig::default()
+        }
+        .validate()
+        .expect_err("drain_timeout=0 必须拒绝");
+        assert_eq!(error.code(), "invalid_shutdown_config");
+
+        let error = ShutdownConfig {
+            read_close_timeout: Duration::ZERO,
+            ..ShutdownConfig::default()
+        }
+        .validate()
+        .expect_err("read_close_timeout=0 必须拒绝");
+        assert_eq!(error.code(), "invalid_shutdown_config");
+
+        ShutdownConfig::default()
+            .validate()
+            .expect("默认关闭序列配置必须合法");
     }
 }

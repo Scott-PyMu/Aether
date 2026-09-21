@@ -88,7 +88,7 @@ impl Store {
             }
         }
 
-        let mut conn = match Self::open_read_write(&path) {
+        let mut conn = match Self::open_writer_connection(&path) {
             Ok(conn) => conn,
             Err(error) => {
                 return Self::enter_safe_mode(&path, format!("打开写连接失败: {error}"));
@@ -110,7 +110,8 @@ impl Store {
         })
     }
 
-    fn open_read_write(path: &Path) -> Result<Connection, StoreError> {
+    /// 读写打开 + PRAGMA 全集（写连接；M2-06 关闭序列的 checkpoint 兜底同样使用）。
+    pub(crate) fn open_writer_connection(path: &Path) -> Result<Connection, StoreError> {
         let conn = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_WRITE

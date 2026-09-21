@@ -57,6 +57,10 @@ pub enum StoreError {
     EmptyWriteBatch,
     /// 写队列配置非法（容量/批量/间隔/读连接数）。
     InvalidWriteQueueConfig { reason: String },
+    /// WAL checkpoint 退避配置非法（尝试次数/退避时长；M2-06）。
+    InvalidCheckpointConfig { reason: String },
+    /// 关闭序列配置非法（drain/读连接关闭超时为 0；M2-06）。
+    InvalidShutdownConfig { reason: String },
     /// 库中事件行无法重建信封（损坏或与当前模型不兼容）。
     InvalidStoredEvent { id: String, reason: String },
     /// 内部不变量被破坏（互斥锁中毒、后台任务异常退出等）。
@@ -108,6 +112,8 @@ impl StoreError {
             Self::WriteQueueClosed => "write_queue_closed",
             Self::EmptyWriteBatch => "empty_write_batch",
             Self::InvalidWriteQueueConfig { .. } => "invalid_write_queue_config",
+            Self::InvalidCheckpointConfig { .. } => "invalid_checkpoint_config",
+            Self::InvalidShutdownConfig { .. } => "invalid_shutdown_config",
             Self::InvalidStoredEvent { .. } => "invalid_stored_event",
             Self::Internal { .. } => "internal",
         }
@@ -169,6 +175,12 @@ impl fmt::Display for StoreError {
             Self::EmptyWriteBatch => write!(f, "空写批次：至少需要 1 条事件"),
             Self::InvalidWriteQueueConfig { reason } => {
                 write!(f, "写队列配置非法: {reason}")
+            }
+            Self::InvalidCheckpointConfig { reason } => {
+                write!(f, "checkpoint 配置非法: {reason}")
+            }
+            Self::InvalidShutdownConfig { reason } => {
+                write!(f, "关闭序列配置非法: {reason}")
             }
             Self::InvalidStoredEvent { id, reason } => {
                 write!(f, "事件行无法重建信封（id={id}）: {reason}")
@@ -292,6 +304,18 @@ mod tests {
                 "配置非法",
             ),
             (
+                StoreError::InvalidCheckpointConfig {
+                    reason: "max_attempts 必须 ≥1".to_owned(),
+                },
+                "checkpoint 配置非法",
+            ),
+            (
+                StoreError::InvalidShutdownConfig {
+                    reason: "drain_timeout 必须 >0".to_owned(),
+                },
+                "关闭序列配置非法",
+            ),
+            (
                 StoreError::InvalidStoredEvent {
                     id: "evt-1".to_owned(),
                     reason: "payload 非法 JSON".to_owned(),
@@ -324,6 +348,8 @@ mod tests {
             "write_queue_closed",
             "empty_write_batch",
             "invalid_write_queue_config",
+            "invalid_checkpoint_config",
+            "invalid_shutdown_config",
             "invalid_stored_event",
             "internal",
         ];

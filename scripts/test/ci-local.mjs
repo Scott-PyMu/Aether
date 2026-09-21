@@ -80,6 +80,10 @@ record(
   "verify-m2-05（取消树与看门狗：20 会话取消风暴 ≤10s / interrupt 回 idle 可续聊 / 10s dump+强制清理）",
   run(node, [path.join(repoRoot, "scripts", "test", "m2-05", "verify-m2-05.mjs")]),
 );
+record(
+  "verify-m2-06（关闭序列五步 shadow 日志 / -wal 0 字节无残留句柄 / checkpoint 退避与运行期阈值）",
+  run(node, [path.join(repoRoot, "scripts", "test", "m2-06", "verify-m2-06.mjs")]),
+);
 
 if (!quick) {
   record("verify-coverage-gate", run(node, [path.join(repoRoot, "scripts", "test", "verify-coverage-gate.mjs")]));
