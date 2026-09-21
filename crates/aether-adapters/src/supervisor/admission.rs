@@ -38,6 +38,8 @@ pub struct RuntimeManifest {
     pub program: std::path::PathBuf,
     /// 启动参数（`--launch-token` 由监督器追加，不在 manifest 中）。
     pub args: Vec<String>,
+    /// 附加环境变量（M2-02：密钥引用/夹具注入；`--launch-token` 之外的启动配置）。
+    pub env: Vec<(String, String)>,
     /// 是否参与预热（enabled）。
     pub enabled: bool,
 }
@@ -58,6 +60,7 @@ impl RuntimeManifest {
             official: false,
             program: program.into(),
             args: Vec::new(),
+            env: Vec::new(),
             enabled: true,
         }
     }
@@ -74,6 +77,20 @@ impl RuntimeManifest {
         S: Into<String>,
     {
         self.args = args.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// 追加启动环境变量（M2-02）。
+    pub fn with_env<I, K, V>(mut self, envs: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<String>,
+        V: Into<String>,
+    {
+        self.env = envs
+            .into_iter()
+            .map(|(key, value)| (key.into(), value.into()))
+            .collect();
         self
     }
 

@@ -14,6 +14,7 @@ pub mod connection;
 pub mod framing;
 pub mod process;
 pub mod protocol;
+pub mod session_client;
 pub mod supervisor;
 
 pub use connection::{
@@ -29,6 +30,10 @@ pub use protocol::{
     code, notify, protocol_major, upgrade_hint, validate_hello, DisabledInfo, DisabledReason,
     Hello, Method, RuntimeInfo, HANDSHAKE_TIMEOUT, INVALID_FRAME_UNHEALTHY_THRESHOLD,
     PROTOCOL_MAJOR, PROTOCOL_MINOR, PROTOCOL_VERSION,
+};
+pub use session_client::{
+    AdapterSessionClient, CreatedSession, RunOutcome, SendAck, SessionClientError, ToolDefinition,
+    ADAPTER_DISCONNECTED_CODE, CLIENT_EVENT_LIMIT,
 };
 
 /// 适配器宿主版本号——取自单一版本来源（工作区 `Cargo.toml`）。

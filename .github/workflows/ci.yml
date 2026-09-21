@@ -130,12 +130,20 @@ jobs:
         shell: bash
         run: bun build packages/adapter-mock/src/main.ts --compile --outfile "$RUNNER_TEMP/aether-mock-adapter"
 
-      - name: cargo test -p aether-adapters（全量：单测 + M1-09/M1-10 集成 + 平台断言）
+      # M2-02：首个真实适配器（Claude Code）——一致性/T5a 集成测试同样要求真实
+      # 适配器进程，三平台矩阵真实执行（fake-claude 夹具为 Node 脚本，无网络/凭证）。
+      - name: 构建 Claude Code 适配器（M2-02）
+        shell: bash
+        run: bun build packages/adapter-claude-code/src/main.ts --compile --outfile "$RUNNER_TEMP/aether-claude-adapter"
+
+      - name: cargo test -p aether-adapters（全量：单测 + M1-09/M1-10/M2-02 集成 + 平台断言）
         shell: bash
         env:
           # Windows 上 bun --compile 产物自动追加 .exe。
           AETHER_MOCK_ADAPTER: ${{ runner.temp }}/aether-mock-adapter${{ runner.os == 'Windows' && '.exe' || '' }}
           AETHER_REQUIRE_MOCK_ADAPTER: "1"
+          AETHER_CLAUDE_ADAPTER: ${{ runner.temp }}/aether-claude-adapter${{ runner.os == 'Windows' && '.exe' || '' }}
+          AETHER_REQUIRE_CLAUDE_ADAPTER: "1"
         run: |
           set -o pipefail
           cargo test -p aether-adapters --no-fail-fast 2>&1 | tee adapters-test.log

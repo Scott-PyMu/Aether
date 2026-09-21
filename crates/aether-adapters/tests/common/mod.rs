@@ -544,3 +544,131 @@ where
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
+
+// ===== M2-02：Claude Code 适配器集成测试支持（fake-claude CLI 夹具）=====
+
+use aether_adapters::session_client::AdapterSessionClient;
+use std::ffi::OsString;
+use std::path::Path;
+use std::sync::Arc;
+
+/// Claude Code 适配器（Bun 编译产物）路径；未设置时跳过（`AETHER_REQUIRE_CLAUDE_ADAPTER=1` 强制）。
+pub fn claude_adapter_binary() -> Option<PathBuf> {
+    match std::env::var_os("AETHER_CLAUDE_ADAPTER") {
+        Some(path) => Some(PathBuf::from(path)),
+        None => {
+            if std::env::var("AETHER_REQUIRE_CLAUDE_ADAPTER").as_deref() == Ok("1") {
+                panic!("AETHER_REQUIRE_CLAUDE_ADAPTER=1 但 AETHER_CLAUDE_ADAPTER 未设置");
+            }
+            eprintln!(
+                "SKIP：AETHER_CLAUDE_ADAPTER 未设置（运行 pnpm verify:m2-02 构建 Claude 适配器后执行）"
+            );
+            None
+        }
+    }
+}
+
+/// fake-claude CLI 夹具路径（仓库内固定，Node 脚本）。
+pub fn fake_claude_cli() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/test/m2-02/fake-claude/cli.mjs")
+}
+
+/// Node 可执行文件（fake-claude 运行宿主；`AETHER_NODE_BIN` 可覆盖）。
+pub fn node_binary() -> String {
+    std::env::var("AETHER_NODE_BIN").unwrap_or_else(|_| "node".to_owned())
+}
+
+/// M2-02 集成 harness：真实 Claude 适配器进程 + 会话客户端 + fake-claude 夹具。
+pub struct ClaudeHarness {
+    pub process: AdapterProcess,
+    pub client: AdapterSessionClient,
+    /// fake-claude 会话存储目录（Mode R 跨进程恢复）。
+    pub home: PathBuf,
+    /// CLI 工作目录。
+    pub workspace: PathBuf,
+    /// fake-claude 进程 pid 记录文件（进程树回收断言）。
+    pub pid_file: PathBuf,
+}
+
+impl ClaudeHarness {
+    /// 启动适配器（附加 `--claude-arg`/其它参数由 `extra_args` 传入），完成握手。
+    pub async fn launch(extra_args: &[&str]) -> Option<Self> {
+        let home = unique_temp_dir("m2-02-claude-home");
+        Self::launch_with_home(home, extra_args).await
+    }
+
+    /// 以指定 `FAKE_CLAUDE_HOME` 启动适配器（Mode R 跨适配器进程恢复用例）。
+    pub async fn launch_with_home(home: PathBuf, extra_args: &[&str]) -> Option<Self> {
+        let path = claude_adapter_binary()?;
+        let workspace = unique_temp_dir("m2-02-claude-ws");
+        let pid_file = home.join("pids.txt");
+        let fake = fake_claude_cli();
+        if !fake.is_file() {
+            panic!("fake-claude 夹具缺失：{}", fake.display());
+        }
+        let mut args: Vec<String> = vec![
+            "--claude-bin".to_owned(),
+            node_binary(),
+            "--claude-arg".to_owned(),
+            fake.to_string_lossy().into_owned(),
+            "--workspace".to_owned(),
+            workspace.to_string_lossy().into_owned(),
+            "--tools".to_owned(),
+            "none".to_owned(),
+        ];
+        args.extend(extra_args.iter().map(|arg| (*arg).to_owned()));
+        let envs: Vec<(OsString, OsString)> = vec![
+            (
+                OsString::from("FAKE_CLAUDE_HOME"),
+                home.as_os_str().to_os_string(),
+            ),
+            (
+                OsString::from("FAKE_CLAUDE_PID_FILE"),
+                pid_file.as_os_str().to_os_string(),
+            ),
+        ];
+        let mut process = AdapterProcess::spawn_with_env(&path, args, envs)
+            .await
+            .expect("启动 Claude 适配器进程");
+        let connection = process.connect().expect("连接适配器 stdio");
+        let hello = connection
+            .handshake()
+            .await
+            .expect("hello 必须在 10s 内到达且 major 兼容");
+        assert_eq!(hello.protocol, "1.0");
+        assert_eq!(hello.runtime.name, "claude-code");
+        assert!(hello.runtime.has_capability("session.send"));
+        let client = AdapterSessionClient::new(Arc::new(connection));
+        Some(Self {
+            process,
+            client,
+            home,
+            workspace,
+            pid_file,
+        })
+    }
+
+    /// `fake-claude` 最近一次启动的 pid（进程树回收断言）。
+    pub fn last_fake_pid(&self) -> Option<u32> {
+        let text = std::fs::read_to_string(&self.pid_file).ok()?;
+        text.lines()
+            .rev()
+            .find_map(|line| line.trim().parse::<u32>().ok())
+    }
+
+    /// 等待 run 终态（含断连）。
+    pub async fn wait_outcome(
+        &self,
+        run_id: &str,
+        timeout: Duration,
+    ) -> Option<aether_adapters::session_client::RunOutcome> {
+        self.client.wait_run_outcome(run_id, timeout).await
+    }
+
+    /// 结束适配器进程（优雅 shutdown 失败则强杀）。
+    pub async fn shutdown(&mut self) {
+        let _ = self.client.shutdown().await;
+        let _ = self.process.wait_timeout(Duration::from_secs(5)).await;
+        let _ = self.process.kill().await;
+    }
+}

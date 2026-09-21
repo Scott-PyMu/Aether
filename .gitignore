@@ -23,6 +23,9 @@ Thumbs.db
 # 本地验证临时目录
 scripts/test/.tmp/
 
+# 本地测试凭证文件（M1-11/M2-02；严禁入库，AGENTS §2.9）
+claud_test_env.txt
+
 # 发布产物（安装器收集目录）
 dist-out/
 

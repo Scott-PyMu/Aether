@@ -1,0 +1,22 @@
+{
+  "name": "@aether/adapter-claude-code",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Aether Claude Code 适配器（Bun 单文件）：createSession/sendMessage（流式）/tools.list/permission/dispose（M2-02）",
+  "scripts": {
+    "test": "vitest run",
+    "coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "build:bun": "bun build src/main.ts --compile --outfile dist/aether-claude-adapter"
+  },
+  "dependencies": {
+    "@aether/adapter-sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.2",
+    "@vitest/coverage-v8": "2.1.9",
+    "typescript": "5.9.3",
+    "vitest": "2.1.9"
+  }
+}

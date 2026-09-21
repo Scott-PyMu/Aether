@@ -254,6 +254,19 @@ impl RuntimeSupervisor {
             .and_then(|running| running.process.id())
     }
 
+    /// 当前运行中适配器的线协议连接（M2-02：核心会话客户端据此驱动 D6 会话方法）。
+    ///
+    /// 返回 `None` 表示无运行进程（`cold`/`disabled`/启动中/已崩溃）；
+    /// 连接随重启更换，调用方须在每次 `start`/`restart` 成功后重新获取。
+    pub async fn connection(&self) -> Option<Arc<AdapterConnection>> {
+        self.state
+            .lock()
+            .await
+            .running
+            .as_ref()
+            .map(|running| Arc::clone(&running.connection))
+    }
+
     /// 非官方 manifest：拒绝加载 → `disabled + untrusted` + 审计（评审 #1）。
     pub async fn reject_untrusted(&self, detail: String) -> StartOutcome {
         let mut state = self.state.lock().await;
@@ -303,17 +316,30 @@ impl RuntimeSupervisor {
         // spawn：D5 `--launch-token` 注入 + 进程组/Job Object（process.rs）。
         let mut args = self.spec.manifest.args.clone();
         args.push(format!("--launch-token={}", self.spec.launch_token));
-        let mut process = match AdapterProcess::spawn(&self.spec.manifest.program, args).await {
-            Ok(process) => process,
-            Err(error) => {
-                return self.fail_start_locked(
-                    &mut state,
-                    DisabledReason::StartFailed,
-                    format!("spawn 失败：{error}"),
-                    Vec::new(),
+        let envs: Vec<(std::ffi::OsString, std::ffi::OsString)> = self
+            .spec
+            .manifest
+            .env
+            .iter()
+            .map(|(key, value)| {
+                (
+                    std::ffi::OsString::from(key),
+                    std::ffi::OsString::from(value),
                 )
-            }
-        };
+            })
+            .collect();
+        let mut process =
+            match AdapterProcess::spawn_with_env(&self.spec.manifest.program, args, envs).await {
+                Ok(process) => process,
+                Err(error) => {
+                    return self.fail_start_locked(
+                        &mut state,
+                        DisabledReason::StartFailed,
+                        format!("spawn 失败：{error}"),
+                        Vec::new(),
+                    )
+                }
+            };
 
         // 台账登记（pid + OS 启动时间 + 令牌；三条件核对供下次启动清理）。
         if let Some(pid) = process.id() {

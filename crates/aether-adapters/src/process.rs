@@ -15,7 +15,7 @@
 //! - 禁止裸 kill 单个 PID（AGENTS §6）：Unix 一律按进程组发信号。
 
 use std::collections::VecDeque;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -81,9 +81,30 @@ impl AdapterProcess {
         I: IntoIterator<Item = A>,
         A: AsRef<OsStr>,
     {
-        let mut wrap = TokioCommandWrap::with_new(program, |command| {
+        Self::spawn_with_env(program, args, std::iter::empty::<(OsString, OsString)>()).await
+    }
+
+    /// 启动适配器进程并注入附加环境变量（测试夹具；D10 密钥注入路径预留）。
+    pub async fn spawn_with_env<S, I, A, K, V>(
+        program: S,
+        args: I,
+        envs: K,
+    ) -> Result<Self, ProcessError>
+    where
+        S: AsRef<OsStr>,
+        I: IntoIterator<Item = A>,
+        A: AsRef<OsStr>,
+        K: IntoIterator<Item = (V, V)>,
+        V: AsRef<OsStr>,
+    {
+        let envs: Vec<(OsString, OsString)> = envs
+            .into_iter()
+            .map(|(key, value)| (key.as_ref().to_os_string(), value.as_ref().to_os_string()))
+            .collect();
+        let mut wrap = TokioCommandWrap::with_new(program, move |command| {
             command
                 .args(args)
+                .envs(envs.iter().map(|(key, value)| (key, value)))
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())

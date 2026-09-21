@@ -65,6 +65,10 @@ record(
   run(node, [path.join(repoRoot, "scripts", "test", "m2-01", "verify-m2-01.mjs")]),
 );
 record(
+  "verify-m2-02（首个真实适配器 Claude Code：一致性/工具事件/T5a 30s Ready+Mode R 重放；需 Bun）",
+  run(node, [path.join(repoRoot, "scripts", "test", "m2-02", "verify-m2-02.mjs")]),
+);
+record(
   "verify-m2-03（权限网关：策略矩阵/T7 路径逃逸 100% deny+审计/300s 超时/T6 100 并发）",
   run(node, [path.join(repoRoot, "scripts", "test", "m2-03", "verify-m2-03.mjs")]),
 );

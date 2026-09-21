@@ -19,7 +19,7 @@ use aether_core::EventEnvelope;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch, Mutex as AsyncMutex};
 use tokio::task::JoinHandle;
 use tokio_util::codec::{FramedRead, FramedWrite};
 
@@ -187,7 +187,8 @@ type PendingMap = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, RpcError>
 pub struct AdapterConnection {
     outbound: mpsc::Sender<Outbound>,
     pending: PendingMap,
-    notifications: mpsc::Receiver<AdapterNotification>,
+    /// 通知队列（M2-02：`&self` 取用——连接以 `Arc` 共享给会话客户端）。
+    notifications: AsyncMutex<mpsc::Receiver<AdapterNotification>>,
     state: watch::Receiver<ConnectionState>,
     invalid_frames_total: Arc<AtomicU64>,
     invalid_frame_streak: Arc<AtomicU32>,
@@ -250,7 +251,7 @@ impl AdapterConnection {
         Self {
             outbound,
             pending,
-            notifications,
+            notifications: AsyncMutex::new(notifications),
             state,
             invalid_frames_total,
             invalid_frame_streak,
@@ -399,13 +400,16 @@ impl AdapterConnection {
     }
 
     /// 取下一条通知（无通知且连接关闭时返回 `None`）。
-    pub async fn next_notification(&mut self) -> Option<AdapterNotification> {
-        self.notifications.recv().await
+    ///
+    /// `&self`（M2-02）：连接以 `Arc` 共享时仍可消费通知；队列由异步互斥保护。
+    pub async fn next_notification(&self) -> Option<AdapterNotification> {
+        self.notifications.lock().await.recv().await
     }
 
-    /// 非阻塞取通知。
-    pub fn try_next_notification(&mut self) -> Option<AdapterNotification> {
-        self.notifications.try_recv().ok()
+    /// 非阻塞取通知（`&self`；队列被占用时返回 `None`）。
+    pub fn try_next_notification(&self) -> Option<AdapterNotification> {
+        let mut receiver = self.notifications.try_lock().ok()?;
+        receiver.try_recv().ok()
     }
 
     /// 当前状态快照。
@@ -442,7 +446,7 @@ impl AdapterConnection {
     }
 
     /// 等待进入 Disconnected 状态（测试/监督器用）。
-    pub async fn wait_for_disconnect(&mut self, timeout: Duration) -> Option<DisconnectReason> {
+    pub async fn wait_for_disconnect(&self, timeout: Duration) -> Option<DisconnectReason> {
         let mut state = self.state.clone();
         let wait = async {
             loop {
@@ -924,7 +928,7 @@ mod tests {
     #[tokio::test]
     async fn handshake_succeeds_when_disconnect_follows_hello() {
         // 阈值 1：hello 后第一条无效帧即断连；hello 仍需被握手方取回（首帧契约达成）。
-        let (mut conn, mut peer) = connected(1);
+        let (conn, mut peer) = connected(1);
         peer.hello().await;
         peer.send_line("not json").await;
         let reason = conn
@@ -965,7 +969,7 @@ mod tests {
 
     #[tokio::test]
     async fn first_frame_not_hello_is_protocol_violation() {
-        let (mut conn, mut peer) = connected(20);
+        let (conn, mut peer) = connected(20);
         peer.send_value(json!({
             "jsonrpc": "2.0",
             "method": "log",
@@ -986,7 +990,7 @@ mod tests {
 
     #[tokio::test]
     async fn twenty_consecutive_invalid_frames_mark_unhealthy() {
-        let (mut conn, mut peer) = connected(20);
+        let (conn, mut peer) = connected(20);
         peer.hello().await;
         conn.handshake_with_timeout(Duration::from_secs(2))
             .await
@@ -1114,7 +1118,7 @@ mod tests {
     #[tokio::test]
     async fn non_artifact_line_between_1_and_2_mib_parses_and_connection_survives() {
         // DoD3：1–2MiB 非引用行正常解析（不再按大行拒绝）。
-        let (mut conn, mut peer) = connected(20);
+        let (conn, mut peer) = connected(20);
         peer.hello().await;
         conn.handshake_with_timeout(Duration::from_secs(2))
             .await
@@ -1148,7 +1152,7 @@ mod tests {
 
     #[tokio::test]
     async fn artifact_ref_under_1mib_parses_and_connection_survives() {
-        let (mut conn, mut peer) = connected(20);
+        let (conn, mut peer) = connected(20);
         peer.hello().await;
         conn.handshake_with_timeout(Duration::from_secs(2))
             .await
@@ -1175,7 +1179,7 @@ mod tests {
 
     #[tokio::test]
     async fn artifact_ref_over_1mib_disconnects_with_contract_violation() {
-        let (mut conn, mut peer) = connected(20);
+        let (conn, mut peer) = connected(20);
         peer.hello().await;
         conn.handshake_with_timeout(Duration::from_secs(2))
             .await
@@ -1213,7 +1217,7 @@ mod tests {
 
     #[tokio::test]
     async fn line_over_2mib_disconnects_with_limit_reason() {
-        let (mut conn, mut peer) = connected(20);
+        let (conn, mut peer) = connected(20);
         peer.hello().await;
         conn.handshake_with_timeout(Duration::from_secs(2))
             .await
@@ -1241,7 +1245,7 @@ mod tests {
 
     #[tokio::test]
     async fn half_line_stream_close_reports_incomplete_bytes() {
-        let (mut conn, mut peer) = connected(20);
+        let (conn, mut peer) = connected(20);
         peer.hello().await;
         conn.handshake_with_timeout(Duration::from_secs(2))
             .await
@@ -1268,7 +1272,7 @@ mod tests {
 
     #[tokio::test]
     async fn event_notification_is_validated_and_forwarded() {
-        let (mut conn, mut peer) = connected(20);
+        let (conn, mut peer) = connected(20);
         peer.hello().await;
         conn.handshake_with_timeout(Duration::from_secs(2))
             .await
@@ -1324,7 +1328,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_jsonrpc_envelope_members_are_ignored() {
         // D6：JSON-RPC 外层未知成员一律忽略（hello / 通知 / 响应三路径）。
-        let (mut conn, mut peer) = connected(20);
+        let (conn, mut peer) = connected(20);
         peer.send_value(json!({
             "jsonrpc": "2.0",
             "method": "hello",
@@ -1370,7 +1374,7 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_notification_method_is_ignored_without_disconnect() {
-        let (mut conn, mut peer) = connected(20);
+        let (conn, mut peer) = connected(20);
         peer.hello().await;
         conn.handshake_with_timeout(Duration::from_secs(2))
             .await
