@@ -19,6 +19,47 @@ export const MAX_FRAME_BYTES = 2 * 1024 * 1024;
 export const ARTIFACT_REF_LIMIT_BYTES = 1024 * 1024;
 /** 附件引用行判别值（行顶层 `"type"` 字段，M2-09 落全帧形状）。 */
 export const ARTIFACT_REF_TYPE = "artifact_ref";
+/** `artifact_ref` 引用帧方法名（与判别值同值；M2-09 全帧形状）。 */
+export const ARTIFACT_REF_METHOD = "artifact_ref";
+
+/**
+ * `artifact_ref` 引用帧全帧形状（M2-09/D6）：
+ *
+ * ```json
+ * {
+ *   "jsonrpc": "2.0",
+ *   "method": "artifact_ref",
+ *   "type": "artifact_ref",
+ *   "params": {
+ *     "session_id": "01J...",
+ *     "run_id": "01J...",
+ *     "refs": [
+ *       { "path": "shot.png", "size": 3145728, "kind": "image/png" }
+ *     ]
+ *   }
+ * }
+ * ```
+ *
+ * 数据体不进入线协议：附件内容存 artifacts 文件（`path` 相对 artifacts 根目录），
+ * 引用帧只携带路径 + 元数据；引用帧本身必须 <1MiB。
+ */
+export interface ArtifactRefEntry {
+  /** 相对 artifacts 根目录的路径（禁止绝对路径 / `..` / 盘符 / UNC）。 */
+  path: string;
+  /** 附件字节数（核心侧与实际文件大小核对）。 */
+  size: number;
+  /** 附件类型等元数据（可选）。 */
+  kind?: string;
+}
+
+export interface ArtifactRefParams {
+  /** 所属会话（可选）。 */
+  session_id?: string;
+  /** 所属 run（可选）。 */
+  run_id?: string;
+  /** 附件引用列表。 */
+  refs: ArtifactRefEntry[];
+}
 
 /** 核心 → 适配器方法表（D6）。 */
 export const METHOD_TIMEOUTS_MS = {

@@ -10,12 +10,18 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+pub mod artifact;
 pub mod connection;
 pub mod framing;
 pub mod process;
 pub mod protocol;
 pub mod session_client;
 pub mod supervisor;
+
+pub use artifact::{
+    ArtifactError, ArtifactRefEntry, ArtifactRefParams, ArtifactValidator, ValidatedRef,
+    ARTIFACT_REF_METHOD,
+};
 
 pub use connection::{
     AdapterConnection, AdapterNotification, ConnectionState, DisconnectReason, RequestError,

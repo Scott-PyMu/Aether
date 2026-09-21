@@ -100,6 +100,29 @@ describe("Adapter（D6）", () => {
     expect(log.method).toBe("log");
   });
 
+  it("emitArtifactRef：M2-09 全帧形状（method/type 双判别键 + 路径/元数据）", async () => {
+    const { adapter, written } = makeAdapter({ lines: [] });
+    await adapter.run();
+    await adapter.emitArtifactRef({
+      session_id: "01JTEST",
+      run_id: "01JRUN",
+      refs: [{ path: "shot.png", size: 3145728, kind: "image/png" }],
+    });
+    const frame = JSON.parse(written[1]!);
+    expect(frame).toEqual({
+      jsonrpc: "2.0",
+      method: "artifact_ref",
+      type: "artifact_ref",
+      params: {
+        session_id: "01JTEST",
+        run_id: "01JRUN",
+        refs: [{ path: "shot.png", size: 3145728, kind: "image/png" }],
+      },
+    });
+    // 引用帧必须 <1MiB（D6 契约；3MiB 附件只存 artifacts 文件）。
+    expect(written[1]!.length).toBeLessThan(1024 * 1024);
+  });
+
   it("连续 20 次无效帧停止处理（D6 硬阈值）", async () => {
     const lines = Array.from({ length: 25 }, (_, index) => `bad line ${index}`);
     const { adapter, stderr } = makeAdapter({ lines });

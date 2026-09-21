@@ -23,6 +23,7 @@ use tokio::sync::{mpsc, oneshot, watch, Mutex as AsyncMutex};
 use tokio::task::JoinHandle;
 use tokio_util::codec::{FramedRead, FramedWrite};
 
+use crate::artifact::ArtifactRefParams;
 use crate::framing::{AetherLineCodec, ChunkLimitedReader, FrameError, RawLine, READ_CHUNK_BYTES};
 use crate::protocol::{
     code, notify, validate_hello, DisabledInfo, Hello, Method, INVALID_FRAME_UNHEALTHY_THRESHOLD,
@@ -44,6 +45,11 @@ pub enum AdapterNotification {
     PermissionRequest(Value),
     /// `log`：日志通知。
     Log(Value),
+    /// `artifact_ref`：附件引用帧（D6；M2-09 落全帧形状）。
+    ///
+    /// 数据体不进入线协议——引用帧只含路径 + 元数据；路径安全校验由
+    /// [`crate::artifact::ArtifactValidator`] 在消费侧完成（本层只做形状校验）。
+    ArtifactRef(Box<ArtifactRefParams>),
     /// 其它通知（前向兼容，未知字段/方法忽略，不断连）。
     Other { method: String, params: Value },
 }
@@ -754,6 +760,19 @@ fn dispatch_notification(
             ctx.push_notification(AdapterNotification::Log(params));
             ctx.clear_invalid_streak();
         }
+        notify::ARTIFACT_REF => {
+            // 形状校验失败按「无效帧」计数（跳过 + 诊断；D6 失败场景表与坏 JSON 同口径），
+            // 不断连——路径安全校验在消费侧（ArtifactValidator）完成。
+            match serde_json::from_value::<ArtifactRefParams>(params) {
+                Ok(artifact_ref) => {
+                    ctx.push_notification(AdapterNotification::ArtifactRef(Box::new(artifact_ref)));
+                    ctx.clear_invalid_streak();
+                }
+                Err(error) => {
+                    return ctx.record_invalid_frame(format!("artifact_ref 引用帧校验失败: {error}"));
+                }
+            }
+        }
         other => {
             ctx.push_notification(AdapterNotification::Other {
                 method: other.to_owned(),
@@ -870,6 +889,18 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         panic!("等待条件超时");
+    }
+
+    /// 等待无效帧计数达到期望（返回 bool，供断言而非 panic）。
+    async fn wait_for_count(conn: &AdapterConnection, expected: u64, timeout: Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + timeout;
+        while tokio::time::Instant::now() < deadline {
+            if conn.invalid_frames_total() >= expected {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        conn.invalid_frames_total() >= expected
     }
 
     #[tokio::test]
@@ -1158,8 +1189,11 @@ mod tests {
             .await
             .unwrap();
         let padding = "a".repeat(512 * 1024);
+        // M2-09 全帧形状（`params` 为 `{session_id?, run_id?, refs}`）；M1-09 时期的
+        // 占位形状（`params.pad`）在形状校验落地后按「无效帧」计数（见
+        // `artifact_ref_malformed_params_count_as_invalid_frame`）。
         peer.send_line(&format!(
-            "{{\"jsonrpc\":\"2.0\",\"method\":\"artifact_ref\",\"type\":\"artifact_ref\",\"params\":{{\"pad\":\"{padding}\"}}}}"
+            "{{\"jsonrpc\":\"2.0\",\"method\":\"artifact_ref\",\"type\":\"artifact_ref\",\"params\":{{\"session_id\":\"01JTEST\",\"refs\":[{{\"path\":\"shot.png\",\"size\":1,\"kind\":\"image/png\"}}],\"pad\":\"{padding}\"}}}}"
         ))
         .await;
         let notification = tokio::time::timeout(Duration::from_secs(5), conn.next_notification())
@@ -1167,14 +1201,44 @@ mod tests {
             .expect("artifact_ref 引用帧（<1MiB）应正常解析")
             .expect("应有通知");
         match notification {
-            AdapterNotification::Other { method, params } => {
-                assert_eq!(method, "artifact_ref");
-                assert_eq!(params["pad"].as_str().unwrap_or_default().len(), 512 * 1024);
+            AdapterNotification::ArtifactRef(artifact_ref) => {
+                assert_eq!(artifact_ref.session_id.as_deref(), Some("01JTEST"));
+                assert_eq!(artifact_ref.refs.len(), 1);
+                assert_eq!(artifact_ref.refs[0].path, "shot.png");
+                assert_eq!(artifact_ref.refs[0].size, 1);
+                assert_eq!(artifact_ref.refs[0].kind.as_deref(), Some("image/png"));
+                assert!(
+                    artifact_ref.refs[0].path.len() < 1024 * 1024,
+                    "引用行数据体必须 <1MiB"
+                );
             }
             other => panic!("通知类型不符: {other:?}"),
         }
         assert!(matches!(conn.state(), ConnectionState::Ready(_)));
         assert_eq!(conn.invalid_frames_total(), 0);
+    }
+
+    #[tokio::test]
+    async fn artifact_ref_malformed_params_count_as_invalid_frame() {
+        let (conn, mut peer) = connected(20);
+        peer.hello().await;
+        conn.handshake_with_timeout(Duration::from_secs(2))
+            .await
+            .unwrap();
+        peer.send_line(
+            "{\"jsonrpc\":\"2.0\",\"method\":\"artifact_ref\",\"type\":\"artifact_ref\",\"params\":{\"refs\":\"not-an-array\"}}",
+        )
+        .await;
+        assert!(
+            wait_for_count(&conn, 1, Duration::from_secs(5)).await,
+            "形状非法的引用帧必须计为无效帧"
+        );
+        assert!(
+            matches!(conn.state(), ConnectionState::Degraded { invalid_frame_streak: 1, .. }),
+            "单次无效帧应进入 Degraded（未达 20 阈值不断连）: {:?}",
+            conn.state()
+        );
+        // 真实进程侧「连接仍可用」断言见 m2_09_artifacts 集成测试。
     }
 
     #[tokio::test]

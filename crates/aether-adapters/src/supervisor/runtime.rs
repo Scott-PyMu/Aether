@@ -69,11 +69,17 @@ impl Default for SupervisorConfig {
     }
 }
 
-/// 运行时静态描述（manifest + 本次启动令牌）。
+/// 运行时静态描述（manifest + 本次启动令牌 + 附件目录）。
 #[derive(Debug, Clone)]
 pub struct RuntimeSpec {
     pub manifest: RuntimeManifest,
     pub launch_token: String,
+    /// 附件目录（M2-09/D6：`artifact_ref` 数据体存 artifacts 文件，不进入线协议）。
+    ///
+    /// 启动时创建 `<artifacts_dir>/<runtime_id>/` 并经 `AETHER_ARTIFACTS_DIR` 注入适配器
+    /// 进程环境；`None` = 未启用附件外置（适配器不得上报引用帧——消费侧校验器无根目录
+    /// 时一律拒绝）。
+    pub artifacts_dir: Option<std::path::PathBuf>,
 }
 
 impl RuntimeSpec {
@@ -81,6 +87,7 @@ impl RuntimeSpec {
         Self {
             manifest,
             launch_token: launch_token.into(),
+            artifacts_dir: None,
         }
     }
 
@@ -89,9 +96,19 @@ impl RuntimeSpec {
         Self {
             manifest,
             launch_token: new_launch_token(),
+            artifacts_dir: None,
         }
     }
+
+    /// 附加附件目录（D6 附件外置；环境注入见 [`RuntimeSupervisor::start`]）。
+    pub fn with_artifacts_dir(mut self, artifacts_dir: impl Into<std::path::PathBuf>) -> Self {
+        self.artifacts_dir = Some(artifacts_dir.into());
+        self
+    }
 }
+
+/// `AETHER_ARTIFACTS_DIR`：注入适配器进程的附件目录环境变量（M2-09/D6）。
+pub const ENV_ARTIFACTS_DIR: &str = "AETHER_ARTIFACTS_DIR";
 
 /// 启动结果。
 #[derive(Debug, Clone, PartialEq)]
@@ -359,7 +376,7 @@ impl RuntimeSupervisor {
         // spawn：D5 `--launch-token` 注入 + 进程组/Job Object（process.rs）。
         let mut args = self.spec.manifest.args.clone();
         args.push(format!("--launch-token={}", self.spec.launch_token));
-        let envs: Vec<(std::ffi::OsString, std::ffi::OsString)> = self
+        let mut envs: Vec<(std::ffi::OsString, std::ffi::OsString)> = self
             .spec
             .manifest
             .env
@@ -371,6 +388,23 @@ impl RuntimeSupervisor {
                 )
             })
             .collect();
+        // M2-09（D6 附件外置）：创建 `<artifacts_dir>/<runtime_id>/` 并经环境注入适配器；
+        // 目录创建失败按 start_failed 处置（附件契约依赖该目录，不得静默降级）。
+        if let Some(root) = self.spec.artifacts_dir.as_ref() {
+            let per_runtime = root.join(self.runtime_id.as_str());
+            if let Err(error) = std::fs::create_dir_all(&per_runtime) {
+                return self.fail_start_locked(
+                    &mut state,
+                    DisabledReason::StartFailed,
+                    format!("附件目录创建失败：{error}"),
+                    Vec::new(),
+                );
+            }
+            envs.push((
+                std::ffi::OsString::from(ENV_ARTIFACTS_DIR),
+                per_runtime.as_os_str().to_os_string(),
+            ));
+        }
         let mut process =
             match AdapterProcess::spawn_with_env(&self.spec.manifest.program, args, envs).await {
                 Ok(process) => process,
@@ -1317,5 +1351,10 @@ mod tests {
         }
         supervisor.begin_enable().await.unwrap();
         assert_eq!(supervisor.status().await, RuntimeStatus::Cold);
+    }
+
+    #[test]
+    fn env_artifacts_dir_constant_is_frozen() {
+        assert_eq!(ENV_ARTIFACTS_DIR, "AETHER_ARTIFACTS_DIR");
     }
 }

@@ -5,12 +5,14 @@
  *
  * CLI：
  * - `--inject <kind>`（可重复）bad-json | stdout-log | half-line | oversized-line |
- *   line-over-2mib | artifact-line | artifact-line-over-limit | crash |
+ *   line-over-2mib | oversized-line-burst | line-over-2mib-burst | artifact-line |
+ *   artifact-line-over-limit | artifact-ref-outside | crash |
  *   capability-missing | hang | no-hello
  * - `--inject-count <n>`（默认 20）
  * - `--protocol <ver>` 覆盖 hello.protocol（版本不匹配注入）
  * - `--name <runtime 名>` / `--runtime-version <ver>`
  * - `--stream-deltas <n>` / `--stream-interval-ms <n>` / `--long-stream-interval-ms <n>`
+ * - `--artifacts-dir <path>` 附件目录（M2-09/D6；缺省回退环境变量 `AETHER_ARTIFACTS_DIR`）
  * - `--launch-token=<ULID>`（D5：核心 spawn 注入；合法值仅写 stderr 启动日志，
  *   非法值 warn 后忽略，不阻塞启动；stdout 线协议不受影响）
  */
@@ -31,6 +33,8 @@ export interface CliOptions {
   streamDeltas?: number;
   streamIntervalMs?: number;
   longStreamIntervalMs?: number;
+  /** M2-09：附件目录（缺省回退 `AETHER_ARTIFACTS_DIR`）。 */
+  artifactsDir?: string;
   /** D5 启动令牌（仅合法 ULID；非法/缺失为 undefined）。 */
   launchToken?: string;
 }
@@ -107,6 +111,9 @@ export function parseArgs(argv: string[], warn: (line: string) => void): CliOpti
       case "--long-stream-interval-ms":
         options.longStreamIntervalMs = requireNumber(argv, ++index, flag);
         break;
+      case "--artifacts-dir":
+        options.artifactsDir = requireValue(argv, ++index, flag);
+        break;
       case "--no-hello":
         options.injections.push("no-hello");
         break;
@@ -172,6 +179,8 @@ export async function runCli(streams: CliStreams): Promise<void> {
   if (options.longStreamIntervalMs !== undefined) {
     mockOptions.longStreamIntervalMs = options.longStreamIntervalMs;
   }
+  // M2-09：`--artifacts-dir` 优先，缺省回退 `AETHER_ARTIFACTS_DIR`（监督器 spawn 注入）。
+  mockOptions.artifactsDir = options.artifactsDir ?? process.env.AETHER_ARTIFACTS_DIR;
 
   const mock = new MockAdapter(mockOptions);
   try {

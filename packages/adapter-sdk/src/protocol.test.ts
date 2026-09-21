@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ARTIFACT_REF_LIMIT_BYTES,
+  ARTIFACT_REF_METHOD,
   ARTIFACT_REF_TYPE,
   ERROR_CODES,
   HANDSHAKE_TIMEOUT_MS,
@@ -30,6 +31,34 @@ describe("D6 协议常量", () => {
     expect(MAX_FRAME_BYTES).toBe(2 * 1024 * 1024);
     expect(ARTIFACT_REF_LIMIT_BYTES).toBe(1024 * 1024);
     expect(ARTIFACT_REF_TYPE).toBe("artifact_ref");
+  });
+
+  it("M2-09：artifact_ref 全帧形状（方法名 == 判别键；引用帧必须 <1MiB）", () => {
+    expect(ARTIFACT_REF_METHOD).toBe("artifact_ref");
+    expect(ARTIFACT_REF_METHOD).toBe(ARTIFACT_REF_TYPE);
+    // 全帧形状：{jsonrpc, method, type, params:{session_id?, run_id?, refs:[{path,size,kind?}]}}
+    const frame = {
+      jsonrpc: "2.0",
+      method: ARTIFACT_REF_METHOD,
+      type: ARTIFACT_REF_TYPE,
+      params: {
+        session_id: "01JTEST",
+        run_id: "01JRUN",
+        refs: [{ path: "shot.png", size: 3145728, kind: "image/png" }],
+      },
+    };
+    const bytes = JSON.stringify(frame).length;
+    expect(bytes).toBeLessThan(ARTIFACT_REF_LIMIT_BYTES);
+    expect(JSON.parse(JSON.stringify(frame))).toEqual({
+      jsonrpc: "2.0",
+      method: "artifact_ref",
+      type: "artifact_ref",
+      params: {
+        session_id: "01JTEST",
+        run_id: "01JRUN",
+        refs: [{ path: "shot.png", size: 3145728, kind: "image/png" }],
+      },
+    });
   });
 
   it("方法表与 D6 超时表逐项一致", () => {

@@ -10,8 +10,8 @@ use std::process::ExitStatus;
 use std::time::Duration;
 
 use aether_adapters::{
-    AdapterConnection, AdapterNotification, AdapterProcess, ConnectionState, DisconnectReason,
-    Method, RequestError,
+    AdapterConnection, AdapterNotification, AdapterProcess, ArtifactRefParams, ConnectionState,
+    DisconnectReason, Method, RequestError,
 };
 use aether_core::{EventEnvelope, EventType};
 use serde_json::{json, Value};
@@ -40,6 +40,8 @@ pub struct MockHarness {
     /// B3 边界证据（非功能验证）：M1 预置 ④⑤ 期间收到的 `permission.request` 通知。
     /// 预置路径应为空；M2-10 真实回环接入后此断言随之演进。
     pub permission_requests: Vec<Value>,
+    /// M2-09：收到的 `artifact_ref` 引用帧（数据体不进入线协议）。
+    pub artifact_refs: Vec<ArtifactRefParams>,
 }
 
 impl MockHarness {
@@ -56,6 +58,27 @@ impl MockHarness {
             connection,
             events: Vec::new(),
             permission_requests: Vec::new(),
+            artifact_refs: Vec::new(),
+        })
+    }
+
+    /// 启动 Mock 进程并注入附加环境变量（M2-09：`AETHER_ARTIFACTS_DIR` 附件目录）。
+    pub async fn launch_with_env(
+        args: &[&str],
+        envs: &[(std::ffi::OsString, std::ffi::OsString)],
+    ) -> Option<Self> {
+        let path = mock_binary()?;
+        let owned: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
+        let mut process = AdapterProcess::spawn_with_env(&path, owned, envs.iter().cloned())
+            .await
+            .expect("启动 Mock 适配器进程");
+        let connection = process.connect().expect("连接 Mock stdio");
+        Some(Self {
+            process,
+            connection,
+            events: Vec::new(),
+            permission_requests: Vec::new(),
+            artifact_refs: Vec::new(),
         })
     }
 
@@ -179,6 +202,10 @@ impl MockHarness {
                     self.permission_requests.push(params);
                 }
                 AdapterNotification::Log(_) | AdapterNotification::Other { .. } => {}
+                AdapterNotification::ArtifactRef(artifact_ref) => {
+                    // M2-09：引用帧收集供断言（数据体不进入线协议）。
+                    self.artifact_refs.push(*artifact_ref);
+                }
             }
         }
     }

@@ -366,6 +366,39 @@ jobs:
             echo "::error title=m2-07-tail::$line"
           done
 
+      # M2 批 2（M2-09 大行与 OOM 防护）：>2MiB 任意行不缓冲断连记错、1–2MiB 非引用行
+      # 正常解析（内存曲线断言受控，真实 Mock + 核心侧 RSS 采样）；artifact_ref 大附件
+      # 引用流（附件仅存 artifacts 路径、数据体不进入线协议、路径逃逸/形状非法拒绝）；
+      # 1.5GiB 真实压力注入 → core_rss_alert/core_rss_throttle 落盘 → delta 限流 →
+      # 释放回落且不崩溃（与 M2-07 同一 ResourcePatrol + AETHER_TEST_RSS_* 钩子）。
+      # 注意：m2_09_oom 需 ~1.5GiB 内存（windows-2022 7GB 满足）。
+      - name: M2 批 2 验证（M2-09 大行与 OOM 防护）
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/test/m2-09/verify-m2-09.mjs 2>&1 | tee m2-09-verify.log
+      - name: M2 批 2 失败诊断（M2-09）
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "### M2-09 verify 失败输出（断言细节 + tail 30）"
+            echo '```text'
+            grep -E "panicked|assertion|left:|right:|FAIL |error\[" m2-09-verify.log 2>/dev/null | tail -12 || true
+            echo '--- tail 30 ---'
+            tail -30 m2-09-verify.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -E "^FAIL |FAIL " m2-09-verify.log 2>/dev/null | tail -6 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m2-09-summary::$line"
+          done
+          grep -E "panicked|assertion|left:|right:" m2-09-verify.log 2>/dev/null | tail -4 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m2-09-assert::$line"
+          done
+          tail -4 m2-09-verify.log 2>/dev/null | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m2-09-tail::$line"
+          done
+
   # M1-09：线协议骨架与 Mock 适配器（D6/评审#6）——Bun 编译 Mock 单文件后，
   # 一致性/健壮性集成测试与吞吐基准均针对真实进程执行。
   wire-protocol-mock:

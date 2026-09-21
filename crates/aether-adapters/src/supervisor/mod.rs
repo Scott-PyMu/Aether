@@ -43,7 +43,7 @@ pub use resources::{
 pub use runtime::{
     kill_tree_system, new_launch_token, IsolationOutcome, MonitorOutcome, ReleaseOutcome,
     RestartOutcome, RuntimeSpec, RuntimeSupervisor, StartOutcome, Supervisor, SupervisorConfig,
-    SupervisorError, SystemTreeKiller, INITIALIZE_TIMEOUT,
+    SupervisorError, SystemTreeKiller, INITIALIZE_TIMEOUT, ENV_ARTIFACTS_DIR,
 };
 pub use state::{
     now_ms, AuditKind, AuditRecord, NoopObserver, ResourceEvent, ResourceLimitKind, StateCore,

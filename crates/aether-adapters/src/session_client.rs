@@ -524,6 +524,10 @@ async fn pump_notifications(
                             guard.permission_requests.push(params)
                         }
                         AdapterNotification::Log(params) => guard.logs.push(params),
+                        AdapterNotification::ArtifactRef(_) => {
+                            // M2-09：引用帧不产生事件类型（附录 B 无附件事件）；数据体
+                            // 不落库。MVP 消费侧仅校验路径（ArtifactValidator），此处忽略。
+                        }
                         AdapterNotification::Other { .. } => {}
                     }
                 }

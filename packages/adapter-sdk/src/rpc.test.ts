@@ -40,6 +40,21 @@ describe("JsonRpcPeer", () => {
     expect(JSON.parse(written[1]!)).toEqual({ jsonrpc: "2.0", method: "hello" });
   });
 
+  it("notifyFrame：附加顶层字段（M2-09 artifact_ref 判别键）", async () => {
+    const { peer, written } = memoryPeer();
+    await peer.notifyFrame(
+      "artifact_ref",
+      { type: "artifact_ref" },
+      { refs: [{ path: "a.png", size: 1 }] },
+    );
+    expect(JSON.parse(written[0]!)).toEqual({
+      jsonrpc: "2.0",
+      method: "artifact_ref",
+      type: "artifact_ref",
+      params: { refs: [{ path: "a.png", size: 1 }] },
+    });
+  });
+
   it("请求 → result；RpcError → error 帧", async () => {
     const { peer, written, requests } = memoryPeer((method) => {
       if (method === "boom") throw new RpcError(-32601, "Method not found: boom", { m: "boom" });

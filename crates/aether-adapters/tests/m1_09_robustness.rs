@@ -162,13 +162,10 @@ async fn artifact_ref_line_under_1mib_is_parsed_over_process() {
     .expect("artifact_ref 引用帧（<1MiB）必须在 10s 内解析")
     .expect("应有通知");
     match notification {
-        AdapterNotification::Other { method, params } => {
-            assert_eq!(method, "artifact_ref");
-            let pad = params["pad"].as_str().unwrap_or_default().len();
-            assert!(
-                pad < ARTIFACT_REF_LIMIT,
-                "引用行数据体必须 <1MiB（实际 {pad}）"
-            );
+        // M2-09 落全帧形状：`artifact-line` 注入的 params 为 `{refs: [], pad: ...}`
+        // （refs 可选为空数组；数据体 <1MiB 由帧层契约保证）。
+        AdapterNotification::ArtifactRef(artifact_ref) => {
+            assert!(artifact_ref.refs.is_empty(), "注入样例的 refs 为空数组");
         }
         other => panic!("通知类型不符: {other:?}"),
     }

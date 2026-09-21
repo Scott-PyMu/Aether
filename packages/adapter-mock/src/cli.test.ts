@@ -8,6 +8,9 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 import { parseArgs, runCli } from "./cli";
 
@@ -155,5 +158,32 @@ describe("Mock CLI --launch-token（M1-09 增量修订）", () => {
     expect(announced).toEqual([]);
     expect(harness.stderr.some((line) => line.includes("忽略非法 --launch-token"))).toBe(true);
     expect(harness.exits).toEqual([]);
+  });
+});
+
+describe("Mock CLI --artifacts-dir（M2-09/D6 附件外置）", () => {
+  it("--artifacts-dir 解析并注入 Mock；env 回退生效", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "aether-m2-09-cli-"));
+    const previous = process.env.AETHER_ARTIFACTS_DIR;
+    try {
+      // 1) 显式 --artifacts-dir。
+      const parsed = parseArgs(["--artifacts-dir", dir], () => {});
+      expect(parsed.artifactsDir).toBe(dir);
+
+      // 2) env 回退：未传 CLI 时读取 AETHER_ARTIFACTS_DIR。
+      process.env.AETHER_ARTIFACTS_DIR = dir;
+      const harness = new CliHarness([]);
+      await harness.waitForHello();
+      harness.request("session.create", { title: "x" }, 1);
+      await harness.waitFor((frame) => frame.id === 1, "session.create");
+      harness.request("session.send", { session_id: "mock-sess-1", client_msg_id: "c1", text: "artifact:env.png:512" }, 2);
+      await harness.waitFor((frame) => frame.id === 2, "session.send");
+      await harness.waitFor((frame) => frame.method === "artifact_ref", "artifact_ref");
+      expect(existsSync(path.join(dir, "env.png"))).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.AETHER_ARTIFACTS_DIR;
+      else process.env.AETHER_ARTIFACTS_DIR = previous;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

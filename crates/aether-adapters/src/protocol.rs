@@ -101,6 +101,8 @@ pub mod notify {
     pub const PERMISSION_REQUEST: &str = "permission.request";
     /// 日志/诊断通知（持久化样本走 stderr，协议 log 走本通知）。
     pub const LOG: &str = "log";
+    /// 附件引用帧（D6：路径 + 元数据；数据体不进入线协议，存 artifacts 文件）。
+    pub const ARTIFACT_REF: &str = "artifact_ref";
 }
 
 /// 错误码（D6：JSON-RPC 标准码 + 应用码 1001–1005）。

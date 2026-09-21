@@ -6,12 +6,20 @@
  * - 5 类工具调用注入清单（权威定义见 `scenarios.ts`，供 M2-02/M2-10 复用）；
  *   ④⑤ 为自包含**预置**（不经核心权限网关、不发 permission.request 通知；边界 B1，
  *   见 `docs/M1-09-证据.md`，M2-10 在真实回环中重放）；
+ * - 附件外置（M2-09/D6）：`artifact:<文件名>[:<字节数>]` 触发——把大附件**数据体**
+ *   写入 `AETHER_ARTIFACTS_DIR`（或 `--artifacts-dir`）目录，仅以 `artifact_ref`
+ *   引用帧（路径 + 元数据）上报，数据体不进入线协议、不落库；
  * - 故障注入：half-line / bad-json / stdout-log / oversized-line（1–2MiB 非引用行）/
  *   line-over-2mib（>2MiB 断连）/ artifact-line（<1MiB 引用帧）/
  *   artifact-line-over-limit（1–2MiB 声称引用 → 契约违约）/
+ *   artifact-ref-outside（引用帧路径逃逸 `..` → 核心校验拒绝）/
+ *   line-over-2mib-burst / oversized-line-burst（M2-09 内存曲线：连续 N 次）/
  *   crash / capability-missing / hang（不响应模式）/ no-hello（见 `InjectionKind`）；
  * - 吞吐基准：`bench:<n>` 触发 n 条 `message.delta` 连发（DoD5 ≥1000 delta/s）。
  */
+
+import { promises as fs } from "node:fs";
+import path from "node:path";
 
 import {
   Adapter,
@@ -43,8 +51,12 @@ export type InjectionKind =
   | "half-line"
   | "oversized-line"
   | "line-over-2mib"
+  | "oversized-line-burst"
+  | "line-over-2mib-burst"
   | "artifact-line"
   | "artifact-line-over-limit"
+  | "artifact-ref-outside"
+  | "artifact-ref-malformed"
   | "crash"
   | "capability-missing"
   | "hang"
@@ -56,8 +68,12 @@ export const INJECTION_KINDS: readonly InjectionKind[] = [
   "half-line",
   "oversized-line",
   "line-over-2mib",
+  "oversized-line-burst",
+  "line-over-2mib-burst",
   "artifact-line",
   "artifact-line-over-limit",
+  "artifact-ref-outside",
+  "artifact-ref-malformed",
   "crash",
   "capability-missing",
   "hang",
@@ -81,6 +97,8 @@ export interface MockAdapterOptions {
   streamDeltas?: number;
   streamIntervalMs?: number;
   longStreamIntervalMs?: number;
+  /** 附件目录（M2-09/D6：`artifact:` 触发把附件数据体写这里；缺省禁止附件触发）。 */
+  artifactsDir?: string;
 }
 
 const DEFAULT_DELTAS = 24;
@@ -94,6 +112,12 @@ const LINE_OVER_2MIB_PAD_BYTES = 2560 * 1024;
 const ARTIFACT_PAD_BYTES = 512 * 1024;
 // D6：1–2MiB 声称 artifact_ref → 契约违约（负向样例）。
 const ARTIFACT_OVER_LIMIT_PAD_BYTES = 1200 * 1024;
+// M2-09：附件默认字节数（>2MiB——证明数据体不可能经 2MiB 帧上限的线协议传输）。
+const DEFAULT_ARTIFACT_BYTES = 3 * 1024 * 1024;
+// M2-09：附件内容标记（「不落库/不进线协议」断言锚点）。
+export const ARTIFACT_MARKER = "AETHER_MOCK_ARTIFACT_MARKER";
+// M2-09：`artifact:` 触发前缀（session.send 文本）。
+export const ARTIFACT_TRIGGER_PREFIX = "artifact:";
 const DELTA_FRAGMENT = "0123456789abcdef";
 
 interface ActiveRun {
@@ -146,7 +170,7 @@ export class MockAdapter {
       | "streamIntervalMs"
       | "longStreamIntervalMs"
     >
-  > & { protocol?: string; sendHello: boolean };
+  > & { protocol?: string; sendHello: boolean; artifactsDir?: string };
 
   private readonly sessions = new Map<string, MockSession>();
   private readonly startedAt = Date.now();
@@ -178,6 +202,7 @@ export class MockAdapter {
       streamDeltas: options.streamDeltas ?? DEFAULT_DELTAS,
       streamIntervalMs: options.streamIntervalMs ?? DEFAULT_INTERVAL_MS,
       longStreamIntervalMs: options.longStreamIntervalMs ?? DEFAULT_LONG_INTERVAL_MS,
+      artifactsDir: options.artifactsDir,
       protocol,
       sendHello:
         (options.sendHello ?? true) &&
@@ -281,6 +306,31 @@ export class MockAdapter {
             })}\n`,
           );
           break;
+        case "oversized-line-burst":
+          // M2-09 内存曲线：连续 `injectCount` 次 1–2MiB 非引用行（解析后逐行释放）。
+          for (let index = 0; index < this.options.injectCount; index += 1) {
+            this.options.rawWrite(
+              `${JSON.stringify({
+                jsonrpc: "2.0",
+                method: "log",
+                params: { pad: "x".repeat(OVERSIZED_PAD_BYTES) },
+              })}\n`,
+            );
+          }
+          break;
+        case "line-over-2mib-burst":
+          // M2-09 内存曲线：连续 `injectCount` 次 >2MiB 行（首行即触发核心断连，
+          // 其余行在断连后写 EPIPE 属预期——断言对象是核心侧内存上界）。
+          for (let index = 0; index < this.options.injectCount; index += 1) {
+            this.options.rawWrite(
+              `${JSON.stringify({
+                jsonrpc: "2.0",
+                method: "log",
+                params: { pad: "x".repeat(LINE_OVER_2MIB_PAD_BYTES) },
+              })}\n`,
+            );
+          }
+          break;
         case "artifact-line":
           this.options.rawWrite(
             `${JSON.stringify({
@@ -298,6 +348,28 @@ export class MockAdapter {
               method: "artifact_ref",
               type: "artifact_ref",
               params: { refs: [], pad: "a".repeat(ARTIFACT_OVER_LIMIT_PAD_BYTES) },
+            })}\n`,
+          );
+          break;
+        case "artifact-ref-outside":
+          // M2-09：引用帧路径逃逸（`..` 段）——核心 ArtifactValidator 必须拒绝。
+          this.options.rawWrite(
+            `${JSON.stringify({
+              jsonrpc: "2.0",
+              method: "artifact_ref",
+              type: "artifact_ref",
+              params: { refs: [{ path: "../outside.bin", size: 1, kind: "application/octet-stream" }] },
+            })}\n`,
+          );
+          break;
+        case "artifact-ref-malformed":
+          // M2-09：引用帧形状非法（refs 非数组）——线协议层按「无效帧」计数（D6）。
+          this.options.rawWrite(
+            `${JSON.stringify({
+              jsonrpc: "2.0",
+              method: "artifact_ref",
+              type: "artifact_ref",
+              params: { refs: "not-an-array" },
             })}\n`,
           );
           break;
@@ -463,6 +535,12 @@ export class MockAdapter {
       } else if (text.trim().startsWith("bench:")) {
         const count = Number.parseInt(text.trim().slice("bench:".length), 10);
         await this.runStream(context, run, Number.isFinite(count) ? count : 0, 0);
+      } else if (text.trim().startsWith(ARTIFACT_TRIGGER_PREFIX)) {
+        await this.runArtifactScenario(
+          context,
+          run,
+          text.trim().slice(ARTIFACT_TRIGGER_PREFIX.length),
+        );
       } else if (text.trim() === "long") {
         await this.runStream(context, run, Number.MAX_SAFE_INTEGER, this.options.longStreamIntervalMs);
       } else {
@@ -525,6 +603,70 @@ export class MockAdapter {
       usage,
     });
     await this.emit(context, "run.completed", { run_id: run.runId, usage });
+  }
+
+  private async runArtifactScenario(
+    context: EnvelopeContext,
+    run: ActiveRun,
+    spec: string,
+  ): Promise<void> {
+    // spec = `<文件名>` 或 `<文件名>:<字节数>`（默认 3MiB，>2MiB 证明数据体无法走线协议）。
+    const [rawName, rawBytes] = spec.split(":");
+    const name = (rawName ?? "").trim();
+    if (!name) {
+      await this.emit(context, "run.failed", {
+        run_id: run.runId,
+        error: { code: "mock_artifacts_missing", message: "artifact: 缺少文件名", recoverable: true },
+      });
+      return;
+    }
+    const artifactsDir = this.options.artifactsDir;
+    if (!artifactsDir) {
+      await this.emit(context, "run.failed", {
+        run_id: run.runId,
+        error: {
+          code: "mock_artifacts_missing",
+          message: "附件目录未配置（AETHER_ARTIFACTS_DIR）",
+          recoverable: true,
+        },
+      });
+      return;
+    }
+    const bytes = rawBytes !== undefined && rawBytes !== "" && Number.isFinite(Number(rawBytes))
+      ? Math.max(1, Math.trunc(Number(rawBytes)))
+      : DEFAULT_ARTIFACT_BYTES;
+    const kind = name.endsWith(".png") ? "image/png" : "application/octet-stream";
+    const target = path.join(artifactsDir, name);
+    try {
+      // 数据体只落 artifacts 文件：标记 + 填充；内容绝不进入线协议。
+      const padding = "x".repeat(Math.max(0, bytes - ARTIFACT_MARKER.length));
+      await fs.writeFile(target, `${ARTIFACT_MARKER}${padding}`);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      await this.emit(context, "run.failed", {
+        run_id: run.runId,
+        error: { code: "mock_artifacts_missing", message: `附件写入失败: ${detail}`, recoverable: true },
+      });
+      return;
+    }
+    await this.adapter.emitArtifactRef({
+      session_id: context.sessionId,
+      run_id: context.runId ?? undefined,
+      refs: [{ path: name, size: bytes, kind }],
+    });
+    const messageId = ulid();
+    await this.emit(context, "message.completed", {
+      message: {
+        id: messageId,
+        session_id: context.sessionId,
+        run_id: context.runId ?? null,
+        role: "assistant",
+        content: `附件已存 artifacts 目录：${name}（${bytes} 字节）`,
+        created_at: Date.now(),
+      },
+      usage: emptyUsage(),
+    });
+    await this.emit(context, "run.completed", { run_id: run.runId, usage: emptyUsage() });
   }
 
   private async runToolScenario(

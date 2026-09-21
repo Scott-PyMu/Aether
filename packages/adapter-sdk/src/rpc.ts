@@ -112,6 +112,24 @@ export class JsonRpcPeer {
     await this.writeLine(JSON.stringify(frame));
   }
 
+  /**
+   * 发送带附加顶层字段的通知（M2-09 `artifact_ref` 需要顶层 `"type"` 判别键；
+   * 行顶层 `type` 是帧层探测的判别依据，`notify` 的标准形状无法表达）。
+   */
+  async notifyFrame(
+    method: string,
+    extra: Record<string, unknown>,
+    params?: unknown,
+  ): Promise<void> {
+    const frame: JsonRpcNotification & Record<string, unknown> = {
+      jsonrpc: "2.0",
+      method,
+      ...extra,
+    };
+    if (params !== undefined) frame.params = params;
+    await this.writeLine(JSON.stringify(frame));
+  }
+
   async reply(id: number | string, result: unknown): Promise<void> {
     const frame: JsonRpcResponse = { jsonrpc: "2.0", id, result };
     await this.writeLine(JSON.stringify(frame));

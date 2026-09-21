@@ -6,6 +6,7 @@
 
 export {
   ARTIFACT_REF_LIMIT_BYTES,
+  ARTIFACT_REF_METHOD,
   ARTIFACT_REF_TYPE,
   ERROR_CODES,
   HANDSHAKE_TIMEOUT_MS,
@@ -23,6 +24,8 @@ export {
   protocolMajor,
   RPC_METHODS,
   validateProtocol,
+  type ArtifactRefEntry,
+  type ArtifactRefParams,
   type ErrorCodeName,
   type ErrorCodeValue,
   type HelloPayload,

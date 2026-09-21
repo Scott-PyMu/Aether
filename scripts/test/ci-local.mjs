@@ -88,6 +88,10 @@ record(
   "verify-m2-07（panic 隔离 / unwrap 静态 0 告警 / RSS 巡检与 delta 限流 / UI health 5s·15s / 日志汇聚端；E2E 需真实 WebView，见 Windows CI）",
   run(node, [path.join(repoRoot, "scripts", "test", "m2-07", "verify-m2-07.mjs"), "--skip-e2e"]),
 );
+record(
+  "verify-m2-09（大行与 OOM 防护：>2MiB 不缓冲断连记错/1–2MiB 内存曲线受控/artifact_ref 附件仅存 artifacts 路径/1.5GiB 压力告警限流不崩溃；需 Bun + ~1.5GiB 内存）",
+  run(node, [path.join(repoRoot, "scripts", "test", "m2-09", "verify-m2-09.mjs")]),
+);
 
 if (!quick) {
   record("verify-coverage-gate", run(node, [path.join(repoRoot, "scripts", "test", "verify-coverage-gate.mjs")]));

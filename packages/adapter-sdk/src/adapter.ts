@@ -11,11 +11,14 @@
 
 import { buildEnvelope, SessionSequencer, type EnvelopeContext } from "./envelope";
 import {
+  ARTIFACT_REF_METHOD,
+  ARTIFACT_REF_TYPE,
   INVALID_FRAME_UNHEALTHY_THRESHOLD,
   NOTIFICATION_EVENT,
   NOTIFICATION_HELLO,
   NOTIFICATION_PERMISSION_REQUEST,
   PROTOCOL_VERSION,
+  type ArtifactRefParams,
 } from "./protocol";
 import { JsonRpcPeer, RpcError } from "./rpc";
 
@@ -105,6 +108,14 @@ export class Adapter {
   /** 发送 `log` 通知。 */
   async emitLog(params: Record<string, unknown>): Promise<void> {
     await this.peer.notify("log", params);
+  }
+
+  /**
+   * 发送 `artifact_ref` 引用帧（M2-09/D6）：附件内容存 artifacts 文件（经
+   * `AETHER_ARTIFACTS_DIR` 注入），线协议只携带路径 + 元数据；引用帧必须 <1MiB。
+   */
+  async emitArtifactRef(params: ArtifactRefParams): Promise<void> {
+    await this.peer.notifyFrame(ARTIFACT_REF_METHOD, { type: ARTIFACT_REF_TYPE }, params);
   }
 
   /** 诊断输出（stderr）。 */

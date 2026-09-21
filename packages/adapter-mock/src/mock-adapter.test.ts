@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
-import { MockAdapter, type MockAdapterOptions } from "./mock-adapter";
+import { MockAdapter, ARTIFACT_MARKER, type MockAdapterOptions } from "./mock-adapter";
 
 interface Frame {
   jsonrpc?: string;
@@ -9,6 +12,7 @@ interface Frame {
   params?: Record<string, unknown>;
   result?: Record<string, unknown>;
   error?: { code: number; message: string };
+  type?: string;
 }
 
 class Harness {
@@ -355,6 +359,66 @@ describe("Mock 适配器：生命周期与基准", () => {
   });
 });
 
+describe("Mock 适配器：附件外置（M2-09/D6）", () => {
+  it("artifact: 触发 → 附件写入 artifacts 目录 + artifact_ref 引用帧（数据体不进线协议）", async () => {
+    const artifactsDir = mkdtempSync(path.join(tmpdir(), "aether-m2-09-"));
+    try {
+      const harness = new Harness({ artifactsDir });
+      await harness.start();
+      const sessionId = await harness.createSession();
+      const runId = await harness.sendMessage(sessionId, "artifact:big.png");
+      await harness.waitForEvent("run.completed");
+
+      // 引用帧：method/type 双判别键 + 路径/元数据（3MiB 默认）。
+      const artifactRef = harness.frames.find((frame) => frame.method === "artifact_ref");
+      expect(artifactRef).toBeDefined();
+      expect(artifactRef?.type).toBe("artifact_ref");
+      const params = artifactRef?.params as Record<string, unknown>;
+      expect(params.session_id).toBe(sessionId);
+      expect(params.run_id).toBe(runId);
+      const refs = params.refs as Array<{ path: string; size: number; kind: string }>;
+      expect(refs).toEqual([{ path: "big.png", size: 3 * 1024 * 1024, kind: "image/png" }]);
+
+      // 附件数据体只存 artifacts 文件（标记 + 填充；内容不进入任何帧）。
+      const file = path.join(artifactsDir, "big.png");
+      const content = readFileSync(file);
+      expect(content).toHaveLength(3 * 1024 * 1024);
+      expect(content.subarray(0, ARTIFACT_MARKER.length).toString()).toBe(ARTIFACT_MARKER);
+      const wireText = JSON.stringify(harness.frames);
+      expect(wireText).not.toContain(ARTIFACT_MARKER);
+    } finally {
+      rmSync(artifactsDir, { recursive: true, force: true });
+    }
+  });
+
+  it("artifact: 指定字节数（<文件名>:<字节>）", async () => {
+    const artifactsDir = mkdtempSync(path.join(tmpdir(), "aether-m2-09-"));
+    try {
+      const harness = new Harness({ artifactsDir });
+      await harness.start();
+      const sessionId = await harness.createSession();
+      await harness.sendMessage(sessionId, "artifact:small.bin:2048");
+      await harness.waitForEvent("run.completed");
+      const artifactRef = harness.frames.find((frame) => frame.method === "artifact_ref");
+      const refs = artifactRef?.params?.refs as Array<{ path: string; size: number }>;
+      expect(refs[0]).toEqual({ path: "small.bin", size: 2048, kind: "application/octet-stream" });
+      expect(readFileSync(path.join(artifactsDir, "small.bin"))).toHaveLength(2048);
+    } finally {
+      rmSync(artifactsDir, { recursive: true, force: true });
+    }
+  });
+
+  it("artifact: 未配置 artifacts 目录 → run.failed（mock_artifacts_missing）", async () => {
+    const harness = new Harness();
+    await harness.start();
+    const sessionId = await harness.createSession();
+    await harness.sendMessage(sessionId, "artifact:nodir.png");
+    const failed = await harness.waitForEvent("run.failed");
+    const payload = failed.params?.payload as { error?: { code: string } };
+    expect(payload.error?.code).toBe("mock_artifacts_missing");
+  });
+});
+
 describe("Mock 适配器：故障注入", () => {
   it("bad-json：hello 后连发 20 条坏 JSON", async () => {
     const harness = new Harness({ injections: ["bad-json"], injectCount: 20 });
@@ -399,6 +463,27 @@ describe("Mock 适配器：故障注入", () => {
     expect(harness.raw.text.length).toBeGreaterThan(2 * 1024 * 1024);
   });
 
+  it("line-over-2mib-burst：连发 N 次 >2MiB 行（M2-09 内存曲线注入）", async () => {
+    const harness = new Harness({ injections: ["line-over-2mib-burst"], injectCount: 20 });
+    await harness.start();
+    await harness.waitForFrame(
+      () => harness.raw.text.split("\n").filter((line) => line.includes('"pad"')).length >= 20,
+      "20 条超 2MiB 行",
+    );
+    expect(harness.raw.text.length).toBeGreaterThan(20 * 2 * 1024 * 1024);
+  });
+
+  it("oversized-line-burst：连发 N 次 1–2MiB 非引用行（M2-09 内存曲线注入）", async () => {
+    const harness = new Harness({ injections: ["oversized-line-burst"], injectCount: 20 });
+    await harness.start();
+    await harness.waitForFrame(
+      () => harness.raw.text.split("\n").filter((line) => line.includes('"pad"')).length >= 20,
+      "20 条超大行",
+    );
+    expect(harness.raw.text.length).toBeGreaterThan(20 * 1024 * 1024);
+    expect(harness.raw.text).not.toContain('"type":"artifact_ref"');
+  });
+
   it("artifact-line：<1MiB artifact_ref 行（顶层 type，D6 契约内样例）", async () => {
     const harness = new Harness({ injections: ["artifact-line"] });
     await harness.start();
@@ -413,6 +498,32 @@ describe("Mock 适配器：故障注入", () => {
     await harness.waitForFrame(() => harness.raw.text.includes('"type":"artifact_ref"'), "违约引用行");
     expect(harness.raw.text.length).toBeGreaterThan(1024 * 1024);
     expect(harness.raw.text.length).toBeLessThan(2 * 1024 * 1024);
+  });
+
+  it("artifact-ref-outside：引用帧路径逃逸 `..`（M2-09 核心拒绝样例）", async () => {
+    const harness = new Harness({ injections: ["artifact-ref-outside"] });
+    await harness.start();
+    const frame = JSON.parse(
+      harness.raw.text
+        .split("\n")
+        .filter(Boolean)
+        .find((line) => line.includes("artifact_ref"))!,
+    );
+    expect(frame.method).toBe("artifact_ref");
+    expect(frame.type).toBe("artifact_ref");
+    expect(frame.params.refs[0].path).toBe("../outside.bin");
+  });
+
+  it("artifact-ref-malformed：形状非法引用帧（M2-09 无效帧计数样例）", async () => {
+    const harness = new Harness({ injections: ["artifact-ref-malformed"] });
+    await harness.start();
+    const frame = JSON.parse(
+      harness.raw.text
+        .split("\n")
+        .filter(Boolean)
+        .find((line) => line.includes("artifact_ref"))!,
+    );
+    expect(frame.params.refs).toBe("not-an-array");
   });
 
   it("crash：退出码 41", async () => {
