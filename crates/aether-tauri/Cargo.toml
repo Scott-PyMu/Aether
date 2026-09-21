@@ -47,6 +47,10 @@ tauri-plugin-single-instance = "2.4.4"
 # ADR-007：核心启动（StoreRuntime/EventPipeline）需 tokio 句柄；日志经 tracing（§2.2 选型）。
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "time"] }
 tracing = "0.1"
+# M2-07 DoD6（ADR-007 §5-1）：P0 运行期日志汇聚端（环形缓冲 + 文件）接线。
+# `tracing-subscriber` 为 `tracing` 的官方输出端（MIT/Apache-2.0，已在 Cargo.lock，
+# aether-control 经 dev-dependency 使用同版本 0.3.23）；`fmt` 提供 MakeWriter 接口。
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std", "registry", "ansi"] }
 url = { version = "2", features = [] }
 
 # A4 ③：HKCU\Software\Microsoft\OneDrive\Accounts\* 的 UserFolder 比对（winreg 安全封装，

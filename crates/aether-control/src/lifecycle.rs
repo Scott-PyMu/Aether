@@ -17,7 +17,15 @@
 //!   **子会话**（`parent_session_id` 递归）；权限等待可经 [`RunCancelToken::cancelled`] 取消；
 //! - **任务看门狗**（[`crate::cancel::TaskWatchdog`]）：登记会话执行任务；在途 run 被
 //!   摘除（中断/超时/降级/关闭）后 10s 未退出 → 记 [`crate::cancel::TaskDump`] 并
-//!   强制清理（`JoinHandle::abort`）；dump 进入诊断缓冲（M3-05 诊断包消费）。
+//!   强制清理（`AbortHandle::abort`）；dump 进入诊断缓冲（M3-05 诊断包消费）。
+//!
+//! 任务 panic 隔离（M2-07；设计 D2「长驻任务全部经 `JoinSet` 管理并登记名称；
+//! 任务 panic 由 JoinError 捕获记录，不传染」）：
+//! - 会话执行任务统一经 `JoinSet` spawn，任务名（`session:<id> run:<id>`）登记进看门狗；
+//! - 看门狗周期 [`reap_run_tasks`] 收割完成任务：`JoinError::is_panic()` → 记录该会话
+//!   `run.failed`（错误码 [`RUN_TASK_PANIC_CODE`]）+ 管线 sequencer 恢复；**其余会话**因
+//!   每会话独立任务且事件流来自管线广播而不受影响；
+//! - panic 后若等待队列已提升，重新 spawn 该会话任务继续执行（run 串行不变）。
 //!
 //! 执行器（[`RunExecutor`]）为 M2-02 真实适配器的接入缝；M2-01 集成测试用测试替身。
 //! 管理器内部对「状态机 + 行 + 事件」的每一次状态变更在状态互斥下整体串行，
@@ -40,7 +48,7 @@ use aether_store::{ReadPool, SessionQuery, StoreCommand, StoreError, StoreOutcom
 use serde_json::{json, Value};
 use tokio::runtime::Handle;
 use tokio::sync::Mutex as AsyncMutex;
-use tokio::task::JoinHandle;
+use tokio::task::{AbortHandle, JoinError, JoinHandle, JoinSet};
 
 use crate::backpressure::{BackpressureController, BackpressureError};
 use crate::cancel::{CancelTree, RunCancelToken, TaskDump, TaskWatchdog};
@@ -53,6 +61,8 @@ use crate::ulid;
 pub const RUN_STREAM_TIMEOUT_MS: i64 = 120_000;
 /// 断流超时错误码（`run.failed.error.code`）。
 pub const RUN_STREAM_TIMEOUT_CODE: &str = "run_stream_timeout";
+/// 会话执行任务 panic 错误码（M2-07；D2 失败表「JoinError 记录 + 会话标 failed」）。
+pub const RUN_TASK_PANIC_CODE: &str = "task_panic";
 /// 看门狗巡检周期（常量级调参；DoD 只约束 120s 判定，不约束巡检频率）。
 pub const WATCHDOG_TICK: Duration = Duration::from_secs(1);
 /// 每会话等待队列上限（D8：运行中再收到消息 → 入 1 条等待队列，超过回 `session_busy`）。
@@ -348,6 +358,10 @@ struct ManagerInner {
     cancel_tree: CancelTree,
     /// 任务看门狗（M2-05）：取消后 10s 未退出 → dump + 强制清理。
     task_watchdog: TaskWatchdog,
+    /// 会话执行任务集合（M2-07；D2：长驻任务全部经 `JoinSet` 管理）。
+    run_tasks: AsyncMutex<JoinSet<()>>,
+    /// run 任务 id →（会话, run）映射（panic 时经 JoinError 定位并恢复）。
+    run_task_index: Mutex<HashMap<tokio::task::Id, (SessionId, RunId)>>,
 }
 
 /// 会话生命周期管理器（克隆共享同一实例；内部状态经异步互斥保护）。
@@ -384,6 +398,8 @@ impl SessionManager {
                 backpressure: Mutex::new(None),
                 cancel_tree: CancelTree::new(),
                 task_watchdog,
+                run_tasks: AsyncMutex::new(JoinSet::new()),
+                run_task_index: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -670,7 +686,7 @@ impl SessionManager {
         drop(state);
 
         if !queued {
-            self.spawn_run(session_id.clone(), run_id.clone());
+            self.spawn_run(session_id.clone(), run_id.clone()).await;
         }
         Ok(SendAck {
             session_id: session_id.clone(),
@@ -842,6 +858,15 @@ impl SessionManager {
         self.inner.task_watchdog.sweep(self.inner.clock.now_ms())
     }
 
+    /// 收割已完成的会话执行任务并处理 panic（M2-07；D2 `JoinError` 捕获）。
+    ///
+    /// 返回本轮收割的任务数；panic 任务会触发该会话 `run.failed`（`task_panic`）
+    /// 与管线 sequencer 恢复，**其余会话不受影响**。背景任务随看门狗周期调用；
+    /// 测试可直接驱动以获得确定性断言。
+    pub async fn reap_run_tasks_once(&self) -> usize {
+        reap_run_tasks(&self.inner).await
+    }
+
     /// 任务 dump 快照（诊断包消费；M3-05 集成）。
     pub fn task_dumps(&self) -> Vec<TaskDump> {
         self.inner.task_watchdog.dumps()
@@ -908,6 +933,8 @@ impl SessionManager {
                 tokio::time::sleep(tick).await;
                 let timeout = watchdog_inner.config.run_stream_timeout_ms;
                 let _ = watchdog_once_inner(&watchdog_inner, timeout).await;
+                // M2-07：收割会话执行任务；panic 经 JoinError 捕获并恢复（D2 不传染）。
+                let _ = reap_run_tasks(&watchdog_inner).await;
                 // M2-05：取消后 10s 未退出的会话任务 → dump + 强制清理。
                 let _ = watchdog_inner
                     .task_watchdog
@@ -981,19 +1008,8 @@ impl SessionManager {
 
     // ===== 内部（调用方持有状态锁的路径不再重复加锁）=====
 
-    fn spawn_run(&self, session_id: SessionId, run_id: RunId) {
-        let inner = Arc::clone(&self.inner);
-        let task_session = session_id.clone();
-        let task_run = run_id.clone();
-        let task_name = format!("session:{} run:{}", session_id.as_str(), run_id.as_str());
-        let started_at_ms = self.inner.clock.now_ms();
-        let handle = tokio::spawn(async move {
-            let _ = run_active(&inner, task_session, task_run).await;
-        });
-        // M2-05：登记任务（取消后 10s 未退出 → dump + 强制清理）。
-        self.inner
-            .task_watchdog
-            .register(task_name, session_id, run_id, started_at_ms, handle);
+    async fn spawn_run(&self, session_id: SessionId, run_id: RunId) {
+        spawn_run_inner(&self.inner, session_id, run_id).await;
     }
 
     async fn hydrate_locked(
@@ -1136,6 +1152,174 @@ async fn run_active(
         match dispatch_and_finalize(inner, &session_id, current).await? {
             Some(next) => current = next,
             None => return Ok(()),
+        }
+    }
+}
+
+/// 经 `JoinSet` spawn 单会话执行任务（M2-07；D2 长驻任务统一经 `JoinSet` 管理）。
+///
+/// 任务名与 `AbortHandle` 登记进看门狗（M2-05 取消兜底）；`task::Id → (会话, run)`
+/// 映射供 [`reap_run_tasks`] 在 panic 时定位会话。
+async fn spawn_run_inner(inner: &Arc<ManagerInner>, session_id: SessionId, run_id: RunId) {
+    let task_inner = Arc::clone(inner);
+    let task_session = session_id.clone();
+    let task_run = run_id.clone();
+    let task_name = format!("session:{} run:{}", session_id.as_str(), run_id.as_str());
+    let started_at_ms = inner.clock.now_ms();
+    let abort: AbortHandle = {
+        let mut set = inner.run_tasks.lock().await;
+        set.spawn(async move {
+            let _ = run_active(&task_inner, task_session, task_run).await;
+        })
+    };
+    let task_id = abort.id();
+    match inner.run_task_index.lock() {
+        Ok(mut index) => {
+            index.insert(task_id, (session_id.clone(), run_id.clone()));
+        }
+        Err(poisoned) => {
+            poisoned
+                .into_inner()
+                .insert(task_id, (session_id.clone(), run_id.clone()));
+        }
+    }
+    // M2-05：登记任务（取消后 10s 未退出 → dump + 强制清理）。
+    inner
+        .task_watchdog
+        .register(task_name, session_id, run_id, started_at_ms, abort);
+}
+
+/// 收割已完成的会话执行任务（M2-07）：`JoinError::is_panic()` → 该会话隔离恢复。
+///
+/// 返回本轮收割的任务数。取消（`abort`）与正常完成不产生恢复动作。
+async fn reap_run_tasks(inner: &Arc<ManagerInner>) -> usize {
+    let mut reaped = 0usize;
+    loop {
+        let joined = {
+            let mut set = inner.run_tasks.lock().await;
+            set.try_join_next_with_id()
+        };
+        let Some(joined) = joined else { break };
+        reaped += 1;
+        let task_id = match &joined {
+            Ok((id, ())) => *id,
+            Err(error) => error.id(),
+        };
+        let target = match inner.run_task_index.lock() {
+            Ok(mut index) => index.remove(&task_id),
+            Err(poisoned) => poisoned.into_inner().remove(&task_id),
+        };
+        match joined {
+            Ok((_id, ())) => {}
+            Err(error) if error.is_panic() => {
+                let detail = panic_detail(error);
+                match target {
+                    Some((session_id, run_id)) => {
+                        handle_run_task_panic(inner, session_id, run_id, detail).await;
+                    }
+                    None => {
+                        tracing::error!(
+                            panic = %detail,
+                            "会话执行任务 panic（JoinError）：任务索引缺失，仅记录（D2）"
+                        );
+                    }
+                }
+            }
+            Err(_cancelled) => {}
+        }
+    }
+    reaped
+}
+
+/// 提取 panic payload 文本（`&str` / `String`；其余类型以占位描述呈现）。
+fn panic_detail(error: JoinError) -> String {
+    let payload = error.into_panic();
+    if let Some(text) = payload.downcast_ref::<&str>() {
+        (*text).to_owned()
+    } else if let Some(text) = payload.downcast_ref::<String>() {
+        text.clone()
+    } else {
+        "非字符串 panic payload".to_owned()
+    }
+}
+
+/// panic 隔离恢复（M2-07；D2 失败表）：
+/// 1. 记录 JoinError（会话/run/panic 详情）；
+/// 2. 管线 sequencer 恢复（丢弃未落盘 delta，下一次提交从库中 `max(seq)+1` 继续）；
+/// 3. 在途 run 标 `failed`（`task_panic`，可重试）且会话回 `idle`；
+/// 4. 若等待队列已提升，重新 spawn 该会话任务续跑（run 串行不变）。
+async fn handle_run_task_panic(
+    inner: &Arc<ManagerInner>,
+    session_id: SessionId,
+    run_id: RunId,
+    detail: String,
+) {
+    tracing::error!(
+        target: "aether_control::lifecycle",
+        session_id = %session_id,
+        run_id = %run_id,
+        panic = %detail,
+        "会话执行任务 panic（JoinError）：仅该会话标记 failed，其余会话不受影响（D2）"
+    );
+    // D4 sequencer 崩溃恢复：丢弃未落盘 delta，下一次提交从库中 max(seq)+1 恢复。
+    if let Err(error) = inner.pipeline.restart_session(session_id.clone()).await {
+        tracing::warn!(
+            session_id = %session_id,
+            error = %error,
+            "panic 后 sequencer 恢复调用失败（继续终态收口）"
+        );
+    }
+
+    let active_run = {
+        let state = lock_state(inner).await;
+        state
+            .sessions
+            .get(&session_id)
+            .and_then(|session| session.active.as_ref())
+            .map(|active| active.run_id.clone())
+    };
+    let Some(active_run) = active_run else {
+        // 无在途 run：panic 发生在终态收尾窗口时确保会话不卡在 running。
+        let runtime_id = {
+            let state = lock_state(inner).await;
+            state
+                .sessions
+                .get(&session_id)
+                .map(|session| session.runtime_id.clone())
+        };
+        if let Some(runtime_id) = runtime_id {
+            if let Err(error) = settle_session_idle(inner, &session_id, &runtime_id).await {
+                tracing::warn!(
+                    session_id = %session_id,
+                    error = %error,
+                    "panic 后会话 idle 收口失败"
+                );
+            }
+        }
+        return;
+    };
+
+    let error = ErrorInfo {
+        code: RUN_TASK_PANIC_CODE.to_owned(),
+        message: format!(
+            "会话执行任务 panic（JoinError）：{detail}；仅该会话标记 failed（D2），\
+             重放按 ADR-005 恢复模式"
+        ),
+        recoverable: true,
+    };
+    match finalize_failed(inner, &session_id, &active_run, error).await {
+        Ok(Some(next)) => {
+            // 等待队列已提升：原任务已死，重新 spawn 该会话任务继续执行。
+            spawn_run_inner(inner, session_id.clone(), next.run_id.clone()).await;
+        }
+        Ok(None) => {}
+        Err(error) => {
+            tracing::error!(
+                session_id = %session_id,
+                run_id = %active_run,
+                error = %error,
+                "panic 后 run 终态收口失败（等待看门狗/重启恢复）"
+            );
         }
     }
 }

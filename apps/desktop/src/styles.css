@@ -122,3 +122,80 @@ body {
   color: #e8a7a7;
   margin: 0;
 }
+
+/* ===== M2-07：核心健康监控（health 轮询 / 降级 / 无响应） ===== */
+
+.health-normal {
+  color: #9aa0a6;
+  font-size: 0.85rem;
+  margin: 0.5rem 0 0;
+}
+
+.health-loading {
+  color: #9aa0a6;
+  font-size: 0.85rem;
+  margin: 0.5rem 0 0;
+}
+
+.health-degraded,
+.health-unresponsive {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-width: 46rem;
+  margin: 1rem auto 0;
+  padding: 0.75rem 1rem;
+  border-radius: 6px;
+}
+
+.health-degraded {
+  border: 1px solid #6b5a2e;
+  background-color: #241f14;
+}
+
+.health-unresponsive {
+  border: 1px solid #7a3b3b;
+  background-color: #2a1717;
+}
+
+.health-title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.health-degraded .health-title {
+  color: #f6b26b;
+}
+
+.health-unresponsive .health-title {
+  color: #e8a7a7;
+}
+
+.health-detail {
+  color: #c8ccd1;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.health-unresponsive button {
+  align-self: flex-start;
+  background-color: #2a2f37;
+  border: 1px solid #3a3f47;
+  border-radius: 4px;
+  color: inherit;
+  cursor: pointer;
+  padding: 0.5rem 1rem;
+}
+
+.health-unresponsive button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.health-error {
+  color: #e8a7a7;
+  font-size: 0.85rem;
+  margin: 0;
+}

@@ -217,6 +217,11 @@ pub struct RuntimeSupervisor {
     probe: Arc<dyn ProcessProbe>,
     sampler: SysinfoSampler,
     state: Mutex<SupervisorState>,
+    /// 同步状态快照缓存（M2-07：`health.runtimes` 摘要的最小读取句柄）。
+    ///
+    /// `state` 为异步互斥（启动/握手期间可能长时间持锁），健康查询不能等待；
+    /// 每次状态转移在 `transition_locked` 内同步刷新本缓存（临界区仅赋值）。
+    summary: std::sync::Mutex<(RuntimeStatus, Option<DisabledReason>)>,
 }
 
 impl RuntimeSupervisor {
@@ -246,6 +251,7 @@ impl RuntimeSupervisor {
                 running: None,
                 ready_since_ms: None,
             }),
+            summary: std::sync::Mutex::new((RuntimeStatus::Cold, None)),
         }
     }
 
@@ -263,6 +269,17 @@ impl RuntimeSupervisor {
 
     pub async fn status_reason(&self) -> Option<DisabledReason> {
         self.state.lock().await.fsm.status_reason()
+    }
+
+    /// 同步状态快照（M2-07：`health.runtimes` 摘要；不等待异步状态锁）。
+    ///
+    /// 返回值与 `runtimes.status` / `runtimes.status_reason` 一一对应（D5）；
+    /// 由每次 [`RuntimeSupervisor::transition_locked`] 同步刷新。
+    pub fn summary_snapshot(&self) -> (RuntimeStatus, Option<DisabledReason>) {
+        match self.summary.lock() {
+            Ok(guard) => *guard,
+            Err(poisoned) => *poisoned.into_inner(),
+        }
     }
 
     /// 当前是否持有运行中的进程（诊断/断言用）。
@@ -792,6 +809,11 @@ impl RuntimeSupervisor {
         if to == RuntimeStatus::Ready {
             state.ready_since_ms = Some(now_u64());
         }
+        // M2-07：同步刷新 `health.runtimes` 摘要缓存（临界区仅赋值）。
+        match self.summary.lock() {
+            Ok(mut summary) => *summary = (change.to, change.reason),
+            Err(poisoned) => *poisoned.into_inner() = (change.to, change.reason),
+        }
         self.observer.on_status_changed(&change);
         Ok(change)
     }
@@ -1161,6 +1183,32 @@ mod tests {
             RuntimeSupervisor::status_event_type().as_str(),
             "runtime.status_changed"
         );
+    }
+
+    /// M2-07：`health.runtimes` 摘要同步快照与状态机一一对应（含 `status_reason`）。
+    #[tokio::test(flavor = "current_thread")]
+    async fn summary_snapshot_tracks_state_core_transitions() {
+        let (supervisor, _ledger) = test_supervisor("aether-test-nonexistent-program");
+        assert_eq!(
+            supervisor.summary_snapshot(),
+            (RuntimeStatus::Cold, None),
+            "初始与 DDL 默认（cold）一致"
+        );
+        assert_eq!(
+            supervisor.summary_snapshot(),
+            (supervisor.status().await, supervisor.status_reason().await)
+        );
+
+        // 非官方 manifest → disabled + untrusted；快照必须同步。
+        let outcome = supervisor
+            .reject_untrusted("非官方 manifest（M2-07 单测）".to_owned())
+            .await;
+        assert!(matches!(outcome, StartOutcome::Rejected { .. }));
+        let (status, reason) = supervisor.summary_snapshot();
+        assert_eq!(status, RuntimeStatus::Disabled);
+        assert_eq!(reason, Some(DisabledReason::Untrusted));
+        assert_eq!(status, supervisor.status().await);
+        assert_eq!(reason, supervisor.status_reason().await);
     }
 
     #[test]

@@ -20,11 +20,15 @@
 //!   [`EventPipeline::health`] 返回 `storage_state=persist_degraded`；
 //! - **背压边界**（ADR-004）：写队列临时高水位（D8 L2）返回 `storage_backpressure`，
 //!   **不**进入降级状态；
+//! - **核心 RSS 巡检**（M2-07；D2 缓解措施）：2GB 告警、2.5GB 强制 delta 限流。
+//!   巡检端（[`crate::resource_patrol`]）经 [`EventPipeline::report_resource_pressure`]
+//!   上报；告警事件走正常落盘路径（先日志后广播），限流经 [`effective_delta_interval`]
+//!   放宽 delta 合并窗口；
 //! - **DB 兜底**：`UNIQUE(session_id, seq)` 命中视为管线 bug——计入诊断并按持久化
 //!   失败路径处理（D4）；`evt.id` 主键冲突则按幂等命中丢弃。
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -67,6 +71,58 @@ pub const PERSIST_RETRY_DELAY: Duration = Duration::from_millis(25);
 pub const READBACK_MAX_GAP: u64 = 10_000;
 /// 补读分页大小（D7 分页 ≤500 条）。
 pub const READBACK_PAGE_SIZE: usize = 500;
+/// 核心 RSS 告警阈值（D2 缓解措施：2GB 告警）。
+pub const RSS_ALERT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// 核心 RSS 强制 delta 限流阈值（D2 缓解措施：2.5GB）。
+pub const RSS_THROTTLE_BYTES: u64 = 5 * 1024 * 1024 * 1024 / 2;
+/// RSS 告警事件错误码（`error` 事件；附录 B 已有类型，不自造类型）。
+pub const RSS_ALERT_EVENT_CODE: &str = "core_rss_alert";
+/// RSS 限流事件错误码。
+pub const RSS_THROTTLE_EVENT_CODE: &str = "core_rss_throttle";
+/// RSS 限流期的 delta 合并窗口（D2：2.5GB 强制 delta 限流）。
+///
+/// 常量级调参：在 L1/L2 背压窗口（64ms）之上进一步放宽到 256ms（约 16 倍于默认
+/// 16ms），以降低 delta 缓冲与广播的内存增速；不改变「先日志后广播」与终稿语义。
+pub const RSS_THROTTLE_DELTA_INTERVAL: Duration = Duration::from_millis(256);
+
+/// 核心 RSS 巡检压力等级（M2-07；单调含回落语义由巡检端判定后上报）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ResourcePressure {
+    /// 正常（< 2GB）。
+    #[default]
+    Normal,
+    /// 告警（≥ 2GB；`error` 事件 `core_rss_alert`）。
+    Alert,
+    /// 强制 delta 限流（≥ 2.5GB；`error` 事件 `core_rss_throttle`）。
+    Throttled,
+}
+
+impl ResourcePressure {
+    /// 稳定取值（诊断/事件消息/测试断言）。
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Alert => "alert",
+            Self::Throttled => "throttled",
+        }
+    }
+
+    const fn level(self) -> u8 {
+        match self {
+            Self::Normal => 0,
+            Self::Alert => 1,
+            Self::Throttled => 2,
+        }
+    }
+
+    fn from_level(level: u8) -> Self {
+        match level {
+            0 => Self::Normal,
+            1 => Self::Alert,
+            _ => Self::Throttled,
+        }
+    }
+}
 
 /// 管线运行参数（默认值即 D4 约定；测试/故障注入可参数化）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -230,6 +286,12 @@ pub struct PipelineHealth {
     pub journal_queue_depth: usize,
     /// journal 背压等级（临时高水位诊断）。
     pub journal_pressure_level: Option<PressureLevel>,
+    /// 核心 RSS 巡检压力等级（M2-07；`normal` / `alert` / `throttled`）。
+    pub resource_pressure: ResourcePressure,
+    /// RSS 告警事件数（≥ 2GB 升级时 +1）。
+    pub resource_alert_events: u64,
+    /// RSS 强制 delta 限流事件数（≥ 2.5GB 升级时 +1）。
+    pub resource_throttle_events: u64,
 }
 
 impl PipelineHealth {
@@ -261,6 +323,8 @@ struct PipelineCounters {
     delta_persisted_events: AtomicU64,
     sequencer_restarts: AtomicU64,
     delta_buffers_discarded: AtomicU64,
+    resource_alert_events: AtomicU64,
+    resource_throttle_events: AtomicU64,
 }
 
 fn bump(counter: &AtomicU64, amount: u64) {
@@ -332,11 +396,18 @@ enum FlushMode {
 
 /// 写队列压力下的 delta 合并窗口（D8：L1/L2 临时高水位 → 放宽至 64ms）。
 ///
+/// M2-07：核心 RSS 达到 2.5GB（[`ResourcePressure::Throttled`]）时强制放宽到
+/// [`RSS_THROTTLE_DELTA_INTERVAL`]（取原窗口与新窗口的较大者）。
+///
 /// 常量级调参：仅影响合并批次节奏，不改变「先日志后广播」与终稿语义。
 pub(crate) fn effective_delta_interval(
     pressure: Option<PressureLevel>,
+    resource_pressure: ResourcePressure,
     base: Duration,
 ) -> Duration {
+    if resource_pressure == ResourcePressure::Throttled {
+        return base.max(RSS_THROTTLE_DELTA_INTERVAL);
+    }
     match pressure {
         Some(_) => DELTA_FLUSH_INTERVAL_L1,
         None => base,
@@ -364,6 +435,12 @@ enum Command {
         trigger: DegradeTrigger,
         reply: oneshot::Sender<bool>,
     },
+    /// 核心 RSS 巡检上报（M2-07；D2 缓解措施）。
+    ReportResourcePressure {
+        pressure: ResourcePressure,
+        rss_bytes: u64,
+        reply: oneshot::Sender<Result<bool, PipelineError>>,
+    },
     Shutdown {
         reply: oneshot::Sender<()>,
     },
@@ -381,6 +458,8 @@ pub struct EventPipeline {
     journal: Arc<dyn JournalWriter>,
     source: Arc<dyn EventSource>,
     actor: Arc<Mutex<Option<JoinHandle<()>>>>,
+    /// 核心 RSS 巡检压力等级（M2-07；原子读，供 delta 合并窗口与 `health` 使用）。
+    resource_pressure: Arc<AtomicU8>,
 }
 
 impl EventPipeline {
@@ -402,6 +481,7 @@ impl EventPipeline {
         let (commands, receiver) = mpsc::channel(config.submit_queue_capacity);
         let (events, _receiver) = broadcast::channel(config.broadcast_capacity);
         let (run_interrupts, _receiver) = broadcast::channel(RUN_INTERRUPT_CAPACITY);
+        let resource_pressure = Arc::new(AtomicU8::new(ResourcePressure::Normal.level()));
         let actor = Actor {
             config: Arc::clone(&config),
             journal: Arc::clone(&journal),
@@ -413,6 +493,7 @@ impl EventPipeline {
             sessions: HashMap::new(),
             dedup: DedupSet::new(config.dedup_capacity),
             in_flight_runs: BTreeMap::new(),
+            resource_pressure: Arc::clone(&resource_pressure),
         };
         let join = handle.spawn(run_actor(actor, receiver));
         Ok(Self {
@@ -425,6 +506,7 @@ impl EventPipeline {
             journal,
             source,
             actor: Arc::new(Mutex::new(Some(join))),
+            resource_pressure,
         })
     }
 
@@ -477,6 +559,34 @@ impl EventPipeline {
             .await
             .map_err(|_| PipelineError::PipelineClosed)?;
         receiver.await.map_err(|_| PipelineError::PipelineClosed)
+    }
+
+    /// 核心 RSS 巡检上报（M2-07；D2 缓解措施）。
+    ///
+    /// - 原子更新压力等级（`health().resource_pressure`）；
+    /// - **升级**（`Normal→Alert`、`*→Throttled`）时经正常落盘路径产生 `error` 事件
+    ///   （`core_rss_alert` / `core_rss_throttle`；先日志后广播）并计数；回落不产生事件；
+    /// - 返回 `true` 表示本次调用产生了升级通知事件（已落盘并广播）。
+    pub async fn report_resource_pressure(
+        &self,
+        pressure: ResourcePressure,
+        rss_bytes: u64,
+    ) -> Result<bool, PipelineError> {
+        let (reply, receiver) = oneshot::channel();
+        self.commands
+            .send(Command::ReportResourcePressure {
+                pressure,
+                rss_bytes,
+                reply,
+            })
+            .await
+            .map_err(|_| PipelineError::PipelineClosed)?;
+        receiver.await.map_err(|_| PipelineError::PipelineClosed)?
+    }
+
+    /// 当前核心 RSS 巡检压力等级（诊断/测试）。
+    pub fn resource_pressure(&self) -> ResourcePressure {
+        ResourcePressure::from_level(self.resource_pressure.load(Ordering::Relaxed))
     }
 
     /// 补读（D4：`last_seq` 断点续传）。
@@ -584,6 +694,14 @@ impl EventPipeline {
             ingress_pending: self.counters.ingress_pending.load(Ordering::Relaxed),
             journal_queue_depth: metrics.queue_depth,
             journal_pressure_level: metrics.pressure_level,
+            resource_pressure: ResourcePressure::from_level(
+                self.resource_pressure.load(Ordering::Relaxed),
+            ),
+            resource_alert_events: self.counters.resource_alert_events.load(Ordering::Relaxed),
+            resource_throttle_events: self
+                .counters
+                .resource_throttle_events
+                .load(Ordering::Relaxed),
         }
     }
 
@@ -632,6 +750,7 @@ struct Actor {
     sessions: HashMap<SessionId, SessionState>,
     dedup: DedupSet,
     in_flight_runs: BTreeMap<RunId, SessionId>,
+    resource_pressure: Arc<AtomicU8>,
 }
 
 async fn run_actor(mut actor: Actor, mut receiver: mpsc::Receiver<Command>) {
@@ -660,6 +779,14 @@ async fn run_actor(mut actor: Actor, mut receiver: mpsc::Receiver<Command>) {
                 let origin = actor.default_origin();
                 let transitioned = actor.enter_degraded(trigger, origin, 0).await;
                 let _ = reply.send(transitioned);
+            }
+            Some(Command::ReportResourcePressure {
+                pressure,
+                rss_bytes,
+                reply,
+            }) => {
+                let result = actor.apply_resource_pressure(pressure, rss_bytes).await;
+                let _ = reply.send(result);
             }
             Some(Command::Shutdown { reply }) => {
                 // 关闭序列（D2）：放弃未落盘 delta（控制事件已按提交序落盘），不广播。
@@ -809,9 +936,11 @@ impl Actor {
                 }
             }
             None => {
-                // D8 L1/L2：写队列临时高水位 → delta 合并批次放宽至 64ms（M2-04）。
+                // D8 L1/L2：写队列临时高水位 → delta 合并批次放宽至 64ms（M2-04）；
+                // M2-07：核心 RSS 限流期进一步放宽至 256ms（D2 缓解措施）。
                 let interval = effective_delta_interval(
                     self.journal.metrics().pressure_level,
+                    ResourcePressure::from_level(self.resource_pressure.load(Ordering::Relaxed)),
                     self.config.delta_flush_interval,
                 );
                 let mut buffer = DeltaBuffer::new(
@@ -1174,6 +1303,107 @@ impl Actor {
         bump(&self.counters.delta_buffers_discarded, discarded);
         bump(&self.counters.sequencer_restarts, 1);
     }
+
+    /// 应用核心 RSS 巡检上报（M2-07；D2 缓解措施）。
+    ///
+    /// - 压力等级写入共享原子（delta 窗口与 `health` 立即生效）；
+    /// - **升级**（`Normal→Alert` / `→Throttled`）产生 `error` 事件（先日志后广播）；
+    ///   回落不产生事件（仅日志与 `health` 呈现）；
+    /// - `Throttled` 同时放宽在途 delta 缓冲的合并窗口（强制 delta 限流）。
+    async fn apply_resource_pressure(
+        &mut self,
+        pressure: ResourcePressure,
+        rss_bytes: u64,
+    ) -> Result<bool, PipelineError> {
+        let previous = ResourcePressure::from_level(self.resource_pressure.load(Ordering::Relaxed));
+        self.resource_pressure
+            .store(pressure.level(), Ordering::Relaxed);
+        if pressure.level() <= previous.level() {
+            if pressure.level() < previous.level() {
+                tracing::warn!(
+                    rss_bytes,
+                    from = previous.code(),
+                    to = pressure.code(),
+                    "核心 RSS 巡检：压力回落，恢复 delta 合并窗口（D2）"
+                );
+            }
+            return Ok(false);
+        }
+
+        let (code, label) = match pressure {
+            ResourcePressure::Alert => (RSS_ALERT_EVENT_CODE, "告警"),
+            ResourcePressure::Throttled => (RSS_THROTTLE_EVENT_CODE, "强制 delta 限流"),
+            ResourcePressure::Normal => return Ok(false),
+        };
+        let action = match pressure {
+            ResourcePressure::Alert => "已记录告警并继续观测",
+            ResourcePressure::Throttled => "delta 合并窗口已强制放宽（降低内存增速）",
+            ResourcePressure::Normal => "无操作",
+        };
+        let message = format!(
+            "核心 RSS {label}：当前 {rss_bytes} 字节（阈值：告警 {RSS_ALERT_BYTES} / \
+             限流 {RSS_THROTTLE_BYTES} 字节）；{action}（D2 缓解措施）"
+        );
+        tracing::warn!(rss_bytes, pressure = code, "{message}");
+        match pressure {
+            ResourcePressure::Alert => bump(&self.counters.resource_alert_events, 1),
+            ResourcePressure::Throttled => {
+                bump(&self.counters.resource_throttle_events, 1);
+                // 强制 delta 限流：放宽在途缓冲窗口（新缓冲经 effective_delta_interval 生效）。
+                let now = Instant::now();
+                let interval = self
+                    .config
+                    .delta_flush_interval
+                    .max(RSS_THROTTLE_DELTA_INTERVAL);
+                for state in self.sessions.values_mut() {
+                    for buffer in state.deltas.iter_mut() {
+                        buffer.relax_deadline(now, interval);
+                    }
+                }
+            }
+            ResourcePressure::Normal => {}
+        }
+
+        let Some((session_id, runtime_id)) = self.default_origin() else {
+            // 无任何会话：`error` 事件必须归属合法会话；仅 tracing + health 呈现。
+            return Ok(false);
+        };
+        // 保序：先冲刷该会话待合并 delta（与 process 的非 delta 事件路径同口径）。
+        if let Err(error) = self.flush_session_deltas(&session_id, FlushMode::All).await {
+            tracing::warn!(error = %error, "RSS 巡检通知前 delta 冲刷失败（继续尝试通知）");
+        }
+        let id = match EventId::new(ulid::generate()) {
+            Ok(id) => id,
+            Err(error) => {
+                tracing::warn!(error = %error, "RSS 巡检通知事件 id 生成失败（仅 health/日志呈现）");
+                return Ok(false);
+            }
+        };
+        let pending = PendingEvent {
+            id,
+            session_id,
+            run_id: None,
+            runtime_id,
+            ts: now_ms(),
+            payload: EventPayload::Error(ErrorInfo {
+                code: code.to_owned(),
+                message,
+                recoverable: true,
+            }),
+        };
+        // 走正常落盘路径（seq + 重试 + 先日志后广播，D4 统一出口）；失败仅经 health/日志呈现。
+        match self.persist_pending(pending, 1).await {
+            Ok(SubmitOutcome::Persisted { .. }) => Ok(true),
+            Ok(_) => Ok(false),
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    "RSS 巡检通知落盘失败：仅经 health/日志呈现（不改变存储状态）"
+                );
+                Ok(false)
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1235,21 +1465,62 @@ mod tests {
     #[test]
     fn l1_pressure_relaxes_delta_flush_interval_to_64ms() {
         assert_eq!(
-            effective_delta_interval(None, DELTA_FLUSH_INTERVAL),
+            effective_delta_interval(None, ResourcePressure::Normal, DELTA_FLUSH_INTERVAL),
             DELTA_FLUSH_INTERVAL,
             "正常水位保持 16ms"
         );
         assert_eq!(
-            effective_delta_interval(Some(PressureLevel::L1), DELTA_FLUSH_INTERVAL),
+            effective_delta_interval(
+                Some(PressureLevel::L1),
+                ResourcePressure::Normal,
+                DELTA_FLUSH_INTERVAL
+            ),
             DELTA_FLUSH_INTERVAL_L1,
             "D8 L1：放宽至 64ms"
         );
         assert_eq!(
-            effective_delta_interval(Some(PressureLevel::L2), DELTA_FLUSH_INTERVAL),
+            effective_delta_interval(
+                Some(PressureLevel::L2),
+                ResourcePressure::Normal,
+                DELTA_FLUSH_INTERVAL
+            ),
             DELTA_FLUSH_INTERVAL_L1,
             "D8 L2：存量 delta 同样放宽"
         );
         assert_eq!(DELTA_FLUSH_INTERVAL_L1, Duration::from_millis(64));
+    }
+
+    /// M2-07 DoD3：RSS 达到 2.5GB（`Throttled`）→ 强制 delta 限流窗口。
+    #[test]
+    fn rss_throttle_forces_wider_delta_flush_interval() {
+        assert_eq!(
+            effective_delta_interval(None, ResourcePressure::Throttled, DELTA_FLUSH_INTERVAL),
+            RSS_THROTTLE_DELTA_INTERVAL,
+            "限流期默认窗口放宽至 256ms"
+        );
+        assert_eq!(
+            effective_delta_interval(
+                Some(PressureLevel::L2),
+                ResourcePressure::Throttled,
+                DELTA_FLUSH_INTERVAL
+            ),
+            RSS_THROTTLE_DELTA_INTERVAL,
+            "限流优先于 L2 背压窗口"
+        );
+        assert_eq!(
+            effective_delta_interval(None, ResourcePressure::Throttled, Duration::from_secs(1)),
+            Duration::from_secs(1),
+            "原窗口更大时取较大者（不缩短）"
+        );
+        assert_eq!(
+            effective_delta_interval(None, ResourcePressure::Alert, DELTA_FLUSH_INTERVAL),
+            DELTA_FLUSH_INTERVAL,
+            "2GB 告警不改变合并窗口（仅 2.5GB 限流）"
+        );
+        assert_eq!(RSS_ALERT_BYTES, 2 * 1024 * 1024 * 1024, "D2：2GB 告警");
+        assert_eq!(RSS_THROTTLE_BYTES, 5 * 512 * 1024 * 1024, "D2：2.5GB 限流");
+        assert_eq!(RSS_ALERT_EVENT_CODE, "core_rss_alert");
+        assert_eq!(RSS_THROTTLE_EVENT_CODE, "core_rss_throttle");
     }
 
     #[test]

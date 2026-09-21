@@ -303,3 +303,43 @@ fn health_passes_through_wired_runtime_summaries() {
         "空 reason 不序列化: {value}"
     );
 }
+
+/// M2-07（ADR-007 §5-2）：生产摘要源 `SupervisorRuntimeSummaries` 与监督器
+/// `status`/`status_reason` 一一映射——空注册表 `[]`、条目按 `id` 稳定排序。
+#[test]
+fn supervisor_summaries_freeze_status_mapping() {
+    use aether_tauri::core_health::{RuntimeSummarySource, SupervisorRuntimeSummaries};
+    use aether_tauri::runtime_control::{boot_supervisor, mock_spec};
+
+    let dir = TempDir::new().expect("临时目录");
+    let ledger = dir.path().join("adapters.json");
+
+    // 已接线、无 runtime → []（与未接线的 null 严格区分）。
+    let empty = Arc::new(boot_supervisor(Vec::new(), Some(&ledger)).expect("空监督器"));
+    let source = SupervisorRuntimeSummaries::new(empty);
+    assert_eq!(source.summaries(), Some(Vec::new()), "已接线空 → []");
+
+    // 两个 runtime（注册顺序 zeta → alpha）：快照按 id 排序且状态取自状态机。
+    let supervisor = Arc::new(
+        boot_supervisor(
+            vec![
+                mock_spec("zeta", "aether-adapter-fixture"),
+                mock_spec("alpha", "aether-adapter-fixture"),
+            ],
+            Some(&ledger),
+        )
+        .expect("监督器"),
+    );
+    let source = SupervisorRuntimeSummaries::new(supervisor);
+    let summaries = source.summaries().expect("已接线必须为数组");
+    let ids: Vec<&str> = summaries
+        .iter()
+        .map(|summary| summary.id.as_str())
+        .collect();
+    assert_eq!(ids, vec!["alpha", "zeta"], "摘要按 id 稳定排序");
+    for summary in &summaries {
+        assert_eq!(summary.status, "cold", "未启动 = DDL 默认 cold");
+        assert!(summary.status_reason.is_none());
+    }
+    println!("health(runtimes wired) = {:?}", summaries);
+}

@@ -17,12 +17,15 @@ pub mod config;
 pub mod core_health;
 pub mod ipc;
 pub mod isolation;
+pub mod logging;
 pub mod nav;
 pub mod picker;
 pub mod runtime_control;
 pub mod single_instance;
 pub mod startup;
 
+#[cfg(debug_assertions)]
+mod health_probe;
 #[cfg(debug_assertions)]
 mod probe;
 #[cfg(debug_assertions)]
@@ -86,6 +89,22 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     startup_probe::record_phase(&startup);
     let startup_for_boot = std::sync::Arc::clone(&startup);
 
+    // M2-07 DoD6（ADR-007 §5-1）：P0 运行期日志汇聚端接线（环形缓冲 + 数据目录文件）。
+    // 启动门未就绪（同步盘阻断）时不触碰候选目录，仅环形缓冲；文件不可写同样退化。
+    match startup.snapshot().phase {
+        startup::StartupPhase::Ready => {
+            match logging::init_for_data_dir(std::path::Path::new(&startup.snapshot().data_dir)) {
+                Ok(_sink) => {}
+                Err(error) => eprintln!("[aether] {error}（继续以无汇聚端运行）"),
+            }
+        }
+        _ => {
+            if logging::init(logging::LogSink::new(logging::DEFAULT_RING_CAPACITY)).is_err() {
+                eprintln!("[aether] 日志汇聚端接线失败（继续以无汇聚端运行）");
+            }
+        }
+    }
+
     // 路径白名单根目录随 M3-05（诊断导出）接入；未配置即默认拒绝。
     // debug + E2E 探针可注入固定目录选择器（迁移主路径自动化）；生产用系统选择器。
     #[cfg(debug_assertions)]
@@ -118,6 +137,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             {
                 probe::setup_window(app.handle())?;
                 startup_probe::start(app.handle().clone());
+                health_probe::start(app.handle().clone());
             }
             #[cfg(not(debug_assertions))]
             {
@@ -129,13 +149,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// 构造命令后端（ADR-007 `health` 真实接线 + M2-01 `runtime_*` 接线）。
+/// 构造命令后端（ADR-007 `health` 真实接线 + M2-01 `runtime_*` 接线 + M2-07 巡检）。
 ///
-/// - 启动门 Ready：打开存储（`quick_check` + 迁移）→ 事件管线 → [`core_health::CoreHealthBackend`]；
+/// - 启动门 Ready：监督器摘要先接线（`health.runtimes` 返回真实快照：空注册表 `[]`；
+///   台账初始化失败 → `null`）→ 打开存储（`quick_check` + 迁移）→ 事件管线 →
+///   [`core_health::CoreHealthBackend`] → 启动 RSS 巡检（D2：2GB 告警 / 2.5GB 限流）；
 /// - 监督器（M2-01 空注册表；M2-02 注册真实适配器）：接线 `runtime_retry`/`runtime_enable`；
-///   台账初始化失败时降级为未接线（命令回 `core_not_ready`），不影响 `health`；
 /// - 启动失败（安全模式等）：按 D3 只读语义呈现为 `persist_degraded`（`degraded_backend`），
-///   不回退 `not_implemented`；
+///   不回退 `not_implemented`；巡检不启动（无管线句柄）；
 /// - 启动门阻断（A4 同步盘检测）：核心不启动；业务命令由启动门返回 `startup_blocked`。
 fn build_backend(
     startup: &std::sync::Arc<startup::StartupGate>,
@@ -145,27 +166,47 @@ fn build_backend(
     }
     let data_dir = std::path::PathBuf::from(startup.snapshot().data_dir);
     let handle = tauri::async_runtime::handle().inner().clone();
+
+    // M2-07（ADR-007 §5-2）：监督器摘要接线在 health 之前完成，
+    // `health.runtimes` 与监督器状态一一对应（字段映射冻结）。
+    let supervisor: Option<std::sync::Arc<aether_adapters::supervisor::Supervisor>> =
+        match runtime_control::boot_empty_supervisor(None) {
+            Ok(supervisor) => Some(std::sync::Arc::new(supervisor)),
+            Err(error) => {
+                tracing::warn!(error = %error, "监督器台账初始化失败：runtime 控制命令回 core_not_ready");
+                None
+            }
+        };
+    let runtimes: std::sync::Arc<dyn core_health::RuntimeSummarySource> = match &supervisor {
+        Some(supervisor) => std::sync::Arc::new(core_health::SupervisorRuntimeSummaries::new(
+            std::sync::Arc::clone(supervisor),
+        )),
+        None => std::sync::Arc::new(core_health::StaticRuntimeSummaries::unwired()),
+    };
+
     let health: std::sync::Arc<dyn ipc::IpcBackend> =
-        match core_health::boot_core_health(&data_dir, &handle) {
-            Ok(core) => std::sync::Arc::new(core),
+        match core_health::boot_core_health_with(&data_dir, &handle, runtimes) {
+            Ok(core) => {
+                // M2-07 DoD3：核心 RSS 巡检（2GB 告警 / 2.5GB 强制 delta 限流；
+                // env 钩子供测试/演练注入阈值）。任务随应用生命周期存活（detached）。
+                if let Some(pipeline) = core.pipeline() {
+                    let patrol = aether_control::ResourcePatrol::with_env();
+                    let _patrol_task = patrol.start((**pipeline).clone(), &handle);
+                }
+                std::sync::Arc::new(core)
+            }
             Err(error) => {
                 tracing::error!(error = %error, "核心健康源启动失败：按只读降级呈现 health");
                 std::sync::Arc::new(core_health::degraded_backend(&error.to_string()))
             }
         };
     let control: Option<std::sync::Arc<dyn runtime_control::RuntimeControl>> =
-        match runtime_control::boot_empty_supervisor(None) {
-            Ok(supervisor) => Some(std::sync::Arc::new(
-                runtime_control::SupervisorControl::new(
-                    std::sync::Arc::new(supervisor),
-                    handle,
-                    runtime_control::RUNTIME_CONTROL_TIMEOUT,
-                ),
-            )),
-            Err(error) => {
-                tracing::warn!(error = %error, "监督器台账初始化失败：runtime 控制命令回 core_not_ready");
-                None
-            }
-        };
+        supervisor.map(|supervisor| {
+            std::sync::Arc::new(runtime_control::SupervisorControl::new(
+                supervisor,
+                handle,
+                runtime_control::RUNTIME_CONTROL_TIMEOUT,
+            )) as std::sync::Arc<dyn runtime_control::RuntimeControl>
+        });
     std::sync::Arc::new(runtime_control::RuntimeControlBackend::new(health, control))
 }

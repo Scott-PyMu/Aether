@@ -336,6 +336,36 @@ jobs:
             echo "::error title=m2-06-tail::$line"
           done
 
+      # M2 批 2（M2-07 panic 隔离与健康巡检）：JoinSet/JoinError panic 隔离、RSS 巡检与
+      # delta 限流、运行期日志汇聚端（attempt=n/3 + persist_degraded）、UI health 5s/15s
+      # 两态 E2E（真实 WebView2 + 损坏库夹具驱动 persist_degraded）。
+      - name: M2 批 2 验证（M2-07 panic 隔离与健康巡检）
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/test/m2-07/verify-m2-07.mjs 2>&1 | tee m2-07-verify.log
+      - name: M2 批 2 失败诊断（M2-07）
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "### M2-07 verify 失败输出（断言细节 + tail 30）"
+            echo '```text'
+            grep -E "panicked|assertion|left:|right:|FAIL |error\[" m2-07-verify.log 2>/dev/null | tail -12 || true
+            echo '--- tail 30 ---'
+            tail -30 m2-07-verify.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -E "^FAIL |FAIL " m2-07-verify.log 2>/dev/null | tail -6 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m2-07-summary::$line"
+          done
+          grep -E "panicked|assertion|left:|right:" m2-07-verify.log 2>/dev/null | tail -4 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m2-07-assert::$line"
+          done
+          tail -4 m2-07-verify.log 2>/dev/null | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m2-07-tail::$line"
+          done
+
   # M1-09：线协议骨架与 Mock 适配器（D6/评审#6）——Bun 编译 Mock 单文件后，
   # 一致性/健壮性集成测试与吞吐基准均针对真实进程执行。
   wire-protocol-mock:

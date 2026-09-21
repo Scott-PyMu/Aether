@@ -9,6 +9,17 @@ vi.mock("./startup", async (importOriginal) => {
   return { ...original, fetchStartup: vi.fn() };
 });
 
+// M2-07：主界面挂载 HealthMonitor（5s 轮询 health）；本文件只验证启动门/骨架，
+// 健康查询以永不落定的 Promise 挂起（保持 loading，不触发无响应定时器干扰断言）。
+vi.mock("./health", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./health")>();
+  return {
+    ...original,
+    fetchHealth: vi.fn().mockReturnValue(new Promise(() => {})),
+    requestAppRestart: vi.fn(),
+  };
+});
+
 const fetchStartupMock = vi.mocked(fetchStartup);
 
 const readySnapshot: StartupSnapshot = {

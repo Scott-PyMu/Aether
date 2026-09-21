@@ -1,6 +1,7 @@
 import { APP_VERSION, PROTOCOL_VERSION } from "@aether/protocol";
 import { useCallback, useEffect, useState } from "react";
 
+import { HealthMonitor } from "./HealthMonitor";
 import { StartupGate } from "./StartupGate";
 import { describeIpcError, fetchStartup, type StartupSnapshot } from "./startup";
 
@@ -62,6 +63,7 @@ export function App() {
       <p className="app-data-dir" data-testid="app-data-dir">
         数据目录：{startup.data_dir}
       </p>
+      <HealthMonitor />
     </main>
   );
 }

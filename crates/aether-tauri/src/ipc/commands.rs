@@ -137,13 +137,18 @@ pub(crate) fn backup_list(
 ///
 /// 返回 `HealthReport`（`storage_state` / `write_queue_depth` / `runtimes` 摘要 / `ts`）；
 /// 仅本地 IPC，不落库、不产生事件。UI 每 5s 轮询，15s 无响应显示「核心未响应」+ 重启入口。
-/// 真实数据接线归属 M2-07（`EventPipeline::health()` + 监督器状态）。
+/// 数据源：`EventPipeline::health()` + 监督器摘要（M2-07 接线）。
+///
+/// 说明（M2-07）：命令为 async——E2E 探针经 `AETHER_E2E_HEALTH_STALL_MS` 在运行时上
+/// 挂起本命令（模拟无响应；不阻塞主线程），生产路径无等待。
 #[tauri::command]
-pub(crate) fn health(
+pub(crate) async fn health(
     state: tauri::State<'_, IpcState>,
     payload: Option<Value>,
 ) -> Result<Value, IpcError> {
     let _request: HealthRequest = parse_no_params(payload.unwrap_or(Value::Null))?;
+    #[cfg(debug_assertions)]
+    crate::health_probe::maybe_stall_health().await;
     state.backend_ready()?.health()
 }
 
@@ -332,6 +337,7 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         app_exit,
         crate::probe::e2e_probe_report,
         crate::startup_probe::e2e_startup_report,
+        crate::health_probe::e2e_health_report,
     ]
 }
 

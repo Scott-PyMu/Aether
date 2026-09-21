@@ -81,6 +81,14 @@ impl DeltaBuffer {
         self.deadline <= now
     }
 
+    /// 放宽合并窗口（不早于 `now + interval`；M2-07 RSS 限流强制放宽在途缓冲）。
+    pub fn relax_deadline(&mut self, now: Instant, interval: Duration) {
+        let relaxed = now + interval;
+        if relaxed > self.deadline {
+            self.deadline = relaxed;
+        }
+    }
+
     /// 固化为待持久化事件（`id` 由调用方生成；seq 由 sequencer 分配）。
     pub fn into_pending(self, id: EventId, ts: i64) -> PendingEvent {
         PendingEvent {

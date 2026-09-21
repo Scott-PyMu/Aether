@@ -55,6 +55,7 @@ dependencies = [
  "aether-store",
  "serde",
  "serde_json",
+ "sysinfo",
  "tempfile",
  "tokio",
  "tokio-util",
@@ -122,6 +123,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "url",
  "winreg",
 ]

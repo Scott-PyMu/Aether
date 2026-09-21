@@ -16,6 +16,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use aether_adapters::supervisor::Supervisor;
 use aether_control::{
     EventPipeline, PipelineConfig, PipelineError, StartupSelfCheckReport, StoreEventSource,
     StoreJournal, SPACE_GUARD_MIN_FREE_BYTES,
@@ -122,6 +123,44 @@ impl RuntimeSummarySource for StaticRuntimeSummaries {
     }
 }
 
+/// 生产摘要源（M2-07；ADR-007 §5-2 字段映射冻结）：
+/// `RuntimeSupervisor` 的 `status` / `status_reason` 一一映射为 `RuntimeSummary`。
+///
+/// 监督器未接线时使用 [`StaticRuntimeSummaries::unwired`]（`runtimes = null`）；
+/// 已接线但无 runtime → `Some(Vec::new())`（`runtimes = []`）。摘要顺序按 `id` 排序，
+/// 保证命令返回稳定（不依赖注册表遍历顺序）。
+pub struct SupervisorRuntimeSummaries {
+    supervisor: Arc<Supervisor>,
+}
+
+impl SupervisorRuntimeSummaries {
+    pub fn new(supervisor: Arc<Supervisor>) -> Self {
+        Self { supervisor }
+    }
+}
+
+impl RuntimeSummarySource for SupervisorRuntimeSummaries {
+    fn summaries(&self) -> Option<Vec<RuntimeSummary>> {
+        let mut summaries: Vec<RuntimeSummary> = self
+            .supervisor
+            .runtime_ids()
+            .into_iter()
+            .filter_map(|id| {
+                self.supervisor.get(&id).map(|runtime| {
+                    let (status, status_reason) = runtime.summary_snapshot();
+                    RuntimeSummary {
+                        id,
+                        status: status.as_str().to_owned(),
+                        status_reason: status_reason.map(|reason| reason.as_str().to_owned()),
+                    }
+                })
+            })
+            .collect();
+        summaries.sort_by(|left, right| left.id.cmp(&right.id));
+        Some(summaries)
+    }
+}
+
 /// `health` 命令返回（ADR-007 附录 A；字段语义见该附录）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct HealthReport {
@@ -171,9 +210,11 @@ impl HealthProvider {
 ///
 /// 持有 `StoreRuntime` 以保持写任务与读连接随应用生命周期存活
 /// （`EventPipeline` 内部持有写队列/读连接池克隆，此处为显式生命周期锚点）。
+/// M2-07 起同时持有 `Arc<EventPipeline>`，供 RSS 巡检等运行期组件复用句柄。
 pub struct CoreHealthBackend {
     provider: HealthProvider,
     _storage: Option<StoreRuntime>,
+    pipeline: Option<Arc<EventPipeline>>,
 }
 
 impl CoreHealthBackend {
@@ -181,6 +222,7 @@ impl CoreHealthBackend {
         Self {
             provider,
             _storage: storage,
+            pipeline: None,
         }
     }
 
@@ -190,13 +232,24 @@ impl CoreHealthBackend {
         runtimes: Arc<dyn RuntimeSummarySource>,
         storage: StoreRuntime,
     ) -> Self {
-        let source: Arc<dyn PipelineHealthSource> = Arc::new(pipeline);
-        Self::new(HealthProvider::new(source, runtimes), Some(storage))
+        let pipeline = Arc::new(pipeline);
+        let source: Arc<dyn PipelineHealthSource> =
+            Arc::clone(&pipeline) as Arc<dyn PipelineHealthSource>;
+        Self {
+            provider: HealthProvider::new(source, runtimes),
+            _storage: Some(storage),
+            pipeline: Some(pipeline),
+        }
     }
 
     /// 只读报告（测试与诊断复用）。
     pub fn report(&self) -> HealthReport {
         self.provider.report()
+    }
+
+    /// 事件管线句柄（M2-07：RSS 巡检等运行期组件接线；降级后端无管线 → `None`）。
+    pub fn pipeline(&self) -> Option<&Arc<EventPipeline>> {
+        self.pipeline.as_ref()
     }
 }
 
@@ -252,9 +305,29 @@ impl std::error::Error for CoreHealthBootError {}
 /// 空间护栏原生探针在 M3-04/M3-05 接线（ADR-006 §5-2 口径：未知 → 不阻断），
 /// 启动自检的 `free_bytes` 暂按空间护栏下限传入；完整性由 `StoreRuntime::open`
 /// 的 `quick_check` 保证（失败即返回 [`CoreHealthBootError::Storage`]）。
+///
+/// `runtimes` 摘要源未接线（`health.runtimes = null`）；生产接线见
+/// [`boot_core_health_with`]（M2-07 监督器摘要）。
 pub fn boot_core_health(
     data_dir: &Path,
     handle: &tokio::runtime::Handle,
+) -> Result<CoreHealthBackend, CoreHealthBootError> {
+    boot_core_health_with(
+        data_dir,
+        handle,
+        Arc::new(StaticRuntimeSummaries::unwired()),
+    )
+}
+
+/// 生产启动（M2-07：监督器摘要接线版本）。
+///
+/// 与 [`boot_core_health`] 相同，仅额外接受 `runtimes` 摘要源：
+/// 监督器已接线时传 [`SupervisorRuntimeSummaries`]（`[]` / 状态快照），
+/// 未接线时传 [`StaticRuntimeSummaries::unwired`]（`null`）。
+pub fn boot_core_health_with(
+    data_dir: &Path,
+    handle: &tokio::runtime::Handle,
+    runtimes: Arc<dyn RuntimeSummarySource>,
 ) -> Result<CoreHealthBackend, CoreHealthBootError> {
     let db_path = data_dir.join("aether.db");
     let storage = StoreRuntime::open(&db_path, WriteQueueConfig::default(), handle)
@@ -266,9 +339,7 @@ pub fn boot_core_health(
         EventPipeline::start(PipelineConfig::default(), journal, source, &startup, handle)
             .map_err(CoreHealthBootError::Pipeline)?;
     Ok(CoreHealthBackend::from_pipeline(
-        pipeline,
-        Arc::new(StaticRuntimeSummaries::unwired()),
-        storage,
+        pipeline, runtimes, storage,
     ))
 }
 

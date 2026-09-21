@@ -84,6 +84,10 @@ record(
   "verify-m2-06（关闭序列五步 shadow 日志 / -wal 0 字节无残留句柄 / checkpoint 退避与运行期阈值）",
   run(node, [path.join(repoRoot, "scripts", "test", "m2-06", "verify-m2-06.mjs")]),
 );
+record(
+  "verify-m2-07（panic 隔离 / unwrap 静态 0 告警 / RSS 巡检与 delta 限流 / UI health 5s·15s / 日志汇聚端；E2E 需真实 WebView，见 Windows CI）",
+  run(node, [path.join(repoRoot, "scripts", "test", "m2-07", "verify-m2-07.mjs"), "--skip-e2e"]),
+);
 
 if (!quick) {
   record("verify-coverage-gate", run(node, [path.join(repoRoot, "scripts", "test", "verify-coverage-gate.mjs")]));

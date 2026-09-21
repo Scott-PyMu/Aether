@@ -16,7 +16,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use aether_core::{RunId, SessionId};
-use tokio::task::JoinHandle;
+use tokio::task::AbortHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::ulid;
@@ -199,7 +199,8 @@ struct TaskRecord {
     started_at_ms: i64,
     orphaned_at_ms: Option<i64>,
     forced_cleanup: bool,
-    handle: JoinHandle<()>,
+    /// 任务中止句柄（M2-07：会话任务经 `JoinSet` 管理，登记 `AbortHandle`）。
+    handle: AbortHandle,
 }
 
 #[derive(Debug, Default)]
@@ -226,13 +227,16 @@ impl TaskWatchdog {
     }
 
     /// 登记会话执行任务；返回任务 id（诊断/断言用）。
+    ///
+    /// `handle` 来自 `JoinSet::spawn` 的 [`AbortHandle`]（M2-07：任务统一经
+    /// `JoinSet` 管理，panic 由 `JoinError` 捕获；本看门狗仅负责取消后的兜底清理）。
     pub fn register(
         &self,
         name: String,
         session_id: SessionId,
         run_id: RunId,
         started_at_ms: i64,
-        handle: JoinHandle<()>,
+        handle: AbortHandle,
     ) -> String {
         let task_id = ulid::generate();
         let mut inner = lock(&self.inner);
@@ -435,7 +439,7 @@ mod tests {
             session,
             run.clone(),
             1_000,
-            handle,
+            handle.abort_handle(),
         );
 
         assert_eq!(watchdog.active_count(), 1);
@@ -479,7 +483,7 @@ mod tests {
             session,
             run.clone(),
             0,
-            handle,
+            handle.abort_handle(),
         );
         assert!(watchdog.mark_orphaned_by_run(&run, 1));
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -498,7 +502,13 @@ mod tests {
             let handle = tokio::spawn(std::future::pending::<()>());
             let session = session_id(&format!("{index}"));
             let run = run_id(&format!("{index}"));
-            watchdog.register(format!("task-{index}"), session, run.clone(), 0, handle);
+            watchdog.register(
+                format!("task-{index}"),
+                session,
+                run.clone(),
+                0,
+                handle.abort_handle(),
+            );
             assert!(watchdog.mark_orphaned_by_run(&run, 0));
             let dumps = watchdog.sweep(1);
             assert_eq!(dumps.len(), 1);

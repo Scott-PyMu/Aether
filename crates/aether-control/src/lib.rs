@@ -26,6 +26,7 @@ pub mod lifecycle;
 pub mod normalizer;
 pub mod permission;
 pub mod pipeline;
+pub mod resource_patrol;
 pub mod sequencer;
 pub mod source;
 pub mod storage_state;
@@ -53,7 +54,7 @@ pub use journal::{
 pub use lifecycle::{
     run_is_retryable, ExecutorFuture, ExecutorOutcome, InterruptReport, LifecycleConfig,
     LifecycleError, RunExecutor, RunRequest, SendAck, SessionManager, MAX_WAITING_RUNS_PER_SESSION,
-    RUN_STREAM_TIMEOUT_CODE, RUN_STREAM_TIMEOUT_MS, WATCHDOG_TICK,
+    RUN_STREAM_TIMEOUT_CODE, RUN_STREAM_TIMEOUT_MS, RUN_TASK_PANIC_CODE, WATCHDOG_TICK,
 };
 pub use normalizer::{Normalizer, PendingEvent};
 pub use permission::{
@@ -61,10 +62,15 @@ pub use permission::{
     PermissionResolution, PermissionService,
 };
 pub use pipeline::{
-    EventPipeline, PipelineConfig, PipelineHealth, ReadbackFrame, RunInterrupt, SubmitOutcome,
-    BROADCAST_CAPACITY, DEDUP_CAPACITY, MAX_WRITE_ATTEMPTS, PERSIST_RETRY_DELAY, READBACK_MAX_GAP,
-    READBACK_PAGE_SIZE, RUN_INTERRUPT_CAPACITY, RUN_INTERRUPT_REASON_DEGRADED,
-    SUBMIT_QUEUE_CAPACITY,
+    EventPipeline, PipelineConfig, PipelineHealth, ReadbackFrame, ResourcePressure, RunInterrupt,
+    SubmitOutcome, BROADCAST_CAPACITY, DEDUP_CAPACITY, MAX_WRITE_ATTEMPTS, PERSIST_RETRY_DELAY,
+    READBACK_MAX_GAP, READBACK_PAGE_SIZE, RSS_ALERT_BYTES, RSS_ALERT_EVENT_CODE,
+    RSS_THROTTLE_BYTES, RSS_THROTTLE_DELTA_INTERVAL, RSS_THROTTLE_EVENT_CODE,
+    RUN_INTERRUPT_CAPACITY, RUN_INTERRUPT_REASON_DEGRADED, SUBMIT_QUEUE_CAPACITY,
+};
+pub use resource_patrol::{
+    ResourcePatrol, ResourcePatrolConfig, ResourcePatrolSnapshot, RssSampler, SysinfoRssSampler,
+    ENV_PATROL_INTERVAL_MS, ENV_RSS_ALERT_MB, ENV_RSS_THROTTLE_MB, RESOURCE_PATROL_INTERVAL,
 };
 pub use sequencer::SessionSequencer;
 pub use source::{EventSource, SourceFuture, StoreEventSource};
