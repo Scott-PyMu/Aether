@@ -16,6 +16,7 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+pub mod backpressure;
 pub mod clock;
 pub mod delta;
 pub mod error;
@@ -30,6 +31,14 @@ pub mod storage_state;
 mod time;
 mod ulid;
 
+pub use backpressure::{
+    BackpressureConfig, BackpressureController, BackpressureError, BackpressureMetrics,
+    ControlReadGate, DeliveryPoll, IsolationReason, IsolationSink, NoopIsolationSink,
+    PressurePhase, DELIVERY_MAX_BYTES, DELIVERY_NO_FALL_MS, DELIVERY_PER_SESSION_ITEMS,
+    DELIVERY_POLL_BATCH, DELIVERY_RESTART_DELAY_MS, PAUSE_BUDGET_MS, PAUSE_BUDGET_WINDOW_MS,
+    PAUSE_MAX_CONSECUTIVE_TIMEOUTS, PAUSE_TIMEOUT_MS, PAUSE_WINDOW_MS, RELEASE_SUSTAIN_MS,
+    STORAGE_L1_THRESHOLD, STORAGE_L2_THRESHOLD,
+};
 pub use clock::{Clock, ManualClock, SharedClock, SystemClock};
 pub use delta::{DeltaBuffer, DELTA_FLUSH_BYTES, DELTA_FLUSH_INTERVAL};
 pub use error::{JournalError, NormalizeError, PipelineError, SourceError};

@@ -35,6 +35,7 @@ use tokio::runtime::Handle;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::task::JoinHandle;
 
+use crate::backpressure::{BackpressureController, BackpressureError};
 use crate::clock::SharedClock;
 use crate::error::PipelineError;
 use crate::pipeline::{EventPipeline, RunInterrupt, SubmitOutcome};
@@ -191,6 +192,13 @@ pub enum LifecycleError {
         depth: usize,
         threshold: usize,
     },
+    /// 适配器背压熔断/隔离（M2-04：L3 控制投递积压或存储侧背压隔离）；拒绝新会话/新 run。
+    AdapterIsolated {
+        runtime_id: RuntimeId,
+        /// 熔断来源（`delivery_backlog` / `storage_backpressure`）。
+        reason: String,
+        since_ms: i64,
+    },
     /// 存储层错误。
     Storage {
         code: String,
@@ -217,6 +225,7 @@ impl LifecycleError {
             Self::InvalidTransition { .. } => "invalid_session_transition",
             Self::PersistDegraded { .. } => "persist_degraded",
             Self::StorageBackpressure { .. } => "storage_backpressure",
+            Self::AdapterIsolated { .. } => "storage_backpressure",
             Self::Storage { .. } => "storage_error",
             Self::Pipeline { .. } => "pipeline_error",
             Self::Internal { .. } => "internal",
@@ -244,6 +253,15 @@ impl std::fmt::Display for LifecycleError {
             Self::StorageBackpressure { depth, threshold } => write!(
                 f,
                 "存储写队列背压（storage_backpressure）：{depth} > {threshold}（D8 L2）"
+            ),
+            Self::AdapterIsolated {
+                runtime_id,
+                reason,
+                since_ms,
+            } => write!(
+                f,
+                "适配器背压熔断（storage_backpressure）：{runtime_id} 于 {since_ms} 隔离\
+                 （来源 {reason}）；拒绝新会话/新 run（M2-04/D8）"
             ),
             Self::Storage { code, message } => write!(f, "存储错误（{code}）：{message}"),
             Self::Pipeline { code, message } => write!(f, "事件管线错误（{code}）：{message}"),
@@ -343,6 +361,9 @@ struct ManagerInner {
     executor: Arc<dyn RunExecutor>,
     state: Arc<AsyncMutex<ManagerState>>,
     background: Mutex<Vec<JoinHandle<()>>>,
+    /// 背压控制器（M2-04）：L3 投递熔断 / 存储侧隔离的适配器级准入；
+    /// `None` = 未接线（仅管线全局准入，D8 L2 由 [`EventPipeline::admission`] 覆盖）。
+    backpressure: Mutex<Option<Arc<BackpressureController>>>,
 }
 
 /// 会话生命周期管理器（克隆共享同一实例；内部状态经异步互斥保护）。
@@ -374,13 +395,50 @@ impl SessionManager {
                 executor,
                 state: Arc::new(AsyncMutex::new(ManagerState::default())),
                 background: Mutex::new(Vec::new()),
+                backpressure: Mutex::new(None),
             }),
         }
+    }
+
+    /// 接线背压控制器（M2-04；未接线 = 仅管线全局准入）。
+    ///
+    /// 接线后 `session.create`/`session.send` 额外执行适配器级准入：
+    /// L3 控制投递熔断与存储侧背压隔离期返回 `storage_backpressure`；
+    /// `persist_degraded` 由管线准入路径返回（本层不重复判定）。
+    #[must_use]
+    pub fn with_backpressure(&self, controller: Arc<BackpressureController>) -> Self {
+        *lock_backpressure(&self.inner) = Some(controller);
+        self.clone()
     }
 
     /// 生命周期配置。
     pub fn config(&self) -> &LifecycleConfig {
         &self.inner.config
+    }
+
+    /// 适配器级背压准入（M2-04）：未接线 → 放行；熔断/隔离 → `storage_backpressure`。
+    fn check_backpressure(&self, runtime_id: &RuntimeId) -> Result<(), LifecycleError> {
+        let guard = lock_backpressure(&self.inner);
+        let Some(controller) = guard.as_ref() else {
+            return Ok(());
+        };
+        controller
+            .admission(runtime_id)
+            .map_err(|error| match error {
+                BackpressureError::PersistDegraded { reason } => {
+                    LifecycleError::PersistDegraded { reason }
+                }
+                BackpressureError::CircuitOpen {
+                    runtime_id,
+                    reason,
+                    since_ms,
+                } => LifecycleError::AdapterIsolated {
+                    runtime_id,
+                    reason: reason.detail_code().to_owned(),
+                    since_ms,
+                },
+                BackpressureError::InvalidConfig { reason } => LifecycleError::Internal { reason },
+            })
     }
 
     /// 创建会话：`EnsureRuntime` → 行（`creating`）→ `session.created` →
@@ -392,6 +450,8 @@ impl SessionManager {
         workspace_id: Option<WorkspaceId>,
         model: Option<String>,
     ) -> Result<Session, LifecycleError> {
+        // M2-04：L3 熔断/存储侧隔离期拒绝新会话。
+        self.check_backpressure(&runtime.id)?;
         let now = self.inner.clock.now_ms();
         let session_id = SessionId::new(ulid::generate()).map_err(internal_from)?;
         let runtime_id = runtime.id.clone();
@@ -532,6 +592,8 @@ impl SessionManager {
                     session_id: session_id.clone(),
                 });
             }
+            // M2-04：L3 投递熔断/存储侧隔离 → 拒绝新 run（已有 run 不受影响）。
+            self.check_backpressure(&session.runtime_id)?;
         }
 
         let now = self.inner.clock.now_ms();
@@ -1440,6 +1502,16 @@ async fn lock_state(
     inner: &Arc<ManagerInner>,
 ) -> tokio::sync::OwnedMappedMutexGuard<ManagerState, ManagerState> {
     tokio::sync::OwnedMutexGuard::map(inner.state.clone().lock_owned().await, |state| state)
+}
+
+/// 背压控制器槽位加锁（中毒容忍；临界区不做 I/O）。
+fn lock_backpressure(
+    inner: &Arc<ManagerInner>,
+) -> std::sync::MutexGuard<'_, Option<Arc<BackpressureController>>> {
+    match inner.backpressure.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
 }
 
 #[cfg(test)]

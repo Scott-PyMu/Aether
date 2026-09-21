@@ -72,6 +72,10 @@ record(
   "verify-m2-03（权限网关：策略矩阵/T7 路径逃逸 100% deny+审计/300s 超时/T6 100 并发）",
   run(node, [path.join(repoRoot, "scripts", "test", "m2-03", "verify-m2-03.mjs")]),
 );
+record(
+  "verify-m2-04（背压分级与 journal 补读：L2/L3/慢订阅者/Lagged/存储侧背压例外与隔离）",
+  run(node, [path.join(repoRoot, "scripts", "test", "m2-04", "verify-m2-04.mjs")]),
+);
 
 if (!quick) {
   record("verify-coverage-gate", run(node, [path.join(repoRoot, "scripts", "test", "verify-coverage-gate.mjs")]));

@@ -145,6 +145,32 @@ pub enum RestartOutcome {
     NotApplicable { status: RuntimeStatus },
 }
 
+/// 隔离结果（M2-04/D8：存储侧背压熔断）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IsolationOutcome {
+    /// 已隔离：`degraded + reason`，进程已终止（停止事件生产），等待解除。
+    Isolated { status: RuntimeStatus },
+    /// 不适用：`cold` / `disabled` / 已处于 `degraded`（保留既有原因）。
+    NotApplicable {
+        status: RuntimeStatus,
+        reason: Option<DisabledReason>,
+    },
+}
+
+/// 解除隔离结果（M2-04/D8：写队列回落 → 自动解除并重启）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReleaseOutcome {
+    /// 已解除并回到 `ready`。
+    Released,
+    /// 当前不在 `degraded`（无需解除；含 `ready`/`cold`/`disabled`）。
+    NotApplicable { status: RuntimeStatus },
+    /// 重启失败（已置 `disabled + reason`）。
+    Failed {
+        reason: DisabledReason,
+        detail: String,
+    },
+}
+
 /// 命令层错误（`runtime_retry` / `runtime_enable` 的参数与状态校验，DoD⑦）。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SupervisorError {
@@ -554,6 +580,74 @@ impl RuntimeSupervisor {
                 reason: DisabledReason::Untrusted,
                 detail,
             },
+        }
+    }
+
+    /// 隔离（M2-04/D8 存储侧背压熔断）：`ready`/`starting` → `degraded + reason`，
+    /// **终止进程**（停止事件生产）且不自动重启；解除经 [`RuntimeSupervisor::release`]。
+    ///
+    /// 与 [`RuntimeSupervisor::restart`] 的区别：隔离不计入崩溃退避/熔断（存储压力非
+    /// 适配器故障），且不自动回到 `ready`（等待控制层队列回落解除，ADR-004）。
+    pub async fn isolate(&self, reason: DisabledReason, detail: &str) -> IsolationOutcome {
+        let mut state = self.state.lock().await;
+        let status = state.fsm.status();
+        match status {
+            RuntimeStatus::Cold | RuntimeStatus::Disabled | RuntimeStatus::Degraded => {
+                return IsolationOutcome::NotApplicable {
+                    status,
+                    reason: state.fsm.status_reason(),
+                };
+            }
+            RuntimeStatus::Ready | RuntimeStatus::Starting => {}
+        }
+        if self
+            .transition_locked(
+                &mut state,
+                RuntimeStatus::Degraded,
+                Some(reason),
+                Some(detail.to_owned()),
+            )
+            .is_err()
+        {
+            return IsolationOutcome::NotApplicable {
+                status,
+                reason: state.fsm.status_reason(),
+            };
+        }
+        if let Some(mut running) = state.running.take() {
+            let report = self.terminate_running(&mut running).await;
+            self.observer.on_audit(&AuditRecord::new(
+                self.runtime_id.clone(),
+                AuditKind::Terminated,
+                format!(
+                    "背压隔离（{detail}）；机制={:?}，退出={}，耗时={}ms",
+                    report.mechanisms(),
+                    report.exited,
+                    report.total_ms
+                ),
+                now_ms(),
+            ));
+        }
+        IsolationOutcome::Isolated {
+            status: RuntimeStatus::Degraded,
+        }
+    }
+
+    /// 解除隔离并重启（M2-04/D8：写队列回落 ≤1024 持续 30s → `degraded → starting → ready`）。
+    pub async fn release(&self) -> ReleaseOutcome {
+        let status = self.status().await;
+        match status {
+            RuntimeStatus::Degraded => match self.start().await {
+                StartOutcome::Ready | StartOutcome::AlreadyRunning => ReleaseOutcome::Released,
+                StartOutcome::Failed { reason, detail, .. } => {
+                    ReleaseOutcome::Failed { reason, detail }
+                }
+                StartOutcome::Rejected { detail } => ReleaseOutcome::Failed {
+                    reason: DisabledReason::Untrusted,
+                    detail,
+                },
+            },
+            other => ReleaseOutcome::NotApplicable { status: other },
         }
     }
 

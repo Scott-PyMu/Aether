@@ -37,7 +37,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
-use crate::delta::{DeltaBuffer, DELTA_FLUSH_BYTES, DELTA_FLUSH_INTERVAL};
+use crate::delta::{DeltaBuffer, DELTA_FLUSH_BYTES, DELTA_FLUSH_INTERVAL, DELTA_FLUSH_INTERVAL_L1};
 use crate::error::{JournalError, PipelineError};
 use crate::journal::{JournalMetrics, JournalWriter, PressureLevel};
 use crate::normalizer::{Normalizer, PendingEvent};
@@ -328,6 +328,19 @@ enum FlushMode {
     All,
     /// 仅窗口到期（定时器路径）。
     Due(Instant),
+}
+
+/// 写队列压力下的 delta 合并窗口（D8：L1/L2 临时高水位 → 放宽至 64ms）。
+///
+/// 常量级调参：仅影响合并批次节奏，不改变「先日志后广播」与终稿语义。
+pub(crate) fn effective_delta_interval(
+    pressure: Option<PressureLevel>,
+    base: Duration,
+) -> Duration {
+    match pressure {
+        Some(_) => DELTA_FLUSH_INTERVAL_L1,
+        None => base,
+    }
 }
 
 /// 落盘结果。
@@ -796,13 +809,18 @@ impl Actor {
                 }
             }
             None => {
+                // D8 L1/L2：写队列临时高水位 → delta 合并批次放宽至 64ms（M2-04）。
+                let interval = effective_delta_interval(
+                    self.journal.metrics().pressure_level,
+                    self.config.delta_flush_interval,
+                );
                 let mut buffer = DeltaBuffer::new(
                     session_id.clone(),
                     run_id,
                     runtime_id,
                     message_id,
                     now,
-                    self.config.delta_flush_interval,
+                    interval,
                 );
                 buffer.push(&text);
                 let full = buffer.is_full(threshold);
@@ -1212,6 +1230,26 @@ mod tests {
             let error = config.validate().expect_err("非法配置必须拒绝");
             assert_eq!(error.code(), "invalid_pipeline_config");
         }
+    }
+
+    #[test]
+    fn l1_pressure_relaxes_delta_flush_interval_to_64ms() {
+        assert_eq!(
+            effective_delta_interval(None, DELTA_FLUSH_INTERVAL),
+            DELTA_FLUSH_INTERVAL,
+            "正常水位保持 16ms"
+        );
+        assert_eq!(
+            effective_delta_interval(Some(PressureLevel::L1), DELTA_FLUSH_INTERVAL),
+            DELTA_FLUSH_INTERVAL_L1,
+            "D8 L1：放宽至 64ms"
+        );
+        assert_eq!(
+            effective_delta_interval(Some(PressureLevel::L2), DELTA_FLUSH_INTERVAL),
+            DELTA_FLUSH_INTERVAL_L1,
+            "D8 L2：存量 delta 同样放宽"
+        );
+        assert_eq!(DELTA_FLUSH_INTERVAL_L1, Duration::from_millis(64));
     }
 
     #[test]

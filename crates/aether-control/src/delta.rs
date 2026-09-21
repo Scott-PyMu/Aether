@@ -19,6 +19,8 @@ use crate::time::now_ms;
 
 /// delta 合并窗口（D4：16ms）。
 pub const DELTA_FLUSH_INTERVAL: Duration = Duration::from_millis(16);
+/// L1 写队列压力下的 delta 合并窗口（D8：写队列 >1024 → 告警 + 批次放宽至 64ms）。
+pub const DELTA_FLUSH_INTERVAL_L1: Duration = Duration::from_millis(64);
 /// delta 合并字节阈值（D4：累计 8KB）。
 pub const DELTA_FLUSH_BYTES: usize = 8 * 1024;
 

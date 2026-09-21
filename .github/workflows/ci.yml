@@ -249,6 +249,36 @@ jobs:
             echo "::error title=m2-batch1-tail::$line"
           done
 
+      # M2 批 2（M2-04 背压分级与 journal 补读）：控制层 L2/L3/慢订阅者/Lagged/存储侧
+      # 背压例外 + M1-10 监督器 isolate/release + 组合层 IsolationSink 桥接（本 job 为
+      # Windows 宿主，夹具由 verify 脚本内构建并注入）。
+      - name: M2 批 2 验证（M2-04 背压分级与 journal 补读）
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/test/m2-04/verify-m2-04.mjs 2>&1 | tee m2-batch2-verify.log
+      - name: M2 批 2 失败诊断（公开 annotation，便于无凭据取证）
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "### M2 批 2 verify 失败输出（断言细节 + tail 30）"
+            echo '```text'
+            grep -E "panicked|assertion|left:|right:|FAIL |error\[" m2-batch2-verify.log 2>/dev/null | tail -12 || true
+            echo '--- tail 30 ---'
+            tail -30 m2-batch2-verify.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -E "^FAIL |FAIL " m2-batch2-verify.log 2>/dev/null | tail -6 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m2-batch2-summary::$line"
+          done
+          grep -E "panicked|assertion|left:|right:" m2-batch2-verify.log 2>/dev/null | tail -4 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m2-batch2-assert::$line"
+          done
+          tail -4 m2-batch2-verify.log 2>/dev/null | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m2-batch2-tail::$line"
+          done
+
   # M1-09：线协议骨架与 Mock 适配器（D6/评审#6）——Bun 编译 Mock 单文件后，
   # 一致性/健壮性集成测试与吞吐基准均针对真实进程执行。
   wire-protocol-mock:

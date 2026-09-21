@@ -97,11 +97,18 @@ pub struct TestCore {
 
 impl TestCore {
     pub async fn open() -> Self {
+        Self::open_with(WriteQueueConfig::default(), PipelineConfig::default()).await
+    }
+
+    /// 以自定义写队列/管线配置打开（M2-04 故障注入：提交延迟、广播容量）。
+    pub async fn open_with(
+        write_config: WriteQueueConfig,
+        pipeline_config: PipelineConfig,
+    ) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let db_path = temp.path().join("aether.db");
-        let storage =
-            StoreRuntime::open(&db_path, WriteQueueConfig::default(), &Handle::current()).unwrap();
-        let pipeline = start_pipeline(&storage);
+        let storage = StoreRuntime::open(&db_path, write_config, &Handle::current()).unwrap();
+        let pipeline = start_pipeline_with(&storage, pipeline_config);
         Self {
             temp,
             db_path,
@@ -140,10 +147,15 @@ pub async fn reopen_core(temp: tempfile::TempDir, db_path: PathBuf) -> TestCore 
 }
 
 pub fn start_pipeline(storage: &StoreRuntime) -> EventPipeline {
+    start_pipeline_with(storage, PipelineConfig::default())
+}
+
+/// 以自定义管线配置启动（M2-04：广播容量注入）。
+pub fn start_pipeline_with(storage: &StoreRuntime, config: PipelineConfig) -> EventPipeline {
     EventPipeline::start(
         PipelineConfig {
             persist_retry_delay: Duration::ZERO,
-            ..PipelineConfig::default()
+            ..config
         },
         Arc::new(StoreJournal::new(storage.queue().clone())),
         Arc::new(StoreEventSource::new(storage.reads().clone())),

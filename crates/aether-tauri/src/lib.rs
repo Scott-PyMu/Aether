@@ -16,6 +16,7 @@
 pub mod config;
 pub mod core_health;
 pub mod ipc;
+pub mod isolation;
 pub mod nav;
 pub mod picker;
 pub mod runtime_control;
