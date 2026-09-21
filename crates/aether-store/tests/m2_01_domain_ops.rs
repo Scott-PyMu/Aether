@@ -143,6 +143,7 @@ async fn domain_commands_and_reads_round_trip() {
             runtime_id: Some("mock".to_owned()),
             status: Some(SessionStatus::Idle),
             limit: Some(10),
+            ..SessionQuery::default()
         })
         .await
         .unwrap();
@@ -467,5 +468,83 @@ async fn command_arriving_during_event_batch_preserves_fifo() {
     // 命令在事件批次之后执行：两者均已提交。
     let metrics = queue.metrics();
     assert!(metrics.committed_entries >= 2);
+    storage.shutdown().await.unwrap();
+}
+
+/// M2-05 父取消级联：`SessionQuery.parent_session_id` 过滤（含终态子会话仍可读）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sessions_filter_by_parent_session_id() {
+    const CHILD: &str = "01J000000000000000000000C";
+    const GRANDCHILD: &str = "01J000000000000000000000G";
+    let temp = tempfile::tempdir().unwrap();
+    let storage = open(&temp.path().join("aether.db"));
+    let queue = storage.queue().clone();
+    let reads = storage.reads().clone();
+    seed(&queue, &reads).await;
+
+    let mut child = session(CHILD, "child");
+    child.parent_session_id = Some(SessionId::new(SESSION_A).unwrap());
+    queue
+        .execute(StoreCommand::InsertSession { session: child })
+        .await
+        .unwrap();
+    let mut grandchild = session(GRANDCHILD, "grandchild");
+    grandchild.parent_session_id = Some(SessionId::new(CHILD).unwrap());
+    grandchild.status = SessionStatus::Completed;
+    queue
+        .execute(StoreCommand::InsertSession {
+            session: grandchild,
+        })
+        .await
+        .unwrap();
+
+    let children = reads
+        .sessions(SessionQuery {
+            parent_session_id: Some(SESSION_A.to_owned()),
+            ..SessionQuery::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(children.len(), 1);
+    assert_eq!(children[0].id.as_str(), CHILD);
+    assert_eq!(
+        children[0]
+            .parent_session_id
+            .as_ref()
+            .map(SessionId::as_str),
+        Some(SESSION_A)
+    );
+
+    let grandchildren = reads
+        .sessions(SessionQuery {
+            parent_session_id: Some(CHILD.to_owned()),
+            ..SessionQuery::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(grandchildren.len(), 1);
+    assert_eq!(grandchildren[0].id.as_str(), GRANDCHILD);
+    assert_eq!(grandchildren[0].status, SessionStatus::Completed);
+
+    // 组合过滤：父 + 状态。
+    let completed = reads
+        .sessions(SessionQuery {
+            parent_session_id: Some(CHILD.to_owned()),
+            status: Some(SessionStatus::Completed),
+            ..SessionQuery::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(completed.len(), 1);
+    let idle = reads
+        .sessions(SessionQuery {
+            parent_session_id: Some(CHILD.to_owned()),
+            status: Some(SessionStatus::Idle),
+            ..SessionQuery::default()
+        })
+        .await
+        .unwrap();
+    assert!(idle.is_empty());
+
     storage.shutdown().await.unwrap();
 }

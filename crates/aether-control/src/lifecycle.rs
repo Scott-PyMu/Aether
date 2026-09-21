@@ -11,6 +11,14 @@
 //!   无任何事件 → `run.failed`（`run_stream_timeout`，recoverable）且会话回 idle 可重试；
 //!   时钟经 [`Clock`] 注入，测试用 [`crate::clock::ManualClock`]。
 //!
+//! 取消树与看门狗（M2-05；设计 D8）：
+//! - **取消树**（[`crate::cancel::CancelTree`]）：应用根 → 会话节点 → run 子节点；
+//!   `interrupt` 取消当前 run（含等待 run），`dispose` 取消会话节点并级联全部子节点与
+//!   **子会话**（`parent_session_id` 递归）；权限等待可经 [`RunCancelToken::cancelled`] 取消；
+//! - **任务看门狗**（[`crate::cancel::TaskWatchdog`]）：登记会话执行任务；在途 run 被
+//!   摘除（中断/超时/降级/关闭）后 10s 未退出 → 记 [`crate::cancel::TaskDump`] 并
+//!   强制清理（`JoinHandle::abort`）；dump 进入诊断缓冲（M3-05 诊断包消费）。
+//!
 //! 执行器（[`RunExecutor`]）为 M2-02 真实适配器的接入缝；M2-01 集成测试用测试替身。
 //! 管理器内部对「状态机 + 行 + 事件」的每一次状态变更在状态互斥下整体串行，
 //! 避免内存状态与持久化行在并发下相互错位。
@@ -18,24 +26,24 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use aether_core::{
-    ErrorInfo, EventPayload, Message, MessageId, MessageRole, MessageSummary, Run,
-    RunCancelledPayload, RunCompletedPayload, RunFailedPayload, RunId, RunStartedPayload, Runtime,
-    RuntimeId, Session, SessionClosedPayload, SessionCreatedPayload, SessionId, SessionStatus,
-    SessionStatusChangedPayload, SessionSummary, TokenUsage, WorkspaceId, ENVELOPE_FIELDS,
-    EVENT_ENVELOPE_VERSION,
+    session_status_is_terminal, ErrorInfo, EventPayload, Message, MessageId, MessageRole,
+    MessageSummary, Run, RunCancelledPayload, RunCompletedPayload, RunFailedPayload, RunId,
+    RunStartedPayload, Runtime, RuntimeId, Session, SessionClosedPayload, SessionCreatedPayload,
+    SessionId, SessionStatus, SessionStatusChangedPayload, SessionSummary, TokenUsage, WorkspaceId,
+    ENVELOPE_FIELDS, EVENT_ENVELOPE_VERSION,
 };
-use aether_store::{ReadPool, StoreCommand, StoreError, StoreOutcome, WriteQueue};
+use aether_store::{ReadPool, SessionQuery, StoreCommand, StoreError, StoreOutcome, WriteQueue};
 use serde_json::{json, Value};
 use tokio::runtime::Handle;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::task::JoinHandle;
 
 use crate::backpressure::{BackpressureController, BackpressureError};
+use crate::cancel::{CancelTree, RunCancelToken, TaskDump, TaskWatchdog};
 use crate::clock::SharedClock;
 use crate::error::PipelineError;
 use crate::pipeline::{EventPipeline, RunInterrupt, SubmitOutcome};
@@ -59,6 +67,10 @@ pub struct LifecycleConfig {
     pub watchdog_tick: Duration,
     /// 等待队列上限（默认 1）。
     pub max_waiting_runs: usize,
+    /// 取消后任务强制清理阈值（D8：10s；测试经时钟注入）。
+    pub task_force_cleanup_ms: i64,
+    /// 任务 dump 环形缓冲容量（诊断包消费）。
+    pub task_dump_capacity: usize,
 }
 
 impl Default for LifecycleConfig {
@@ -67,45 +79,11 @@ impl Default for LifecycleConfig {
             run_stream_timeout_ms: RUN_STREAM_TIMEOUT_MS,
             watchdog_tick: WATCHDOG_TICK,
             max_waiting_runs: MAX_WAITING_RUNS_PER_SESSION,
+            task_force_cleanup_ms: crate::cancel::TASK_FORCE_CLEANUP_MS,
+            task_dump_capacity: crate::cancel::TASK_DUMP_CAPACITY,
         }
     }
 }
-
-/// run 中断令牌（M2-02/M2-05 扩展为取消树；M2-01 提供最小语义）。
-#[derive(Debug, Clone)]
-pub struct RunCancelToken {
-    cancelled: Arc<AtomicBool>,
-}
-
-impl RunCancelToken {
-    pub fn new() -> Self {
-        Self {
-            cancelled: Arc::new(AtomicBool::new(false)),
-        }
-    }
-
-    pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::SeqCst);
-    }
-
-    pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::SeqCst)
-    }
-}
-
-impl Default for RunCancelToken {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl PartialEq for RunCancelToken {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.cancelled, &other.cancelled)
-    }
-}
-
-impl Eq for RunCancelToken {}
 
 /// run 执行请求（M2-02 真实适配器据此调用 `session.create/send`）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -345,6 +323,8 @@ struct SessionState {
     runtime_id: RuntimeId,
     active: Option<ActiveRun>,
     waiting: Option<QueuedRun>,
+    /// 会话取消节点（取消树；run 令牌为其子节点，父/子会话级联）。
+    cancel: RunCancelToken,
 }
 
 #[derive(Default)]
@@ -364,6 +344,10 @@ struct ManagerInner {
     /// 背压控制器（M2-04）：L3 投递熔断 / 存储侧隔离的适配器级准入；
     /// `None` = 未接线（仅管线全局准入，D8 L2 由 [`EventPipeline::admission`] 覆盖）。
     backpressure: Mutex<Option<Arc<BackpressureController>>>,
+    /// 取消树（M2-05）：根 → 会话 → run 级联。
+    cancel_tree: CancelTree,
+    /// 任务看门狗（M2-05）：取消后 10s 未退出 → dump + 强制清理。
+    task_watchdog: TaskWatchdog,
 }
 
 /// 会话生命周期管理器（克隆共享同一实例；内部状态经异步互斥保护）。
@@ -385,6 +369,8 @@ impl SessionManager {
         pipeline: EventPipeline,
         executor: Arc<dyn RunExecutor>,
     ) -> Self {
+        let task_watchdog =
+            TaskWatchdog::new(config.task_force_cleanup_ms, config.task_dump_capacity);
         Self {
             inner: Arc::new(ManagerInner {
                 config,
@@ -396,6 +382,8 @@ impl SessionManager {
                 state: Arc::new(AsyncMutex::new(ManagerState::default())),
                 background: Mutex::new(Vec::new()),
                 backpressure: Mutex::new(None),
+                cancel_tree: CancelTree::new(),
+                task_watchdog,
             }),
         }
     }
@@ -522,6 +510,7 @@ impl SessionManager {
         .await?;
 
         let mut state = lock_state(&self.inner).await;
+        let cancel = self.inner.cancel_tree.session_token(&session_id, None);
         state.sessions.insert(
             session_id.clone(),
             SessionState {
@@ -529,6 +518,7 @@ impl SessionManager {
                 runtime_id,
                 active: None,
                 waiting: None,
+                cancel,
             },
         );
         drop(state);
@@ -657,13 +647,14 @@ impl SessionManager {
             })?;
             let runtime_id = session.runtime_id.clone();
             if session.active.is_none() {
+                let cancel = RunCancelToken::child_of(&session.cancel);
                 session.active = Some(ActiveRun {
                     run_id: run_id.clone(),
                     input_message_id: message_id.clone(),
                     runtime_id,
                     text: text.to_owned(),
                     last_activity_ms: now,
-                    cancel: RunCancelToken::new(),
+                    cancel,
                 });
                 false
             } else {
@@ -715,16 +706,12 @@ impl SessionManager {
         let cancelled_waiting_run = waiting.as_ref().map(|waiting| waiting.run_id.clone());
 
         if let Some(active) = active {
-            let change = {
-                let session = state.sessions.get_mut(session_id).ok_or_else(|| {
-                    LifecycleError::SessionNotFound {
-                        session_id: session_id.clone(),
-                    }
-                })?;
-                session.fsm.transition(SessionStatus::Idle)?
-            };
             self.finish_run(&active.run_id, aether_core::RunStatus::Cancelled, None)
                 .await?;
+            // M2-05：任务从在途 run 摘除 → 看门狗计时（10s 未退出 → dump + 强制清理）。
+            self.inner
+                .task_watchdog
+                .mark_orphaned_by_run(&active.run_id, self.inner.clock.now_ms());
             self.emit(
                 session_id,
                 Some(&active.run_id),
@@ -735,8 +722,8 @@ impl SessionManager {
                 }),
             )
             .await?;
-            self.persist_status_and_emit(session_id, change, false, &active.runtime_id)
-                .await?;
+            // 会话回 idle（D9 等待审批时经 running 收口；取消树已级联取消权限等待）。
+            settle_idle_locked(&self.inner, &mut state, session_id, &active.runtime_id).await?;
         }
         if let Some(waiting) = waiting {
             self.finish_run(&waiting.run_id, aether_core::RunStatus::Cancelled, None)
@@ -761,9 +748,26 @@ impl SessionManager {
         })
     }
 
-    /// 关闭会话：取消在途 run；空闲会话置 `completed`，有在途 run 置 `cancelled`；
-    /// 广播 `session.closed`（D9 最小审计 + 会话生命周期事件）。
+    /// 关闭会话（取消树根动作）：取消会话节点（级联全部 run 子节点与权限等待）→
+    /// 取消在途 run；**子会话按 `parent_session_id` 递归关闭**（D8 父取消级联）；
+    /// 空闲会话置 `completed`，有在途 run 置 `cancelled`；广播 `session.closed`
+    /// （D9 最小审计 + 会话生命周期事件）。
     pub async fn dispose(&self, session_id: &SessionId) -> Result<SessionStatus, LifecycleError> {
+        // 父取消级联：先关闭全部后代（最深优先），再关闭本会话。
+        let descendants = self.descendants_of(session_id).await?;
+        for child in descendants.iter().rev() {
+            self.dispose_single(child).await?;
+        }
+        self.dispose_single(session_id).await
+    }
+
+    /// 关闭单个会话（不含后代遍历；[`SessionManager::dispose`] 的级联单元）。
+    async fn dispose_single(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<SessionStatus, LifecycleError> {
+        // 会话节点取消：run 子节点与绑定其上的权限等待级联取消（D8）。
+        self.inner.cancel_tree.cancel_session(session_id);
         let report = self.interrupt(session_id).await?;
         let target = if report.interrupted_run.is_some() || report.cancelled_waiting_run.is_some() {
             SessionStatus::Cancelled
@@ -797,12 +801,85 @@ impl SessionManager {
         Ok(target)
     }
 
+    /// 收集全部非终态后代会话（BFS；`sessions.parent_session_id` 为唯一事实来源）。
+    async fn descendants_of(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Vec<SessionId>, LifecycleError> {
+        let mut descendants = Vec::new();
+        let mut frontier = vec![session_id.clone()];
+        while let Some(parent) = frontier.pop() {
+            let children = self
+                .inner
+                .reads
+                .sessions(SessionQuery {
+                    parent_session_id: Some(parent.as_str().to_owned()),
+                    ..SessionQuery::default()
+                })
+                .await?;
+            for child in children {
+                if session_status_is_terminal(child.status) {
+                    continue;
+                }
+                descendants.push(child.id.clone());
+                frontier.push(child.id);
+            }
+        }
+        Ok(descendants)
+    }
+
     /// 看门狗单次巡检：返回本轮判定断流的 run（已落 `run.failed` + 会话回 idle）。
     ///
     /// 背景任务按 [`LifecycleConfig::watchdog_tick`] 周期调用；测试可直接驱动以省略等待。
     pub async fn watchdog_once(&self) -> Vec<RunId> {
         let timeout = self.inner.config.run_stream_timeout_ms;
         watchdog_once_inner(&self.inner, timeout).await
+    }
+
+    /// 任务看门狗单次巡检：返回本轮记录的任务 dump（M2-05；取消后超阈值未退出 →
+    /// dump + 强制清理）。背景任务随看门狗周期调用；测试可直接驱动。
+    pub fn sweep_tasks_once(&self) -> Vec<TaskDump> {
+        self.inner.task_watchdog.sweep(self.inner.clock.now_ms())
+    }
+
+    /// 任务 dump 快照（诊断包消费；M3-05 集成）。
+    pub fn task_dumps(&self) -> Vec<TaskDump> {
+        self.inner.task_watchdog.dumps()
+    }
+
+    /// 在册会话执行任务数（诊断/测试断言；`sweep_tasks_once` 后为真实运行数）。
+    pub fn active_task_count(&self) -> usize {
+        self.inner.task_watchdog.active_count()
+    }
+
+    /// 会话取消树节点句柄（M2-05；权限等待可经 [`RunCancelToken::cancelled`] 级联取消）。
+    pub async fn session_cancel_token(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<RunCancelToken, LifecycleError> {
+        let mut state = lock_state(&self.inner).await;
+        self.hydrate_locked(&mut state, session_id).await?;
+        state
+            .sessions
+            .get(session_id)
+            .map(|session| session.cancel.clone())
+            .ok_or_else(|| LifecycleError::SessionNotFound {
+                session_id: session_id.clone(),
+            })
+    }
+
+    /// 当前在途 run 的取消令牌（无在途 run → `None`；权限等待绑定该令牌）。
+    pub async fn active_run_cancel_token(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Option<RunCancelToken>, LifecycleError> {
+        let mut state = lock_state(&self.inner).await;
+        self.hydrate_locked(&mut state, session_id).await?;
+        Ok(state
+            .sessions
+            .get(session_id)
+            .and_then(|session| session.active.as_ref())
+            .map(|active| active.cancel.clone()))
     }
 
     /// 记录 run 活动（事件监听器在任意落盘事件到达时调用；重置断流计时）。
@@ -831,6 +908,10 @@ impl SessionManager {
                 tokio::time::sleep(tick).await;
                 let timeout = watchdog_inner.config.run_stream_timeout_ms;
                 let _ = watchdog_once_inner(&watchdog_inner, timeout).await;
+                // M2-05：取消后 10s 未退出的会话任务 → dump + 强制清理。
+                let _ = watchdog_inner
+                    .task_watchdog
+                    .sweep(watchdog_inner.clock.now_ms());
             }
         });
 
@@ -902,9 +983,17 @@ impl SessionManager {
 
     fn spawn_run(&self, session_id: SessionId, run_id: RunId) {
         let inner = Arc::clone(&self.inner);
-        tokio::spawn(async move {
-            let _ = run_active(&inner, session_id, run_id).await;
+        let task_session = session_id.clone();
+        let task_run = run_id.clone();
+        let task_name = format!("session:{} run:{}", session_id.as_str(), run_id.as_str());
+        let started_at_ms = self.inner.clock.now_ms();
+        let handle = tokio::spawn(async move {
+            let _ = run_active(&inner, task_session, task_run).await;
         });
+        // M2-05：登记任务（取消后 10s 未退出 → dump + 强制清理）。
+        self.inner
+            .task_watchdog
+            .register(task_name, session_id, run_id, started_at_ms, handle);
     }
 
     async fn hydrate_locked(
@@ -920,6 +1009,10 @@ impl SessionManager {
                 session_id: session_id.clone(),
             }
         })?;
+        let cancel = self
+            .inner
+            .cancel_tree
+            .session_token(session_id, session.parent_session_id.as_ref());
         state.sessions.insert(
             session_id.clone(),
             SessionState {
@@ -927,6 +1020,7 @@ impl SessionManager {
                 runtime_id: session.runtime_id,
                 active: None,
                 waiting: None,
+                cancel,
             },
         );
         Ok(())
@@ -1170,7 +1264,8 @@ async fn detach_and_prepare(
                 input_message_id: queued.input_message_id,
                 runtime_id: queued.runtime_id,
                 text: queued.text,
-                cancel: RunCancelToken::new(),
+                // M2-05：提升的 run 亦为会话取消树子节点。
+                cancel: RunCancelToken::child_of(&session.cancel),
             });
             if let Some(next_run) = &next {
                 session.active = Some(ActiveRun {
@@ -1339,24 +1434,43 @@ async fn settle_session_idle(
     runtime_id: &RuntimeId,
 ) -> Result<(), LifecycleError> {
     let mut state = lock_state(inner).await;
-    let change =
-        {
-            let session = state.sessions.get_mut(session_id).ok_or_else(|| {
-                LifecycleError::SessionNotFound {
-                    session_id: session_id.clone(),
-                }
+    settle_idle_locked(inner, &mut state, session_id, runtime_id).await
+}
+
+/// 会话回 `idle`（调用方持有状态锁；D9 等待审批经 `running` 收口——状态机白名单约束）。
+async fn settle_idle_locked(
+    inner: &Arc<ManagerInner>,
+    state: &mut ManagerState,
+    session_id: &SessionId,
+    runtime_id: &RuntimeId,
+) -> Result<(), LifecycleError> {
+    let session =
+        state
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| LifecycleError::SessionNotFound {
+                session_id: session_id.clone(),
             })?;
-            match session.fsm.status() {
-                SessionStatus::Running | SessionStatus::WaitingPermission => {
-                    Some(session.fsm.transition(SessionStatus::Idle)?)
-                }
-                _ => None,
-            }
-        };
-    if let Some(change) = change {
+    let changes = idle_transitions(&mut session.fsm)?;
+    for change in changes {
         persist_status_inner(inner, session_id, change, false, runtime_id).await?;
     }
     Ok(())
+}
+
+/// 当前状态回 `idle` 的合法转移序列（白名单：`waiting_permission → idle` 非法，
+/// 必须先回 `running`；其余状态无操作）。
+fn idle_transitions(
+    fsm: &mut aether_core::SessionFsm,
+) -> Result<Vec<aether_core::SessionStatusChange>, LifecycleError> {
+    match fsm.status() {
+        SessionStatus::Running => Ok(vec![fsm.transition(SessionStatus::Idle)?]),
+        SessionStatus::WaitingPermission => Ok(vec![
+            fsm.transition(SessionStatus::Running)?,
+            fsm.transition(SessionStatus::Idle)?,
+        ]),
+        _ => Ok(Vec::new()),
+    }
 }
 
 async fn watchdog_once_inner(inner: &Arc<ManagerInner>, timeout_ms: i64) -> Vec<RunId> {
@@ -1386,6 +1500,10 @@ async fn watchdog_once_inner(inner: &Arc<ManagerInner>, timeout_ms: i64) -> Vec<
             .await
             .is_ok()
         {
+            // M2-05：run 被摘除（执行器可能仍卡住）→ 看门狗计时。
+            inner
+                .task_watchdog
+                .mark_orphaned_by_run(&run_id, inner.clock.now_ms());
             failed.push(run_id);
         }
     }
@@ -1398,6 +1516,10 @@ async fn finalize_degraded_interrupt(
     inner: &Arc<ManagerInner>,
     interrupt: RunInterrupt,
 ) -> Result<(), LifecycleError> {
+    // M2-05：在途 run 被降级中断摘除 → 看门狗计时。
+    inner
+        .task_watchdog
+        .mark_orphaned_by_run(&interrupt.run_id, inner.clock.now_ms());
     let promoted = finalize_cancelled(
         inner,
         &interrupt.session_id,
@@ -1524,6 +1646,11 @@ mod tests {
         assert_eq!(config.run_stream_timeout_ms, 120_000, "D8：120s 断流");
         assert_eq!(config.max_waiting_runs, 1, "D8：等待队列 1");
         assert_eq!(config.watchdog_tick, Duration::from_secs(1));
+        assert_eq!(
+            config.task_force_cleanup_ms, 10_000,
+            "D8：取消后 10s 未退出 → 强制清理 + dump"
+        );
+        assert_eq!(config.task_dump_capacity, 64);
     }
 
     #[test]
@@ -1588,12 +1715,13 @@ mod tests {
 
     #[test]
     fn cancel_token_flips_once_and_stays() {
-        let token = RunCancelToken::new();
-        assert!(!token.is_cancelled());
-        token.cancel();
-        assert!(token.is_cancelled());
-        token.cancel();
-        assert!(token.is_cancelled());
+        // 取消令牌本体语义（含等价性/默认构造）在 `crate::cancel` 单测覆盖；
+        // 此处保留生命周期侧的最小冒烟（令牌来自取消树子节点）。
+        let session = RunCancelToken::new();
+        let run = RunCancelToken::child_of(&session);
+        assert!(!run.is_cancelled());
+        session.cancel();
+        assert!(run.is_cancelled(), "会话取消级联到 run 子节点");
     }
 
     #[test]
@@ -1694,11 +1822,6 @@ mod tests {
             .unwrap_err();
         let mapped = LifecycleError::from(transition_error);
         assert_eq!(mapped.code(), "invalid_session_transition");
-
-        // 令牌等价性（Arc::ptr_eq）与默认构造。
-        let token = RunCancelToken::default();
-        assert_eq!(token, token.clone());
-        assert_ne!(token, RunCancelToken::new());
     }
 
     #[test]
@@ -1707,9 +1830,12 @@ mod tests {
             run_stream_timeout_ms: 5,
             watchdog_tick: Duration::from_millis(5),
             max_waiting_runs: 2,
+            task_force_cleanup_ms: 50,
+            task_dump_capacity: 4,
         };
         assert_eq!(config.clone(), config);
         assert_eq!(config.run_stream_timeout_ms, 5);
+        assert_eq!(config.task_force_cleanup_ms, 50);
         assert_eq!(LifecycleConfig::default().max_waiting_runs, 1);
     }
 }

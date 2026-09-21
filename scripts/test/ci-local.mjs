@@ -76,6 +76,10 @@ record(
   "verify-m2-04（背压分级与 journal 补读：L2/L3/慢订阅者/Lagged/存储侧背压例外与隔离）",
   run(node, [path.join(repoRoot, "scripts", "test", "m2-04", "verify-m2-04.mjs")]),
 );
+record(
+  "verify-m2-05（取消树与看门狗：20 会话取消风暴 ≤10s / interrupt 回 idle 可续聊 / 10s dump+强制清理）",
+  run(node, [path.join(repoRoot, "scripts", "test", "m2-05", "verify-m2-05.mjs")]),
+);
 
 if (!quick) {
   record("verify-coverage-gate", run(node, [path.join(repoRoot, "scripts", "test", "verify-coverage-gate.mjs")]));

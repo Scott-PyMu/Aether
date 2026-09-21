@@ -13,8 +13,10 @@ use aether_control::{
     PermissionConfig, PermissionService, PipelineConfig, RunExecutor, RunRequest, SessionManager,
     SharedClock, StartupSelfCheckReport, StoreEventSource, StoreJournal, SystemClock,
 };
-use aether_core::{Runtime, RuntimeId, RuntimeStatus, Session, SessionId, TokenUsage, WorkspaceId};
-use aether_store::{ReadPool, StoreRuntime, WriteQueue, WriteQueueConfig};
+use aether_core::{
+    Runtime, RuntimeId, RuntimeStatus, Session, SessionId, SessionStatus, TokenUsage, WorkspaceId,
+};
+use aether_store::{ReadPool, StoreCommand, StoreRuntime, WriteQueue, WriteQueueConfig};
 use tokio::runtime::Handle;
 use tokio::sync::Semaphore;
 
@@ -84,6 +86,84 @@ impl RunExecutor for ScriptedExecutor {
                 },
             }
         })
+    }
+}
+
+/// 取消响应型执行器（M2-05 DoD1 取消风暴）：许可放行 → `Completed`；
+/// 取消树级联（run 令牌）→ `Cancelled`（任务随即退出）。
+pub struct CancellableExecutor {
+    pub calls: Mutex<Vec<RunRequest>>,
+    pub permits: Arc<Semaphore>,
+}
+
+impl CancellableExecutor {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            calls: Mutex::new(Vec::new()),
+            permits: Arc::new(Semaphore::new(0)),
+        })
+    }
+
+    pub fn call_count(&self) -> usize {
+        self.calls.lock().unwrap().len()
+    }
+
+    /// 已收到取消级联的 run 数（断言取消树覆盖全部在途 run）。
+    pub fn cancelled_count(&self) -> usize {
+        self.calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|request| request.cancel.is_cancelled())
+            .count()
+    }
+
+    /// 放行 `count` 次执行（无取消时返回 `Completed`）。
+    pub fn release(&self, count: usize) {
+        self.permits.add_permits(count);
+    }
+}
+
+impl RunExecutor for CancellableExecutor {
+    fn execute(&self, request: RunRequest) -> ExecutorFuture<'_> {
+        self.calls.lock().unwrap().push(request.clone());
+        let permits = Arc::clone(&self.permits);
+        let cancel = request.cancel.clone();
+        Box::pin(async move {
+            tokio::select! {
+                _ = permits.acquire() => ExecutorOutcome::Completed {
+                    assistant_text: Some("done".to_owned()),
+                    usage: None,
+                },
+                _ = cancel.cancelled() => ExecutorOutcome::Cancelled {
+                    reason: Some("cancelled".to_owned()),
+                },
+            }
+        })
+    }
+}
+
+/// 不响应型执行器（M2-05 DoD3）：忽略取消令牌，永不返回（故障注入「任务不退出」）。
+pub struct UnresponsiveExecutor {
+    pub calls: Mutex<Vec<RunRequest>>,
+}
+
+impl UnresponsiveExecutor {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            calls: Mutex::new(Vec::new()),
+        })
+    }
+
+    pub fn call_count(&self) -> usize {
+        self.calls.lock().unwrap().len()
+    }
+}
+
+impl RunExecutor for UnresponsiveExecutor {
+    fn execute(&self, request: RunRequest) -> ExecutorFuture<'_> {
+        self.calls.lock().unwrap().push(request);
+        Box::pin(std::future::pending::<ExecutorOutcome>())
     }
 }
 
@@ -245,6 +325,53 @@ pub async fn create_session(manager: &SessionManager, title: &str) -> Session {
         .create_session(mock_runtime(), title, None, None)
         .await
         .unwrap()
+}
+
+/// 直接落库构造会话行（M2-05 父取消级联：P0 无子会话创建 API，测试经存储层构造）。
+pub async fn insert_session_row(
+    core: &TestCore,
+    session_id: &str,
+    parent_session_id: Option<&str>,
+) -> Session {
+    insert_session_row_with_status(core, session_id, parent_session_id, SessionStatus::Idle).await
+}
+
+/// 直接落库构造指定状态的会话行（M2-05：`waiting_permission` 取消路径的前置构造）。
+pub async fn insert_session_row_with_status(
+    core: &TestCore,
+    session_id: &str,
+    parent_session_id: Option<&str>,
+    status: SessionStatus,
+) -> Session {
+    let session = Session {
+        id: SessionId::new(session_id).unwrap(),
+        runtime_id: RuntimeId::new("mock").unwrap(),
+        workspace_id: None,
+        parent_session_id: parent_session_id.map(|id| SessionId::new(id).unwrap()),
+        title: format!("child-{session_id}"),
+        status,
+        model: None,
+        system_prompt: None,
+        config: serde_json::json!({}),
+        token_usage: TokenUsage::default(),
+        created_at: 1,
+        updated_at: 1,
+        closed_at: None,
+    };
+    let queue = core.write();
+    queue
+        .execute(StoreCommand::EnsureRuntime {
+            runtime: mock_runtime(),
+        })
+        .await
+        .unwrap();
+    queue
+        .execute(StoreCommand::InsertSession {
+            session: session.clone(),
+        })
+        .await
+        .unwrap();
+    session
 }
 
 /// 系统时钟句柄（真实时间场景）。

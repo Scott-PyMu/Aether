@@ -17,6 +17,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 pub mod backpressure;
+pub mod cancel;
 pub mod clock;
 pub mod delta;
 pub mod error;
@@ -39,6 +40,10 @@ pub use backpressure::{
     PAUSE_MAX_CONSECUTIVE_TIMEOUTS, PAUSE_TIMEOUT_MS, PAUSE_WINDOW_MS, RELEASE_SUSTAIN_MS,
     STORAGE_L1_THRESHOLD, STORAGE_L2_THRESHOLD,
 };
+pub use cancel::{
+    CancelTree, RunCancelToken, TaskDump, TaskWatchdog, TASK_DUMP_ACTION_FORCED_CLEANUP,
+    TASK_DUMP_CAPACITY, TASK_FORCE_CLEANUP_MS,
+};
 pub use clock::{Clock, ManualClock, SharedClock, SystemClock};
 pub use delta::{DeltaBuffer, DELTA_FLUSH_BYTES, DELTA_FLUSH_INTERVAL};
 pub use error::{JournalError, NormalizeError, PipelineError, SourceError};
@@ -47,8 +52,8 @@ pub use journal::{
 };
 pub use lifecycle::{
     run_is_retryable, ExecutorFuture, ExecutorOutcome, InterruptReport, LifecycleConfig,
-    LifecycleError, RunCancelToken, RunExecutor, RunRequest, SendAck, SessionManager,
-    MAX_WAITING_RUNS_PER_SESSION, RUN_STREAM_TIMEOUT_CODE, RUN_STREAM_TIMEOUT_MS, WATCHDOG_TICK,
+    LifecycleError, RunExecutor, RunRequest, SendAck, SessionManager, MAX_WAITING_RUNS_PER_SESSION,
+    RUN_STREAM_TIMEOUT_CODE, RUN_STREAM_TIMEOUT_MS, WATCHDOG_TICK,
 };
 pub use normalizer::{Normalizer, PendingEvent};
 pub use permission::{

@@ -1,6 +1,10 @@
 //! 权限服务（M2-03；设计 D9）：策略评估 → 审批（pending 持久化 / 300s 超时 deny）
 //! → 审计最小写入 → `permission.requested/resolved` 事件。
 //!
+//! M2-05：审批等待可经取消树级联取消（[`PermissionService::request_cancellable`]）——
+//! `interrupt`/`dispose`/父会话取消命中时，待审批票据按 deny 收口（审计
+//! `permission.cancelled`）；D9 边界口径不变（仅约束经线协议上报的工具调用）。
+//!
 //! 分层：
 //! - 决策（矩阵/路径/审批票据）在 `aether-security::permission`（纯模型，无 I/O）；
 //! - 本模块承接持久化（`permissions` / `audit_log` 经单写队列）、超时巡检（注入时钟）、
@@ -32,6 +36,7 @@ use tokio::runtime::Handle;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
+use crate::cancel::RunCancelToken;
 use crate::clock::SharedClock;
 use crate::error::PipelineError;
 use crate::pipeline::{EventPipeline, SubmitOutcome};
@@ -271,6 +276,19 @@ impl PermissionService {
         &self,
         request: PermissionRequest,
     ) -> Result<PermissionResolution, PermissionError> {
+        self.request_cancellable(request, None).await
+    }
+
+    /// 请求一次工具调用权限；等待可被取消树级联取消（M2-05：权限等待可取消）。
+    ///
+    /// `cancel` 命中（`interrupt`/`dispose`/父会话取消）时，待审批票据按 deny 收口
+    /// （落库 `resolved` + `permission.resolved(deny)` 事件 + 审计 `permission.cancelled`），
+    /// 返回 `timed_out=false` 的 deny 决议；决议与取消并发时以票据摘除为仲裁，不丢决议。
+    pub async fn request_cancellable(
+        &self,
+        request: PermissionRequest,
+        cancel: Option<&RunCancelToken>,
+    ) -> Result<PermissionResolution, PermissionError> {
         let resource = PermissionResource::from_code(&request.resource).ok_or_else(|| {
             PermissionError::InvalidResource {
                 resource: request.resource.clone(),
@@ -414,26 +432,61 @@ impl PermissionService {
         )
         .await?;
 
-        let resolution = match self.inner.config.wait_timeout {
-            Some(limit) => match tokio::time::timeout(limit, rx).await {
-                Ok(Ok(resolution)) => resolution,
-                Ok(Err(_)) => {
-                    return Err(PermissionError::Internal {
-                        reason: "等待者通道被丢弃".to_owned(),
-                    })
-                }
-                Err(_) => self.timeout_ticket(&id).await?,
-            },
-            None => match rx.await {
-                Ok(resolution) => resolution,
-                Err(_) => {
-                    return Err(PermissionError::Internal {
-                        reason: "等待者通道被丢弃".to_owned(),
-                    })
-                }
-            },
-        };
+        let resolution = self.wait_for_resolution(&id, rx, cancel).await?;
         Ok(resolution)
+    }
+
+    /// 等待审批决议（`permission.request` 等待段；M2-05 权限等待可取消）。
+    ///
+    /// 三路等待：决议（oneshot）/ 取消树级联（[`RunCancelToken`]）/ 兜底超时；
+    /// 取消与决议并发时以「票据摘除」为仲裁——取消方摘到票据则按 deny 收口，
+    /// 否则等待并返回实际决议（不丢决议、不死锁）。
+    async fn wait_for_resolution(
+        &self,
+        id: &str,
+        mut rx: oneshot::Receiver<PermissionResolution>,
+        cancel: Option<&RunCancelToken>,
+    ) -> Result<PermissionResolution, PermissionError> {
+        if let Some(token) = cancel {
+            if token.is_cancelled() {
+                if let Some(resolution) = self.try_cancel_ticket(id).await? {
+                    return Ok(resolution);
+                }
+            }
+        }
+        let wait_timeout = self.inner.config.wait_timeout;
+        let cancelled = async {
+            match cancel {
+                Some(token) => token.cancelled().await,
+                None => std::future::pending::<()>().await,
+            }
+        };
+        let timeout = async {
+            match wait_timeout {
+                Some(limit) => tokio::time::sleep(limit).await,
+                None => std::future::pending::<()>().await,
+            }
+        };
+        tokio::pin!(cancelled, timeout);
+        tokio::select! {
+            result = &mut rx => match result {
+                Ok(resolution) => Ok(resolution),
+                Err(_) => Err(PermissionError::Internal {
+                    reason: "等待者通道被丢弃".to_owned(),
+                }),
+            },
+            () = &mut cancelled => match self.try_cancel_ticket(id).await? {
+                Some(resolution) => Ok(resolution),
+                // 取消与决议并发：票据已被决议路径摘除 → 等待实际决议（不丢）。
+                None => match rx.await {
+                    Ok(resolution) => Ok(resolution),
+                    Err(_) => Err(PermissionError::Internal {
+                        reason: "等待者通道被丢弃".to_owned(),
+                    }),
+                },
+            },
+            () = &mut timeout => self.timeout_ticket(id).await,
+        }
     }
 
     /// 用户决议（UI `permission.resolve` 语义）：`once` / `session` 授权，`deny` 拒绝。
@@ -616,6 +669,95 @@ impl PermissionService {
             (ticket, waiter)
         };
         self.finalize_timeout(&ticket, waiter).await
+    }
+
+    /// 取消树级联（M2-05）：摘除待审批票据并按 deny 收口；票据已被决议/超时摘除时
+    /// 返回 `None`（调用方回落到实际决议）。
+    async fn try_cancel_ticket(
+        &self,
+        id: &str,
+    ) -> Result<Option<PermissionResolution>, PermissionError> {
+        let (ticket, waiter) = {
+            let mut inner = lock_inner(&self.inner);
+            let Some(ticket) = inner.queue.remove(id) else {
+                return Ok(None);
+            };
+            (ticket, inner.waiters.remove(id))
+        };
+        self.finalize_cancelled(&ticket, waiter).await.map(Some)
+    }
+
+    /// 取消收口：落库 deny（`resolved`）+ `permission.resolved(deny)` 事件 +
+    /// 审计 `permission.cancelled` + 唤醒等待者（deny，`timed_out=false`）。
+    async fn finalize_cancelled(
+        &self,
+        ticket: &ApprovalTicket,
+        waiter: Option<oneshot::Sender<PermissionResolution>>,
+    ) -> Result<PermissionResolution, PermissionError> {
+        let resolved_at = self.inner.clock.now_ms();
+        let affected = self
+            .inner
+            .write
+            .execute(StoreCommand::ResolvePermission {
+                id: ticket.id.clone(),
+                decision: PermissionDecision::Deny,
+                scope: None,
+                status: PermissionStatus::Resolved,
+                resolved_at,
+                resolver: Some("system".to_owned()),
+            })
+            .await?;
+        if let StoreOutcome::Applied { affected } = affected {
+            if affected == 0 {
+                return Err(PermissionError::NotPending {
+                    request_id: ticket.request_id.clone(),
+                });
+            }
+        }
+        if let (Some(session_id), Some(runtime_id)) =
+            (ticket.session_id.as_ref(), self.runtime_id_of(ticket).await)
+        {
+            if let Ok(session_id) = SessionId::new(session_id.clone()) {
+                self.emit(
+                    &session_id,
+                    &runtime_id,
+                    "permission.resolved",
+                    json!({
+                        "request_id": ticket.request_id,
+                        "decision": "deny",
+                        "scope": Value::Null,
+                    }),
+                )
+                .await?;
+            }
+        }
+        self.insert_audit(
+            ticket.session_id.as_deref(),
+            "system",
+            "permission.cancelled",
+            &format!("{}:{}", ticket.resource, ticket.action),
+            "cancelled",
+            Some(
+                json!({
+                    "request_id": ticket.request_id,
+                    "reason": "取消树级联（interrupt/dispose）",
+                })
+                .to_string(),
+            ),
+        )
+        .await?;
+
+        let resolution = PermissionResolution {
+            request_id: ticket.request_id.clone(),
+            decision: PermissionDecision::Deny,
+            scope: None,
+            reason: "会话取消（取消树级联）→ deny（已审计）".to_owned(),
+            timed_out: false,
+        };
+        if let Some(waiter) = waiter {
+            let _ = waiter.send(resolution.clone());
+        }
+        Ok(resolution)
     }
 
     /// 超时落库 + 审计 + 事件 + 唤醒等待者（票据须已从队列摘除）。

@@ -507,6 +507,8 @@ fn txn_failed(error: rusqlite::Error) -> StoreError {
 pub struct SessionQuery {
     pub runtime_id: Option<String>,
     pub status: Option<SessionStatus>,
+    /// 父会话过滤（M2-05 父取消级联：按 `parent_session_id` 遍历子会话）。
+    pub parent_session_id: Option<String>,
     pub limit: Option<u32>,
 }
 
@@ -522,6 +524,10 @@ impl SessionQuery {
         if let Some(status) = self.status {
             clauses.push("status = ?");
             values.push(Box::new(status.as_str().to_owned()));
+        }
+        if let Some(parent_session_id) = &self.parent_session_id {
+            clauses.push("parent_session_id = ?");
+            values.push(Box::new(parent_session_id.clone()));
         }
         let where_clause = if clauses.is_empty() {
             String::new()
