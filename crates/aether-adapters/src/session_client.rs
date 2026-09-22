@@ -23,6 +23,7 @@ use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
 
 use crate::connection::{AdapterConnection, AdapterNotification, ConnectionState, RequestError};
+use crate::permission_loop::PermissionLoop;
 use crate::protocol::Method;
 
 /// 连接在 run 在途时断开的错误码（核心据此将 run 标 failed）。
@@ -125,6 +126,8 @@ struct ClientState {
     dropped_events: u64,
     /// `permission.request` 通知。
     permission_requests: Vec<Value>,
+    /// M2-10 权限回环（接线后每条通知经网关决议并下发 `permission.resolve`）。
+    permission_loop: Option<Arc<PermissionLoop>>,
     /// `log` 通知。
     logs: Vec<Value>,
     /// 断连细节（`None` = 连接仍存活/未观察到断开）。
@@ -142,7 +145,19 @@ pub struct AdapterSessionClient {
 impl AdapterSessionClient {
     /// 建立客户端并启动通知 pump（连接须已握手完成）。
     pub fn new(connection: Arc<AdapterConnection>) -> Self {
-        let state = Arc::new(Mutex::new(ClientState::default()));
+        Self::with_permission_loop(connection, None)
+    }
+
+    /// 建立客户端并接线权限回环（M2-10）：`permission.request` 通知经网关决议后
+    /// 以 `permission.resolve` 下发；未接线时仅收集通知（M1-09/M2-02 既有语义）。
+    pub fn with_permission_loop(
+        connection: Arc<AdapterConnection>,
+        permission_loop: Option<Arc<PermissionLoop>>,
+    ) -> Self {
+        let state = Arc::new(Mutex::new(ClientState {
+            permission_loop,
+            ..ClientState::default()
+        }));
         let notify = Arc::new(Notify::new());
         let pump = tokio::spawn(pump_notifications(
             Arc::clone(&connection),
@@ -155,6 +170,16 @@ impl AdapterSessionClient {
             notify,
             pump,
         }
+    }
+
+    /// 运行期接线/替换权限回环（`None` 解除接线）。
+    pub async fn attach_permission_loop(&self, permission_loop: Option<Arc<PermissionLoop>>) {
+        self.state.lock().await.permission_loop = permission_loop;
+    }
+
+    /// 当前权限回环（诊断/关闭序列用）。
+    pub async fn permission_loop(&self) -> Option<Arc<PermissionLoop>> {
+        self.state.lock().await.permission_loop.clone()
     }
 
     /// 底层连接（诊断/高级用法）。
@@ -521,7 +546,24 @@ async fn pump_notifications(
                             guard.events.push(envelope);
                         }
                         AdapterNotification::PermissionRequest(params) => {
-                            guard.permission_requests.push(params)
+                            guard.permission_requests.push(params.clone());
+                            // M2-10 权限回环：接线时经网关决议并下发 permission.resolve
+                            // （决议在后台任务执行，不阻塞通知 pump）。
+                            if let Some(permission_loop) = guard.permission_loop.clone() {
+                                let runtime_id = match connection.state() {
+                                    ConnectionState::Ready(hello)
+                                    | ConnectionState::Degraded { hello, .. } => {
+                                        Some(hello.runtime.name)
+                                    }
+                                    ConnectionState::Connecting
+                                    | ConnectionState::Disconnected(_) => None,
+                                };
+                                permission_loop.dispatch(
+                                    Arc::clone(&connection),
+                                    params,
+                                    runtime_id,
+                                );
+                            }
                         }
                         AdapterNotification::Log(params) => guard.logs.push(params),
                         AdapterNotification::ArtifactRef(_) => {
@@ -837,6 +879,112 @@ mod tests {
             .await
             .is_some());
         assert!(client.disconnect_detail().await.is_some());
+    }
+
+    /// M2-10：接线权限回环后，`permission.request` 通知经网关决议并下发
+    /// `permission.resolve`；探针「收到 = 决议 = 下发」。
+    #[tokio::test]
+    async fn permission_loop_dispatches_notification_and_resolves() {
+        use crate::permission_loop::{
+            PermissionGate, PermissionGateFuture, PermissionLoop, PermissionLoopDecision,
+            PermissionLoopProbe, PermissionLoopRequest,
+        };
+
+        #[derive(Default)]
+        struct StubGate {
+            requests: std::sync::Mutex<Vec<PermissionLoopRequest>>,
+        }
+
+        impl PermissionGate for StubGate {
+            fn decide(&self, request: PermissionLoopRequest) -> PermissionGateFuture<'_> {
+                self.requests.lock().unwrap().push(request);
+                Box::pin(async move {
+                    Ok(PermissionLoopDecision::allow(Some(
+                        aether_core::PermissionScope::Once,
+                    )))
+                })
+            }
+        }
+
+        let (core_side, adapter_side) = tokio::io::duplex(1024 * 1024);
+        let (adapter_read, adapter_write) = tokio::io::split(adapter_side);
+        let (core_read, core_write) = tokio::io::split(core_side);
+        let connection = Arc::new(AdapterConnection::spawn(core_read, core_write));
+        let gate = Arc::new(StubGate::default());
+        let probe = Arc::new(PermissionLoopProbe::new());
+        let permission_loop = PermissionLoop::with_probe(gate.clone(), Arc::clone(&probe));
+        let client = AdapterSessionClient::with_permission_loop(
+            Arc::clone(&connection),
+            Some(permission_loop),
+        );
+        let mut peer = Peer {
+            reader: BufReader::new(adapter_read),
+            writer: adapter_write,
+        };
+        peer.hello().await;
+
+        peer.send_value(json!({
+            "jsonrpc": "2.0",
+            "method": "permission.request",
+            "params": {
+                "request_id": "01J00000000000000000000PR",
+                "session_id": "sess-1",
+                "resource": "fs.write",
+                "action": "write",
+                "target": "notes.md",
+            },
+        }))
+        .await;
+
+        let request = peer.next_line().await.expect("permission.resolve 请求");
+        assert_eq!(request["method"], "permission.resolve");
+        assert_eq!(request["params"]["request_id"], "01J00000000000000000000PR");
+        assert_eq!(request["params"]["decision"], "allow");
+        assert_eq!(request["params"]["scope"], "once");
+        peer.respond(request["id"].as_u64().unwrap(), json!({"resolved": true}))
+            .await;
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        while probe.snapshot().resolutions_sent == 0 && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let snapshot = probe.snapshot();
+        assert!(snapshot.zero_passthrough(), "{snapshot:?}");
+        assert_eq!(snapshot.requests_received, 1);
+        assert_eq!(snapshot.decisions, 1);
+        assert_eq!(snapshot.resolutions_sent, 1);
+        assert_eq!(gate.requests.lock().unwrap().len(), 1);
+        assert_eq!(
+            gate.requests.lock().unwrap()[0].runtime_id.as_deref(),
+            Some("claude-code"),
+            "runtime_id 由 hello 上下文注入"
+        );
+        assert_eq!(client.permission_requests().await.len(), 1);
+
+        // 未接线（attach None）后不再经回环：仅收集通知。
+        client.attach_permission_loop(None).await;
+        peer.send_value(json!({
+            "jsonrpc": "2.0",
+            "method": "permission.request",
+            "params": {
+                "request_id": "01J00000000000000000000PX",
+                "resource": "fs.read",
+                "action": "read",
+                "target": "a.txt",
+            },
+        }))
+        .await;
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(200);
+        while client.permission_requests().await.len() < 2 && tokio::time::Instant::now() < deadline
+        {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(client.permission_requests().await.len(), 2);
+        assert_eq!(
+            probe.snapshot().requests_received,
+            1,
+            "解除接线后不再进回环"
+        );
     }
 
     #[tokio::test]

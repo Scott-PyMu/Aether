@@ -109,6 +109,7 @@ dependencies = [
  "aether-adapters",
  "aether-control",
  "aether-core",
+ "aether-security",
  "aether-store",
  "dirs",
  "embed-resource",

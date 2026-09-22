@@ -64,6 +64,9 @@ winreg = "0.55"
 tauri = { version = "2.11.5", features = ["test"] }
 # ADR-007：health 真实接线测试的临时数据目录。
 tempfile = "3"
+# M2-10 权限回环集成测试：以真实策略引擎组装真实 PermissionService
+# （aether-security 为工作区内部 crate，已在依赖图内；仅测试目标使用）。
+aether-security.workspace = true
 
 [lints]
 workspace = true

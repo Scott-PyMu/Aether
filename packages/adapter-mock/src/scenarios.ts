@@ -70,6 +70,65 @@ export function scenarioForText(text: string): ToolCallScenarioId | undefined {
   return undefined;
 }
 
+/**
+ * M2-10 真实权限回环触发（M1-09 B1 预置 ④⑤ 的 M2 演进）：
+ *
+ * - `permission-loop:<target>`：文件类写工具（`fs.write` ask）——适配器发
+ *   `permission.request` 通知并**阻塞等待**核心 `permission.resolve`，决策完全来自
+ *   核心权限网关（UI 决议 / 超时 deny / 策略直决），适配器不预设、不伪造；
+ * - `permission-loop-read:<target>`：文件类读工具（`fs.read`，工作区内策略 allow /
+ *   工作区外 deny）——同样经回环上报，决策由核心策略矩阵给出。
+ *
+ * 事件序列（回环）：`tool.call_started` →（等待核心决议）→ `permission.resolved`
+ * → `tool.call_completed`（allow）或 `tool.call_failed`（deny，error.code=denied）。
+ */
+export const PERMISSION_LOOP_TRIGGER = "permission-loop:";
+export const PERMISSION_LOOP_READ_TRIGGER = "permission-loop-read:";
+
+export interface PermissionLoopTrigger {
+  resource: "fs.write" | "fs.read";
+  action: "write" | "read";
+  toolName: string;
+  target: string;
+}
+
+export function permissionLoopForText(text: string): PermissionLoopTrigger | undefined {
+  const normalized = text.trim();
+  const specs: Array<{
+    prefix: string;
+    resource: PermissionLoopTrigger["resource"];
+    action: PermissionLoopTrigger["action"];
+    toolName: string;
+  }> = [
+    {
+      prefix: PERMISSION_LOOP_READ_TRIGGER,
+      resource: "fs.read",
+      action: "read",
+      toolName: "mock.read_file",
+    },
+    {
+      prefix: PERMISSION_LOOP_TRIGGER,
+      resource: "fs.write",
+      action: "write",
+      toolName: "mock.write_file",
+    },
+  ];
+  for (const spec of specs) {
+    if (!normalized.startsWith(spec.prefix)) continue;
+    const target = normalized.slice(spec.prefix.length).trim();
+    if (!target) return undefined;
+    return { resource: spec.resource, action: spec.action, toolName: spec.toolName, target };
+  }
+  return undefined;
+}
+
+/** 适配器侧等待的核心决议（`permission.resolve` 请求 params 的映射）。 */
+export interface PermissionLoopDecision {
+  decision: "allow" | "deny";
+  scope: "once" | "session" | null;
+  reason?: string;
+}
+
 export interface PermissionRequestPayload {
   request_id: string;
   resource: string;
@@ -119,7 +178,7 @@ export function buildPermissionRequested(payload: PermissionRequestPayload): Rec
 export function buildPermissionResolved(
   requestId: string,
   decision: "allow" | "deny",
-  scope: "once" | "session",
+  scope: "once" | "session" | null,
 ): Record<string, unknown> {
   return { request_id: requestId, decision, scope };
 }

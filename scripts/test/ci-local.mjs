@@ -92,6 +92,10 @@ record(
   "verify-m2-09（大行与 OOM 防护：>2MiB 不缓冲断连记错/1–2MiB 内存曲线受控/artifact_ref 附件仅存 artifacts 路径/1.5GiB 压力告警限流不崩溃；需 Bun + ~1.5GiB 内存）",
   run(node, [path.join(repoRoot, "scripts", "test", "m2-09", "verify-m2-09.mjs")]),
 );
+record(
+  "verify-m2-10（权限回环：适配器文件类工具调用 100% 经 permission.request 回环、零直通；异常路径 deny/超时/once/session/重启 pending；证据可导出归档；需 Bun + 真实 Mock + 真实网关）",
+  run(node, [path.join(repoRoot, "scripts", "test", "m2-10", "verify-m2-10.mjs")]),
+);
 
 if (!quick) {
   record("verify-coverage-gate", run(node, [path.join(repoRoot, "scripts", "test", "verify-coverage-gate.mjs")]));

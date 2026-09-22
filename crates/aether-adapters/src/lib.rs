@@ -13,6 +13,7 @@
 pub mod artifact;
 pub mod connection;
 pub mod framing;
+pub mod permission_loop;
 pub mod process;
 pub mod protocol;
 pub mod session_client;
@@ -30,6 +31,11 @@ pub use connection::{
 pub use framing::{
     AetherLineCodec, ChunkLimitedReader, FrameError, RawLine, ARTIFACT_REF_LIMIT,
     ARTIFACT_REF_TYPE, MAX_FRAME_BYTES, READ_CHUNK_BYTES,
+};
+pub use permission_loop::{
+    PermissionGate, PermissionGateFuture, PermissionLoop, PermissionLoopDecision,
+    PermissionLoopProbe, PermissionLoopRequest, PermissionLoopSnapshot,
+    PERMISSION_LOOP_ERROR_LIMIT, PERMISSION_RESOLVE_TIMEOUT,
 };
 pub use process::{AdapterProcess, ProcessError, ProcessTerminationTarget, STDERR_TAIL_LINES};
 pub use protocol::{

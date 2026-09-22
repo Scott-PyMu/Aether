@@ -19,6 +19,7 @@ pub mod ipc;
 pub mod isolation;
 pub mod logging;
 pub mod nav;
+pub mod permission_loop;
 pub mod picker;
 pub mod runtime_control;
 pub mod single_instance;

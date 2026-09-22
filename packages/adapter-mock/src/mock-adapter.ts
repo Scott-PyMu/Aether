@@ -6,6 +6,9 @@
  * - 5 类工具调用注入清单（权威定义见 `scenarios.ts`，供 M2-02/M2-10 复用）；
  *   ④⑤ 为自包含**预置**（不经核心权限网关、不发 permission.request 通知；边界 B1，
  *   见 `docs/M1-09-证据.md`，M2-10 在真实回环中重放）；
+ * - **M2-10 真实权限回环**（`permission-loop:<target>` / `permission-loop-read:<target>`）：
+ *   文件类工具调用发 `permission.request` 通知并等待核心 `permission.resolve`，
+ *   决策完全来自核心权限网关（适配器不预设、不伪造；M1-09 B1 的 M2 演进）；
  * - 附件外置（M2-09/D6）：`artifact:<文件名>[:<字节数>]` 触发——把大附件**数据体**
  *   写入 `AETHER_ARTIFACTS_DIR`（或 `--artifacts-dir`）目录，仅以 `artifact_ref`
  *   引用帧（路径 + 元数据）上报，数据体不进入线协议、不落库；
@@ -38,10 +41,13 @@ import {
   buildToolCallFailed,
   buildToolCallStarted,
   PERMISSION_DENIED_ERROR,
+  permissionLoopForText,
   scenarioForText,
   TOOL_CALL_SCENARIOS,
   TOOL_FAILURE_ERROR,
   TOOL_TIMEOUT_ERROR,
+  type PermissionLoopDecision,
+  type PermissionLoopTrigger,
   type ToolCallScenarioId,
 } from "./scenarios";
 
@@ -173,6 +179,11 @@ export class MockAdapter {
   > & { protocol?: string; sendHello: boolean; artifactsDir?: string };
 
   private readonly sessions = new Map<string, MockSession>();
+  /** M2-10：待决权限请求（`permission.request` 已发、等待核心 `permission.resolve`）。 */
+  private readonly permissionWaiters = new Map<
+    string,
+    (decision: PermissionLoopDecision | undefined) => void
+  >();
   private readonly startedAt = Date.now();
   private sessionCounter = 0;
 
@@ -464,11 +475,30 @@ export class MockAdapter {
           ],
         };
       })
-      .handle("permission.resolve", () => {
-        // 边界 B1（M1-09 证据）：M1 预置路径不产生待决权限请求——Mock 自包含产出
-        // ④⑤ 事件序列，由场景固定决策，不发送 permission.request 通知，也不依赖本方法。
-        // M2-10 真实回环（mock-only 路径）在本方法内登记/结算 pending 状态。
-        return { resolved: false, reason: "m1-preset（不走核心权限网关，见 B1）" };
+      .handle("permission.resolve", (params) => {
+        const input = params as {
+          request_id?: string;
+          decision?: string;
+          scope?: string;
+          reason?: string;
+        };
+        const requestId = input.request_id;
+        if (!requestId) {
+          throw new RpcError(-32602, "permission.resolve 缺少 request_id");
+        }
+        const waiter = this.permissionWaiters.get(requestId);
+        if (!waiter) {
+          // 边界 B1（M1-09 证据）：预置路径（④⑤）不产生待决回环请求——不伪造决议、
+          // 不产生网关副作用。M2-10 真实回环（`permission-loop:*`）在此结算等待者。
+          return { resolved: false, reason: "no-pending-request（M1 预置不经网关，见 B1）" };
+        }
+        this.permissionWaiters.delete(requestId);
+        const decision: PermissionLoopDecision["decision"] =
+          input.decision === "allow" ? "allow" : "deny";
+        const scope: PermissionLoopDecision["scope"] =
+          decision === "allow" ? (input.scope === "session" ? "session" : "once") : null;
+        waiter({ decision, scope, ...(input.reason !== undefined ? { reason: input.reason } : {}) });
+        return { resolved: true, request_id: requestId, decision, scope };
       })
       .handle("health.ping", () => {
         if (this.options.injections.includes("hang")) {
@@ -530,7 +560,10 @@ export class MockAdapter {
     try {
       await this.emit(context, "run.started", { run_id: runId });
       const scenario = scenarioForText(text);
-      if (scenario) {
+      const permissionLoop = permissionLoopForText(text);
+      if (permissionLoop) {
+        await this.runPermissionLoopScenario(permissionLoop, context, run);
+      } else if (scenario) {
         await this.runToolScenario(scenario, context, run);
       } else if (text.trim().startsWith("bench:")) {
         const count = Number.parseInt(text.trim().slice("bench:".length), 10);
@@ -667,6 +700,93 @@ export class MockAdapter {
       usage: emptyUsage(),
     });
     await this.emit(context, "run.completed", { run_id: run.runId, usage: emptyUsage() });
+  }
+
+  /**
+   * M2-10 真实权限回环：`tool.call_started` → `permission.request` 通知 →
+   * 等待核心 `permission.resolve` → `permission.resolved` → 工具终态 → `run.completed`。
+   *
+   * 适配器**不预设决策**（与 ④⑤ 预置的本质区别）：决议缺失（中断/销毁）按
+   * timeout/abort 收口，不产出 `permission.resolved`（核心侧取消路径另有审计）。
+   */
+  private async runPermissionLoopScenario(
+    trigger: PermissionLoopTrigger,
+    context: EnvelopeContext,
+    run: ActiveRun,
+  ): Promise<void> {
+    const startedAt = Date.now();
+    const toolCallId = ulid();
+    const requestId = ulid();
+    await this.emit(
+      context,
+      "tool.call_started",
+      buildToolCallStarted(toolCallId, trigger.toolName, { path: trigger.target }),
+    );
+
+    const decision = await this.awaitPermissionResolution(context, run, requestId, trigger);
+    if (decision === undefined) {
+      await this.emit(
+        context,
+        "tool.call_failed",
+        buildToolCallFailed(
+          toolCallId,
+          trigger.toolName,
+          Date.now() - startedAt,
+          TOOL_TIMEOUT_ERROR,
+        ),
+      );
+      await this.emit(context, "run.cancelled", { run_id: run.runId, reason: "interrupted" });
+      return;
+    }
+
+    await this.emit(
+      context,
+      "permission.resolved",
+      buildPermissionResolved(requestId, decision.decision, decision.scope),
+    );
+    if (decision.decision === "allow") {
+      await this.emit(
+        context,
+        "tool.call_completed",
+        buildToolCallCompleted(toolCallId, trigger.toolName, Date.now() - startedAt),
+      );
+    } else {
+      await this.emit(
+        context,
+        "tool.call_failed",
+        buildToolCallFailed(
+          toolCallId,
+          trigger.toolName,
+          Date.now() - startedAt,
+          PERMISSION_DENIED_ERROR,
+        ),
+      );
+    }
+    await this.emit(context, "run.completed", { run_id: run.runId, usage: emptyUsage() });
+  }
+
+  /** 发 `permission.request` 通知并等待核心 `permission.resolve`（中断/销毁 → undefined）。 */
+  private async awaitPermissionResolution(
+    context: EnvelopeContext,
+    run: ActiveRun,
+    requestId: string,
+    trigger: PermissionLoopTrigger,
+  ): Promise<PermissionLoopDecision | undefined> {
+    await this.adapter.emitPermissionRequest({
+      request_id: requestId,
+      session_id: context.sessionId,
+      run_id: context.runId ?? undefined,
+      resource: trigger.resource,
+      action: trigger.action,
+      target: trigger.target,
+    });
+    return new Promise<PermissionLoopDecision | undefined>((resolve) => {
+      this.permissionWaiters.set(requestId, resolve);
+      // 中断/销毁兜底：仅当等待者仍待决时按中断收口（避免与决议双唤醒）。
+      void this.waitForInterrupt(run).then(() => {
+        if (this.permissionWaiters.delete(requestId)) resolve(undefined);
+      });
+    });
   }
 
   private async runToolScenario(

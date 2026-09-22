@@ -427,6 +427,11 @@ jobs:
       - name: M1-09 验证（编译 Mock + 单测 + 一致性/健壮性集成 + 吞吐基准）
         run: pnpm verify:m1-09
 
+      # M2 批 4（M2-10 权限回环）：真实 Mock 进程 + 真实权限网关（策略/审批/超时/审计）
+      # + 探针零直通断言；与 M1-09 共用 Bun 构建的 Mock 单文件宿主。
+      - name: M2-10 验证（权限回环：基础回环零直通 + 异常路径 + 证据归档）
+        run: pnpm verify:m2-10
+
   # M1-06：数据目录检测/迁移流/单实例（A4/评审#9）——T13/T12 E2E 需要真实 WebView2。
   data-dir-guard:
     name: Data dir guard (M1-06)

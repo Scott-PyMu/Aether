@@ -323,6 +323,130 @@ describe("Mock 适配器：5 类工具调用注入清单（DoD6 权威序列）"
   });
 });
 
+describe("Mock 适配器：M2-10 真实权限回环（permission.request ↔ permission.resolve）", () => {
+  it("permission-loop：发 permission.request 并等待核心决议（allow → permission.resolved + completed）", async () => {
+    const harness = new Harness();
+    await harness.start();
+    const sessionId = await harness.createSession();
+    const runId = await harness.sendMessage(sessionId, "permission-loop:C:/ws/notes.md");
+    const request = await harness.waitForFrame(
+      (frame) => frame.method === "permission.request",
+      "permission.request",
+    );
+    const params = request.params as {
+      request_id: string;
+      session_id: string;
+      run_id: string;
+      resource: string;
+      action: string;
+      target: string;
+    };
+    expect(params.resource).toBe("fs.write");
+    expect(params.action).toBe("write");
+    expect(params.target).toBe("C:/ws/notes.md");
+    expect(params.session_id).toBe(sessionId);
+    expect(params.run_id).toBe(runId);
+    // 核心决议前不得产出 permission.resolved / 工具终态（真实回环 ≠ 预置）。
+    expect(
+      harness.events().some((frame) => frame.params?.type === "permission.resolved"),
+    ).toBe(false);
+
+    const resolved = await harness.requestResult("permission.resolve", {
+      request_id: params.request_id,
+      decision: "allow",
+      scope: "once",
+    });
+    expect(resolved.resolved).toBe(true);
+    await harness.waitForEvent("run.completed");
+    expect(toolEventTypes(eventTypesBetween(harness, runId))).toEqual([
+      "tool.call_started",
+      "permission.resolved",
+      "tool.call_completed",
+    ]);
+    const resolvedEvent = harness
+      .events()
+      .find((frame) => frame.params?.type === "permission.resolved");
+    const payload = resolvedEvent?.params?.payload as { decision: string; scope: string };
+    expect(payload.decision).toBe("allow");
+    expect(payload.scope).toBe("once");
+  });
+
+  it("permission-loop：deny → permission.resolved(deny, scope=null) + tool.call_failed(denied)", async () => {
+    const harness = new Harness();
+    await harness.start();
+    const sessionId = await harness.createSession();
+    const runId = await harness.sendMessage(sessionId, "permission-loop:C:/ws/blocked.md");
+    const request = await harness.waitForFrame(
+      (frame) => frame.method === "permission.request",
+      "permission.request",
+    );
+    const requestId = (request.params as { request_id: string }).request_id;
+    await harness.requestResult("permission.resolve", {
+      request_id: requestId,
+      decision: "deny",
+      reason: "用户拒绝",
+    });
+    await harness.waitForEvent("run.completed");
+    expect(toolEventTypes(eventTypesBetween(harness, runId))).toEqual([
+      "tool.call_started",
+      "permission.resolved",
+      "tool.call_failed",
+    ]);
+    const resolvedEvent = harness
+      .events()
+      .find((frame) => frame.params?.type === "permission.resolved");
+    expect((resolvedEvent?.params?.payload as { decision: string }).decision).toBe("deny");
+    expect((resolvedEvent?.params?.payload as { scope: string | null }).scope).toBe(null);
+    const failed = harness.events().find((frame) => frame.params?.type === "tool.call_failed");
+    expect((failed?.params?.payload as { error: { code: string } }).error.code).toBe("denied");
+  });
+
+  it("permission-loop-read：resource=fs.read（策略直决路径同样经回环）", async () => {
+    const harness = new Harness();
+    await harness.start();
+    const sessionId = await harness.createSession();
+    const runId = await harness.sendMessage(sessionId, "permission-loop-read:C:/ws/readme.md");
+    const request = await harness.waitForFrame(
+      (frame) => frame.method === "permission.request",
+      "permission.request",
+    );
+    const params = request.params as { request_id: string; resource: string; action: string };
+    expect(params.resource).toBe("fs.read");
+    expect(params.action).toBe("read");
+    await harness.requestResult("permission.resolve", {
+      request_id: params.request_id,
+      decision: "allow",
+      scope: "once",
+    });
+    await harness.waitForEvent("run.completed");
+    expect(toolEventTypes(eventTypesBetween(harness, runId))).toEqual([
+      "tool.call_started",
+      "permission.resolved",
+      "tool.call_completed",
+    ]);
+  });
+
+  it("permission-loop 等待期中断：按 timeout/abort 收口，不伪造 permission.resolved", async () => {
+    const harness = new Harness();
+    await harness.start();
+    const sessionId = await harness.createSession();
+    const runId = await harness.sendMessage(sessionId, "permission-loop:C:/ws/slow.md");
+    await harness.waitForFrame((frame) => frame.method === "permission.request", "permission.request");
+    const interrupted = await harness.requestResult("session.interrupt", { session_id: sessionId });
+    expect(interrupted.interrupted).toBe(true);
+    await harness.waitForEvent("run.cancelled");
+    expect(toolEventTypes(eventTypesBetween(harness, runId))).toEqual([
+      "tool.call_started",
+      "tool.call_failed",
+    ]);
+    expect(
+      harness.events().some((frame) => frame.params?.type === "permission.resolved"),
+    ).toBe(false);
+    const failed = harness.events().find((frame) => frame.params?.type === "tool.call_failed");
+    expect((failed?.params?.payload as { error: { code: string } }).error.code).toBe("timeout");
+  });
+});
+
 describe("Mock 适配器：生命周期与基准", () => {
   it("session.dispose 后会话不可用（1005）", async () => {
     const harness = new Harness();
