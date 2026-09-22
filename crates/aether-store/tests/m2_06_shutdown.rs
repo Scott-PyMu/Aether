@@ -154,40 +154,49 @@ async fn dod3_forced_checkpoint_retries_until_read_lock_released() {
 
     let (release, holder) = hold_read_lock(runtime.reads()).await;
 
-    // 强制 checkpoint 与持锁读并发：读锁未释放 → busy → 退避重试。
+    // 阶段 1（确定性）：读事务持有期间每次尝试都返回 busy → 退避至 max_attempts
+    // 后返回失败报告并记录诊断。**不依赖调度时序**：原实现「固定 120ms 后释放读锁」
+    // 在慢机上首轮尝试可能晚于释放，退化为一次成功（CI flake：`必须发生退避重试`
+    // 失败，`crates/aether-store/tests/m2_06_shutdown.rs:174`）。
     let queue = runtime.queue().clone();
     let config = CheckpointConfig {
         max_attempts: 40,
         initial_backoff: Duration::from_millis(15),
         max_backoff: Duration::from_millis(25),
     };
-    let checkpoint = tokio::spawn(async move { queue.checkpoint_truncate(config).await });
-    tokio::time::sleep(Duration::from_millis(120)).await;
-    release.send(()).unwrap();
-    holder.await.unwrap();
-    let report = checkpoint.await.unwrap().unwrap();
-
-    assert!(
-        report.succeeded,
-        "读锁释放后 checkpoint 必须成功：{report:?}"
+    let busy_report = queue.checkpoint_truncate(config.clone()).await.unwrap();
+    assert!(!busy_report.succeeded, "读锁未释放时不得声称成功");
+    assert_eq!(
+        busy_report.attempts, config.max_attempts,
+        "读锁持续占用时必须尝试满 max_attempts"
     );
-    assert!(report.retried(), "必须发生退避重试");
-    assert!(report.busy_attempts() >= 1, "必须记录读锁（busy）尝试");
+    assert!(busy_report.retried(), "必须发生退避重试");
+    assert!(busy_report.busy_attempts() >= 1, "必须记录读锁（busy）尝试");
     assert!(
-        report
+        busy_report
             .history
             .iter()
             .any(|attempt| attempt.busy && attempt.error.is_some()),
         "读锁尝试必须带诊断：{:?}",
-        report.history
+        busy_report.history
+    );
+
+    // 阶段 2：释放读锁后重试 → 首次尝试即成功，TRUNCATE 后 WAL 归零。
+    release.send(()).unwrap();
+    holder.await.unwrap();
+    let report = queue.checkpoint_truncate(config).await.unwrap();
+    assert!(
+        report.succeeded,
+        "读锁释放后 checkpoint 必须成功：{report:?}"
     );
     assert_eq!(runtime.wal_size_bytes(), 0, "TRUNCATE 后 WAL 必须归零");
 
     println!(
-        "[m2-06 DoD3] 读锁释放后 checkpoint 成功：{}；busy 尝试={}；逐次记录={:?}",
+        "[m2-06 DoD3] 读锁退避：busy 尝试={}（attempts={}）；释放后 checkpoint 成功：{}；逐次记录={:?}",
+        busy_report.busy_attempts(),
+        busy_report.attempts,
         report.diagnostic_summary(),
-        report.busy_attempts(),
-        report
+        busy_report
             .history
             .iter()
             .map(|attempt| (attempt.attempt, attempt.busy, attempt.waited_ms))
