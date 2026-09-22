@@ -202,6 +202,11 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # M2-09 步骤以 Bun 编译 Mock 适配器（windows-2022 镜像不含 Bun；与 M1-09 /
+      # adapters 矩阵同版本钉扎，避免依赖 runner 预装版本导致构建失败）。
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
       - name: M1-08 验证（单测矩阵 + 静态检查 + CSP/导航 E2E）
         shell: bash
         run: |
@@ -395,13 +400,19 @@ jobs:
         shell: bash
         run: |
           {
-            echo "### M2-09 verify 失败输出（断言细节 + tail 30）"
+            echo "### M2-09 verify 失败输出（断言细节 + head 20 + tail 30）"
             echo '```text'
             grep -E "panicked|assertion|left:|right:|FAIL |error\[" m2-09-verify.log 2>/dev/null | tail -12 || true
+            echo '--- head 20（含工具链/构建错误，如 Bun 缺失）---'
+            head -20 m2-09-verify.log 2>/dev/null || true
             echo '--- tail 30 ---'
             tail -30 m2-09-verify.log 2>/dev/null || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          # 构建/工具链错误优先（GitHub 每步仅保留前 10 条 annotation）。
+          grep -E "not recognized|不是内部或外部命令|ENOENT|Cannot find|\[exec\] 无法执行" m2-09-verify.log 2>/dev/null | head -4 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m2-09-build::$line"
+          done
           grep -E "^FAIL |FAIL " m2-09-verify.log 2>/dev/null | tail -6 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
             echo "::error title=m2-09-summary::$line"
           done
