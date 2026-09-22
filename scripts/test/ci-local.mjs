@@ -93,6 +93,10 @@ record(
   run(node, [path.join(repoRoot, "scripts", "test", "m2-09", "verify-m2-09.mjs")]),
 );
 record(
+  "verify-m2-11（三运行时适配器：Claude/Codex/DSH 单测+集成、DSH DoD1–8、静态合规；需 Bun；真实运行时为 opt-in）",
+  run(node, [path.join(repoRoot, "scripts", "test", "m2-11", "verify-m2-11.mjs")]),
+);
+record(
   "verify-m2-10（权限回环：适配器文件类工具调用 100% 经 permission.request 回环、零直通；异常路径 deny/超时/once/session/重启 pending；证据可导出归档；需 Bun + 真实 Mock + 真实网关）",
   run(node, [path.join(repoRoot, "scripts", "test", "m2-10", "verify-m2-10.mjs")]),
 );

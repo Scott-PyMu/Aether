@@ -136,7 +136,16 @@ jobs:
         shell: bash
         run: bun build packages/adapter-claude-code/src/main.ts --compile --outfile "$RUNNER_TEMP/aether-claude-adapter"
 
-      - name: cargo test -p aether-adapters（全量：单测 + M1-09/M1-10/M2-02 集成 + 平台断言）
+      # M2-11 / ADR-008：Codex 与 DSH 适配器（fake-codex / fake-dsh 为 Node 夹具，无网络/凭证）。
+      - name: 构建 Codex 适配器（M2-11）
+        shell: bash
+        run: bun build packages/adapter-codex/src/main.ts --compile --outfile "$RUNNER_TEMP/aether-codex-adapter"
+
+      - name: 构建 DSH 适配器（M2-11）
+        shell: bash
+        run: bun build packages/adapter-dsh/src/main.ts --compile --outfile "$RUNNER_TEMP/aether-dsh-adapter"
+
+      - name: cargo test -p aether-adapters（全量：单测 + M1-09/M1-10/M2-02/M2-11 集成 + 平台断言）
         shell: bash
         env:
           # Windows 上 bun --compile 产物自动追加 .exe。
@@ -144,6 +153,10 @@ jobs:
           AETHER_REQUIRE_MOCK_ADAPTER: "1"
           AETHER_CLAUDE_ADAPTER: ${{ runner.temp }}/aether-claude-adapter${{ runner.os == 'Windows' && '.exe' || '' }}
           AETHER_REQUIRE_CLAUDE_ADAPTER: "1"
+          AETHER_CODEX_ADAPTER: ${{ runner.temp }}/aether-codex-adapter${{ runner.os == 'Windows' && '.exe' || '' }}
+          AETHER_REQUIRE_CODEX_ADAPTER: "1"
+          AETHER_DSH_ADAPTER: ${{ runner.temp }}/aether-dsh-adapter${{ runner.os == 'Windows' && '.exe' || '' }}
+          AETHER_REQUIRE_DSH_ADAPTER: "1"
         run: |
           set -o pipefail
           cargo test -p aether-adapters --no-fail-fast 2>&1 | tee adapters-test.log

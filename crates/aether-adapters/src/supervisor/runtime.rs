@@ -28,9 +28,9 @@ use super::state::{
     SupervisorObserver,
 };
 use super::termination::{run_termination, TerminationBudget, TerminationReport};
-use crate::connection::AdapterConnection;
+use crate::connection::{AdapterConnection, RequestError};
 use crate::process::{AdapterProcess, ProcessTerminationTarget};
-use crate::protocol::{DisabledInfo, DisabledReason, Method, HANDSHAKE_TIMEOUT};
+use crate::protocol::{code, DisabledInfo, DisabledReason, Method, HANDSHAKE_TIMEOUT};
 
 /// 预热/启动时 `initialize` 超时（D6 方法表 10s）。
 pub const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -497,9 +497,12 @@ impl RuntimeSupervisor {
             self.terminate_process(&mut process, Some(&connection))
                 .await;
             let tail = process.stderr_tail();
+            // M2-11/ADR-008：适配器侧版本门闩（如 DSH pin 不匹配）经应用码 1003 上报，
+            // 映射为 `disabled + version_mismatch`（沿用 D5/D6 协议词典，其余仍 start_failed）。
+            let reason = classify_initialize_failure(&error);
             return self.fail_start_locked(
                 &mut state,
-                DisabledReason::StartFailed,
+                reason,
                 format!("initialize 失败：{error}"),
                 tail,
             );
@@ -885,6 +888,19 @@ fn classify_handshake_failure(disabled: &DisabledInfo) -> DisabledReason {
     disabled.status_reason
 }
 
+/// `initialize` 失败归因（M2-11/ADR-008 §3.4）。
+///
+/// 适配器侧版本门闩（DSH pin / 插件契约帧不匹配）经应用码 `1003 VERSION_MISMATCH`
+/// 上报 → `disabled + version_mismatch`；其余一律 `start_failed`（不改变既有语义）。
+fn classify_initialize_failure(error: &RequestError) -> DisabledReason {
+    match error {
+        RequestError::Rpc(rpc) if rpc.code == code::VERSION_MISMATCH => {
+            DisabledReason::VersionMismatch
+        }
+        _ => DisabledReason::StartFailed,
+    }
+}
+
 /// 生成 ULID 形状启动令牌（26 位 Crockford Base32；时间 48bit + pid 32bit + 计数 48bit）。
 pub fn new_launch_token() -> String {
     const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -1258,6 +1274,37 @@ mod tests {
         assert_eq!(
             classify_handshake_failure(&DisabledInfo::protocol_error("bad")),
             DisabledReason::ProtocolError
+        );
+    }
+
+    /// M2-11/ADR-008 §3.4：`initialize` 返回应用码 1003 → `version_mismatch`；其余 `start_failed`。
+    #[test]
+    fn initialize_failure_classification_maps_version_mismatch_only() {
+        let version_mismatch = RequestError::Rpc(crate::connection::RpcError {
+            code: code::VERSION_MISMATCH,
+            message: "DSH 版本门闩失败：pin 0.1.5-rc.2，实际 0.1.1-rc.2".to_owned(),
+            data: None,
+        });
+        assert_eq!(
+            classify_initialize_failure(&version_mismatch),
+            DisabledReason::VersionMismatch
+        );
+        let other = RequestError::Rpc(crate::connection::RpcError {
+            code: -32603,
+            message: "initialize 内部错误".to_owned(),
+            data: None,
+        });
+        assert_eq!(
+            classify_initialize_failure(&other),
+            DisabledReason::StartFailed
+        );
+        let timeout = RequestError::Timeout {
+            method: Method::Initialize,
+            timeout: Duration::from_secs(10),
+        };
+        assert_eq!(
+            classify_initialize_failure(&timeout),
+            DisabledReason::StartFailed
         );
     }
 

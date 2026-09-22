@@ -699,3 +699,240 @@ impl ClaudeHarness {
         let _ = self.process.kill().await;
     }
 }
+
+// ===== M2-11/ADR-008：Codex 与 DSH 适配器集成测试支持 =====
+
+/// 适配器二进制路径解析（`AETHER_<NAME>_ADAPTER`；`AETHER_REQUIRE_<NAME>_ADAPTER=1` 强制）。
+fn adapter_binary(env: &str, require: &str, label: &str) -> Option<PathBuf> {
+    match std::env::var_os(env) {
+        Some(path) => Some(PathBuf::from(path)),
+        None => {
+            if std::env::var(require).as_deref() == Ok("1") {
+                panic!("{require}=1 但 {env} 未设置");
+            }
+            eprintln!("SKIP：{env} 未设置（运行 pnpm verify:m2-11 构建 {label} 适配器后执行）");
+            None
+        }
+    }
+}
+
+/// Codex 适配器（Bun 编译产物）路径。
+pub fn codex_adapter_binary() -> Option<PathBuf> {
+    adapter_binary(
+        "AETHER_CODEX_ADAPTER",
+        "AETHER_REQUIRE_CODEX_ADAPTER",
+        "Codex",
+    )
+}
+
+/// DSH 适配器（Bun 编译产物）路径。
+pub fn dsh_adapter_binary() -> Option<PathBuf> {
+    adapter_binary("AETHER_DSH_ADAPTER", "AETHER_REQUIRE_DSH_ADAPTER", "DSH")
+}
+
+/// fake-codex CLI 夹具路径。
+pub fn fake_codex_cli() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/test/m2-11/fake-codex/cli.mjs")
+}
+
+/// fake-dsh ACP server 夹具路径。
+pub fn fake_dsh_server() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/test/m2-11/fake-dsh/acp-server.mjs")
+}
+
+/// Codex 集成 harness：真实 Codex 适配器进程 + 会话客户端 + fake-codex 夹具。
+pub struct CodexHarness {
+    pub process: AdapterProcess,
+    pub client: AdapterSessionClient,
+    pub home: PathBuf,
+    pub workspace: PathBuf,
+    pub pid_file: PathBuf,
+}
+
+impl CodexHarness {
+    pub async fn launch(extra_args: &[&str]) -> Option<Self> {
+        let home = unique_temp_dir("m2-11-codex-home");
+        Self::launch_with_home(home, extra_args).await
+    }
+
+    /// 以指定 CODEX_HOME 启动（Mode R 跨适配器进程恢复用例）。
+    pub async fn launch_with_home(home: PathBuf, extra_args: &[&str]) -> Option<Self> {
+        let path = codex_adapter_binary()?;
+        let workspace = unique_temp_dir("m2-11-codex-ws");
+        let pid_file = home.join("pids.txt");
+        let fake = fake_codex_cli();
+        if !fake.is_file() {
+            panic!("fake-codex 夹具缺失：{}", fake.display());
+        }
+        let mut args: Vec<String> = vec![
+            "--codex-bin".to_owned(),
+            node_binary(),
+            "--codex-arg".to_owned(),
+            fake.to_string_lossy().into_owned(),
+            "--workspace".to_owned(),
+            workspace.to_string_lossy().into_owned(),
+            "--sandbox".to_owned(),
+            "read-only".to_owned(),
+            "--reasoning".to_owned(),
+            "low".to_owned(),
+            "--codex-home".to_owned(),
+            home.to_string_lossy().into_owned(),
+        ];
+        args.extend(extra_args.iter().map(|arg| (*arg).to_owned()));
+        let envs: Vec<(OsString, OsString)> = vec![
+            (
+                OsString::from("CODEX_HOME"),
+                home.as_os_str().to_os_string(),
+            ),
+            (
+                OsString::from("FAKE_CODEX_PID_FILE"),
+                pid_file.as_os_str().to_os_string(),
+            ),
+        ];
+        let mut process = AdapterProcess::spawn_with_env(&path, args, envs)
+            .await
+            .expect("启动 Codex 适配器进程");
+        let connection = process.connect().expect("连接适配器 stdio");
+        let hello = connection
+            .handshake()
+            .await
+            .expect("hello 必须在 10s 内到达且 major 兼容");
+        assert_eq!(hello.protocol, "1.0");
+        assert_eq!(hello.runtime.name, "codex");
+        assert!(hello.runtime.has_capability("session.send"));
+        let client = AdapterSessionClient::new(Arc::new(connection));
+        Some(Self {
+            process,
+            client,
+            home,
+            workspace,
+            pid_file,
+        })
+    }
+
+    /// fake-codex 最近一次启动的 pid（进程树回收断言）。
+    pub fn last_fake_pid(&self) -> Option<u32> {
+        let text = std::fs::read_to_string(&self.pid_file).ok()?;
+        text.lines()
+            .rev()
+            .find_map(|line| line.trim().parse::<u32>().ok())
+    }
+
+    pub async fn wait_outcome(
+        &self,
+        run_id: &str,
+        timeout: Duration,
+    ) -> Option<aether_adapters::session_client::RunOutcome> {
+        self.client.wait_run_outcome(run_id, timeout).await
+    }
+
+    pub async fn shutdown(&mut self) {
+        let _ = self.client.shutdown().await;
+        let _ = self.process.wait_timeout(Duration::from_secs(5)).await;
+        let _ = self.process.kill().await;
+    }
+}
+
+/// DSH 集成 harness：真实 DSH 适配器进程 + 会话客户端 + fake-dsh ACP 夹具。
+pub struct DshHarness {
+    pub process: AdapterProcess,
+    pub client: AdapterSessionClient,
+    pub home: PathBuf,
+    pub workspace: PathBuf,
+    pub pid_file: PathBuf,
+}
+
+impl DshHarness {
+    pub async fn launch(extra_args: &[&str]) -> Option<Self> {
+        let home = unique_temp_dir("m2-11-dsh-home");
+        Self::launch_with_home(home, extra_args).await
+    }
+
+    pub async fn launch_with_home(home: PathBuf, extra_args: &[&str]) -> Option<Self> {
+        let path = dsh_adapter_binary()?;
+        let workspace = unique_temp_dir("m2-11-dsh-ws");
+        let pid_file = home.join("pids.txt");
+        let fake = fake_dsh_server();
+        if !fake.is_file() {
+            panic!("fake-dsh 夹具缺失：{}", fake.display());
+        }
+        let mut args: Vec<String> = vec![
+            "--dsh-bin".to_owned(),
+            fake.to_string_lossy().into_owned(),
+            "--dsh-node".to_owned(),
+            node_binary(),
+            "--dsh-home".to_owned(),
+            home.to_string_lossy().into_owned(),
+            "--dsh-profile".to_owned(),
+            "acp".to_owned(),
+            "--dsh-provider".to_owned(),
+            "fake".to_owned(),
+            "--dsh-model".to_owned(),
+            "fake-model".to_owned(),
+            "--dsh-version".to_owned(),
+            "0.1.5-rc.2".to_owned(),
+            "--workspace".to_owned(),
+            workspace.to_string_lossy().into_owned(),
+        ];
+        args.extend(extra_args.iter().map(|arg| (*arg).to_owned()));
+        let envs: Vec<(OsString, OsString)> = vec![(
+            OsString::from("FAKE_DSH_PID_FILE"),
+            pid_file.as_os_str().to_os_string(),
+        )];
+        let mut process = AdapterProcess::spawn_with_env(&path, args, envs)
+            .await
+            .expect("启动 DSH 适配器进程");
+        let connection = process.connect().expect("连接适配器 stdio");
+        let hello = connection
+            .handshake()
+            .await
+            .expect("hello 必须在 10s 内到达且 major 兼容");
+        assert_eq!(hello.protocol, "1.0");
+        assert_eq!(hello.runtime.name, "deepseek-harness");
+        assert!(hello.runtime.has_capability("session.send"));
+        let client = AdapterSessionClient::new(Arc::new(connection));
+        Some(Self {
+            process,
+            client,
+            home,
+            workspace,
+            pid_file,
+        })
+    }
+
+    pub fn last_fake_pid(&self) -> Option<u32> {
+        let text = std::fs::read_to_string(&self.pid_file).ok()?;
+        text.lines()
+            .rev()
+            .find_map(|line| line.trim().parse::<u32>().ok())
+    }
+
+    pub async fn wait_outcome(
+        &self,
+        run_id: &str,
+        timeout: Duration,
+    ) -> Option<aether_adapters::session_client::RunOutcome> {
+        self.client.wait_run_outcome(run_id, timeout).await
+    }
+
+    /// 等待并返回指定序号的 `permission.request` 通知（1-based）。
+    pub async fn wait_permission_request(&self, index: usize, timeout: Duration) -> Option<Value> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let requests = self.client.permission_requests().await;
+            if requests.len() >= index {
+                return requests.get(index - 1).cloned();
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return None;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    pub async fn shutdown(&mut self) {
+        let _ = self.client.shutdown().await;
+        let _ = self.process.wait_timeout(Duration::from_secs(5)).await;
+        let _ = self.process.kill().await;
+    }
+}

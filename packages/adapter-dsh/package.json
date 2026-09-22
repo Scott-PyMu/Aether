@@ -1,0 +1,22 @@
+{
+  "name": "@aether/adapter-dsh",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Aether DeepSeek Harness 适配器（ACP 主通道 + --patch 插件带外 delta；M2-11 / ADR-002 / ADR-008）",
+  "scripts": {
+    "test": "vitest run",
+    "coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "build:bun": "bun build src/main.ts --compile --outfile dist/aether-dsh-adapter"
+  },
+  "dependencies": {
+    "@aether/adapter-sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.2",
+    "@vitest/coverage-v8": "2.1.9",
+    "typescript": "5.9.3",
+    "vitest": "2.1.9"
+  }
+}
