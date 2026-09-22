@@ -601,7 +601,26 @@ jobs:
         env:
           AETHER_MOCK_ADAPTER: ${{ runner.temp }}/aether-mock-adapter
           AETHER_REQUIRE_MOCK_ADAPTER: "1"
-        run: cargo llvm-cov --workspace --exclude aether-tauri --fail-under-lines 70
+        run: |
+          set -o pipefail
+          cargo llvm-cov --workspace --exclude aether-tauri --fail-under-lines 70 2>&1 | tee llvm-cov.log
+      - name: 覆盖率失败诊断（公开 annotation，便于无凭据取证）
+        if: failure()
+        run: |
+          {
+            echo "### Rust 覆盖率失败输出（FAILED/panicked + tail 30）"
+            echo '```text'
+            grep -E "FAILED|panicked|test result: FAILED|error\[|fail-under" llvm-cov.log 2>/dev/null | tail -20 || true
+            echo '--- tail 30 ---'
+            tail -30 llvm-cov.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -E "FAILED|panicked|test result: FAILED|error\[|fail-under" llvm-cov.log 2>/dev/null | tail -6 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=coverage-fail::$line"
+          done
+          tail -4 llvm-cov.log 2>/dev/null | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=coverage-tail::$line"
+          done
 
   # DoD2：供应链门禁（依赖白名单 / 许可证 / 相似度 / SBOM）
   # 各检查步骤使用 if: !cancelled()，保证一次运行报告全部违规（不因首个失败短路）。
