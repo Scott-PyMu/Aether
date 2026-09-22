@@ -92,7 +92,11 @@ async fn oversized_line_burst_parses_all_and_memory_bounded() {
         return;
     };
     let mut parsed = 0usize;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    // 等待预算放宽（原 15s）：llvm-cov 插桩 + 同二进制 4 用例并发下，20 行 ×
+    // 1–2MiB（≈30MiB）的解析偶发超出 15s（CI Coverage gate flake：
+    // `全部 1–2MiB 行必须解析`，`m2_09_memory.rs:114`）。功能断言不变（20 行必须
+    // 全部解析 + RSS 受控），此处仅放宽等待预算（常量级调参，记录于 M2-09 证据 §6）。
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     while parsed < 20 && tokio::time::Instant::now() < deadline {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         let notification = tokio::time::timeout(remaining, harness.connection.next_notification())
