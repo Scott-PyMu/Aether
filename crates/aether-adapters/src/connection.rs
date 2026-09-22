@@ -769,7 +769,8 @@ fn dispatch_notification(
                     ctx.clear_invalid_streak();
                 }
                 Err(error) => {
-                    return ctx.record_invalid_frame(format!("artifact_ref 引用帧校验失败: {error}"));
+                    return ctx
+                        .record_invalid_frame(format!("artifact_ref 引用帧校验失败: {error}"));
                 }
             }
         }
@@ -1234,7 +1235,13 @@ mod tests {
             "形状非法的引用帧必须计为无效帧"
         );
         assert!(
-            matches!(conn.state(), ConnectionState::Degraded { invalid_frame_streak: 1, .. }),
+            matches!(
+                conn.state(),
+                ConnectionState::Degraded {
+                    invalid_frame_streak: 1,
+                    ..
+                }
+            ),
             "单次无效帧应进入 Degraded（未达 20 阈值不断连）: {:?}",
             conn.state()
         );

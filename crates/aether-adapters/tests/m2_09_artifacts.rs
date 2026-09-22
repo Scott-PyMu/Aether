@@ -26,9 +26,9 @@ use aether_adapters::supervisor::{
 };
 use aether_adapters::{AdapterNotification, ArtifactError, ArtifactValidator, Method};
 use aether_core::{EventType, RuntimeId, RuntimeStatus};
+use common::{unique_temp_dir, MockHarness};
 use serde_json::json;
 use tokio::sync::Mutex;
-use common::{unique_temp_dir, MockHarness};
 
 /// 附件标记字节（Mock 写入附件内容的锚点；断言其在任何帧中 0 命中）。
 const ARTIFACT_MARKER: &[u8] = b"AETHER_MOCK_ARTIFACT_MARKER";
@@ -48,7 +48,10 @@ async fn attachment_body_lives_in_artifacts_dir_and_only_ref_on_wire() {
     let artifacts_dir = root.join("mock");
     let Some(mut harness) = MockHarness::launch_with_env(
         &[],
-        &[(OsString::from(ENV_ARTIFACTS_DIR), artifacts_dir.as_os_str().to_os_string())],
+        &[(
+            OsString::from(ENV_ARTIFACTS_DIR),
+            artifacts_dir.as_os_str().to_os_string(),
+        )],
     )
     .await
     else {
@@ -56,7 +59,9 @@ async fn attachment_body_lives_in_artifacts_dir_and_only_ref_on_wire() {
     };
     harness.connection.handshake().await.expect("hello");
     let session_id = harness.open_session().await;
-    let run_id = harness.send(&session_id, "artifact:big.png", "m2-09-artifact").await;
+    let run_id = harness
+        .send(&session_id, "artifact:big.png", "m2-09-artifact")
+        .await;
 
     // 驱动 run 到终态（run.completed），期间收集事件与引用帧。
     harness
@@ -77,7 +82,10 @@ async fn attachment_body_lives_in_artifacts_dir_and_only_ref_on_wire() {
         harness.artifact_refs.len()
     );
     let artifact_ref = &harness.artifact_refs[0];
-    assert_eq!(artifact_ref.session_id.as_deref(), Some(session_id.as_str()));
+    assert_eq!(
+        artifact_ref.session_id.as_deref(),
+        Some(session_id.as_str())
+    );
     assert_eq!(artifact_ref.run_id.as_deref(), Some(run_id.as_str()));
     assert_eq!(artifact_ref.refs.len(), 1);
     let entry = &artifact_ref.refs[0];
@@ -102,7 +110,11 @@ async fn attachment_body_lives_in_artifacts_dir_and_only_ref_on_wire() {
     // 3) 附件数据体仅存 artifacts 路径：文件存在、尺寸一致、标记锚点可读。
     let file = artifacts_dir.join("big.png");
     let meta = std::fs::metadata(&file).expect("附件文件必须存在于 artifacts 路径");
-    assert_eq!(meta.len(), ARTIFACT_BYTES as u64, "附件文件尺寸必须与声明一致");
+    assert_eq!(
+        meta.len(),
+        ARTIFACT_BYTES as u64,
+        "附件文件尺寸必须与声明一致"
+    );
     let content = std::fs::read(&file).unwrap();
     assert!(
         content.starts_with(ARTIFACT_MARKER),
@@ -164,7 +176,9 @@ async fn artifact_ref_escape_path_is_rejected_by_validator_connection_survives()
 
     // 消费侧校验：`..` 段 → InvalidPath（拒绝；不落库、不广播、不产生事件）。
     let validator = ArtifactValidator::new(root.join("mock"));
-    let error = validator.validate(&artifact_ref).expect_err("逃逸必须被拒绝");
+    let error = validator
+        .validate(&artifact_ref)
+        .expect_err("逃逸必须被拒绝");
     assert!(
         matches!(error, ArtifactError::InvalidPath { .. }),
         "逃逸拒绝类型不符: {error:?}"
@@ -185,8 +199,7 @@ async fn artifact_ref_escape_path_is_rejected_by_validator_connection_survives()
 #[tokio::test]
 async fn malformed_artifact_ref_params_count_as_invalid_frame() {
     let root = artifacts_root("malformed");
-    let Some(mut harness) =
-        MockHarness::launch(&["--inject", "artifact-ref-malformed"]).await
+    let Some(mut harness) = MockHarness::launch(&["--inject", "artifact-ref-malformed"]).await
     else {
         return;
     };
@@ -234,7 +247,10 @@ async fn supervisor_injects_artifacts_dir_env_and_creates_per_runtime_dir() {
     );
 
     let outcome = supervisor.start().await;
-    assert!(matches!(outcome, StartOutcome::Ready), "启动失败: {outcome:?}");
+    assert!(
+        matches!(outcome, StartOutcome::Ready),
+        "启动失败: {outcome:?}"
+    );
     let expected_dir = root.join("mock");
     assert!(
         expected_dir.is_dir(),
@@ -249,7 +265,10 @@ async fn supervisor_injects_artifacts_dir_env_and_creates_per_runtime_dir() {
         .request(Method::SessionCreate, json!({"title": "m2-09-supervisor"}))
         .await
         .expect("session.create");
-    let session_id = created["session_id"].as_str().expect("session_id").to_owned();
+    let session_id = created["session_id"]
+        .as_str()
+        .expect("session_id")
+        .to_owned();
     let ack = connection
         .request(
             Method::SessionSend,
@@ -266,16 +285,14 @@ async fn supervisor_injects_artifacts_dir_env_and_creates_per_runtime_dir() {
     // 附件文件必须出现在 `<root>/mock/envproof.png`（2048 字节）——证明环境注入生效。
     let attachment = expected_dir.join("envproof.png");
     assert!(
-        common::wait_until(
-            || attachment.exists(),
-            Duration::from_secs(10)
-        )
-        .await,
+        common::wait_until(|| attachment.exists(), Duration::from_secs(10)).await,
         "Mock 必须把附件写入监督器注入的目录: {}",
         attachment.display()
     );
     assert_eq!(
-        std::fs::metadata(&attachment).map(|meta| meta.len()).unwrap_or(0),
+        std::fs::metadata(&attachment)
+            .map(|meta| meta.len())
+            .unwrap_or(0),
         2048,
         "附件字节数必须与引用帧声明一致"
     );
@@ -291,7 +308,10 @@ async fn artifact_ref_flow_does_not_create_attachment_event_types() {
     let artifacts_dir = root.join("mock");
     let Some(mut harness) = MockHarness::launch_with_env(
         &[],
-        &[(OsString::from(ENV_ARTIFACTS_DIR), artifacts_dir.as_os_str().to_os_string())],
+        &[(
+            OsString::from(ENV_ARTIFACTS_DIR),
+            artifacts_dir.as_os_str().to_os_string(),
+        )],
     )
     .await
     else {
@@ -299,7 +319,9 @@ async fn artifact_ref_flow_does_not_create_attachment_event_types() {
     };
     harness.connection.handshake().await.expect("hello");
     let session_id = harness.open_session().await;
-    let run_id = harness.send(&session_id, "artifact:shot.png:1024", "m2-09-types").await;
+    let run_id = harness
+        .send(&session_id, "artifact:shot.png:1024", "m2-09-types")
+        .await;
     harness
         .drive_run(&run_id, Duration::from_secs(15))
         .await

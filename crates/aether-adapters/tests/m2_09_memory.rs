@@ -54,13 +54,8 @@ fn assert_rss_bounded(baseline: u64, label: &str) {
 #[tokio::test]
 async fn line_over_2mib_burst_disconnects_without_buffering_and_memory_bounded() {
     let baseline = current_rss_mib();
-    let Some(mut harness) = MockHarness::launch(&[
-        "--inject",
-        "line-over-2mib-burst",
-        "--inject-count",
-        "20",
-    ])
-    .await
+    let Some(mut harness) =
+        MockHarness::launch(&["--inject", "line-over-2mib-burst", "--inject-count", "20"]).await
     else {
         return;
     };
@@ -91,13 +86,8 @@ async fn line_over_2mib_burst_disconnects_without_buffering_and_memory_bounded()
 #[tokio::test]
 async fn oversized_line_burst_parses_all_and_memory_bounded() {
     let baseline = current_rss_mib();
-    let Some(mut harness) = MockHarness::launch(&[
-        "--inject",
-        "oversized-line-burst",
-        "--inject-count",
-        "20",
-    ])
-    .await
+    let Some(mut harness) =
+        MockHarness::launch(&["--inject", "oversized-line-burst", "--inject-count", "20"]).await
     else {
         return;
     };
@@ -166,9 +156,7 @@ async fn connection_recovers_after_line_over_2mib_storm() {
         return;
     };
     let session_id = second.open_session().await;
-    let run_id = second
-        .send(&session_id, "hello", "m2-09-recover")
-        .await;
+    let run_id = second.send(&session_id, "hello", "m2-09-recover").await;
     second
         .drive_run(&run_id, Duration::from_secs(15))
         .await

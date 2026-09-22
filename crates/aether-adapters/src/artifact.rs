@@ -161,12 +161,11 @@ impl ArtifactValidator {
                     root: self.root.to_string_lossy().into_owned(),
                 });
             }
-            let actual = resolved
-                .metadata()
-                .map(|meta| meta.len())
-                .map_err(|_| ArtifactError::Unreachable {
+            let actual = resolved.metadata().map(|meta| meta.len()).map_err(|_| {
+                ArtifactError::Unreachable {
                     path: entry.path.clone(),
-                })?;
+                }
+            })?;
             if actual != entry.size {
                 return Err(ArtifactError::SizeMismatch {
                     path: entry.path.clone(),
@@ -280,7 +279,9 @@ mod tests {
         let file = root.join("shot.png");
         std::fs::write(&file, vec![0xAB; 4096]).unwrap();
         let validator = ArtifactValidator::new(root.clone());
-        let validated = validator.validate(&params(vec![entry("shot.png", 4096)])).unwrap();
+        let validated = validator
+            .validate(&params(vec![entry("shot.png", 4096)]))
+            .unwrap();
         assert_eq!(validated.len(), 1);
         assert_eq!(validated[0].path, "shot.png");
         assert_eq!(validated[0].size, 4096);
@@ -318,7 +319,13 @@ mod tests {
     fn absolute_and_windows_prefix_paths_are_rejected() {
         let root = temp_root("absolute");
         let validator = ArtifactValidator::new(root);
-        for bad in ["/etc/passwd", "C:\\windows\\x", "C:evil", "\\\\server\\share", "\\\\?\\C:\\x"] {
+        for bad in [
+            "/etc/passwd",
+            "C:\\windows\\x",
+            "C:evil",
+            "\\\\server\\share",
+            "\\\\?\\C:\\x",
+        ] {
             let error = validator.validate(&params(vec![entry(bad, 1)]));
             assert!(
                 matches!(error, Err(ArtifactError::InvalidPath { .. })),
@@ -368,7 +375,10 @@ mod tests {
         }
         #[cfg(windows)]
         {
-            match std::os::windows::fs::symlink_file(outside.join("secret.bin"), root.join("link.bin")) {
+            match std::os::windows::fs::symlink_file(
+                outside.join("secret.bin"),
+                root.join("link.bin"),
+            ) {
                 Ok(()) => {
                     let validator = ArtifactValidator::new(root);
                     let error = validator.validate(&params(vec![entry("link.bin", 16)]));

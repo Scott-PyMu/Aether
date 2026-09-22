@@ -137,13 +137,22 @@ async fn real_1_5gb_pressure_triggers_alert_throttle_and_no_crash() {
 
     // 3) 告警事件：≥1GiB → Alert + core_rss_alert 落盘（先日志后广播）。
     let change = patrol.patrol_once(&core.pipeline).await;
-    assert_eq!(change, Some(ResourcePressure::Alert), "1.1GiB ≥ 1GiB 必须告警");
+    assert_eq!(
+        change,
+        Some(ResourcePressure::Alert),
+        "1.1GiB ≥ 1GiB 必须告警"
+    );
     let health = core.pipeline.health();
     assert_eq!(health.resource_pressure, ResourcePressure::Alert);
     assert_eq!(health.resource_alert_events, 1);
     assert!(
-        wait_event_count(&core.pipeline, &session.id, base_events + 1, Duration::from_secs(5))
-            .await,
+        wait_event_count(
+            &core.pipeline,
+            &session.id,
+            base_events + 1,
+            Duration::from_secs(5)
+        )
+        .await,
         "core_rss_alert 必须落盘"
     );
     let codes = readback_codes(&core.pipeline, &session.id).await;
@@ -173,8 +182,13 @@ async fn real_1_5gb_pressure_triggers_alert_throttle_and_no_crash() {
     assert_eq!(health.resource_pressure, ResourcePressure::Throttled);
     assert_eq!(health.resource_throttle_events, 1);
     assert!(
-        wait_event_count(&core.pipeline, &session.id, base_events + 2, Duration::from_secs(5))
-            .await,
+        wait_event_count(
+            &core.pipeline,
+            &session.id,
+            base_events + 2,
+            Duration::from_secs(5)
+        )
+        .await,
         "core_rss_throttle 必须落盘"
     );
     let codes = readback_codes(&core.pipeline, &session.id).await;
