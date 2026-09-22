@@ -11,7 +11,7 @@
 
 mod m2_support;
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -24,27 +24,34 @@ use m2_support::{
     wait_session_status, TestCore,
 };
 
-/// 选择性 panic 执行器：前 `panic_budget` 次执行 panic，其余返回 `Completed`。
+/// 选择性 panic 执行器：`panic_text` 对应的 run 首次执行 panic，其余返回 `Completed`。
+///
+/// 按**输入文本**选择 panic 目标（而非「全局第 N 次调用」）：会话任务经 `JoinSet`
+/// 并发调度，跨会话的 execute 调用顺序不确定，全局计数会把 panic 打到其他会话
+/// （CI annotation：`m2_07_panic.rs:142 panic 会话 run 必须标 failed` 的根因）。
 struct PanicExecutor {
     calls: Mutex<Vec<RunRequest>>,
-    panic_budget: AtomicUsize,
+    panic_text: String,
+    panicked: AtomicBool,
     /// 可选门控：执行前等待许可（控制 panic 发生的时点）。
     permits: Option<Arc<Semaphore>>,
 }
 
 impl PanicExecutor {
-    fn new(panic_budget: usize) -> Arc<Self> {
+    fn new(panic_text: &str) -> Arc<Self> {
         Arc::new(Self {
             calls: Mutex::new(Vec::new()),
-            panic_budget: AtomicUsize::new(panic_budget),
+            panic_text: panic_text.to_owned(),
+            panicked: AtomicBool::new(false),
             permits: None,
         })
     }
 
-    fn gated(panic_budget: usize) -> Arc<Self> {
+    fn gated(panic_text: &str) -> Arc<Self> {
         Arc::new(Self {
             calls: Mutex::new(Vec::new()),
-            panic_budget: AtomicUsize::new(panic_budget),
+            panic_text: panic_text.to_owned(),
+            panicked: AtomicBool::new(false),
             permits: Some(Arc::new(Semaphore::new(0))),
         })
     }
@@ -74,16 +81,13 @@ impl RunExecutor for PanicExecutor {
         self.calls.lock().unwrap().push(request.clone());
         let permits = self.permits.clone();
         let should_panic =
-            self.panic_budget
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |budget| {
-                    budget.checked_sub(1)
-                });
+            request.text == self.panic_text && !self.panicked.swap(true, Ordering::SeqCst);
         let run_label = request.run_id.to_string();
         Box::pin(async move {
             if let Some(permits) = permits {
                 let _permit = permits.acquire().await;
             }
-            if should_panic.is_ok() {
+            if should_panic {
                 // 在 future poll 期间 panic：由 JoinSet 的 JoinError 捕获，不传染其他任务。
                 panic!("注入 panic（M2-07 DoD1）：run {run_label}");
             }
@@ -95,16 +99,33 @@ impl RunExecutor for PanicExecutor {
     }
 }
 
-/// 收割循环：驱动 `reap_run_tasks_once` 直到 panic 任务被处理（测试确定性入口）。
-async fn reap_until(manager: &aether_control::SessionManager, deadline: Duration) -> usize {
+/// 收割循环：持续驱动 `reap_run_tasks_once` 直到 `run_id` 达到期望终态。
+///
+/// 一轮收割可能**先**拿到其他会话的正常完成（`reaped > 0` 但不含 panic 任务）；
+/// panic 任务进入 JoinSet 完成队列的时点由调度决定（CI 插桩/满载下晚于正常完成）。
+/// 生产由后台看门狗周期收割；测试无后台任务，必须持续收割直至 panic 落终态，
+/// 否则断言退化为调度时序赌博。
+async fn reap_until_run_status(
+    manager: &aether_control::SessionManager,
+    run_id: &aether_core::RunId,
+    expected: RunStatus,
+    deadline: Duration,
+) -> bool {
     let started = tokio::time::Instant::now();
     loop {
-        let reaped = manager.reap_run_tasks_once().await;
-        if reaped > 0 {
-            return reaped;
+        let _ = manager.reap_run_tasks_once().await;
+        if manager
+            .run(run_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|run| run.status)
+            == Some(expected)
+        {
+            return true;
         }
         if started.elapsed() >= deadline {
-            return 0;
+            return false;
         }
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
@@ -114,7 +135,7 @@ async fn reap_until(manager: &aether_control::SessionManager, deadline: Duration
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn dod1_panic_isolates_session_and_other_streams_continue() {
     let core = TestCore::open().await;
-    let executor = PanicExecutor::new(1);
+    let executor = PanicExecutor::new("boom");
     let manager = build_manager(
         &core,
         manual_clock(1_000),
@@ -135,13 +156,16 @@ async fn dod1_panic_isolates_session_and_other_streams_continue() {
         .await
         .unwrap();
 
-    // 收割：panic 任务被 JoinError 捕获并隔离恢复。
-    let reaped = reap_until(&manager, Duration::from_secs(5)).await;
-    assert!(reaped >= 1, "panic 任务必须被 JoinError 收割路径处理");
-
+    // 收割：panic 任务被 JoinError 捕获并隔离恢复（持续收割直至落终态）。
     assert!(
-        wait_run_status(&manager, &ack_a.run_id, RunStatus::Failed).await,
-        "panic 会话 run 必须标 failed"
+        reap_until_run_status(
+            &manager,
+            &ack_a.run_id,
+            RunStatus::Failed,
+            Duration::from_secs(10)
+        )
+        .await,
+        "panic 会话 run 必须经 JoinError 收割路径标 failed（task_panic）"
     );
     assert!(
         wait_run_status(&manager, &ack_b.run_id, RunStatus::Succeeded).await,
@@ -228,7 +252,7 @@ async fn dod1_panic_isolates_session_and_other_streams_continue() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn dod1_panic_promotes_and_respawns_waiting_run() {
     let core = TestCore::open().await;
-    let executor = PanicExecutor::gated(1);
+    let executor = PanicExecutor::gated("first");
     let manager = build_manager(
         &core,
         manual_clock(1_000),
@@ -256,11 +280,15 @@ async fn dod1_panic_promotes_and_respawns_waiting_run() {
 
     // 放行第一条：panic → 收割恢复 → 提升并重新 spawn 执行第二条。
     executor.release(1);
-    let reaped = reap_until(&manager, Duration::from_secs(5)).await;
-    assert!(reaped >= 1, "panic 任务必须被收割");
     assert!(
-        wait_run_status(&manager, &ack_first.run_id, RunStatus::Failed).await,
-        "panic run 必须 failed"
+        reap_until_run_status(
+            &manager,
+            &ack_first.run_id,
+            RunStatus::Failed,
+            Duration::from_secs(10)
+        )
+        .await,
+        "panic run 必须经 JoinError 收割并标 failed（task_panic）"
     );
     // 放行提升后的第二条。
     executor.release(1);

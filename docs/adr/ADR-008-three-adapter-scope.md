@@ -92,7 +92,7 @@
 3. **监督器**：新增一个错误码映射分支（§3.4），有单测覆盖；其余不变。
 4. **文档（评审后同步完成）**：设计文档升 **v1.8**（§2.2 路线图、§5 P0 能力、D5 版本门闩表述、附录 E `native_id` 口径）；实施计划升 **v1.14**（M2-11 条件转正、Gate 2 纳入三运行时门禁、§1 计数 35→36、§7 映射）；需求文档升 **v0.6**（P0 阶段表 = 三运行时、RA-02、P1 阶段目标、§3.8 矩阵）。
 5. **运维**：Codex 需稳定端点（spike 已知坑 4/5）与隔离 `CODEX_HOME`；DSH 需 `0.1.5-rc.2` 隔离安装与 provider 配置（密钥经环境/Keychain，不入仓库）。
-6. **验收遗留（Gate 2 前必须关闭）**：① Codex 真实 ≥20 次完成率补验（裁决 3，现有证据 8 次）；② DSH 真实权限回环补验（裁决 4，现有证据仅夹具 + M2-10 探针）。
+6. **验收遗留（Gate 2 前必须关闭）——已全部闭环（2026-09-22 复核，见 §6）**：① Codex 真实 ≥20 次完成率补验（裁决 3）→ **20/20（100%）**；② DSH 真实权限回环补验（裁决 4）→ **allow/deny 双场景零直通**。唯一遗留：三平台 CI 矩阵结论（`638d2ff` run 已触发，待出）。
 
 ## 5. 风险与失效条件
 
@@ -111,9 +111,11 @@
 - Codex：同证据文档「Codex 一致性验收」章节（M2-02 等价口径）；
 - 验证入口：`pnpm verify:m2-11`（构建三适配器 + TS 单测 + Rust 集成 + 静态合规 + opt-in 真实运行）；
 - 真实运行 opt-in 触发方式：Claude 为 `AETHER_REQUIRE_REAL_CLAUDE=1` 或凭证（`AETHER_CLAUDE_{BASE_URL,TOKEN}`）；Codex 为 `AETHER_REQUIRE_REAL_CODEX=1` 强制 / 凭证 `AETHER_REAL_CODEX_HOME` 触发；DSH 为 `AETHER_REQUIRE_REAL_DSH=1` 强制 / 凭证 `AETHER_REAL_DSH_{BIN,HOME}` 触发；缺凭证显式 SKIP（禁止静默跳过）；
-- **Gate 2 前必须补验归档**（评审裁决 3/4）：
-  1. Codex 真实完成率 ≥20 次（≥95%、逐 run 终态；现有证据 8 次，不满足）；
-  2. DSH 真实工具 ask 权限回环（100% 经 `permission.request`、零直通；现有证据仅夹具侧）。
+- **Gate 2 前必须补验归档**（评审裁决 3/4）——**已闭环（2026-09-22，证据经评审 Agent 读原始 summary.json 复核）**：
+  1. ✅ Codex 真实完成率 ≥20 次：`--runs 20` → **20/20（100%，≥95%）、逐 run `run.completed`、零挂起**（`docs/M2-11-证据.md` §5.1；summary `scripts/test/.tmp/m2-11/real-codex-2026-09-22T08-20-09-685Z/summary.json`：`regression{runs:20, completed:20, hang:0, completionRate:1}`，gitignored）；
+  2. ✅ DSH 真实工具 ask 权限回环：DeepSeek 官方 API + `DSH_PERMISSION_MODE=read-only` 触发真实 `session/request_permission`，**allow/deny 双场景零直通**（ask=1、`tool.call_started` 映射 1/1、收口晚于决议 1.2s）（`docs/M2-11-证据.md` §5.2b；summary `real-dsh-2026-09-22T08-41-58-034Z`（allow）/ `real-dsh-2026-09-22T08-38-28-653Z`（deny），gitignored）；
+  3. ✅ 三平台 CI 矩阵（2026-09-22 结论已出，经 GitHub API 独立核验）：`adapters-platform-tests` 在 **3 次 run（`638d2ff` / `c96f6aa` / `b4961a4`）中均 3/3 success**，矩阵内真实构建三适配器并执行 M2-11 集成 + M2-02/M1-09 回归——决策 3「三平台 CI 矩阵真实执行」达成；
+  4. ✅ 非本任务遗留（M2-11 范围外）**已由责任方加固闭环（2026-09-22）**：同一批 run 中 **M1-08 `Tauri security baseline` 3 次均失败**（根因：测试夹具按「全局第 N 次调用」选择 panic 目标，跨会话 `JoinSet` 调度顺序不确定 → panic 落到其他会话；叠加收割循环以「任意任务被收割」为界的次生竞态）与 **M1-06 `Data dir guard` 多次失败**（根因：E2E 逐 chunk `split` 导致长 PHASE JSON 被管道分片切段、谓词永不命中）——均非产品缺陷，修复与复跑证据见 `docs/M2-07-证据.md` §6、`docs/M1-06-目录选择器与迁移主路径验证.md` §6（M1-08 CSP / M2-07 健康 E2E 同缺陷一并修复）；Gate 2 以加固后的下一次 CI run 结果为准。
 
 ## 7. 评审记录
 
@@ -122,6 +124,8 @@
 | v0.1 | 2026-09-21 | 草案：依据产品指令提出三运行时范围扩展与 M2-11 激活；实现随任务先行，待评审归档 | （待填） |
 | v0.2 | 2026-09-22 | 评审补充：新增 §3.4b（DSH provider 路由走官方 composition base 分层 + 有界重试兜底）；真实运行时证据更新 | （待填） |
 | v0.3 | 2026-09-22 | **架构评审（AI 评审 Agent，按《评审要求》）**：结论「有条件通过」，提出 P0×2 / P1×5 / P2×4 共 11 项问题；产品负责人同日裁决 6 项并落盘本版——① Gate 2 纳入三运行时一致性门禁（决策 7）；② 需求文档升版与设计 v1.8 / 计划 v1.14 同批评审（决策 + §4.4）；③ Codex 真实完成率必须达 20 次（决策 9）；④ DSH 真实权限回环 Gate 2 前补验（决策 10）；⑤ 运行时集合冻结为三、不新增（决策 8）；⑥ 按裁决更新全部文档（§4.4）。P1/P2 评审问题随本版修订闭环：影响文档补列（表头）、附录 E 口径（§4.4）、opt-in 变量口径（§6）、§3.4b 风险入表（§5）、范围纪律留痕（表头）。**评审通过，归档** | 产品负责人 + 架构评审 Agent |
+| v0.4 | 2026-09-22 | **裁决 9/10 补验闭环复核**（AI 评审 Agent）：① Codex 真实 20/20（summary `real-codex-2026-09-22T08-20-09-685Z`，completionRate=1、perRun 20/20）；② DSH 真实 ask 回环 allow/deny 双场景零直通（summary `real-dsh-2026-09-22T08-41-58-034Z` / `08-38-28-653Z`）——均读取 gitignored 原始 summary.json 核实，非仅转述文档；M2-11 证据头同步闭环标记；三平台 CI 矩阵结论经 GitHub API 独立核验（3 次 run adapters 3/3 全绿，决策 3 达成）；⚠️ 登记非本任务遗留：M1-08（m2_07_panic flake ×3）/ M1-06（WebView E2E flake ×2）需责任方在 Gate 2 汇总评审前 rerun 留痕或加固 | 架构评审 Agent |
+| v0.5 | 2026-09-22 | 责任方遗留项加固闭环（M2-07 / M1-06）：§4.6-4 由 ⚠️ 遗留转为 ✅ 已加固——`m2_07_panic` 改为按输入文本选择 panic 目标 + 持续收割至终态（普通 250/250、llvm-cov 插桩 8/8）；M1-06/M1-08/M2-07 E2E 引入 `lineFramer` 跨 chunk 行框定并加固探针回填等待；证据见 `docs/M2-07-证据.md` §6、`docs/M1-06-目录选择器与迁移主路径验证.md` §6 | M2-07 / M1-06 责任方 |
 
 ## 8. 变更记录
 
@@ -130,3 +134,5 @@
 | v0.1 | 2026-09-21 | 初稿 |
 | v0.2 | 2026-09-22 | 评审补充：新增 §3.4b（DSH provider 路由走官方 composition base 分层 + 有界重试兜底）；真实运行时证据更新 |
 | v0.3 | 2026-09-22 | 评审归档版：新增决策 7（Gate 2 纳入三运行时门禁，覆盖 ADR-002 §4 冻结结论）、决策 8（运行时集合冻结为三）、决策 9（Codex 真实 ≥20 次硬指标）、决策 10（DSH 真实权限回环 Gate 2 前补验）；影响文档补列《需求文档》与附录 E；范围纪律留痕；§5 补 §3.4b 上游演进风险；§6 补 opt-in 变量口径与 Gate 2 前补验清单；§4.4 文档升版口径更新（v0.6 / v1.8 / v1.14） |
+| v0.4 | 2026-09-22 | 裁决 9/10 补验闭环：§4.6 与 §6 标记两项补验已完成并附证据路径（Codex 20/20；DSH ask 回环 allow/deny 零直通）；§7 补复核记录；三平台 CI 矩阵结论闭环（3 次 run adapters 3/3 全绿）；登记 M1-08/M1-06 flaky 为 Gate 2 前责任方遗留 |
+| v0.5 | 2026-09-22 | 责任方加固闭环：§4.6-4 遗留项（M1-08 `m2_07_panic` flake / M1-06 WebView E2E flake）完成根因定位与修复并附复跑证据；§7 补记录 |

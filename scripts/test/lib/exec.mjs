@@ -7,6 +7,7 @@ import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 
 export const repoRoot = path.resolve(
@@ -51,6 +52,43 @@ export function pnpmCommand() {
     return { command: candidate, prefix: [] };
   }
   return { command: "pnpm", prefix: [] };
+}
+
+/**
+ * 子进程 stdout/stderr 行框定器（M1-06/M1-08 E2E 加固）。
+ *
+ * 管道可能在**任意字节**处把一行拆成多个 chunk：直接对每个 chunk 做
+ * `split(/\r?\n/)` 会把一条长行（如含中文标签的 PHASE 快照 JSON）切成两段
+ * 互相不匹配的行，导致 E2E 谓词永不命中（CI annotation：
+ * `等待超时：启动门阻塞快照（已收到 3 行 stdout…）`）。
+ *
+ * 返回 `{ feed, flush }`：`feed` 逐 chunk 投喂，仅当遇到 `\n` 才回调完整行；
+ * 进程结束时调用 `flush` 补发无尾换行的余量。空行与行首 BOM / 行尾 CR 归一化。
+ */
+export function lineFramer(onLine) {
+  const decoder = new StringDecoder("utf8");
+  let pending = "";
+  const emit = (raw) => {
+    const line = raw.replace(/^\uFEFF/, "").replace(/\r+$/, "");
+    if (line.trim()) onLine(line);
+  };
+  return {
+    feed(chunk) {
+      pending += typeof chunk === "string" ? chunk : decoder.write(chunk);
+      let index = pending.indexOf("\n");
+      while (index >= 0) {
+        emit(pending.slice(0, index));
+        pending = pending.slice(index + 1);
+        index = pending.indexOf("\n");
+      }
+    },
+    flush() {
+      pending += decoder.end();
+      const rest = pending;
+      pending = "";
+      if (rest.trim()) emit(rest);
+    },
+  };
 }
 
 /** 读取 rustc host triple（如 x86_64-pc-windows-msvc）。 */

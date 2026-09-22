@@ -17,7 +17,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 
-import { bin, pnpmCommand, repoRoot, run, summarize } from "../lib/exec.mjs";
+import { bin, lineFramer, pnpmCommand, repoRoot, run, summarize } from "../lib/exec.mjs";
 import { buildEnv } from "../m1-08/env.mjs";
 
 const args = process.argv.slice(2);
@@ -51,13 +51,13 @@ async function launchProbe(dataDir, mode, timeoutMs) {
   });
   const lines = [];
   const stdoutDone = (async () => {
-    for await (const chunk of app.stdout) {
-      for (const line of String(chunk).split(/\r?\n/)) {
-        if (!line.trim()) continue;
-        lines.push(line);
-        console.log(`[app] ${line}`);
-      }
-    }
+    // 行框定：跨 chunk 缓冲未闭合行（管道分片会截断 REPORT JSON → 回报丢失）。
+    const framer = lineFramer((line) => {
+      lines.push(line);
+      console.log(`[app] ${line}`);
+    });
+    for await (const chunk of app.stdout) framer.feed(chunk);
+    framer.flush();
   })();
   const stderrDone = (async () => {
     for await (const chunk of app.stderr) {

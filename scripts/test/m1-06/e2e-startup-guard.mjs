@@ -19,7 +19,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
-import { bin, pnpmCommand, repoRoot, run, summarize } from "../lib/exec.mjs";
+import { bin, lineFramer, pnpmCommand, repoRoot, run, summarize } from "../lib/exec.mjs";
 import { buildEnv } from "../m1-08/env.mjs";
 
 const args = process.argv.slice(2);
@@ -59,15 +59,15 @@ function launch(extraEnv, label) {
     stdio: ["ignore", "pipe", "pipe"],
   });
   const state = { lines: [], stderr: [], exited: false, code: null };
-  child.stdout.on("data", (chunk) => {
-    for (const raw of String(chunk).split(/\r?\n/)) {
-      // 归一化：去掉 chunk 边界可能出现的 BOM / 尾随 CR，保证谓词匹配稳定。
-      const line = raw.replace(/^\uFEFF/, "").replace(/\r+$/, "");
-      if (!line.trim()) continue;
-      state.lines.push(line);
-      console.log(`[${label}] ${line}`);
-    }
+  // 行框定：跨 chunk 缓冲未闭合行。管道可能在任意字节处分片，长行（如带中文
+  // 标签的 PHASE 快照 JSON）曾被切成两段互相不匹配的行 → 谓词永不命中（CI
+  // annotation：`等待超时：启动门阻塞快照（已收到 3 行 stdout…`）。
+  const stdoutLines = lineFramer((line) => {
+    state.lines.push(line);
+    console.log(`[${label}] ${line}`);
   });
+  child.stdout.on("data", (chunk) => stdoutLines.feed(chunk));
+  child.stdout.on("end", () => stdoutLines.flush());
   child.stderr.on("data", (chunk) => {
     const text = String(chunk);
     state.stderr.push(text.trimEnd());

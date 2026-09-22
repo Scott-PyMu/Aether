@@ -237,21 +237,37 @@ const SCRIPT_TEMPLATE: &str = r#"
   if (S.step === 1 && MODE === 'migrate') {
     // 迁移主路径：不直接填输入框，改为点击「选择目录…」，由注入的 DirectoryPicker
     // 返回固定路径，验证 选择器 → UI → startup_migrate 全链路。
+    // 回填是异步的（IPC + React 重渲染）：后续轮次轮询输入框等待，不使用固定延迟
+    // （CI 慢机时序 flake：固定 200ms 会读到空值 / 按钮仍禁用，迁移无法触发）。
     var input = document.querySelector('[data-testid="startup-target"]');
     var pickButton = document.querySelector('[data-testid="startup-pick"]');
     var migrateButton = document.querySelector('[data-testid="startup-migrate"]');
     if (input && pickButton && migrateButton) {
       S.step = 2;
+      S.pickStartedAt = Date.now();
+      S.pickedReported = false;
+      S.migrateClicked = false;
       pickButton.click();
-      setTimeout(function () {
-        report({ stage: 'picked', value: input.value, expected: TARGET });
-        setTimeout(function () {
-          migrateButton.click();
-          report({ stage: 'clicked', target: input.value });
-        }, 120);
-      }, 200);
     }
     return;
+  }
+  if (S.step === 2 && MODE === 'migrate' && !S.migrateClicked) {
+    var pendingInput = document.querySelector('[data-testid="startup-target"]');
+    var pendingMigrate = document.querySelector('[data-testid="startup-migrate"]');
+    if (!pendingInput || !pendingMigrate) { return; }
+    if (!S.pickedReported) {
+      // 轮询等待回填；30s 兜底按实际值回报（空值即真实失败，便于诊断）。
+      if (pendingInput.value === TARGET || Date.now() - S.pickStartedAt > 30000) {
+        S.pickedReported = true;
+        report({ stage: 'picked', value: pendingInput.value, expected: TARGET });
+      } else {
+        return;
+      }
+    }
+    if (pendingMigrate.disabled) { return; }
+    S.migrateClicked = true;
+    pendingMigrate.click();
+    report({ stage: 'clicked', target: pendingInput.value });
   }
   if (MODE === 'finish') {
     // 幂等续跑：点击「完成迁移」（用已复制副本继续写指针）。
