@@ -756,7 +756,7 @@ impl RuntimeSupervisor {
         report
     }
 
-    /// 监控循环（真实应用由 M2-01 启动；测试用 `monitor_once` 显式驱动）。
+    /// 监控循环（D5；应用启动序列由 M2-08 接线，测试用 `monitor_once` 显式驱动）。
     ///
     /// 调用方负责在结束时 abort 该任务（随应用关闭或测试清理）。
     pub fn spawn_monitor(self: &Arc<Self>) -> JoinHandle<()> {
@@ -1125,6 +1125,17 @@ impl Supervisor {
         for runtime in self.runtimes.values() {
             let _ = runtime.shutdown().await;
         }
+    }
+
+    /// 启动全部注册运行时的心跳/资源监控任务（M2-08：应用启动序列收口）。
+    ///
+    /// 返回 `(runtime_id, JoinHandle)` 供应用退出编排 abort（避免退出期间心跳触发
+    /// 重启竞态）；句柄丢弃不影响任务运行（tokio 任务 detached）。
+    pub fn spawn_monitors(&self) -> Vec<(String, JoinHandle<()>)> {
+        self.runtimes
+            .iter()
+            .map(|(id, runtime)| (id.clone(), runtime.spawn_monitor()))
+            .collect()
     }
 
     /// 观察者（测试/诊断）。

@@ -27,6 +27,7 @@ use serde_json::Value;
 
 use crate::ipc::backend::IpcBackend;
 use crate::ipc::error::IpcError;
+use crate::shutdown::StorageSlot;
 
 /// 存储健康快照（`EventPipeline::health()` 的最小投影）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -208,12 +209,12 @@ impl HealthProvider {
 
 /// 核心健康后端：仅实现 `health`（其余命令沿用默认 `not_implemented`）。
 ///
-/// 持有 `StoreRuntime` 以保持写任务与读连接随应用生命周期存活
-/// （`EventPipeline` 内部持有写队列/读连接池克隆，此处为显式生命周期锚点）。
+/// 持有存储生命周期锚点（M2-08 起为 [`StorageSlot`]：写任务与读连接随应用生命周期
+/// 存活，应用退出时经槽位取走所有权执行存储侧五步关闭）。
 /// M2-07 起同时持有 `Arc<EventPipeline>`，供 RSS 巡检等运行期组件复用句柄。
 pub struct CoreHealthBackend {
     provider: HealthProvider,
-    _storage: Option<StoreRuntime>,
+    storage: Option<Arc<StorageSlot>>,
     pipeline: Option<Arc<EventPipeline>>,
 }
 
@@ -221,23 +222,36 @@ impl CoreHealthBackend {
     pub fn new(provider: HealthProvider, storage: Option<StoreRuntime>) -> Self {
         Self {
             provider,
-            _storage: storage,
+            storage: storage.map(|runtime| Arc::new(StorageSlot::new(runtime))),
             pipeline: None,
         }
     }
 
-    /// 由真实管线构造（`storage` 为存储运行时锚点）。
+    /// 由真实管线构造（`storage` 为存储运行时生命周期锚点）。
     pub fn from_pipeline(
         pipeline: EventPipeline,
         runtimes: Arc<dyn RuntimeSummarySource>,
         storage: StoreRuntime,
+    ) -> Self {
+        Self::from_pipeline_with_slot(
+            pipeline,
+            runtimes,
+            Some(Arc::new(StorageSlot::new(storage))),
+        )
+    }
+
+    /// 由真实管线构造（共享存储槽位版本；M2-08：退出编排与后端共享同一运行时）。
+    pub fn from_pipeline_with_slot(
+        pipeline: EventPipeline,
+        runtimes: Arc<dyn RuntimeSummarySource>,
+        storage: Option<Arc<StorageSlot>>,
     ) -> Self {
         let pipeline = Arc::new(pipeline);
         let source: Arc<dyn PipelineHealthSource> =
             Arc::clone(&pipeline) as Arc<dyn PipelineHealthSource>;
         Self {
             provider: HealthProvider::new(source, runtimes),
-            _storage: Some(storage),
+            storage,
             pipeline: Some(pipeline),
         }
     }
@@ -250,6 +264,11 @@ impl CoreHealthBackend {
     /// 事件管线句柄（M2-07：RSS 巡检等运行期组件接线；降级后端无管线 → `None`）。
     pub fn pipeline(&self) -> Option<&Arc<EventPipeline>> {
         self.pipeline.as_ref()
+    }
+
+    /// 存储槽位（M2-08：退出编排取走所有权执行五步关闭；降级后端 → `None`）。
+    pub fn storage_slot(&self) -> Option<Arc<StorageSlot>> {
+        self.storage.clone()
     }
 }
 
@@ -329,6 +348,18 @@ pub fn boot_core_health_with(
     handle: &tokio::runtime::Handle,
     runtimes: Arc<dyn RuntimeSummarySource>,
 ) -> Result<CoreHealthBackend, CoreHealthBootError> {
+    boot_core_health_with_slot(data_dir, handle, runtimes).map(|(backend, _slot)| backend)
+}
+
+/// 生产启动（M2-08：同时返回存储槽位，供应用退出编排执行五步关闭）。
+///
+/// 语义与 [`boot_core_health_with`] 完全一致；后端与退出编排共享同一
+/// [`StorageSlot`]（后端持生命周期锚点，退出时由编排取走所有权）。
+pub fn boot_core_health_with_slot(
+    data_dir: &Path,
+    handle: &tokio::runtime::Handle,
+    runtimes: Arc<dyn RuntimeSummarySource>,
+) -> Result<(CoreHealthBackend, Arc<StorageSlot>), CoreHealthBootError> {
     let db_path = data_dir.join("aether.db");
     let storage = StoreRuntime::open(&db_path, WriteQueueConfig::default(), handle)
         .map_err(CoreHealthBootError::Storage)?;
@@ -338,9 +369,10 @@ pub fn boot_core_health_with(
     let pipeline =
         EventPipeline::start(PipelineConfig::default(), journal, source, &startup, handle)
             .map_err(CoreHealthBootError::Pipeline)?;
-    Ok(CoreHealthBackend::from_pipeline(
-        pipeline, runtimes, storage,
-    ))
+    let slot = Arc::new(StorageSlot::new(storage));
+    let backend =
+        CoreHealthBackend::from_pipeline_with_slot(pipeline, runtimes, Some(Arc::clone(&slot)));
+    Ok((backend, slot))
 }
 
 fn now_ms() -> i64 {

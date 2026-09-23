@@ -16,9 +16,9 @@ use std::time::Duration;
 
 use aether_adapters::protocol::DisabledReason;
 use aether_adapters::supervisor::{
-    default_ledger_path, AdapterLedger, AdmissionPolicy, NoopObserver, RuntimeManifest,
-    RuntimeSpec, StartOutcome, Supervisor, SupervisorConfig, SupervisorError, SysinfoProbe,
-    SystemTreeKiller,
+    default_ledger_path, AdapterLedger, AdmissionPolicy, CleanupReport, NoopObserver,
+    RuntimeManifest, RuntimeSpec, StartOutcome, Supervisor, SupervisorConfig, SupervisorError,
+    SysinfoProbe, SystemTreeKiller,
 };
 use aether_core::RuntimeStatus;
 use serde::Serialize;
@@ -31,6 +31,69 @@ use crate::ipc::error::IpcError;
 
 /// 控制命令硬超时（启动含握手/initialize，D6 方法表 10s + 进程启动余量）。
 pub const RUNTIME_CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// 启动序列尾段（孤儿清理 + 预热）的等待上限（单个握手/initialize 各受 D6 超时约束）。
+pub const SUPERVISOR_STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// 启动序列尾段结果（M2-08；D2 启动序列：孤儿清理 → 适配器预热 → 监控接线）。
+pub struct SupervisorStartup {
+    /// 启动清理报告（D5 三条件逐条处置）。
+    pub cleanup: CleanupReport,
+    /// 预热结果（`runtime_id` → `StartOutcome`）。
+    pub warmups: Vec<(String, StartOutcome)>,
+    /// 心跳/资源监控任务句柄（应用退出时 abort；见 `crate::shutdown::AppShutdown`）。
+    pub monitors: Vec<(String, tokio::task::JoinHandle<()>)>,
+}
+
+/// 执行启动序列尾段（M2-08 D2 收口）：
+/// ① 孤儿清理（D5 台账三条件，绝不误杀）；② 适配器预热（`initialize`）；
+/// ③ 为全部注册运行时启动监控任务（10s 心跳/连续 3 次失败 → 重启，T5b）。
+///
+/// 同步阻塞接口：在核心 tokio 运行时上 spawn 后以 `std::sync::mpsc` 等待
+/// （与 [`SupervisorControl::call`] 同口径，可从 Tauri 主线程/测试线程调用）。
+pub fn run_supervisor_startup(
+    supervisor: &Arc<Supervisor>,
+    handle: &tokio::runtime::Handle,
+) -> Result<SupervisorStartup, SupervisorError> {
+    let cleaner = Arc::clone(supervisor);
+    let cleanup = blocking_call(handle, SUPERVISOR_STARTUP_TIMEOUT, async move {
+        cleaner.cleanup_orphans().await
+    })??;
+    let warmer = Arc::clone(supervisor);
+    let warmups = blocking_call(handle, SUPERVISOR_STARTUP_TIMEOUT, async move {
+        warmer.warmup_all().await
+    })?;
+    // `spawn_monitor` 内部使用 `tokio::spawn`：调用方可能位于非运行时线程
+    // （Tauri setup / 测试线程），显式进入核心运行时上下文。
+    let monitors = {
+        let _guard = handle.enter();
+        supervisor.spawn_monitors()
+    };
+    Ok(SupervisorStartup {
+        cleanup,
+        warmups,
+        monitors,
+    })
+}
+
+/// 在核心运行时上执行 future 并同步等待结果（超时返回 `SupervisorError`）。
+fn blocking_call<T, F>(
+    handle: &tokio::runtime::Handle,
+    timeout: Duration,
+    future: F,
+) -> Result<T, SupervisorError>
+where
+    T: Send + 'static,
+    F: Future<Output = T> + Send + 'static,
+{
+    let (sender, receiver) = std::sync::mpsc::channel();
+    handle.spawn(async move {
+        let _ = sender.send(future.await);
+    });
+    receiver
+        .recv_timeout(timeout)
+        .map_err(|_| SupervisorError::Transition(format!("启动序列尾段超时（>{timeout:?}）")))
+}
 
 /// 运行时控制出口（测试替身/生产监督器共用）。
 pub trait RuntimeControl: Send + Sync + 'static {

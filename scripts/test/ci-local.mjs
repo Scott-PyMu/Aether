@@ -89,6 +89,10 @@ record(
   run(node, [path.join(repoRoot, "scripts", "test", "m2-07", "verify-m2-07.mjs"), "--skip-e2e"]),
 );
 record(
+  "verify-m2-08（孤儿清理与退出可靠性：强杀核心重启清理/PID 复用 0 误杀 / T11 退出 ≤10s 无残留 / T5b 心跳熔断 120s 内 Ready）",
+  run(node, [path.join(repoRoot, "scripts", "test", "m2-08", "verify-m2-08.mjs")]),
+);
+record(
   "verify-m2-09（大行与 OOM 防护：>2MiB 不缓冲断连记错/1–2MiB 内存曲线受控/artifact_ref 附件仅存 artifacts 路径/1.5GiB 压力告警限流不崩溃；需 Bun + ~1.5GiB 内存）",
   run(node, [path.join(repoRoot, "scripts", "test", "m2-09", "verify-m2-09.mjs")]),
 );

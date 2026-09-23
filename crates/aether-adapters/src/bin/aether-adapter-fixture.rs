@@ -7,6 +7,7 @@
 //! aether-adapter-fixture --mode tree   --seconds 60 --pid-file <path> [--launch-token T]
 //! aether-adapter-fixture --mode stderr-crash --lines 60 --exit-code 7
 //! aether-adapter-fixture --mode deaf   --seconds 60   # hello + initialize 后不响应心跳
+//! aether-adapter-fixture --mode deaf   --seconds 300 --survive-eof  # 孤儿场景（核心强杀后仍存活）
 //! aether-adapter-fixture --mode silent --seconds 60   # 存活但不发 hello（握手超时）
 //! # M1-10 资源告警夹具（M4-01 复用）：真实分配内存，按跨重启计数交替超限/回落
 //! aether-adapter-fixture --mode deaf --seconds 30 --mb 160 \
@@ -55,6 +56,8 @@ struct Args {
     exit_code: i32,
     pid_file: Option<std::path::PathBuf>,
     launch_token: Option<String>,
+    /// 孤儿夹具（M2-08）：stdin EOF（核心被强杀）后仍保持存活至 `--seconds`。
+    survive_eof: bool,
     /// 资源夹具：真实分配的内存（MiB；0 = 不分配）。
     mb: u64,
     /// 资源夹具：跨重启计数文件（可选）。启动时读取计数 N、回写 N+1，
@@ -71,6 +74,7 @@ fn parse_args() -> Result<Args, String> {
         exit_code: 7,
         pid_file: None,
         launch_token: None,
+        survive_eof: false,
         mb: 0,
         mb_cycle_file: None,
     };
@@ -108,6 +112,7 @@ fn parse_args() -> Result<Args, String> {
                     .map_err(|error| format!("--mb 非法：{error}"))?
             }
             "--mb-cycle-file" => args.mb_cycle_file = Some(value()?.into()),
+            "--survive-eof" => args.survive_eof = true,
             "--launch-token" => args.launch_token = Some(value()?),
             other if other.starts_with("--launch-token=") => {
                 // D5 spawn 注入形式：`--launch-token=<ULID>`（单参数）。
@@ -266,7 +271,18 @@ fn serve_deaf(args: &Args) -> Result<(), String> {
         }
         line.clear();
         match reader.read_line(&mut line) {
-            Ok(0) => return Ok(()),
+            Ok(0) => {
+                // M2-08 孤儿场景：核心被强杀 → stdin 写端关闭。真实卡死适配器不会因
+                // EOF 自行退出；`--survive-eof` 显式保持存活至 `--seconds`（默认仍退出）。
+                if !args.survive_eof {
+                    return Ok(());
+                }
+                let deadline = Duration::from_secs(args.seconds);
+                while started.elapsed() < deadline {
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+                return Ok(());
+            }
             Ok(_) => {
                 let trimmed = line.trim();
                 if trimmed.is_empty() {

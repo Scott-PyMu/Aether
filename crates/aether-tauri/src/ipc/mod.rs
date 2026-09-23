@@ -22,10 +22,11 @@ pub use commands::handler;
 pub use error::{IpcError, IpcErrorCode};
 
 use crate::picker::{DirectoryPicker, TauriDialogPicker};
+use crate::shutdown::{AppShutdown, ExitFlag, ExitPhase};
 use crate::startup::StartupGate;
 
 /// 命令层共享状态：后端实现 + 路径白名单根目录 + 启动门（M1-06）
-/// + 目录选择器（M1-06 迁移主路径可测试性）。
+/// + 目录选择器（M1-06 迁移主路径可测试性）+ 应用退出编排（M2-08）。
 ///
 /// `backend` 为 `OnceLock`：生产启动在 Builder 阶段先以「延迟注入」构造
 /// （窗口加载期状态必须可用——`startup_*` 门命令不依赖后端），
@@ -37,6 +38,10 @@ pub struct IpcState {
     startup: Option<Arc<StartupGate>>,
     picker: OnceLock<Arc<dyn DirectoryPicker>>,
     app: OnceLock<tauri::AppHandle>,
+    /// M2-08 应用退出编排（核心启动完成后注入；未注入 = 放行直接退出）。
+    shutdown: OnceLock<Arc<AppShutdown>>,
+    /// M2-08 `ExitRequested` 防重入阶段。
+    exit: ExitFlag,
 }
 
 impl IpcState {
@@ -48,6 +53,8 @@ impl IpcState {
             startup: None,
             picker: OnceLock::new(),
             app: OnceLock::new(),
+            shutdown: OnceLock::new(),
+            exit: ExitFlag::new(),
         }
     }
 
@@ -63,6 +70,8 @@ impl IpcState {
             startup: Some(startup),
             picker: OnceLock::new(),
             app: OnceLock::new(),
+            shutdown: OnceLock::new(),
+            exit: ExitFlag::new(),
         }
     }
 
@@ -87,6 +96,8 @@ impl IpcState {
             startup: Some(startup),
             picker: OnceLock::new(),
             app: OnceLock::new(),
+            shutdown: OnceLock::new(),
+            exit: ExitFlag::new(),
         }
     }
 
@@ -104,6 +115,29 @@ impl IpcState {
     /// 注入真实后端（仅首次生效；返回 `false` 表示已注入）。
     pub fn install_backend(&self, backend: Arc<dyn IpcBackend>) -> bool {
         self.backend.set(backend).is_ok()
+    }
+
+    /// 注入应用退出编排（M2-08；仅首次生效）。
+    pub fn install_shutdown(&self, shutdown: Arc<AppShutdown>) -> bool {
+        self.shutdown.set(shutdown).is_ok()
+    }
+
+    /// 退出编排句柄（`None` = 未接线，`ExitRequested` 直接放行）。
+    pub(crate) fn shutdown_orchestrator(&self) -> Option<Arc<AppShutdown>> {
+        self.shutdown.get().cloned()
+    }
+
+    pub(crate) fn exit_phase(&self) -> ExitPhase {
+        self.exit.phase()
+    }
+
+    /// `Idle → Running` 原子抢占。
+    pub(crate) fn begin_exit_cleanup(&self) -> bool {
+        self.exit.begin()
+    }
+
+    pub(crate) fn finish_exit_cleanup(&self) {
+        self.exit.finish();
     }
 
     pub fn startup(&self) -> Option<&StartupGate> {

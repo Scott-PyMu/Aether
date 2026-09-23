@@ -22,6 +22,7 @@ pub mod nav;
 pub mod permission_loop;
 pub mod picker;
 pub mod runtime_control;
+pub mod shutdown;
 pub mod single_instance;
 pub mod startup;
 
@@ -130,8 +131,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
             // 单实例插件已初始化：此处才做「库打开 + quick_check」与管线启动（D2 顺序），
             // 并注入已 manage 的状态（窗口加载期状态始终可用）。
-            let backend = build_backend(&startup_for_boot);
-            let _ = app.state::<ipc::IpcState>().install_backend(backend);
+            let bundle = build_backend(&startup_for_boot);
+            let _ = app.state::<ipc::IpcState>().install_backend(bundle.backend);
+            // M2-08：应用退出编排接线（存储五步 + 适配器终止段；未接线则退出直接放行）。
+            if let Some(orchestrator) = bundle.shutdown {
+                let _ = app.state::<ipc::IpcState>().install_shutdown(orchestrator);
+            }
             app.state::<ipc::IpcState>()
                 .set_app_handle(app.handle().clone());
             #[cfg(debug_assertions)]
@@ -146,24 +151,41 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             Ok(())
         })
-        .run(tauri::generate_context!())?;
+        .build(tauri::generate_context!())?
+        // M2-08：D2 关闭序列在应用退出路径收口（`app_exit` 命令 / 窗口关闭 / 探针退出
+        // 同路径）；执行完成前 prevent_exit，完成后以原始退出码退出。
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+                shutdown::on_exit_requested(app_handle, code, &api);
+            }
+        });
     Ok(())
 }
 
-/// 构造命令后端（ADR-007 `health` 真实接线 + M2-01 `runtime_*` 接线 + M2-07 巡检）。
+/// 后端装配结果：命令后端 + 应用退出编排（M2-08）。
+struct BackendBundle {
+    backend: std::sync::Arc<dyn ipc::IpcBackend>,
+    shutdown: Option<std::sync::Arc<shutdown::AppShutdown>>,
+}
+
+/// 构造命令后端（ADR-007 `health` 真实接线 + M2-01 `runtime_*` 接线 + M2-07 巡检
+/// + M2-08 启动序列与退出编排）。
 ///
-/// - 启动门 Ready：监督器摘要先接线（`health.runtimes` 返回真实快照：空注册表 `[]`；
-///   台账初始化失败 → `null`）→ 打开存储（`quick_check` + 迁移）→ 事件管线 →
-///   [`core_health::CoreHealthBackend`] → 启动 RSS 巡检（D2：2GB 告警 / 2.5GB 限流）；
+/// - 启动门 Ready：监督器注册表（台账）先接线（`health.runtimes` 返回真实快照：
+///   空注册表 `[]`；台账初始化失败 → `null`）→ 打开存储（`quick_check` + 迁移）→
+///   事件管线 → [`core_health::CoreHealthBackend`] → **启动序列尾段（M2-08/D2）**：
+///   孤儿清理（D5 三条件）→ 适配器预热 → 心跳监控接线 → 退出编排注入；RSS 巡检
+///   （D2：2GB 告警 / 2.5GB 限流）随核心启动；
 /// - 监督器（M2-01 空注册表；M2-02 注册真实适配器）：接线 `runtime_retry`/`runtime_enable`；
 /// - 启动失败（安全模式等）：按 D3 只读语义呈现为 `persist_degraded`（`degraded_backend`），
-///   不回退 `not_implemented`；巡检不启动（无管线句柄）；
+///   不回退 `not_implemented`；巡检不启动（无管线句柄）；退出编排仅保留已就绪的监督器；
 /// - 启动门阻断（A4 同步盘检测）：核心不启动；业务命令由启动门返回 `startup_blocked`。
-fn build_backend(
-    startup: &std::sync::Arc<startup::StartupGate>,
-) -> std::sync::Arc<dyn ipc::IpcBackend> {
+fn build_backend(startup: &std::sync::Arc<startup::StartupGate>) -> BackendBundle {
     if startup.ensure_ready().is_err() {
-        return std::sync::Arc::new(ipc::backend::NotImplementedBackend);
+        return BackendBundle {
+            backend: std::sync::Arc::new(ipc::backend::NotImplementedBackend),
+            shutdown: None,
+        };
     }
     let data_dir = std::path::PathBuf::from(startup.snapshot().data_dir);
     let handle = tauri::async_runtime::handle().inner().clone();
@@ -185,22 +207,71 @@ fn build_backend(
         None => std::sync::Arc::new(core_health::StaticRuntimeSummaries::unwired()),
     };
 
-    let health: std::sync::Arc<dyn ipc::IpcBackend> =
-        match core_health::boot_core_health_with(&data_dir, &handle, runtimes) {
-            Ok(core) => {
+    let (health, storage_slot, pipeline) =
+        match core_health::boot_core_health_with_slot(&data_dir, &handle, runtimes) {
+            Ok((core, slot)) => {
                 // M2-07 DoD3：核心 RSS 巡检（2GB 告警 / 2.5GB 强制 delta 限流；
                 // env 钩子供测试/演练注入阈值）。任务随应用生命周期存活（detached）。
                 if let Some(pipeline) = core.pipeline() {
                     let patrol = aether_control::ResourcePatrol::with_env();
                     let _patrol_task = patrol.start((**pipeline).clone(), &handle);
                 }
-                std::sync::Arc::new(core)
+                let pipeline = core.pipeline().map(|pipeline| (**pipeline).clone());
+                (
+                    std::sync::Arc::new(core) as std::sync::Arc<dyn ipc::IpcBackend>,
+                    Some(slot),
+                    pipeline,
+                )
             }
             Err(error) => {
                 tracing::error!(error = %error, "核心健康源启动失败：按只读降级呈现 health");
-                std::sync::Arc::new(core_health::degraded_backend(&error.to_string()))
+                (
+                    std::sync::Arc::new(core_health::degraded_backend(&error.to_string()))
+                        as std::sync::Arc<dyn ipc::IpcBackend>,
+                    None,
+                    None,
+                )
             }
         };
+
+    // M2-08 启动序列尾段（D2：库打开 + quick_check → 孤儿清理 → 迁移/预热）：
+    // 清理台账残留（强杀核心后的孤儿）；预热 enabled 适配器；接线心跳监控（T5b）。
+    let monitors = match &supervisor {
+        Some(supervisor) => match runtime_control::run_supervisor_startup(supervisor, &handle) {
+            Ok(startup_report) => {
+                let reclaimed = startup_report.cleanup.reclaimed().count();
+                let skipped = startup_report.cleanup.skipped().count();
+                tracing::info!(
+                    reclaimed,
+                    skipped,
+                    actions = startup_report.cleanup.actions.len(),
+                    "启动孤儿清理完成（D5 台账三条件）"
+                );
+                for (runtime_id, outcome) in &startup_report.warmups {
+                    tracing::info!(runtime_id = %runtime_id, outcome = ?outcome, "适配器预热结果");
+                }
+                startup_report.monitors
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "启动序列尾段失败（孤儿清理/预热未完成）");
+                Vec::new()
+            }
+        },
+        None => Vec::new(),
+    };
+
+    let orchestrator = if supervisor.is_some() || pipeline.is_some() || storage_slot.is_some() {
+        Some(shutdown::AppShutdown::new(
+            pipeline,
+            supervisor.clone(),
+            storage_slot,
+            monitors,
+            handle.clone(),
+        ))
+    } else {
+        None
+    };
+
     let control: Option<std::sync::Arc<dyn runtime_control::RuntimeControl>> =
         supervisor.map(|supervisor| {
             std::sync::Arc::new(runtime_control::SupervisorControl::new(
@@ -209,5 +280,8 @@ fn build_backend(
                 runtime_control::RUNTIME_CONTROL_TIMEOUT,
             )) as std::sync::Arc<dyn runtime_control::RuntimeControl>
         });
-    std::sync::Arc::new(runtime_control::RuntimeControlBackend::new(health, control))
+    BackendBundle {
+        backend: std::sync::Arc::new(runtime_control::RuntimeControlBackend::new(health, control)),
+        shutdown: orchestrator,
+    }
 }
