@@ -25,7 +25,8 @@
     "deny.toml",
     "scripts/ci/similarity-rules.json",
     "scripts/ci/npm-license-allowlist.json",
-    "scripts/test/fixtures"
+    "scripts/test/fixtures",
+    "scripts/test/.tmp"
   ],
   "rules": [
     {
