@@ -174,7 +174,7 @@ export type IpcErrorCode =
 "not_implemented" | 
 /**
  *  补读缺口过大（D4：>10k 拒绝自动补发；与核心管线 `readback_gap_too_large`
- *  同码透传，M3-02 属主承接项，实施计划 v1.15）。
+ *  同码透传，M3-02 属主承接项；ADR-009 决策 2 登记，实施计划 v1.16）。
  */
 "readback_gap_too_large";
 

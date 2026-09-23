@@ -44,7 +44,7 @@ pub enum IpcErrorCode {
     /// 命令尚未实现（框架就绪，实现随对应里程碑落地）。
     NotImplemented,
     /// 补读缺口过大（D4：>10k 拒绝自动补发；与核心管线 `readback_gap_too_large`
-    /// 同码透传，M3-02 属主承接项，实施计划 v1.15）。
+    /// 同码透传，M3-02 属主承接项；ADR-009 决策 2 登记，实施计划 v1.16）。
     ReadbackGapTooLarge,
 }
 

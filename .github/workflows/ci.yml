@@ -648,7 +648,7 @@ jobs:
             echo "::error title=m3-01-tail::$line"
           done
 
-  # M3-02：会话工作台（UI-01/02/05 + D7；实施计划 v1.15 属主承接项）。
+  # M3-02：会话工作台（UI-01/02/05 + D7；实施计划 v1.16 属主承接项；响应契约/错误码见 ADR-009）。
   # 覆盖：工作台 E2E（创建/发送/流式/中断）、运行时选择器、模型透传、10k 滚动基准、
   # messages_page 真实后端与生产补读路径（aetherStore 注入 + readback_gap_too_large
   # 同码透传 + 缺口 >10k 确认重载）、真实 Mock 适配器会话链路（RunExecutor 接线）。
