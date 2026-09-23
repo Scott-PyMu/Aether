@@ -475,6 +475,20 @@ fn malformed_samples_return_structured_errors_and_do_not_reach_backend() {
             "invalid_type",
             None,
         ),
+        // ADR-006 v0.3：`app_exit` 的 confirm 对齐（缺失/false/未知成员）。
+        ("app_exit", json!({}), "missing_field", Some("confirm")),
+        (
+            "app_exit",
+            json!({ "confirm": false }),
+            "invalid_value",
+            Some("confirm"),
+        ),
+        (
+            "app_exit",
+            json!({ "confirm": true, "extra": 1 }),
+            "unknown_field",
+            Some("extra"),
+        ),
         (
             "run_retry",
             json!({ "run_id": "short" }),
@@ -693,6 +707,28 @@ fn valid_requests_reach_backend_exactly_once() {
         fixture.backend.calls(),
         expected_calls,
         "合法请求必须恰好一次到达后端"
+    );
+}
+
+/// ADR-006 v0.3：`app_exit` 在 `{confirm:true}` 通过严格解析后才进入命令体；
+/// 框架夹具无应用句柄 → 命令体返回 `not_implemented`（证明校验已通过、未透传后端）。
+#[test]
+fn app_exit_requires_confirm_true_before_reaching_command_body() {
+    let fixture = fixture("app-exit");
+    let result = invoke(&fixture.webview, "app_exit", json!({ "confirm": true }));
+    match result {
+        Err(error) => {
+            assert_eq!(
+                error.get("code").and_then(Value::as_str),
+                Some("not_implemented"),
+                "合法 confirm:true 必须通过严格解析并到达命令体：{error}"
+            );
+        }
+        Ok(value) => panic!("夹具无应用句柄，不应成功退出：{value}"),
+    }
+    assert!(
+        fixture.backend.calls().is_empty(),
+        "app_exit 不经 IpcBackend 下游"
     );
 }
 

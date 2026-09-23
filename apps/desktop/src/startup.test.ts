@@ -45,10 +45,12 @@ describe("startup IPC 契约", () => {
     expect(invokeMock).toHaveBeenCalledWith("startup_pick_target");
   });
 
-  it("exitApp 调用 app_exit", async () => {
+  it("exitApp 调用 app_exit 并携带 confirm:true（ADR-006 v0.3）", async () => {
     invokeMock.mockResolvedValue(undefined);
     await expect(exitApp()).resolves.toBeUndefined();
-    expect(invokeMock).toHaveBeenCalledWith("app_exit");
+    expect(invokeMock).toHaveBeenCalledWith("app_exit", {
+      payload: { confirm: true },
+    });
   });
 
   it("describeIpcError 优先 message，兜底 String", () => {

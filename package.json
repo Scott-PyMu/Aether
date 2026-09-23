@@ -38,6 +38,7 @@
     "verify:m2-09": "node scripts/test/m2-09/verify-m2-09.mjs",
     "verify:m2-11": "node scripts/test/m2-11/verify-m2-11.mjs",
     "verify:m2-10": "node scripts/test/m2-10/verify-m2-10.mjs",
+    "verify:m3-01": "node scripts/test/m3-01/verify-m3-01.mjs",
     "smoke": "node scripts/test/smoke-desktop.mjs",
     "ci:local": "node scripts/test/ci-local.mjs"
   },

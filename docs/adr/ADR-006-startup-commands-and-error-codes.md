@@ -2,14 +2,14 @@
 
 | 项 | 内容 |
 |---|---|
-| 状态 | **已批准**（2026-09-18 复评通过，签署见 §7；实现对齐状态见 §3.3，`app_exit` confirm 挂 M1-08 DoD3） |
+| 状态 | **已批准**（2026-09-18 复评通过，签署见 §7；实现对齐状态见 §3.3；v0.3（2026-09-23）关闭全部对齐项） |
 | 决策日期 | 2026-09-17 |
-| 决策载体 | 已合入：《设计文档》v1.5 → v1.6（随 ADR-007 增量续升 v1.7）；《实施计划与验收标准》v1.11 → v1.12（随升 v1.13）；2026-09-18 随 v1.7/v1.13 冻结 |
+| 决策载体 | 已合入：《设计文档》v1.5 → v1.6（随 ADR-007 增量续升 v1.7）；《实施计划与验收标准》v1.11 → v1.12（随升 v1.13；v0.3 随 M3-01 范围修订续升 v1.15）；2026-09-18 随 v1.7/v1.13 冻结 |
 | 关联 | 设计文档 D1/D7、A4、评审 #9、附录 B/E；实施计划 M1-06、M1-08 DoD3、M3-01、M4-04、Gate 1、§7 映射 |
-| 取代 | 无（对 D7 命令面的**增量登记**，不修改既有命令语义） |
+| 取代 | 无（对 D7 命令面的**增量登记**，不修改既有命令语义；v0.3 仅更新状态/挂载，不改决策） |
 | 被取代 | 无 |
 | 回退条件 | 见 §6 |
-| 未对齐项 | 3 处（v0.2 已补齐 2 处：无参严格解析；待对齐 1 处：`app_exit` confirm），见 §3.3 |
+| 未对齐项 | 0 处（v0.2 补齐 2 处无参严格解析；v0.3 随 M3-01 范围修订关闭 `app_exit` confirm），见 §3.3 |
 
 ## 1. 背景
 
@@ -27,7 +27,7 @@
 | 2 | **错误码新增 3 个**：`startup_blocked`（启动门阻断）、`migration_failed`（迁移失败：复制/校验/原子替换/写指针/状态持久化/空间）、`internal`（内部不可达错误：序列化/任务调度/选择器调用）。语义与触发点见附录 B；迁移的**参数类**错误继续复用既有码（`path_rejected`/`invalid_value`/`invalid_format`/`missing_field`/`unknown_field`），不新增重复码 | 设计文档 D7；实施计划 M1-08 DoD3 |
 | 3 | **参数校验统一走 D7 强制校验框架**：serde 严格反序列化（`deny_unknown_fields`）→ 语义校验（长度上限 / 枚举白名单 / 格式）→ 路径 canonicalize 与形态拒绝（Windows 特殊路径：UNC/verbatim/ADS/8.3 短名/尾随点或空格/保留设备名）→ 启动门与迁移专属校验链（见附录 A.2）。校验失败一律结构化错误，不落库、不透传下游 | 设计文档 D7；实施计划 M1-08 DoD3 |
 | 4 | **capabilities 维持最小 allowlist（空权限集），不因本 ADR 变更**。技术依据：Tauri 2 权限（ACL）管辖**插件命令**与 `core:` 能力；**应用内命令（application commands）**在本地源（`tauri.localhost` / `tauri://localhost`）下不受 ACL 门控，仅当应用显式定义 app ACL manifest 或来源为远程时才启用校验（`tauri::ipc::authority` 行为）。若评审要求显式登记应用命令权限（启用 app manifest），须另立子决策并同步更新 `build.rs`（`tauri_build::Attributes::app_manifest`）与 `tests/security_baseline.rs` 断言（M1-08 DoD4）；**未来若将任一命令下沉为插件命令，必须先登记权限**（写入本 ADR 约束） | 设计文档 D7 安全基线；实施计划 M1-08 DoD4；约束本 ADR §5 未决项 3 |
-| 5 | **M1-08 DoD3 校验矩阵扩展**：4 个新命令纳入畸形参数样本集（无参数命令的未知成员拒绝、`target_dir` 相对路径/不存在/文件/Windows 特殊形态、`app_exit` 的 `confirm` 缺失与 false）。**「无参数命令的未知成员拒绝」以严格无参数解析为前提**：`startup_get`/`startup_pick_target` 已按 `backup_list` 模式对齐（`payload: Option<Value>` + 空 DTO + `parse_no_params`，v0.2 修订补齐），该矩阵项可验证；`app_exit` 的 `confirm` 仍待对齐（见 §3.3 对齐动作）。样本先在 `crates/aether-tauri/tests/m1_06_*.rs` 落地（两无参命令已完成），M1-08 矩阵并入 `tests/ipc_validation.rs` | 实施计划 M1-08 DoD3（附录 D.1） |
+| 5 | **M1-08 DoD3 校验矩阵扩展**：4 个新命令纳入畸形参数样本集（无参数命令的未知成员拒绝、`target_dir` 相对路径/不存在/文件/Windows 特殊形态、`app_exit` 的 `confirm` 缺失与 false）。**「无参数命令的未知成员拒绝」以严格无参数解析为前提**：`startup_get`/`startup_pick_target` 已按 `backup_list` 模式对齐（`payload: Option<Value>` + 空 DTO + `parse_no_params`，v0.2 修订补齐），该矩阵项可验证；`app_exit` 的 `confirm` 已对齐（v0.3，随 M3-01 范围修订落地；见 §3.3）。样本先在 `crates/aether-tauri/tests/m1_06_*.rs` 落地（两无参命令已完成），M1-08 矩阵并入 `tests/ipc_validation.rs` | 实施计划 M1-08 DoD3（附录 D.1） |
 | 6 | **M3-01 bindings 覆盖命令全集**：tauri-specta 生成物必须包含 4 个新命令；生成与 `git diff --exit-code` 校验（T14）在 M3-01 执行。bindings 未生成前，前端契约以 `apps/desktop/src/startup.ts` 的手工类型为准（M1-06 范围内） | 实施计划 M3-01（附录 D.2） |
 | 7 | **附录 E 不改动**：4 个命令均不读写数据库（迁移在存储层打开之前执行；指针文件与 `migration_state.json` 为壳层私有文件，不进线协议与数据库映射表）。验收口径：M4-04 验收清单登记命令面全集（附录 D.3） | 设计文档 附录 E（结论：无变更）；实施计划 M4-04 |
 
@@ -55,16 +55,16 @@
 | `startup_get` | **已实现**；无参严格解析按 v0.2 修订补齐（`payload: Option<Value>` + `parse_no_params`，同 `backup_list`） | `commands.rs`（`startup_get`）；`tests/m1_06_startup_ipc.rs`（新增 `startup_get_rejects_unknown_payload_members`） |
 | `startup_pick_target` | **已实现**；无参严格解析按 v0.2 修订补齐（证据：`m1_06_picker.rs` 新增用例） | `crates/aether-tauri/src/picker.rs`；`tests/m1_06_picker.rs`（含 `startup_pick_target_rejects_unknown_payload_members`） |
 | 3 个错误码 | **已实现** | `crates/aether-tauri/src/ipc/error.rs`（`startup_blocked`/`migration_failed`/`internal`） |
-| `app_exit` | **待对齐**：`{ confirm: true }` 缺失/false 结构化拒绝 + 严格解析（当前为无参数，额外成员静默忽略） | `commands.rs`（`app_exit`）；对齐动作见下 |
+| `app_exit` | **已实现**（v0.3，随 M3-01 范围修订）：DTO `{ confirm: bool }`（`deny_unknown_fields`）+ `confirm != true → invalid_value` + 严格解析；前端 `exitApp()` 携 `{ payload: { confirm: true } }`；矩阵样本（缺失/false/未知成员）并入 `ipc_validation` | `commands.rs`（`app_exit`）、`src/ipc/dto.rs`（`AppExitRequest`）；`tests/ipc_validation.rs`（3 样本 + `app_exit_requires_confirm_true_before_reaching_command_body`）；`apps/desktop/src/startup.ts` + `startup.test.ts`；`docs/M3-01-证据.md` |
 | capabilities | **无需变更**（决策 4） | `tests/security_baseline.rs::capabilities_are_minimal_allowlist`（空权限集）持续通过；真实 E2E 在 `withGlobalTauri:false` 下调用应用命令成功 |
-| bindings | **待 M3-01**（T14 未落地） | 计划 M3-01；`apps/desktop/src/startup.ts` 为当前前端契约 |
+| bindings | **已完成**（M3-01/T14）：生成物覆盖 25 个可调用命令 + `aether://event`；CI `git diff --exit-code` 校验 | `packages/protocol/src/bindings.ts`（生成物，禁止手改）；`scripts/ci/bindings.mjs`；`tests/export_bindings.rs`；`docs/M3-01-证据.md` |
 
-**对齐动作（v0.2 已执行第 1 项；剩余由 M1-08 DoD3 承接）**：
+**对齐动作（v0.2 执行第 1 项；v0.3 关闭全部）**：
 
 1. ✅（v0.2 修订）`startup_get` / `startup_pick_target`：命令签名改 `payload: Option<Value>`，以空 DTO（`#[serde(deny_unknown_fields)]`）经 `parse_no_params` 严格反序列化——与 `backup_list` 的实现完全一致（`commands.rs` 的 `backup_list` 分支：`payload: Option<Value>` + `parse_no_params(payload.unwrap_or(Value::Null))`）；任何成员返回 `unknown_field`。新增用例：`startup_get_rejects_unknown_payload_members`、`startup_pick_target_rejects_unknown_payload_members`。
-2. ⏳ `app_exit`（挂 M1-08 DoD3）：新增 DTO `{ confirm: bool }`（`deny_unknown_fields`），`confirm != true` 返回 `invalid_value`；前端 `exitApp()` 改为 `invoke("app_exit", { payload: { confirm: true } })`。
-3. ⏳ `tests/ipc_validation.rs` 校验矩阵并入其余畸形样本（4 组：两无参命令的额外成员样本随本修订已有；`confirm` 缺失与 false 待并入）。
-4. 对齐完成后，§2 决策 5 与附录 D.1 的矩阵项方可验证；本表状态更新为「已实现」并关闭。
+2. ✅（v0.3，随 M3-01 范围修订）`app_exit`：新增 DTO `{ confirm: bool }`（`deny_unknown_fields`），`confirm != true` 返回 `invalid_value`；前端 `exitApp()` 改为 `invoke("app_exit", { payload: { confirm: true } })`。
+3. ✅（v0.3）`tests/ipc_validation.rs` 校验矩阵并入 `confirm` 缺失/false/未知成员 3 样本，并新增合法形态到达命令体的断言用例。
+4. ✅ 对齐完成后，§2 决策 5 与附录 D.1 的矩阵项可验证；本表状态已更新为「已实现」并关闭（未对齐项 0 处）。
 
 ### 3.4 不影响的
 
@@ -81,7 +81,7 @@
 
 ## 5. 后续（未决项）
 
-1. **实现对齐（3 处，v0.2 已补齐 2 处）**：① `app_exit` 的 `confirm:true`（待对齐）；②③ `startup_get`/`startup_pick_target` 的严格无参数解析（`payload: Option<Value>` + 空 DTO（`deny_unknown_fields`）+ `parse_no_params`，与 `backup_list` 一致）——已按 v0.2 修订补齐（含新增用例，见 §3.3）。剩余项由 M1-08 DoD3 承接（`app_exit` DTO/命令/前端/样本 + 矩阵并入），完成后关闭 §3.3 待对齐项。
+1. **实现对齐（v0.3 已全部关闭，未对齐项 0 处）**：① `app_exit` 的 `confirm:true`——v0.3（2026-09-23）随 M3-01 范围修订落地（DTO/命令/前端/矩阵样本/证据见 §3.3）；②③ `startup_get`/`startup_pick_target` 的严格无参数解析——已按 v0.2 修订补齐（含新增用例，见 §3.3）。原挂载 M1-08 DoD3 已不再承接（该任务已通过且矩阵未覆盖），v0.3 明确改挂 M3-01 并关闭。
 2. **空间护栏原生探针**：迁移命令的空间校验当前由可注入探针提供（原生实现返回「未知 → 不阻断」）；真实磁盘探针按 ADR-003 决策 19 在 **M3-04**（备份/导出外部路径）统一接线，届时迁移复用同一探针。登记于 M1-06 证据与本文档，不视为本 ADR 的遗漏。
 3. **capabilities 显式登记诉求**：若评审要求启用应用 ACL manifest 并显式登记命令，须另立子决策（含 `build.rs`（`tauri_build::Attributes::app_manifest`）与 `tests/security_baseline.rs` 断言变更），不得静默修改。
 4. **参数命名确认**：`startup_migrate` 采用 `target_dir`（与 `startup_pick_target` 返回字段、前端类型、E2E 一致）；任务草纲曾写作 `target_path`，以本 ADR 的实现契约为准。
@@ -89,7 +89,7 @@
 
 ## 6. 回退条件
 
-1. **`confirm` 对齐与既有交互冲突**（如前端无法携带参数）→ 保留无参数 `app_exit` 并在本 ADR 记录偏差（须评审确认），不得静默删改决策。
+1. **`confirm` 对齐与既有交互冲突**（如前端无法携带参数）→ 保留无参数 `app_exit` 并在本 ADR 记录偏差（须评审确认），不得静默删改决策。**（未触发；v0.3 已按目标契约对齐并关闭。）**
 2. **capabilities 结论被评审否定**（要求显式 ACL）→ 按未决项 3 另立子决策，先改设计文档再回流计划。
 3. **新命令参数校验与 D7 强制框架冲突** → 以 D7 框架为准调整命令定义并记录证据。
 4. **bindings 生成器不支持无参数命令**（`startup_get`/`startup_pick_target`）→ 在 M3-01 记录适配方式（空对象参数或生成器配置），不得放宽校验。
@@ -100,6 +100,7 @@
 |---|---|---|---|
 | 2026-09-17 | （留空待签） | 有条件通过；B1/B2 已修订，待复评 | 决策 4 口径采纳；`app_exit` confirm 挂 M1-08 DoD3；未决项 2/4 确认 |
 | 2026-09-18 | AI 评审（opencode/GLM） | 通过（复评） | 条件项核验闭合：B1/B2 修订（严格无参解析用例 `m1_06_startup_ipc.rs`/`m1_06_picker.rs`、M4-04 DoD3 对齐、命令计数口径）；决策 4 空权限集断言（`security_baseline.rs::capabilities_are_minimal_allowlist`）维持；`app_exit` confirm 与未决项 2/4 维持原挂载（M1-08 DoD3 / M3-04 / 附录 A.2 契约）；随 v1.7/v1.13 冻结 |
+| 2026-09-23 | 评审（M3-01 复核意见） | 通过（v0.3 状态更新） | 确认 M1-08 挂载已失效（矩阵未覆盖）；批准随 M3-01 范围修订完成 `app_exit` confirm 对齐（计划 v1.15），不改决策；M3-01 生产补读承接项登记至 M3-02 + Gate 3 核验；JsonPayload 登记上游跟踪项 |
 
 ## 8. 变更记录
 
@@ -107,6 +108,7 @@
 |---|---|---|---|
 | v0.1 | 2026-09-17 | 创建：登记 M1-06 新增 4 命令与 3 错误码；拟设计文档 v1.6 / 实施计划 v1.12 修订；给出合入 diff 与实现对齐状态 | （文档维护） |
 | v0.2 | 2026-09-17 | 评审修订：D.3 合入文本对齐 M4-04 实际 DoD3；startup_get/pick_target 补无参严格解析（B2）；命令计数口径、决策 4 改动点、快照可缺省字段注记 | （文档维护） |
+| v0.3 | 2026-09-23 | 状态/挂载更新（不改决策）：`app_exit` confirm 对齐随 M3-01 范围修订落地并关闭（原 M1-08 DoD3 挂载失效）；§3.3/§5/附录 A/§6 状态同步；bindings 行更新为 M3-01/T14 已完成；评审记录补 2026-09-23 复核 | （文档维护，评审确认） |
 
 ---
 
@@ -119,9 +121,9 @@
 | `startup_get` | 无（`null`/缺省；**严格无参：任何成员拒绝**） | `StartupSnapshot`（下） | 启动门任意阶段（含阻断态） | 拒绝启动页唯一查询入口 |
 | `startup_migrate` | `{ "target_dir": string }`（已严格） | `StartupSnapshot`（成功时 `phase=ready`、`data_dir_source=migrated`、`migration` 明细） | 仅 `blocked_sync_dir` | 迁移执行；幂等续跑 |
 | `startup_pick_target` | 无（`null`/缺省；**严格无参：任何成员拒绝**） | `{ "target_dir": string \| null }`（null=取消） | 启动门任意阶段 | 系统目录选择器（Rust 侧，不经 WebView 权限面） |
-| `app_exit` | `{ "confirm": true }`（决策 1；**当前无参数，待对齐**，见 §3.3） | `{ "exiting": true }` | 启动门任意阶段 | 请求退出应用 |
+| `app_exit` | `{ "confirm": true }`（决策 1；**已对齐**，v0.3，见 §3.3） | `{ "exiting": true }` | 启动门任意阶段 | 请求退出应用 |
 
-> **「严格无参数解析」口径**：命令签名声明 `payload: Option<Value>`，以空对象经 `parse_no_params` 严格反序列化（`deny_unknown_fields`），任何成员返回 `unknown_field`——与 `backup_list` 完全一致。`startup_get`/`startup_pick_target` 已按此实现（v0.2 修订补齐；用例见 §3.3）；`startup_migrate` 走 `parse_strict`（严格）；`app_exit` 的 `confirm` 与严格解析仍待对齐（见 §3.3）。
+> **「严格无参数解析」口径**：命令签名声明 `payload: Option<Value>`，以空对象经 `parse_no_params` 严格反序列化（`deny_unknown_fields`），任何成员返回 `unknown_field`——与 `backup_list` 完全一致。`startup_get`/`startup_pick_target` 已按此实现（v0.2 修订补齐；用例见 §3.3）；`startup_migrate` 与 `app_exit` 走 `parse_strict`（严格；`app_exit` 于 v0.3 对齐，含 `confirm` 缺失/false/未知成员样本）。
 
 `StartupSnapshot`（`startup_get`/`startup_migrate` 返回）：
 

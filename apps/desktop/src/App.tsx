@@ -1,6 +1,7 @@
 import { APP_VERSION, PROTOCOL_VERSION } from "@aether/protocol";
 import { useCallback, useEffect, useState } from "react";
 
+import { EventBridgeIndicator } from "./EventBridgeIndicator";
 import { HealthMonitor } from "./HealthMonitor";
 import { StartupGate } from "./StartupGate";
 import { describeIpcError, fetchStartup, type StartupSnapshot } from "./startup";
@@ -64,6 +65,7 @@ export function App() {
         数据目录：{startup.data_dir}
       </p>
       <HealthMonitor />
+      <EventBridgeIndicator />
     </main>
   );
 }

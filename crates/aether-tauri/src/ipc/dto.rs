@@ -15,7 +15,7 @@ use super::validate::{
 };
 
 /// 权限决议（D9：`once` / `session` 授权；`deny` 拒绝）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, serde::Serialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionDecision {
     Once,
@@ -24,7 +24,7 @@ pub enum PermissionDecision {
 }
 
 /// 会话状态过滤（与附录 C `sessions.status` CHECK 枚举一一对应）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, serde::Serialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionStatus {
     Creating,
@@ -43,7 +43,7 @@ pub enum SessionStatus {
 /// 键名并同步 `settings` 表语义，再放开对应命令。未登记键一律 `invalid_enum`。
 pub const SETTINGS_KEY_ALLOWLIST: &[&str] = &[];
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, specta::Type)]
 #[serde(deny_unknown_fields)]
 pub struct SessionCreateRequest {
     pub runtime_id: String,
@@ -75,7 +75,7 @@ impl CommandRequest for SessionCreateRequest {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, specta::Type)]
 #[serde(deny_unknown_fields)]
 pub struct SessionListRequest {
     #[serde(default)]
@@ -95,7 +95,7 @@ impl CommandRequest for SessionListRequest {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, specta::Type)]
 #[serde(deny_unknown_fields)]
 pub struct SessionSendRequest {
     pub session_id: String,
@@ -122,7 +122,7 @@ impl CommandRequest for SessionSendRequest {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, specta::Type)]
 #[serde(deny_unknown_fields)]
 pub struct SessionIdRequest {
     pub session_id: String,
@@ -143,7 +143,7 @@ impl CommandRequest for SessionIdRequest {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, specta::Type)]
 #[serde(deny_unknown_fields)]
 pub struct MessagesPageRequest {
     pub session_id: String,
@@ -162,7 +162,7 @@ impl CommandRequest for MessagesPageRequest {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, specta::Type)]
 #[serde(deny_unknown_fields)]
 pub struct PermissionsPendingRequest {
     #[serde(default)]
@@ -180,7 +180,7 @@ impl CommandRequest for PermissionsPendingRequest {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, specta::Type)]
 #[serde(deny_unknown_fields)]
 pub struct PermissionResolveRequest {
     pub request_id: String,
@@ -196,7 +196,7 @@ impl CommandRequest for PermissionResolveRequest {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, specta::Type)]
 #[serde(deny_unknown_fields)]
 pub struct SettingsGetRequest {
     pub key: String,
@@ -208,21 +208,21 @@ impl CommandRequest for SettingsGetRequest {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, specta::Type)]
 #[serde(deny_unknown_fields)]
 pub struct SettingsSetRequest {
     pub key: String,
-    pub value: serde_json::Value,
+    pub value: crate::json_payload::JsonPayload,
 }
 
 impl CommandRequest for SettingsSetRequest {
     fn validate(&self) -> Result<(), IpcError> {
         validate_settings_key(&self.key)?;
-        ensure_value_size(&self.value, "value", MAX_SETTING_VALUE_BYTES)
+        ensure_value_size(&self.value.0, "value", MAX_SETTING_VALUE_BYTES)
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, specta::Type)]
 #[serde(deny_unknown_fields)]
 pub struct BackupCreateRequest {
     #[serde(default)]
@@ -241,7 +241,7 @@ impl CommandRequest for BackupCreateRequest {
 }
 
 /// `backup_list`（ADR-004）：无参数命令；非空成员一律拒绝。
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, specta::Type)]
 #[serde(deny_unknown_fields)]
 pub struct BackupListRequest {}
 
@@ -251,14 +251,14 @@ impl CommandRequest for BackupListRequest {}
 ///
 /// 仅本地 IPC 查询：不落库、不产生事件；返回 `HealthReport`
 /// （`storage_state` / `write_queue_depth` / `runtimes` 摘要 / `ts`）。
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, specta::Type)]
 #[serde(deny_unknown_fields)]
 pub struct HealthRequest {}
 
 impl CommandRequest for HealthRequest {}
 
 /// 备份来源（ADR-004 `backup_restore`）：内部备份 id 枚举 或 外部 `.db` 路径。
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum BackupSource {
     /// 内部备份 id（`backups` 表白名单，仅 ULID 格式层校验；存在性由后端判定）。
@@ -267,7 +267,7 @@ pub enum BackupSource {
     External { path: String },
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, specta::Type)]
 #[serde(deny_unknown_fields)]
 pub struct BackupRestoreRequest {
     pub source: BackupSource,
@@ -301,7 +301,7 @@ impl CommandRequest for BackupRestoreRequest {
 }
 
 /// `app_restart`（ADR-004）：显式 `confirm:true` 才允许复用关闭序列重启。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, specta::Type)]
 #[serde(deny_unknown_fields)]
 pub struct AppRestartRequest {
     pub confirm: bool,
@@ -320,8 +320,29 @@ impl CommandRequest for AppRestartRequest {
     }
 }
 
+/// `app_exit`（ADR-006 决策 1，v0.3 对齐）：拒绝启动页退出；显式 `confirm:true`
+/// 才允许退出（与 `app_restart` 的 confirm 约定一致）。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct AppExitRequest {
+    pub confirm: bool,
+}
+
+impl CommandRequest for AppExitRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !self.confirm {
+            return Err(IpcError::at_field(
+                IpcErrorCode::InvalidValue,
+                "confirm",
+                "必须显式 confirm:true（与 app_restart 的 confirm 约定一致）",
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// `run_retry`（ADR-004）：仅终态 run 可重试；格式层校验 ULID，终态由后端判定。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, specta::Type)]
 #[serde(deny_unknown_fields)]
 pub struct RunRetryRequest {
     pub run_id: String,
@@ -338,7 +359,7 @@ impl CommandRequest for RunRetryRequest {
 
 /// `runtime_retry`（ADR-004/M1-10）：仅 `disabled + start_failed` 可用；
 /// `runtime_id` 必须命中 `runtimes` 白名单（存在性由后端判定）。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, specta::Type)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeRetryRequest {
     pub runtime_id: String,
@@ -352,7 +373,7 @@ impl CommandRequest for RuntimeRetryRequest {
 
 /// `runtime_enable`（ADR-004/M1-10）：仅 `disabled` 可用；
 /// `untrusted` / `version_mismatch` 必须先修复后再启用（后端状态判定）。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, specta::Type)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeEnableRequest {
     pub runtime_id: String,
@@ -366,7 +387,7 @@ impl CommandRequest for RuntimeEnableRequest {
 
 /// `workspace_set`（ADR-004/D14）：`workspace_id` 存在性 或 `root_path`
 /// canonicalize（目录须存在；命中同步盘拒绝清单则拒绝）。P0 仅对新会话生效。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, specta::Type)]
 #[serde(deny_unknown_fields)]
 pub struct WorkspaceSetRequest {
     #[serde(default)]
@@ -409,7 +430,7 @@ impl CommandRequest for WorkspaceSetRequest {
 ///
 /// 形态校验（绝对路径、存在目录、Windows 特殊路径）在命令内完成；目标自身的 A4
 /// 同步盘复核在启动门迁移流内执行（同一检测上下文）。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, specta::Type)]
 #[serde(deny_unknown_fields)]
 pub struct StartupMigrateRequest {
     pub target_dir: String,
@@ -422,20 +443,20 @@ impl CommandRequest for StartupMigrateRequest {
 }
 
 /// `startup_get`（ADR-006）：无参数命令；缺省载荷等价空对象，任何成员都会被严格模式拒绝。
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, specta::Type)]
 #[serde(deny_unknown_fields)]
 pub struct StartupGetRequest {}
 
 impl CommandRequest for StartupGetRequest {}
 
 /// `startup_pick_target`（ADR-006）：无参数命令；缺省载荷等价空对象，任何成员都会被严格模式拒绝。
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, specta::Type)]
 #[serde(deny_unknown_fields)]
 pub struct StartupPickTargetRequest {}
 
 impl CommandRequest for StartupPickTargetRequest {}
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, specta::Type)]
 #[serde(deny_unknown_fields)]
 pub struct ExportDiagnosticsRequest {
     pub target_dir: String,

@@ -47,6 +47,14 @@ tauri-plugin-single-instance = "2.4.4"
 # ADR-007：核心启动（StoreRuntime/EventPipeline）需 tokio 句柄；日志经 tracing（§2.2 选型）。
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "time"] }
 tracing = "0.1"
+# M3-01/T14（设计 D7）：TS 类型绑定生成器（生成物 `packages/protocol/src/bindings.ts`，
+# 禁止手改，AGENTS §2.8；CI 重新生成 + `git diff --exit-code`，T14）。
+# 版本固定 =2.0.0-rc.25（MIT；与 tauri 2.11 配套的最新 rc；上游对 specta 亦为精确锁定）。
+# `specta` 的 `serde_json` 特性提供 `serde_json::Value` 的 `Type` 实现（命令 payload 透传）。
+# `specta-typescript` 提供 `Unknown` 不透明类型（`CommandPayload` 的类型映射，见 `ipc`）。
+specta = { version = "=2.0.0-rc.25", features = ["derive", "serde_json"] }
+specta-typescript = "=0.0.12"
+tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
 # M2-07 DoD6（ADR-007 §5-1）：P0 运行期日志汇聚端（环形缓冲 + 文件）接线。
 # `tracing-subscriber` 为 `tracing` 的官方输出端（MIT/Apache-2.0，已在 Cargo.lock，
 # aether-control 经 dev-dependency 使用同版本 0.3.23）；`fmt` 提供 MakeWriter 接口。
@@ -67,7 +75,6 @@ tempfile = "3"
 # M2-10 权限回环集成测试：以真实策略引擎组装真实 PermissionService
 # （aether-security 为工作区内部 crate，已在依赖图内；仅测试目标使用）。
 aether-security.workspace = true
-
 [lints]
 workspace = true
 

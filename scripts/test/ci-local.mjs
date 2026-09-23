@@ -104,6 +104,10 @@ record(
   "verify-m2-10（权限回环：适配器文件类工具调用 100% 经 permission.request 回环、零直通；异常路径 deny/超时/once/session/重启 pending；证据可导出归档；需 Bun + 真实 Mock + 真实网关）",
   run(node, [path.join(repoRoot, "scripts", "test", "m2-10", "verify-m2-10.mjs")]),
 );
+record(
+  "verify-m3-01（前端骨架/类型绑定 T14/EventStore：生成物 diff 校验 + D7 全集静态断言 + 去重/乱序/补读/>10k/16ms/压力/gap 补齐 + 事件桥慢消费不反压）",
+  run(node, [path.join(repoRoot, "scripts", "test", "m3-01", "verify-m3-01.mjs")]),
+);
 
 if (!quick) {
   record("verify-coverage-gate", run(node, [path.join(repoRoot, "scripts", "test", "verify-coverage-gate.mjs")]));

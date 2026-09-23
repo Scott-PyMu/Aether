@@ -9,7 +9,7 @@ use std::fmt;
 use serde::Serialize;
 
 /// 结构化错误码（稳定枚举，新增取值需走设计变更评审）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum IpcErrorCode {
     /// 请求体不是 JSON 对象，或 JSON 解析失败。
@@ -68,7 +68,7 @@ impl IpcErrorCode {
 }
 
 /// IPC 命令错误的线上形态：`{ "code": "...", "message": "...", "field": "..." }`。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 pub struct IpcError {
     pub code: IpcErrorCode,
     pub message: String,

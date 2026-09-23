@@ -594,6 +594,60 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+  # M3-01：T14 类型契约门禁（tauri-specta 重新生成 + git diff --exit-code）与
+  # EventStore/事件桥交付验证（D7/D8）。覆盖：bindings 生成物 diff、D7 全集
+  # 静态断言、EventStore 单测/集成（10×50 压力与缺口补齐）、慢消费不反压。
+  bindings-contract:
+    name: Bindings contract + M3-01 (T14)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: 安装 Tauri Linux 系统依赖（webkit2gtk 等）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      # keyring（sync-secret-service）经 libdbus-sys 构建，必须安装 libdbus 开发包。
+      - name: 安装 Linux 系统依赖（keyring/secret-service 需要 libdbus）
+        run: sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: M3-01 验证（T14 bindings diff + EventStore 单测/集成 + 事件桥慢消费不反压）
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/test/m3-01/verify-m3-01.mjs 2>&1 | tee m3-01-verify.log
+      - name: M3-01 失败诊断（公开 annotation，便于无凭据取证）
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "### M3-01 verify 失败输出（bindings/断言 + tail 30）"
+            echo '```text'
+            grep -E "阻断|命令缺失|事件通道|panicked|assertion|FAIL |error\[" m3-01-verify.log 2>/dev/null | tail -12 || true
+            echo '--- tail 30 ---'
+            tail -30 m3-01-verify.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -A 20 "===== verify-m3-01 =====" m3-01-verify.log 2>/dev/null | tail -12 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m3-01-summary::$line"
+          done
+          grep -E "阻断|命令缺失|事件通道|panicked|assertion" m3-01-verify.log 2>/dev/null | tail -4 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m3-01-assert::$line"
+          done
+          tail -4 m3-01-verify.log 2>/dev/null | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m3-01-tail::$line"
+          done
+
   # DoD3：覆盖率门禁（Rust cargo-llvm-cov + TS vitest --coverage，行覆盖 <70% 失败）
   coverage:
     name: Coverage gate (>=70% lines)

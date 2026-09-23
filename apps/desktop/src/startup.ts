@@ -80,8 +80,11 @@ export async function pickMigrationTarget(): Promise<string | null> {
   return result.target_dir ?? null;
 }
 
+/**
+ * 退出应用（ADR-006 v0.3：显式 `confirm:true`，与 `app_restart` 的 confirm 约定一致）。
+ */
 export async function exitApp(): Promise<void> {
-  await invoke("app_exit");
+  await invoke("app_exit", { payload: { confirm: true } });
 }
 
 /** 将 IPC 结构化错误转为可展示文本（`message` 优先，兜底 String(error)）。 */

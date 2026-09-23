@@ -13,10 +13,13 @@
 // （与 aether-core/store/adapters/control 同口径；集成测试各自在文件级豁免）。
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+pub mod bindings;
 pub mod config;
 pub mod core_health;
+pub mod event_bridge;
 pub mod ipc;
 pub mod isolation;
+pub mod json_payload;
 pub mod logging;
 pub mod nav;
 pub mod permission_loop;
@@ -131,7 +134,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
             // 单实例插件已初始化：此处才做「库打开 + quick_check」与管线启动（D2 顺序），
             // 并注入已 manage 的状态（窗口加载期状态始终可用）。
-            let bundle = build_backend(&startup_for_boot);
+            let bundle = build_backend(&startup_for_boot, app.handle());
             let _ = app.state::<ipc::IpcState>().install_backend(bundle.backend);
             // M2-08：应用退出编排接线（存储五步 + 适配器终止段；未接线则退出直接放行）。
             if let Some(orchestrator) = bundle.shutdown {
@@ -180,7 +183,10 @@ struct BackendBundle {
 /// - 启动失败（安全模式等）：按 D3 只读语义呈现为 `persist_degraded`（`degraded_backend`），
 ///   不回退 `not_implemented`；巡检不启动（无管线句柄）；退出编排仅保留已就绪的监督器；
 /// - 启动门阻断（A4 同步盘检测）：核心不启动；业务命令由启动门返回 `startup_blocked`。
-fn build_backend(startup: &std::sync::Arc<startup::StartupGate>) -> BackendBundle {
+fn build_backend(
+    startup: &std::sync::Arc<startup::StartupGate>,
+    app: &tauri::AppHandle,
+) -> BackendBundle {
     if startup.ensure_ready().is_err() {
         return BackendBundle {
             backend: std::sync::Arc::new(ipc::backend::NotImplementedBackend),
@@ -215,6 +221,14 @@ fn build_backend(startup: &std::sync::Arc<startup::StartupGate>) -> BackendBundl
                 if let Some(pipeline) = core.pipeline() {
                     let patrol = aether_control::ResourcePatrol::with_env();
                     let _patrol_task = patrol.start((**pipeline).clone(), &handle);
+                    // M3-01（D7/D8）：`aether://event` 事件桥接线（管线广播 → WebView 单通道）。
+                    // 桥接只读转发；慢消费 `Lagged(k)` 不阻塞管线（见 event_bridge 模块说明）。
+                    let metrics = event_bridge::spawn_app(app, pipeline);
+                    tracing::info!(
+                        channel = bindings::EVENT_CHANNEL,
+                        "事件桥已接线（采样计数见诊断）"
+                    );
+                    let _ = metrics;
                 }
                 let pipeline = core.pipeline().map(|pipeline| (**pipeline).clone());
                 (
