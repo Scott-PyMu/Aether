@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use aether_core::{ErrorInfo, EventEnvelope, EventPayload, EventType};
 use serde_json::{json, Value};
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
 
@@ -101,6 +102,10 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
+/// 事件出口（M3-02）：每条 `event` 通知的信封原样转发（生产 = 核心事件管线；
+/// 调用方负责会话/run 归属重写与归一化提交）。
+pub type EventSink = UnboundedSender<EventEnvelope>;
+
 /// 会话客户端错误。
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum SessionClientError {
@@ -128,6 +133,8 @@ struct ClientState {
     permission_requests: Vec<Value>,
     /// M2-10 权限回环（接线后每条通知经网关决议并下发 `permission.resolve`）。
     permission_loop: Option<Arc<PermissionLoop>>,
+    /// M3-02 事件出口（接线后每条 `event` 通知原样转发；未接线仅本地缓冲）。
+    event_sink: Option<EventSink>,
     /// `log` 通知。
     logs: Vec<Value>,
     /// 断连细节（`None` = 连接仍存活/未观察到断开）。
@@ -154,8 +161,20 @@ impl AdapterSessionClient {
         connection: Arc<AdapterConnection>,
         permission_loop: Option<Arc<PermissionLoop>>,
     ) -> Self {
+        Self::with_channels(connection, permission_loop, None)
+    }
+
+    /// 建立客户端并接线权限回环 + 事件出口（M3-02 生产接线）：
+    /// 每条 `event` 通知在本地投影后原样发送到 `event_sink`（有界性由调用方保证，
+    /// 出口为无界通道；核心侧转发任务负责丢弃/缓冲策略）。
+    pub fn with_channels(
+        connection: Arc<AdapterConnection>,
+        permission_loop: Option<Arc<PermissionLoop>>,
+        event_sink: Option<EventSink>,
+    ) -> Self {
         let state = Arc::new(Mutex::new(ClientState {
             permission_loop,
+            event_sink,
             ..ClientState::default()
         }));
         let notify = Arc::new(Notify::new());
@@ -475,11 +494,15 @@ async fn pump_notifications(
                 let Some(notification) = notification else {
                     break;
                 };
+                let mut forwarded: Option<(EventSink, EventEnvelope)> = None;
                 {
                     let mut guard = state.lock().await;
                     match notification {
                         AdapterNotification::Event(envelope) => {
                             let envelope = *envelope;
+                            if let Some(sink) = guard.event_sink.clone() {
+                                forwarded = Some((sink, envelope.clone()));
+                            }
                             let run_id = envelope.run_id.as_ref().map(|id| id.as_str().to_owned());
                             let event_type = envelope.event_type();
                             if let Some(run_id) = run_id.as_deref() {
@@ -572,6 +595,10 @@ async fn pump_notifications(
                         }
                         AdapterNotification::Other { .. } => {}
                     }
+                }
+                if let Some((sink, envelope)) = forwarded {
+                    // 无界通道发送非阻塞；接收端已关闭（核心退出）时静默丢弃。
+                    let _ = sink.send(envelope);
                 }
                 notify.notify_waiters();
             }

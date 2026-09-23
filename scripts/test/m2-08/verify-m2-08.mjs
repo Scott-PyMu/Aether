@@ -155,14 +155,20 @@ record("回归 m2-08 触及面：aether-adapters supervisor 单测", regression.
   const read = (relative) => readFileSync(path.join(repoRoot, relative), "utf8");
 
   const lib = read("crates/aether-tauri/src/lib.rs");
+  // M3-02：启动入口重构为 `boot_core_full`（同一启动序列 + 会话后端所需的
+  // 读/写/管线句柄；存储槽位仍共享给退出编排）。断言接受两者之一，意图不变。
+  const coreBootWired =
+    lib.includes("boot_core_full") || lib.includes("boot_core_health_with_slot");
   for (const [needle, label] of [
     ["run_supervisor_startup", "启动序列尾段（孤儿清理 + 预热 + 监控）接线"],
     ["install_shutdown", "退出编排注入"],
     ["shutdown::on_exit_requested", "ExitRequested 回调接线"],
     ["RunEvent::ExitRequested", "Tauri 退出事件"],
-    ["boot_core_health_with_slot", "存储槽位共享（退出五步关闭）"],
   ]) {
     if (!lib.includes(needle)) problems.push(`lib.rs 缺少${label}: ${needle}`);
+  }
+  if (!coreBootWired) {
+    problems.push("lib.rs 缺少核心启动接线（boot_core_full / boot_core_health_with_slot）");
   }
 
   const control = read("crates/aether-tauri/src/runtime_control.rs");

@@ -18,9 +18,11 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 0.25rem;
   min-height: 100vh;
+  padding: 2rem 0;
+  box-sizing: border-box;
 }
 
 .app-subtitle {
@@ -198,4 +200,330 @@ body {
   color: #e8a7a7;
   font-size: 0.85rem;
   margin: 0;
+}
+
+/* ===== M3-02：会话工作台（会话列表 / 运行时选择器 / 消息流 / 状态条） ===== */
+
+.workbench {
+  display: grid;
+  grid-template-columns: 18rem 1fr;
+  gap: 1rem;
+  width: min(72rem, 96vw);
+  margin: 1rem auto;
+  text-align: left;
+}
+
+.workbench-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.workbench-title {
+  font-size: 0.9rem;
+  color: #9aa0a6;
+  margin: 0.5rem 0 0.25rem;
+}
+
+.session-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.session-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  width: 100%;
+  text-align: left;
+  background-color: #1d2026;
+  border: 1px solid #3a3f47;
+  border-radius: 4px;
+  color: inherit;
+  cursor: pointer;
+  padding: 0.5rem 0.65rem;
+}
+
+.session-item.active {
+  border-color: #6f9dd8;
+  background-color: #1f2733;
+}
+
+.session-item-title {
+  font-weight: 600;
+}
+
+.session-item-status,
+.session-item-model {
+  color: #9aa0a6;
+  font-size: 0.8rem;
+}
+
+.session-empty,
+.runtime-empty {
+  color: #9aa0a6;
+  font-size: 0.85rem;
+}
+
+.runtime-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.runtime-option {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  text-align: left;
+  background-color: #1d2026;
+  border: 1px solid #3a3f47;
+  border-radius: 4px;
+  color: inherit;
+  cursor: pointer;
+  padding: 0.45rem 0.6rem;
+}
+
+.runtime-option.selected {
+  border-color: #6f9dd8;
+  background-color: #1f2733;
+}
+
+.runtime-status,
+.runtime-reason {
+  color: #9aa0a6;
+  font-size: 0.78rem;
+}
+
+.runtime-option[data-status="ready"] .runtime-status {
+  color: #8fd18f;
+}
+
+.runtime-option[data-status="degraded"] .runtime-status,
+.runtime-option[data-status="disabled"] .runtime-status {
+  color: #e8a7a7;
+}
+
+.capability-badge {
+  display: inline-block;
+  border: 1px solid #3a3f47;
+  border-radius: 999px;
+  color: #b9c0c7;
+  font-size: 0.7rem;
+  padding: 0 0.45rem;
+}
+
+.session-create {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.session-create input {
+  background-color: #1d2026;
+  border: 1px solid #3a3f47;
+  border-radius: 4px;
+  color: inherit;
+  padding: 0.45rem 0.6rem;
+}
+
+.session-create button,
+.session-status-bar button,
+.composer button {
+  background-color: #2a2f37;
+  border: 1px solid #3a3f47;
+  border-radius: 4px;
+  color: inherit;
+  cursor: pointer;
+  padding: 0.45rem 1rem;
+}
+
+.session-create button:disabled,
+.session-status-bar button:disabled,
+.composer button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.workbench-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.session-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  border: 1px solid #3a3f47;
+  border-radius: 4px;
+  padding: 0.45rem 0.65rem;
+}
+
+.last-ack {
+  color: #9aa0a6;
+  font-size: 0.8rem;
+}
+
+.message-stream {
+  position: relative;
+}
+
+.message-list {
+  border: 1px solid #3a3f47;
+  border-radius: 4px;
+}
+
+.message-bubble {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin: 0.4rem 0.6rem;
+  padding: 0.5rem 0.7rem;
+  border-radius: 6px;
+  background-color: #1d2026;
+  overflow: hidden;
+}
+
+.message-user {
+  border-left: 3px solid #6f9dd8;
+}
+
+.message-assistant {
+  border-left: 3px solid #8fd18f;
+}
+
+.message-role {
+  color: #9aa0a6;
+  font-size: 0.75rem;
+}
+
+.message-plain {
+  white-space: pre-wrap;
+}
+
+.message-streaming {
+  color: #8fd18f;
+  font-size: 0.75rem;
+}
+
+.stream-empty,
+.workbench-hint {
+  color: #9aa0a6;
+  font-size: 0.85rem;
+}
+
+.tool-calls {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  color: #b9c0c7;
+  font-size: 0.8rem;
+}
+
+.composer {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.composer textarea {
+  flex: 1;
+  min-height: 3.5rem;
+  background-color: #1d2026;
+  border: 1px solid #3a3f47;
+  border-radius: 4px;
+  color: inherit;
+  padding: 0.5rem 0.65rem;
+  resize: vertical;
+}
+
+.workbench-error {
+  color: #e8a7a7;
+  margin: 0;
+}
+
+.history-overflow {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  border: 1px solid #6b5a2e;
+  border-radius: 6px;
+  background-color: #241f14;
+  padding: 0.6rem 0.8rem;
+}
+
+.history-overflow button {
+  align-self: flex-start;
+  background-color: #2a2f37;
+  border: 1px solid #3a3f47;
+  border-radius: 4px;
+  color: inherit;
+  cursor: pointer;
+  padding: 0.4rem 0.9rem;
+}
+
+/* ===== Markdown 渲染 ===== */
+
+.md-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.md-heading {
+  margin: 0.2rem 0;
+}
+
+.md-quote {
+  border-left: 3px solid #3a3f47;
+  color: #b9c0c7;
+  margin: 0.2rem 0;
+  padding-left: 0.6rem;
+}
+
+.md-list {
+  margin: 0.2rem 0;
+  padding-left: 1.2rem;
+}
+
+.md-code-block {
+  background-color: #101216;
+  border: 1px solid #2a2f37;
+  border-radius: 4px;
+  margin: 0.2rem 0;
+  padding: 0.5rem 0.65rem;
+  overflow-x: auto;
+}
+
+.md-inline-code {
+  background-color: #101216;
+  border-radius: 3px;
+  padding: 0 0.25rem;
+}
+
+.md-code-block [data-token="comment"] {
+  color: #7f8c98;
+}
+
+.md-code-block [data-token="string"] {
+  color: #a5d6a7;
+}
+
+.md-code-block [data-token="number"] {
+  color: #f6b26b;
+}
+
+.md-code-block [data-token="keyword"] {
+  color: #82aaff;
 }

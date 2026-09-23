@@ -108,6 +108,10 @@ record(
   "verify-m3-01（前端骨架/类型绑定 T14/EventStore：生成物 diff 校验 + D7 全集静态断言 + 去重/乱序/补读/>10k/16ms/压力/gap 补齐 + 事件桥慢消费不反压）",
   run(node, [path.join(repoRoot, "scripts", "test", "m3-01", "verify-m3-01.mjs")]),
 );
+record(
+  "verify-m3-02（会话工作台：创建/发送/流式/中断 E2E + 运行时选择器 + 模型透传 + 10k 滚动基准 + messages_page 真实后端与生产补读路径；需 Bun）",
+  run(node, [path.join(repoRoot, "scripts", "test", "m3-02", "verify-m3-02.mjs")]),
+);
 
 if (!quick) {
   record("verify-coverage-gate", run(node, [path.join(repoRoot, "scripts", "test", "verify-coverage-gate.mjs")]));

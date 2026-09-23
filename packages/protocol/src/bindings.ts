@@ -171,7 +171,12 @@ export type IpcErrorCode =
  */
 "core_not_ready" | 
 /**  命令尚未实现（框架就绪，实现随对应里程碑落地）。 */
-"not_implemented";
+"not_implemented" | 
+/**
+ *  补读缺口过大（D4：>10k 拒绝自动补发；与核心管线 `readback_gap_too_large`
+ *  同码透传，M3-02 属主承接项，实施计划 v1.15）。
+ */
+"readback_gap_too_large";
 
 /**  IPC 命令错误的线上形态：`{ "code": "...", "message": "...", "field": "..." }`。 */
 export type IpcError_Deserialize = {

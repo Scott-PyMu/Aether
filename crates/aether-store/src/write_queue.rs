@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use aether_core::{EventEnvelope, SessionId};
+use aether_core::{EventEnvelope, Message, SessionId};
 use rusqlite::{params, Connection};
 use serde_json::Value;
 use tokio::runtime::Handle;
@@ -607,6 +607,92 @@ impl ReadPool {
         self.with_connection(move |conn| read_events_page(conn, &session, after_seq, limit))
             .await
     }
+
+    /// 最近一页事件（按 seq 降序取 `limit` 条后升序返回；M3-02 缓存清空后重载）。
+    ///
+    /// 语义与 [`ReadPool::events_page`] 的升序输出一致；`limit` 为 0 时返回空。
+    pub async fn events_latest(
+        &self,
+        session_id: &SessionId,
+        limit: usize,
+    ) -> Result<Vec<EventEnvelope>, StoreError> {
+        let session = session_id.as_str().to_owned();
+        self.with_connection(move |conn| read_events_latest(conn, &session, limit))
+            .await
+    }
+
+    /// 最近一页消息（按 seq 降序取 `limit` 条后升序返回；M3-02 工作台消息基线）。
+    ///
+    /// 与 [`ReadPool::messages_page`]（`after_seq = None` 从会话起点读）语义区分：
+    /// 本方法取**尾部**一页（缓存清空后重载工作台基线）；输出升序，与
+    /// [`ReadPool::events_latest`] 同口径。`messages.seq` 与 `events.seq` 为两条
+    /// 独立序列；`limit` 为 0 时返回空。
+    pub async fn messages_latest(
+        &self,
+        session_id: &SessionId,
+        limit: usize,
+    ) -> Result<Vec<Message>, StoreError> {
+        let session = session_id.as_str().to_owned();
+        self.with_connection(move |conn| read_messages_latest(conn, &session, limit))
+            .await
+    }
+}
+
+/// 最近一页消息实现（降序取 + 反转，保持升序契约；列与 `ops::messages_page` 一致）。
+fn read_messages_latest(
+    connection: &Connection,
+    session_id: &str,
+    limit: usize,
+) -> Result<Vec<Message>, StoreError> {
+    let limit = i64::try_from(limit).map_err(|_| StoreError::Internal {
+        reason: format!("分页上限超出 SQLite INTEGER 范围: {limit}"),
+    })?;
+    let mut statement = connection.prepare(
+        "SELECT id, session_id, run_id, client_msg_id, role, content, content_parts, tool_calls, \
+         parent_message_id, seq, created_at FROM messages \
+         WHERE session_id = ?1 ORDER BY seq DESC LIMIT ?2",
+    )?;
+    let rows = statement.query_map(params![session_id, limit], crate::ops::read_message_row)?;
+    let mut messages = Vec::new();
+    for row in rows {
+        messages.push(row?);
+    }
+    messages.reverse();
+    Ok(messages)
+}
+
+/// 最近一页事件实现（降序取 + 反转，保持升序契约）。
+fn read_events_latest(
+    connection: &Connection,
+    session_id: &str,
+    limit: usize,
+) -> Result<Vec<EventEnvelope>, StoreError> {
+    let limit = i64::try_from(limit).map_err(|_| StoreError::Internal {
+        reason: format!("分页上限超出 SQLite INTEGER 范围: {limit}"),
+    })?;
+    let mut statement = connection.prepare(
+        "SELECT id, session_id, run_id, runtime_id, seq, type, payload, ts, v \
+         FROM events WHERE session_id = ?1 ORDER BY seq DESC LIMIT ?2",
+    )?;
+    let rows = statement.query_map(params![session_id, limit], |row| {
+        Ok(StoredEventRow {
+            id: row.get(0)?,
+            session_id: row.get(1)?,
+            run_id: row.get(2)?,
+            runtime_id: row.get(3)?,
+            seq: row.get(4)?,
+            event_type: row.get(5)?,
+            payload: row.get(6)?,
+            ts: row.get(7)?,
+            v: row.get(8)?,
+        })
+    })?;
+    let mut events = Vec::new();
+    for row in rows {
+        events.push(row?.into_envelope()?);
+    }
+    events.reverse();
+    Ok(events)
 }
 
 /// 关闭序列步骤（D2：`写队列 drain → 关闭全部读连接 → wal_checkpoint(TRUNCATE)
@@ -1615,5 +1701,53 @@ mod tests {
         ShutdownConfig::default()
             .validate()
             .expect("默认关闭序列配置必须合法");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn messages_latest_reads_tail_in_ascending_order() {
+        let dir = tempfile::TempDir::new().expect("临时目录");
+        let path = dir.path().join("aether.db");
+        drop(Store::open(&path).expect("建库并迁移"));
+        {
+            let connection = Store::open_writer_connection(&path).expect("写连接");
+            connection
+                .execute_batch(
+                    "INSERT INTO runtimes (id, name, kind, version, created_at, updated_at) \
+                     VALUES ('mock', 'Mock', 'mock', '0.1.0', 1, 1);\
+                     INSERT INTO sessions (id, runtime_id, title, status, created_at, updated_at) \
+                     VALUES ('01J0000000000000000000000A', 'mock', 't', 'idle', 1, 1);",
+                )
+                .expect("种子运行时与会话");
+            for index in 1..=3i64 {
+                connection
+                    .execute(
+                        "INSERT INTO messages (id, session_id, role, content, seq, created_at) \
+                         VALUES (?1, '01J0000000000000000000000A', 'user', ?2, ?3, 1)",
+                        params![
+                            format!("01J000000000000000000000M{index}"),
+                            format!("m{index}"),
+                            index
+                        ],
+                    )
+                    .expect("插入消息");
+            }
+        }
+        let reads = ReadPool::open(&path, 1).expect("读连接池");
+        let session = SessionId::new("01J0000000000000000000000A").expect("会话 id");
+
+        let tail = reads.messages_latest(&session, 2).await.expect("最近一页");
+        let seqs: Vec<u64> = tail.iter().map(|message| message.seq).collect();
+        assert_eq!(seqs, vec![2, 3], "尾部 limit 条（升序契约）");
+        assert_eq!(tail[0].content, "m2");
+
+        let zero = reads.messages_latest(&session, 0).await.expect("limit=0");
+        assert!(zero.is_empty());
+
+        let missing = SessionId::new("01J0000000000000000000009Z").expect("会话 id");
+        assert!(reads
+            .messages_latest(&missing, 2)
+            .await
+            .expect("无消息会话")
+            .is_empty());
     }
 }

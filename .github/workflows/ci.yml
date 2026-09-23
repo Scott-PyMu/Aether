@@ -648,6 +648,64 @@ jobs:
             echo "::error title=m3-01-tail::$line"
           done
 
+  # M3-02：会话工作台（UI-01/02/05 + D7；实施计划 v1.15 属主承接项）。
+  # 覆盖：工作台 E2E（创建/发送/流式/中断）、运行时选择器、模型透传、10k 滚动基准、
+  # messages_page 真实后端与生产补读路径（aetherStore 注入 + readback_gap_too_large
+  # 同码透传 + 缺口 >10k 确认重载）、真实 Mock 适配器会话链路（RunExecutor 接线）。
+  session-workbench:
+    name: Session workbench (M3-02)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: 安装 Tauri Linux 系统依赖（webkit2gtk 等）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: 安装 Linux 系统依赖（keyring/secret-service 需要 libdbus）
+        run: sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: M3-02 验证（工作台 E2E + 运行时选择器 + 模型透传 + 10k 滚动 + 生产补读路径 + 真实 Mock 会话链路）
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/test/m3-02/verify-m3-02.mjs 2>&1 | tee m3-02-verify.log
+      - name: M3-02 失败诊断（公开 annotation，便于无凭据取证）
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "### M3-02 verify 失败输出（断言 + tail 30）"
+            echo '```text'
+            grep -E "阻断|缺少|panicked|assertion|FAIL |error\[|AssertionError" m3-02-verify.log 2>/dev/null | tail -12 || true
+            echo '--- tail 30 ---'
+            tail -30 m3-02-verify.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -A 20 "===== verify-m3-02 =====" m3-02-verify.log 2>/dev/null | tail -12 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m3-02-summary::$line"
+          done
+          grep -E "阻断|缺少|panicked|assertion|AssertionError" m3-02-verify.log 2>/dev/null | tail -4 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m3-02-assert::$line"
+          done
+          tail -4 m3-02-verify.log 2>/dev/null | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m3-02-tail::$line"
+          done
+
   # DoD3：覆盖率门禁（Rust cargo-llvm-cov + TS vitest --coverage，行覆盖 <70% 失败）
   coverage:
     name: Coverage gate (>=70% lines)

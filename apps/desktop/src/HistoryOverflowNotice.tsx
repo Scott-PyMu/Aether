@@ -10,9 +10,12 @@ import { useSessionEvents } from "./useSessionEvents";
 export function HistoryOverflowNotice({
   store,
   sessionId,
+  onReload,
 }: {
   store: EventStore;
   sessionId: string;
+  /** 重载完成后回调（M3-02 工作台：同步重载消息基线）。 */
+  onReload?: () => void;
 }) {
   const { historyTooLarge, reloadPending, reloadLimit, error } =
     useSessionEvents(store, sessionId);
@@ -39,7 +42,9 @@ export function HistoryOverflowNotice({
         data-testid="history-reload"
         disabled={reloadPending}
         onClick={() => {
-          void store.confirmReload(sessionId);
+          void store.confirmReload(sessionId).then(() => {
+            onReload?.();
+          });
         }}
       >
         重新加载最近 {reloadLimit} 条

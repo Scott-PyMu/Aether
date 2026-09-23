@@ -43,6 +43,9 @@ pub enum IpcErrorCode {
     CoreNotReady,
     /// 命令尚未实现（框架就绪，实现随对应里程碑落地）。
     NotImplemented,
+    /// 补读缺口过大（D4：>10k 拒绝自动补发；与核心管线 `readback_gap_too_large`
+    /// 同码透传，M3-02 属主承接项，实施计划 v1.15）。
+    ReadbackGapTooLarge,
 }
 
 impl IpcErrorCode {
@@ -63,6 +66,7 @@ impl IpcErrorCode {
             Self::Internal => "internal",
             Self::CoreNotReady => "core_not_ready",
             Self::NotImplemented => "not_implemented",
+            Self::ReadbackGapTooLarge => "readback_gap_too_large",
         }
     }
 }

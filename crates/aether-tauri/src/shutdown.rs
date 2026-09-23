@@ -187,6 +187,8 @@ pub struct AppShutdown {
     supervisor: Option<Arc<Supervisor>>,
     storage: Option<Arc<StorageSlot>>,
     monitors: Mutex<Vec<(String, JoinHandle<()>)>>,
+    /// 会话管理器（M3-02）：退出时停止看门狗/事件监听后台任务。
+    session_manager: Mutex<Option<aether_control::SessionManager>>,
     handle: tokio::runtime::Handle,
     budget: Duration,
 }
@@ -204,9 +206,19 @@ impl AppShutdown {
             supervisor,
             storage,
             monitors: Mutex::new(monitors),
+            session_manager: Mutex::new(None),
             handle,
             budget: APP_EXIT_BUDGET,
         })
+    }
+
+    /// 接线会话管理器（M3-02；退出序列先停其后台任务，再进入管线/存储关闭）。
+    pub fn install_session_manager(&self, manager: aether_control::SessionManager) {
+        let mut slot = match self.session_manager.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *slot = Some(manager);
     }
 
     /// 退出预算（测试可观测）。
@@ -227,6 +239,18 @@ impl AppShutdown {
             };
             for (_, handle) in monitors.drain(..) {
                 handle.abort();
+            }
+        }
+
+        // 0.5 停止会话管理器后台任务（M3-02：看门狗/事件监听/中断监听），
+        //     避免关闭期间仍有看门狗对已终态 run 落库。
+        {
+            let manager = match self.session_manager.lock() {
+                Ok(mut guard) => guard.take(),
+                Err(poisoned) => poisoned.into_inner().take(),
+            };
+            if let Some(manager) = manager {
+                manager.shutdown_background().await;
             }
         }
 

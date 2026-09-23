@@ -360,19 +360,51 @@ pub fn boot_core_health_with_slot(
     handle: &tokio::runtime::Handle,
     runtimes: Arc<dyn RuntimeSummarySource>,
 ) -> Result<(CoreHealthBackend, Arc<StorageSlot>), CoreHealthBootError> {
+    boot_core_full(data_dir, handle, runtimes).map(|boot| (boot.backend, boot.storage))
+}
+
+/// 核心启动结果（M3-02：额外暴露读连接池/写队列/管线句柄，供会话后端复用）。
+pub struct CoreBoot {
+    pub backend: CoreHealthBackend,
+    pub storage: Arc<StorageSlot>,
+    pub reads: aether_store::ReadPool,
+    pub write: aether_store::WriteQueue,
+    pub pipeline: EventPipeline,
+}
+
+/// 生产启动（M3-02 会话后端接线版本）。
+///
+/// 与 [`boot_core_health_with_slot`] 同一启动序列；额外返回读/写/管线句柄
+/// （均为克隆共享句柄，生命周期锚点仍在 [`StorageSlot`]）。
+pub fn boot_core_full(
+    data_dir: &Path,
+    handle: &tokio::runtime::Handle,
+    runtimes: Arc<dyn RuntimeSummarySource>,
+) -> Result<CoreBoot, CoreHealthBootError> {
     let db_path = data_dir.join("aether.db");
     let storage = StoreRuntime::open(&db_path, WriteQueueConfig::default(), handle)
         .map_err(CoreHealthBootError::Storage)?;
-    let journal = Arc::new(StoreJournal::new(storage.queue().clone()));
-    let source = Arc::new(StoreEventSource::new(storage.reads().clone()));
+    let reads = storage.reads().clone();
+    let write = storage.queue().clone();
+    let journal = Arc::new(StoreJournal::new(write.clone()));
+    let source = Arc::new(StoreEventSource::new(reads.clone()));
     let startup = StartupSelfCheckReport::passing(SPACE_GUARD_MIN_FREE_BYTES);
     let pipeline =
         EventPipeline::start(PipelineConfig::default(), journal, source, &startup, handle)
             .map_err(CoreHealthBootError::Pipeline)?;
     let slot = Arc::new(StorageSlot::new(storage));
-    let backend =
-        CoreHealthBackend::from_pipeline_with_slot(pipeline, runtimes, Some(Arc::clone(&slot)));
-    Ok((backend, slot))
+    let backend = CoreHealthBackend::from_pipeline_with_slot(
+        pipeline.clone(),
+        runtimes,
+        Some(Arc::clone(&slot)),
+    );
+    Ok(CoreBoot {
+        backend,
+        storage: slot,
+        reads,
+        write,
+        pipeline,
+    })
 }
 
 fn now_ms() -> i64 {

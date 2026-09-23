@@ -13,6 +13,7 @@
 // （与 aether-core/store/adapters/control 同口径；集成测试各自在文件级豁免）。
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+pub mod adapter_executor;
 pub mod bindings;
 pub mod config;
 pub mod core_health;
@@ -25,6 +26,7 @@ pub mod nav;
 pub mod permission_loop;
 pub mod picker;
 pub mod runtime_control;
+pub mod session_backend;
 pub mod shutdown;
 pub mod single_instance;
 pub mod startup;
@@ -213,28 +215,67 @@ fn build_backend(
         None => std::sync::Arc::new(core_health::StaticRuntimeSummaries::unwired()),
     };
 
-    let (health, storage_slot, pipeline) =
-        match core_health::boot_core_health_with_slot(&data_dir, &handle, runtimes) {
-            Ok((core, slot)) => {
+    // M3-02：会话后端（生命周期 + 适配器执行器 + 消息分页）随核心启动接线。
+    let mut session_manager: Option<aether_control::SessionManager> = None;
+    let mut adapter_executor: Option<std::sync::Arc<adapter_executor::AdapterRunExecutor>> = None;
+    let (health, storage_slot, pipeline, reads) =
+        match core_health::boot_core_full(&data_dir, &handle, runtimes) {
+            Ok(boot) => {
+                let core_health::CoreBoot {
+                    backend: core,
+                    storage: slot,
+                    reads,
+                    write,
+                    pipeline,
+                } = boot;
                 // M2-07 DoD3：核心 RSS 巡检（2GB 告警 / 2.5GB 强制 delta 限流；
                 // env 钩子供测试/演练注入阈值）。任务随应用生命周期存活（detached）。
-                if let Some(pipeline) = core.pipeline() {
+                {
                     let patrol = aether_control::ResourcePatrol::with_env();
-                    let _patrol_task = patrol.start((**pipeline).clone(), &handle);
+                    let _patrol_task = patrol.start(pipeline.clone(), &handle);
                     // M3-01（D7/D8）：`aether://event` 事件桥接线（管线广播 → WebView 单通道）。
                     // 桥接只读转发；慢消费 `Lagged(k)` 不阻塞管线（见 event_bridge 模块说明）。
-                    let metrics = event_bridge::spawn_app(app, pipeline);
+                    let metrics = event_bridge::spawn_app(app, &pipeline);
                     tracing::info!(
                         channel = bindings::EVENT_CHANNEL,
                         "事件桥已接线（采样计数见诊断）"
                     );
                     let _ = metrics;
                 }
-                let pipeline = core.pipeline().map(|pipeline| (**pipeline).clone());
+                // M3-02：真实 run 执行器（适配器会话客户端）；权限网关接线随工作区
+                // （M3-08）落地——当前以 `None` 交付，不伪造回环（D9 边界）。
+                let executor = supervisor.as_ref().map(|supervisor| {
+                    std::sync::Arc::new(adapter_executor::AdapterRunExecutor::new(
+                        std::sync::Arc::clone(supervisor),
+                        pipeline.clone(),
+                        reads.clone(),
+                        write.clone(),
+                        handle.clone(),
+                        None,
+                    ))
+                });
+                let run_executor: std::sync::Arc<dyn aether_control::RunExecutor> = match &executor
+                {
+                    Some(executor) => executor.clone(),
+                    None => std::sync::Arc::new(adapter_executor::UnavailableExecutor),
+                };
+                let manager = aether_control::SessionManager::new(
+                    aether_control::LifecycleConfig::default(),
+                    std::sync::Arc::new(aether_control::SystemClock),
+                    write,
+                    reads.clone(),
+                    pipeline.clone(),
+                    run_executor,
+                );
+                let background = manager.spawn_background(&handle);
+                tracing::info!(background, "会话生命周期后台任务已启动（看门狗/事件监听）");
+                session_manager = Some(manager);
+                adapter_executor = executor;
                 (
                     std::sync::Arc::new(core) as std::sync::Arc<dyn ipc::IpcBackend>,
                     Some(slot),
-                    pipeline,
+                    Some(pipeline),
+                    Some(reads),
                 )
             }
             Err(error) => {
@@ -242,6 +283,7 @@ fn build_backend(
                 (
                     std::sync::Arc::new(core_health::degraded_backend(&error.to_string()))
                         as std::sync::Arc<dyn ipc::IpcBackend>,
+                    None,
                     None,
                     None,
                 )
@@ -275,27 +317,40 @@ fn build_backend(
     };
 
     let orchestrator = if supervisor.is_some() || pipeline.is_some() || storage_slot.is_some() {
-        Some(shutdown::AppShutdown::new(
+        let orchestrator = shutdown::AppShutdown::new(
             pipeline,
             supervisor.clone(),
             storage_slot,
             monitors,
             handle.clone(),
-        ))
+        );
+        if let Some(manager) = &session_manager {
+            orchestrator.install_session_manager(manager.clone());
+        }
+        Some(orchestrator)
     } else {
         None
     };
 
     let control: Option<std::sync::Arc<dyn runtime_control::RuntimeControl>> =
-        supervisor.map(|supervisor| {
+        supervisor.clone().map(|supervisor| {
             std::sync::Arc::new(runtime_control::SupervisorControl::new(
                 supervisor,
-                handle,
+                handle.clone(),
                 runtime_control::RUNTIME_CONTROL_TIMEOUT,
             )) as std::sync::Arc<dyn runtime_control::RuntimeControl>
         });
+    let inner: std::sync::Arc<dyn ipc::IpcBackend> =
+        std::sync::Arc::new(runtime_control::RuntimeControlBackend::new(health, control));
     BackendBundle {
-        backend: std::sync::Arc::new(runtime_control::RuntimeControlBackend::new(health, control)),
+        backend: std::sync::Arc::new(session_backend::SessionBackend::new(
+            inner,
+            session_manager,
+            adapter_executor,
+            reads,
+            supervisor,
+            handle,
+        )),
         shutdown: orchestrator,
     }
 }

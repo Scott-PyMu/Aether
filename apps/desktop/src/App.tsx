@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { EventBridgeIndicator } from "./EventBridgeIndicator";
 import { HealthMonitor } from "./HealthMonitor";
+import { SessionWorkbench } from "./SessionWorkbench";
 import { StartupGate } from "./StartupGate";
 import { describeIpcError, fetchStartup, type StartupSnapshot } from "./startup";
 
@@ -66,6 +67,7 @@ export function App() {
       </p>
       <HealthMonitor />
       <EventBridgeIndicator />
+      <SessionWorkbench />
     </main>
   );
 }

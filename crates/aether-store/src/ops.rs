@@ -67,6 +67,13 @@ pub enum StoreCommand {
         updated_at: i64,
         closed_at: Option<i64>,
     },
+    /// 更新会话私有配置（`sessions.config`；M3-02：`native_id` 等适配器映射，
+    /// 调用方负责与既有配置合并后整体写入，本层不做键级合并）。
+    UpdateSessionConfig {
+        session_id: SessionId,
+        config: serde_json::Value,
+        updated_at: i64,
+    },
     /// 插入 run 行。
     InsertRun { run: Run },
     /// 启动排队中的 run（`queued → running`，记录 `started_at`）。
@@ -201,6 +208,22 @@ pub(crate) fn apply_command(
                     "UPDATE sessions SET status = ?2, updated_at = ?3, \
                      closed_at = CASE WHEN ?4 IS NULL THEN closed_at ELSE ?4 END WHERE id = ?1",
                     params![session_id.as_str(), status.as_str(), updated_at, closed_at],
+                )
+                .map_err(txn_failed)?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::Applied { affected })
+        }
+        StoreCommand::UpdateSessionConfig {
+            session_id,
+            config,
+            updated_at,
+        } => {
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            let config = json_text(config)?;
+            let affected = transaction
+                .execute(
+                    "UPDATE sessions SET config = ?2, updated_at = ?3 WHERE id = ?1",
+                    params![session_id.as_str(), config, updated_at],
                 )
                 .map_err(txn_failed)?;
             transaction.commit().map_err(txn_failed)?;
@@ -801,7 +824,7 @@ fn read_run_row(row: &Row<'_>) -> rusqlite::Result<Run> {
     })
 }
 
-fn read_message_row(row: &Row<'_>) -> rusqlite::Result<Message> {
+pub(crate) fn read_message_row(row: &Row<'_>) -> rusqlite::Result<Message> {
     let role: String = row.get(4)?;
     let role = role
         .parse::<MessageRole>()
