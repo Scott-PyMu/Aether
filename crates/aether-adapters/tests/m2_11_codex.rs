@@ -8,7 +8,8 @@
 //! - 中断：5s 内返回、`run.cancelled`、Codex CLI 进程树整树回收；
 //! - 幂等（`client_msg_id`）与 dispose 后拒绝；
 //! - Mode R：别名映射跨适配器进程 `exec resume` 恢复；
-//! - T5a：外部强杀 → 30s 内 Ready + 在途 run 收口 + Mode R 重放；
+//! - T5a：外部强杀 → 30s 内 Ready + 在途 run 收口（`Disconnected` / `Failed(cli_exit)`
+//!   显式仲裁，P1 加固）+ Mode R 重放；
 //! - 夹具 20 次完成率代理（真实端点 50 次为 opt-in，见 `verify-m2-11`）。
 //!
 //! 运行：`AETHER_CODEX_ADAPTER=<编译产物> cargo test -p aether-adapters --test m2_11_codex -- --nocapture`
@@ -19,16 +20,14 @@ mod common;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use aether_adapters::session_client::{
-    AdapterSessionClient, RunOutcome, SessionClientError, ADAPTER_DISCONNECTED_CODE,
-};
+use aether_adapters::session_client::{AdapterSessionClient, RunOutcome, SessionClientError};
 use aether_adapters::supervisor::{
     kill_tree_system, AdapterLedger, AdmissionPolicy, HeartbeatConfig, RuntimeManifest,
     RuntimeSpec, StartOutcome, Supervisor, SupervisorConfig, SysinfoProbe, SystemTreeKiller,
     TerminationBudget,
 };
 use aether_adapters::RequestError;
-use aether_core::{EventPayload, EventType, RuntimeStatus};
+use aether_core::{ErrorInfo, EventPayload, EventType, RuntimeStatus};
 use serde_json::json;
 
 fn delta_text(events: &[aether_core::EventEnvelope], run_id: &str) -> String {
@@ -625,11 +624,10 @@ async fn t5a_kill_codex_adapter_ready_within_30s_and_replay() {
         .wait_run_outcome(&inflight.run_id, Duration::from_secs(30))
         .await
         .expect("在途 run 必须收口");
-    assert!(
-        matches!(outcome, RunOutcome::Disconnected { .. }),
-        "{outcome:?}"
-    );
-    assert_eq!(outcome.error_code(), Some(ADAPTER_DISCONNECTED_CODE));
+    // P1 加固（M2-Gate2 报告 §7 #1）：整树强杀（taskkill /T /F）下适配器可能先上报
+    // CLI 子进程退出（Failed(cli_exit)）再断连；两种收口均为合法终态且可重试。
+    let closure = common::assert_t5a_inflight_closure(&outcome);
+    println!("[m2-11 codex T5a] 在途 run 收口={closure}（整树强杀竞态仲裁）");
 
     let ready = common::wait_for_async(
         || async {
@@ -709,4 +707,74 @@ async fn fixture_twenty_runs_all_reach_terminal_state() {
     println!("[m2-11 codex] 夹具 20 次完成率 = {completed}/{total}（{rate:.2}）");
     assert!(rate >= 0.95, "完成率必须 ≥95%（实测 {completed}/{total}）");
     harness.shutdown().await;
+}
+
+/// P1 加固自检（M2-Gate2 报告 §7 #1）：T5a 收口仲裁显式且收窄——
+/// 接受 `Disconnected(adapter_disconnected)` 与 `Failed(cli_exit, recoverable=true)`，
+/// 拒绝 Completed/Cancelled、非 `cli_exit` 的 Failed、以及不可重试的 Failed。
+#[test]
+fn t5a_closure_arbitration_is_explicit_and_narrow() {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    let disconnected = RunOutcome::Disconnected {
+        detail: "连接断开".to_owned(),
+    };
+    assert_eq!(
+        common::assert_t5a_inflight_closure(&disconnected),
+        "disconnected"
+    );
+
+    let cli_exit = RunOutcome::Failed {
+        error: ErrorInfo {
+            code: "cli_exit".to_owned(),
+            message: "exit=1".to_owned(),
+            recoverable: true,
+        },
+    };
+    assert_eq!(
+        common::assert_t5a_inflight_closure(&cli_exit),
+        "failed:cli_exit"
+    );
+
+    let completed = RunOutcome::Completed {
+        assistant_text: None,
+        usage: None,
+    };
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| common::assert_t5a_inflight_closure(
+            &completed
+        )))
+        .is_err(),
+        "Completed 不属于 T5a 强杀收口"
+    );
+
+    let non_recoverable = RunOutcome::Failed {
+        error: ErrorInfo {
+            code: "cli_exit".to_owned(),
+            message: "exit=1".to_owned(),
+            recoverable: false,
+        },
+    };
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| common::assert_t5a_inflight_closure(
+            &non_recoverable
+        )))
+        .is_err(),
+        "recoverable=false 的收口必须被拒（可重试为硬要求）"
+    );
+
+    let other_code = RunOutcome::Failed {
+        error: ErrorInfo {
+            code: "api_error".to_owned(),
+            message: "503".to_owned(),
+            recoverable: true,
+        },
+    };
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| common::assert_t5a_inflight_closure(
+            &other_code
+        )))
+        .is_err(),
+        "非 cli_exit 的 Failed 必须被拒（不得放宽为任意终态）"
+    );
 }

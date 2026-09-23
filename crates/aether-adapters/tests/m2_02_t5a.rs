@@ -5,8 +5,10 @@
 //! 2. `remember:<token>` 完成（建立原生会话上下文）→ `slow` 在途流式；
 //! 3. 跨平台强杀 helper（Unix `SIGKILL` 进程组 / Windows Job Object+`taskkill`，复用 M1-10）
 //!    外部强杀适配器进程；
-//! 4. 在途 run 由会话客户端收口为 `Disconnected(adapter_disconnected)`（错误码供核心落
-//!    `run.failed`；M2-01 生命周期对执行器 Failed 的落库路径已有覆盖）；
+//! 4. 在途 run 由会话客户端收口（P1 加固：`Disconnected(adapter_disconnected)` 或
+//!    `Failed(cli_exit)`——整树强杀下 CLI 子进程先退出的竞态分支，二者均为终态且可重试；
+//!    收口仲裁见 `common::assert_t5a_inflight_closure`；M2-01 生命周期对执行器 Failed
+//!    的落库路径已有覆盖）；
 //! 5. 监督器监控循环自动 `Degraded(crashed) → Starting → Ready`，断言墙钟 ≤30s；
 //! 6. 新连接以 `native_id`（Mode R）恢复原生会话重放「recall」→ 命中口令，每个 run 均有终态。
 //!
@@ -18,9 +20,7 @@ mod common;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use aether_adapters::session_client::{
-    AdapterSessionClient, RunOutcome, ADAPTER_DISCONNECTED_CODE,
-};
+use aether_adapters::session_client::{AdapterSessionClient, RunOutcome};
 use aether_adapters::supervisor::{
     kill_tree_system, AdapterLedger, AdmissionPolicy, HeartbeatConfig, RuntimeManifest,
     RuntimeSpec, StartOutcome, Supervisor, SupervisorConfig, SysinfoProbe, SystemTreeKiller,
@@ -151,16 +151,15 @@ async fn t5a_kill_adapter_ready_within_30s_inflight_failed_and_mode_r_replay() {
     // 跨平台强杀 helper（ADR-003/ADR-004；与 M1-10 终止序列同口径）。
     kill_tree_system(adapter_pid).expect("外部强杀注入");
 
-    // 在途 run：连接断开 → 客户端收口 Disconnected（核心据此落 run.failed）。
+    // 在途 run：连接断开 → 客户端收口（P1 加固：整树强杀竞态下的显式收口仲裁，见
+    // `common::assert_t5a_inflight_closure`——Disconnected / Failed(cli_exit) 二者均为
+    // 合法终态且可重试；不得放宽为任意终态）。
     let outcome = client1
         .wait_run_outcome(&inflight.run_id, Duration::from_secs(30))
         .await
         .expect("在途 run 必须收口（不得挂起）");
-    assert!(
-        matches!(outcome, RunOutcome::Disconnected { .. }),
-        "期望 Disconnected，实际 {outcome:?}"
-    );
-    assert_eq!(outcome.error_code(), Some(ADAPTER_DISCONNECTED_CODE));
+    let closure = common::assert_t5a_inflight_closure(&outcome);
+    println!("[m2-02 T5a] 在途 run 收口={closure}（整树强杀竞态仲裁）");
 
     // 监督器自动恢复 Ready（墙钟 ≤30s）。
     let ready = common::wait_for_async(

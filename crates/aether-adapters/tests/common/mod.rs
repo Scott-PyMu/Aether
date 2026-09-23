@@ -574,7 +574,9 @@ where
 
 // ===== M2-02：Claude Code 适配器集成测试支持（fake-claude CLI 夹具）=====
 
-use aether_adapters::session_client::AdapterSessionClient;
+use aether_adapters::session_client::{
+    AdapterSessionClient, RunOutcome, ADAPTER_DISCONNECTED_CODE,
+};
 use std::ffi::OsString;
 use std::path::Path;
 use std::sync::Arc;
@@ -697,6 +699,46 @@ impl ClaudeHarness {
         let _ = self.client.shutdown().await;
         let _ = self.process.wait_timeout(Duration::from_secs(5)).await;
         let _ = self.process.kill().await;
+    }
+}
+
+// ===== T5a 收口仲裁（P1 加固；M2-Gate2 验收报告 §7 #1）=====
+
+/// 断言 T5a 外部强杀下在途 run 的收口（终态、可重试），返回收口分类供证据打印。
+///
+/// 背景：整树强杀 helper（`kill_tree_system`：Windows `taskkill /T /F` / Unix 进程组
+/// `SIGKILL`）同时终止适配器与其 CLI 子进程，Windows 下存在调度窗口——适配器可能先
+/// 观测到 CLI 子进程退出并上报 `run.failed(cli_exit)`，随后自身才断连。两种收口均为
+/// DoD 口径下的合法终态（「在途 run 标 failed 且可重试」、不得挂起）：
+/// - `Disconnected(adapter_disconnected)`：适配器本体先终止（Unix / 多数运行）；
+/// - `Failed(cli_exit)`：适配器先上报 CLI 退出（Gate 2 实测 1/5 复现）。
+///
+/// 收敛必须显式且收窄：仅允许上述两种分支 + 对应错误码，`Failed` 分支额外要求
+/// `recoverable=true`；不得放宽为「任意终态」。Mode R 重放断言由各用例保留。
+pub fn assert_t5a_inflight_closure(outcome: &RunOutcome) -> &'static str {
+    match outcome {
+        RunOutcome::Disconnected { .. } => {
+            assert_eq!(
+                outcome.error_code(),
+                Some(ADAPTER_DISCONNECTED_CODE),
+                "Disconnected 收口必须携带 adapter_disconnected：{outcome:?}"
+            );
+            "disconnected"
+        }
+        RunOutcome::Failed { error } => {
+            assert_eq!(
+                error.code, "cli_exit",
+                "T5a 强杀下 Failed 收口只允许 cli_exit（CLI 子进程先于适配器被终止）：{outcome:?}"
+            );
+            assert!(
+                error.recoverable,
+                "T5a 在途 run 收口必须可重试（recoverable=true）：{outcome:?}"
+            );
+            "failed:cli_exit"
+        }
+        other => panic!(
+            "T5a 在途 run 收口必须为 Disconnected(adapter_disconnected) 或 Failed(cli_exit)，实际 {other:?}"
+        ),
     }
 }
 
