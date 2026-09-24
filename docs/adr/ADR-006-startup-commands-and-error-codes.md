@@ -2,9 +2,9 @@
 
 | 项 | 内容 |
 |---|---|
-| 状态 | **已批准**（2026-09-18 复评通过，签署见 §7；实现对齐状态见 §3.3；v0.3（2026-09-23）关闭全部对齐项；v0.4（2026-09-23）附录 B 增行（ADR-009），不改决策） |
+| 状态 | **已批准**（2026-09-18 复评通过，签署见 §7；实现对齐状态见 §3.3；v0.3（2026-09-23）关闭全部对齐项；v0.4（2026-09-23）附录 B 增行（ADR-009）；v0.5（2026-09-24）附录 B 增行 4 错误码并新增「警告码」子表（ADR-010），不改决策） |
 | 决策日期 | 2026-09-17 |
-| 决策载体 | 已合入：《设计文档》v1.5 → v1.6（随 ADR-007 增量续升 v1.7）；《实施计划与验收标准》v1.11 → v1.12（随升 v1.13；v0.3 随 M3-01 范围修订续升 v1.15）；2026-09-18 随 v1.7/v1.13 冻结；v0.4 随 ADR-009 附录 B 增行（设计文档 v1.9 / 计划 v1.16） |
+| 决策载体 | 已合入：《设计文档》v1.5 → v1.6（随 ADR-007 增量续升 v1.7）；《实施计划与验收标准》v1.11 → v1.12（随升 v1.13；v0.3 随 M3-01 范围修订续升 v1.15）；2026-09-18 随 v1.7/v1.13 冻结；v0.4 随 ADR-009 附录 B 增行（设计文档 v1.9 / 计划 v1.16）；v0.5 随 ADR-010 附录 B 增行（错误码 +4 / 警告码子表；设计文档 v1.10 / 计划 v1.17） |
 | 关联 | 设计文档 D1/D7、A4、评审 #9、附录 B/E；实施计划 M1-06、M1-08 DoD3、M3-01、M4-04、Gate 1、§7 映射 |
 | 取代 | 无（对 D7 命令面的**增量登记**，不修改既有命令语义；v0.3 仅更新状态/挂载，不改决策） |
 | 被取代 | 无 |
@@ -186,10 +186,24 @@
 | `migration_failed` | 迁移失败（复制/校验/原子替换/写指针/状态持久化/空间/并发） | `startup_migrate` 迁移链与迁移后的目标复核 | 展示 `message`；指针写入失败时提示「完成迁移」并刷新快照呈现 `pending_migration` |
 | `internal` | 内部错误（序列化失败、任务调度失败、目录选择器调用失败） | 命令层不可达路径 | 展示 `message`（不参与分支） |
 | `readback_gap_too_large` | 补读缺口过大（D4：>10k）拒绝自动补发 | `messages_page`（`last_seq` 缺口 > `READBACK_MAX_GAP`）；与核心管线 `PipelineError::ReadbackGapTooLarge` 同码透传 | 提示「历史消息过多」→ 用户确认后清缓存重载最近 N 条（默认 500，可配置；不重启核心/应用） |
+| `builtin_provider_undeletable` | 内置供应商禁止删除 | `provider_delete`（`is_builtin=1`） | 提示「内置供应商不可删除」（删除入口预置灰） |
+| `artifact_path_rejected` | 会话引用路径校验失败（canonicalize / 可访问性 / 探测失败；不含同步盘语义） | `artifact_add` | 提示路径不可用 + 原因 |
+| `provider_not_found` | 供应商不存在 | 供应商类命令与 `provider_model_*`（按 id 查无） | 刷新供应商列表 + 提示 |
+| `provider_model_not_found` | 模型不存在 | `provider_model_toggle` | 刷新表单模型列表 + 提示 |
 
 说明：错误码为稳定契约（`snake_case` 序列化），新增取值须走 ADR；迁移的**参数类**失败沿用既有码，避免语义重复。
 
-> **ADR-009（2026-09-23）增行**：`readback_gap_too_large` 已登记（表末行）；决策与契约详见 `docs/adr/ADR-009-messages-page-response-and-readback-error-code.md`。本增行不改 ADR-006 既有决策。
+### 附录 B.1：警告码子表（ADR-010 新增登记位，2026-09-24）
+
+> `warnings[].code` 为独立命名空间（非 `IpcErrorCode`、不入上表）；**新增警告码必须走 ADR 在本子表增行**，与错误码登记规则同构（稳定契约、`snake_case`、不得自造）。
+
+| code | 语义 | 触发点 |
+|---|---|---|
+| `thinking_depth_unsupported` | 运行时未声明 `thinking_depth` 能力，按缺省 2 应用且字段不透传（非阻断） | `session_create`（ready 后判定）/ `session_send`（run 启动判定）；尽力而为：同步判定路径随响应返回，延迟判定路径不返回（以生效值回显为准） |
+
+> **ADR-009（2026-09-23）增行**：`readback_gap_too_large` 已登记（ADR-009 增行）；决策与契约详见 `docs/adr/ADR-009-messages-page-response-and-readback-error-code.md`。本增行不改 ADR-006 既有决策。
+>
+> **ADR-010（2026-09-24）增行**：错误码 4 条已登记（上表末 4 行）；新增警告码子表（首项 `thinking_depth_unsupported`）；决策与契约详见 `docs/adr/ADR-010-p0-ui-capability-registration.md`。本增行不改 ADR-006 既有决策。
 
 ## 附录 C：拟议《设计文档》v1.6 合入文本
 
