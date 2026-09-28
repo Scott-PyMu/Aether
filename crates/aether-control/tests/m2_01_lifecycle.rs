@@ -183,6 +183,12 @@ async fn idempotent_send_survives_core_restart() {
     assert_eq!(replay_same_core.message_id, first.message_id);
     assert_eq!(replay_same_core.run_id, first.run_id);
     assert_eq!(message_count(&core.reads(), &session.id).await, 1);
+    // run 终态先落库、会话回 idle 随后（同一次收口的两步）；重启断言会话前必须
+    // 等待 idle 落库（CI 高负载/覆盖率插桩下否则读取到 running 存档）。
+    assert!(
+        wait_session_status(&manager, &session.id, SessionStatus::Idle).await,
+        "首次 run 收口后会话应回 idle"
+    );
 
     // 核心重启：关管线/存储 → 同一数据目录重开 → 重放同值。
     let (temp, db_path) = core.shutdown().await;
