@@ -618,7 +618,6 @@ fn valid_requests_reach_backend_exactly_once() {
             json!({ "source": { "external": { "path": external_db } } }),
             "backup_restore",
         ),
-        ("app_restart", json!({ "confirm": true }), "app_restart"),
         ("run_retry", json!({ "run_id": ULID }), "run_retry"),
         (
             "runtime_retry",
@@ -690,7 +689,6 @@ fn valid_requests_reach_backend_exactly_once() {
         "backup_list",
         "backup_restore",
         "backup_restore",
-        "app_restart",
         "run_retry",
         "runtime_retry",
         "runtime_enable",
@@ -729,6 +727,29 @@ fn app_exit_requires_confirm_true_before_reaching_command_body() {
     assert!(
         fixture.backend.calls().is_empty(),
         "app_exit 不经 IpcBackend 下游"
+    );
+}
+
+/// ADR-004/M3-06：`app_restart` 在 `{confirm:true}` 通过严格解析后才进入命令体；
+/// 框架夹具无应用句柄 → 命令体返回 `not_implemented`（证明校验已通过、未透传后端）。
+/// 命令层实现与 `app_exit` 同口径（重启属应用生命周期动作）。
+#[test]
+fn app_restart_requires_confirm_true_before_reaching_command_body() {
+    let fixture = fixture("app-restart");
+    let result = invoke(&fixture.webview, "app_restart", json!({ "confirm": true }));
+    match result {
+        Err(error) => {
+            assert_eq!(
+                error.get("code").and_then(Value::as_str),
+                Some("not_implemented"),
+                "合法 confirm:true 必须通过严格解析并到达命令体：{error}"
+            );
+        }
+        Ok(value) => panic!("夹具无应用句柄，不应成功重启：{value}"),
+    }
+    assert!(
+        fixture.backend.calls().is_empty(),
+        "app_restart 不经 IpcBackend 下游"
     );
 }
 

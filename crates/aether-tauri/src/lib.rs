@@ -34,6 +34,8 @@ pub mod startup;
 #[cfg(debug_assertions)]
 mod health_probe;
 #[cfg(debug_assertions)]
+mod m3_06_probe;
+#[cfg(debug_assertions)]
 mod probe;
 #[cfg(debug_assertions)]
 mod startup_probe;
@@ -149,6 +151,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 probe::setup_window(app.handle())?;
                 startup_probe::start(app.handle().clone());
                 health_probe::start(app.handle().clone());
+                // M3-06：降级恢复 E2E 探针（降级横幅 → app_restart → 重启后自检）。
+                m3_06_probe::start(
+                    app.handle().clone(),
+                    std::path::PathBuf::from(&startup_for_boot.snapshot().data_dir),
+                );
             }
             #[cfg(not(debug_assertions))]
             {
@@ -218,77 +225,90 @@ fn build_backend(
     // M3-02：会话后端（生命周期 + 适配器执行器 + 消息分页）随核心启动接线。
     let mut session_manager: Option<aether_control::SessionManager> = None;
     let mut adapter_executor: Option<std::sync::Arc<adapter_executor::AdapterRunExecutor>> = None;
-    let (health, storage_slot, pipeline, reads) =
-        match core_health::boot_core_full(&data_dir, &handle, runtimes) {
-            Ok(boot) => {
-                let core_health::CoreBoot {
-                    backend: core,
-                    storage: slot,
-                    reads,
-                    write,
-                    pipeline,
-                } = boot;
-                // M2-07 DoD3：核心 RSS 巡检（2GB 告警 / 2.5GB 强制 delta 限流；
-                // env 钩子供测试/演练注入阈值）。任务随应用生命周期存活（detached）。
-                {
-                    let patrol = aether_control::ResourcePatrol::with_env();
-                    let _patrol_task = patrol.start(pipeline.clone(), &handle);
-                    // M3-01（D7/D8）：`aether://event` 事件桥接线（管线广播 → WebView 单通道）。
-                    // 桥接只读转发；慢消费 `Lagged(k)` 不阻塞管线（见 event_bridge 模块说明）。
-                    let metrics = event_bridge::spawn_app(app, &pipeline);
-                    tracing::info!(
-                        channel = bindings::EVENT_CHANNEL,
-                        "事件桥已接线（采样计数见诊断）"
-                    );
-                    let _ = metrics;
-                }
-                // M3-02：真实 run 执行器（适配器会话客户端）；权限网关接线随工作区
-                // （M3-08）落地——当前以 `None` 交付，不伪造回环（D9 边界）。
-                let executor = supervisor.as_ref().map(|supervisor| {
-                    std::sync::Arc::new(adapter_executor::AdapterRunExecutor::new(
-                        std::sync::Arc::clone(supervisor),
-                        pipeline.clone(),
-                        reads.clone(),
-                        write.clone(),
-                        handle.clone(),
-                        None,
-                    ))
-                });
-                let run_executor: std::sync::Arc<dyn aether_control::RunExecutor> = match &executor
-                {
-                    Some(executor) => executor.clone(),
-                    None => std::sync::Arc::new(adapter_executor::UnavailableExecutor),
-                };
-                let manager = aether_control::SessionManager::new(
-                    aether_control::LifecycleConfig::default(),
-                    std::sync::Arc::new(aether_control::SystemClock),
-                    write,
-                    reads.clone(),
-                    pipeline.clone(),
-                    run_executor,
+    let (health, storage_slot, pipeline, reads) = match core_health::boot_core_full(
+        &data_dir, &handle, runtimes,
+    ) {
+        Ok(boot) => {
+            let core_health::CoreBoot {
+                backend: core,
+                storage: slot,
+                reads,
+                write,
+                pipeline,
+            } = boot;
+            // M2-07 DoD3：核心 RSS 巡检（2GB 告警 / 2.5GB 强制 delta 限流；
+            // env 钩子供测试/演练注入阈值）。任务随应用生命周期存活（detached）。
+            {
+                let patrol = aether_control::ResourcePatrol::with_env();
+                let _patrol_task = patrol.start(pipeline.clone(), &handle);
+                // M3-01（D7/D8）：`aether://event` 事件桥接线（管线广播 → WebView 单通道）。
+                // 桥接只读转发；慢消费 `Lagged(k)` 不阻塞管线（见 event_bridge 模块说明）。
+                let metrics = event_bridge::spawn_app(app, &pipeline);
+                tracing::info!(
+                    channel = bindings::EVENT_CHANNEL,
+                    "事件桥已接线（采样计数见诊断）"
                 );
-                let background = manager.spawn_background(&handle);
-                tracing::info!(background, "会话生命周期后台任务已启动（看门狗/事件监听）");
-                session_manager = Some(manager);
-                adapter_executor = executor;
-                (
-                    std::sync::Arc::new(core) as std::sync::Arc<dyn ipc::IpcBackend>,
-                    Some(slot),
-                    Some(pipeline),
-                    Some(reads),
-                )
+                let _ = metrics;
             }
-            Err(error) => {
-                tracing::error!(error = %error, "核心健康源启动失败：按只读降级呈现 health");
-                (
-                    std::sync::Arc::new(core_health::degraded_backend(&error.to_string()))
-                        as std::sync::Arc<dyn ipc::IpcBackend>,
+            // M3-02：真实 run 执行器（适配器会话客户端）；权限网关接线随工作区
+            // （M3-08）落地——当前以 `None` 交付，不伪造回环（D9 边界）。
+            let executor = supervisor.as_ref().map(|supervisor| {
+                std::sync::Arc::new(adapter_executor::AdapterRunExecutor::new(
+                    std::sync::Arc::clone(supervisor),
+                    pipeline.clone(),
+                    reads.clone(),
+                    write.clone(),
+                    handle.clone(),
                     None,
-                    None,
-                    None,
-                )
+                ))
+            });
+            let run_executor: std::sync::Arc<dyn aether_control::RunExecutor> = match &executor {
+                Some(executor) => executor.clone(),
+                None => std::sync::Arc::new(adapter_executor::UnavailableExecutor),
+            };
+            let manager = aether_control::SessionManager::new(
+                aether_control::LifecycleConfig::default(),
+                std::sync::Arc::new(aether_control::SystemClock),
+                write,
+                reads.clone(),
+                pipeline.clone(),
+                run_executor,
+            );
+            // M3-06 重启状态重建（D5「运行中崩溃 → 在途 run 标 failed，可重试」）：
+            // 启动序列内、UI ready 握手前收口上一进程崩溃遗留的 queued/running run
+            // 与非空闲会话（未确认不伪造完成；收口后可经 run_retry 重放）。
+            match handle.block_on(manager.reconcile_interrupted_runs()) {
+                Ok(report) => tracing::info!(
+                    runs_failed = report.runs_failed.len(),
+                    sessions_reset = report.sessions_reset.len(),
+                    "重启状态重建完成（未收口 run/会话已收口）"
+                ),
+                Err(error) => {
+                    tracing::warn!(error = %error, "重启状态重建失败（继续启动；未收口项保留待下次）")
+                }
             }
-        };
+            let background = manager.spawn_background(&handle);
+            tracing::info!(background, "会话生命周期后台任务已启动（看门狗/事件监听）");
+            session_manager = Some(manager);
+            adapter_executor = executor;
+            (
+                std::sync::Arc::new(core) as std::sync::Arc<dyn ipc::IpcBackend>,
+                Some(slot),
+                Some(pipeline),
+                Some(reads),
+            )
+        }
+        Err(error) => {
+            tracing::error!(error = %error, "核心健康源启动失败：按只读降级呈现 health");
+            (
+                std::sync::Arc::new(core_health::degraded_backend(&error.to_string()))
+                    as std::sync::Arc<dyn ipc::IpcBackend>,
+                None,
+                None,
+                None,
+            )
+        }
+    };
 
     // M2-08 启动序列尾段（D2：库打开 + quick_check → 孤儿清理 → 迁移/预热）：
     // 清理台账残留（强杀核心后的孤儿）；预热 enabled 适配器；接线心跳监控（T5b）。

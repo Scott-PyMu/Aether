@@ -335,12 +335,13 @@ impl AdapterRunExecutor {
             })?;
         let client = self.client_for(&request.runtime_id).await?;
         let adapter_session = self.ensure_adapter_session(&client, &session).await?;
+        // 适配器侧幂等键（ADR-005「适配器侧对 client_msg_id 同样去重」）取**核心 run id**：
+        // 每次派发（含 M3-06 `run_retry` 重放）都是一个新 run，必须产生新的适配器 run；
+        // 核心侧的重复 `session.send` 已由存储层 `UNIQUE(session_id, client_msg_id)`
+        // 在到达适配器之前去重（ADR-005 持久化支撑），因此以 run id 为键不丢失去重语义，
+        // 且避免重放复用输入消息 id 时被适配器幂等命中而返回旧 run。
         let ack = client
-            .send(
-                &adapter_session,
-                request.input_message_id.as_str(),
-                &request.text,
-            )
+            .send(&adapter_session, request.run_id.as_str(), &request.text)
             .await
             .map_err(|error| error_info(ADAPTER_REQUEST_FAILED_CODE, error.to_string()))?;
         let buffered = {

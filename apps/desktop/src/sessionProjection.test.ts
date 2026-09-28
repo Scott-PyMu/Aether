@@ -151,4 +151,18 @@ describe("projectSession（M3-02）", () => {
     expect(projection.bubbles[0]?.streaming).toBe(true);
     expect(projection.runs[0]?.status).toBe("running");
   });
+
+  // M3-06：取消原因透传（存储降级中断 → UI 展示「已中断（存储降级）」）。
+  it("run.cancelled 透传取消原因（persist_degraded）", () => {
+    const events = [
+      event(1, "run.started", { run_id: RUN }),
+      event(2, "run.cancelled", { run_id: RUN, reason: "persist_degraded" }),
+    ];
+    const projection = projectSession(events, []);
+    expect(projection.runs[0]).toMatchObject({
+      runId: RUN,
+      status: "cancelled",
+      cancelReason: "persist_degraded",
+    });
+  });
 });

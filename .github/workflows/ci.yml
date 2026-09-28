@@ -384,6 +384,33 @@ jobs:
             echo "::error title=m2-07-tail::$line"
           done
 
+      # M3-06（崩溃恢复体验 E2E）：损坏库 → 只读降级横幅（发送入口禁用 + 恢复引导，
+      # 无热恢复入口）→ 点击 storage-degraded-restart → app_restart 复用 D2 关闭序列 →
+      # 新进程重跑启动序列自检并再次渲染降级横幅（stdout 管道跨重启继承断言新 pid）。
+      - name: M3-06 E2E 验证（存储降级恢复引导 + app_restart）
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/test/m3-06/e2e-degraded-recovery.mjs 2>&1 | tee m3-06-e2e.log
+      - name: M3-06 E2E 失败诊断
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "### M3-06 E2E 失败输出（断言细节 + tail 30）"
+            echo '```text'
+            grep -E "panicked|assertion|left:|right:|FAIL |error\[" m3-06-e2e.log 2>/dev/null | tail -12 || true
+            echo '--- tail 30 ---'
+            tail -30 m3-06-e2e.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -E "^FAIL |FAIL " m3-06-e2e.log 2>/dev/null | tail -6 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m3-06-e2e-summary::$line"
+          done
+          tail -4 m3-06-e2e.log 2>/dev/null | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m3-06-e2e-tail::$line"
+          done
+
       # M2 批 2（M2-09 大行与 OOM 防护）：>2MiB 任意行不缓冲断连记错、1–2MiB 非引用行
       # 正常解析（内存曲线断言受控，真实 Mock + 核心侧 RSS 采样）；artifact_ref 大附件
       # 引用流（附件仅存 artifacts 路径、数据体不进入线协议、路径逃逸/形状非法拒绝）；
@@ -704,6 +731,56 @@ jobs:
           done
           tail -4 m3-02-verify.log 2>/dev/null | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
             echo "::error title=m3-02-tail::$line"
+          done
+
+  m3-06-recovery:
+    name: Crash recovery (M3-06)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: 安装 Tauri Linux 系统依赖（webkit2gtk 等）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: 安装 Linux 系统依赖（keyring/secret-service 需要 libdbus）
+        run: sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: M3-06 验证（T4 kill -9 ×20 已确认零丢失 + run_retry Mode R/N + 重启状态重建 + 降级 UX；E2E 见 Windows security-baseline）
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/test/m3-06/verify-m3-06.mjs --skip-e2e 2>&1 | tee m3-06-verify.log
+      - name: M3-06 失败诊断（公开 annotation，便于无凭据取证）
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "### M3-06 verify 失败输出（断言 + tail 30）"
+            echo '```text'
+            grep -E "panicked|assertion|left:|right:|FAIL |error\[" m3-06-verify.log 2>/dev/null | tail -12 || true
+            echo '--- tail 30 ---'
+            tail -30 m3-06-verify.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -A 20 "===== verify-m3-06 =====" m3-06-verify.log 2>/dev/null | tail -14 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m3-06-summary::$line"
+          done
+          grep -E "panicked|assertion|left:|right:" m3-06-verify.log 2>/dev/null | tail -4 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m3-06-assert::$line"
+          done
+          tail -4 m3-06-verify.log 2>/dev/null | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m3-06-tail::$line"
           done
 
   # DoD3：覆盖率门禁（Rust cargo-llvm-cov + TS vitest --coverage，行覆盖 <70% 失败）

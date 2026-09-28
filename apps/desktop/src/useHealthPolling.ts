@@ -15,10 +15,12 @@ import {
   HEALTH_POLL_INTERVAL_MS,
   HEALTH_TIMEOUT_MS,
   type HealthReport,
+  type HealthStatus,
 } from "./health";
+import { publishHealthState } from "./healthBus";
 import { describeIpcError } from "./startup";
 
-export type HealthStatus = "loading" | "normal" | "degraded" | "unresponsive";
+export type { HealthStatus };
 
 export interface HealthState {
   status: HealthStatus;
@@ -113,6 +115,11 @@ export function useHealthPolling(options: HealthPollingOptions = {}): HealthStat
     // 轮询参数在挂载时固定（D2 常量；测试注入值同口径）。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // M3-06：把健康状态发布到共享总线（工作台降级联动；全应用单轮询源）。
+  useEffect(() => {
+    publishHealthState(state);
+  }, [state]);
 
   return state;
 }

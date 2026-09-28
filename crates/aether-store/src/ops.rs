@@ -621,6 +621,64 @@ impl ReadPool {
         .await
     }
 
+    /// 按 id 读取消息（不存在为 `None`）。
+    ///
+    /// M3-06：`run_retry` 读取原 run 输入消息正文（重放输入）与 T4 已确认消息零丢失
+    /// 校验均经本方法（只读）。
+    pub async fn message(&self, message_id: &MessageId) -> Result<Option<Message>, StoreError> {
+        let message = message_id.as_str().to_owned();
+        self.with_connection(move |connection| {
+            connection
+                .query_row(
+                    "SELECT id, session_id, run_id, client_msg_id, role, content, content_parts, tool_calls, \
+                     parent_message_id, seq, created_at FROM messages WHERE id = ?1",
+                    [message.as_str()],
+                    read_message_row,
+                )
+                .optional()
+                .map_err(StoreError::from)
+        })
+        .await
+    }
+
+    /// 未收口 run（`queued` / `running`）清单（M3-06 重启状态重建：核心重启后按
+    /// 「运行中崩溃 → 在途 run 标 failed（可重试）」收口，D5 失败场景口径）。
+    pub async fn unfinished_runs(&self) -> Result<Vec<Run>, StoreError> {
+        self.with_connection(move |connection| {
+            let mut statement = connection.prepare(
+                "SELECT id, session_id, status, input_message_id, error, started_at, finished_at \
+                 FROM runs WHERE status IN ('queued', 'running') ORDER BY started_at ASC, rowid ASC",
+            )?;
+            let rows = statement.query_map([], read_run_row)?;
+            let mut runs = Vec::new();
+            for row in rows {
+                runs.push(row?);
+            }
+            Ok(runs)
+        })
+        .await
+    }
+
+    /// 非终态、非空闲会话清单（M3-06 重启状态重建：核心重启后在途会话回 `idle`，
+    /// 与 `unfinished_runs` 收口配套；`paused` 在 P0 不可达但一并收口）。
+    pub async fn sessions_for_recovery(&self) -> Result<Vec<Session>, StoreError> {
+        self.with_connection(move |connection| {
+            let mut statement = connection.prepare(
+                "SELECT id, runtime_id, workspace_id, parent_session_id, title, status, model, \
+                 system_prompt, config, token_usage, created_at, updated_at, closed_at FROM sessions \
+                 WHERE status NOT IN ('idle', 'completed', 'failed', 'cancelled') \
+                 ORDER BY created_at ASC, rowid ASC",
+            )?;
+            let rows = statement.query_map([], read_session_row)?;
+            let mut sessions = Vec::new();
+            for row in rows {
+                sessions.push(row?);
+            }
+            Ok(sessions)
+        })
+        .await
+    }
+
     /// 按幂等键查消息（ADR-005；重启后重放查询用）。
     pub async fn message_by_client_msg_id(
         &self,
@@ -1100,6 +1158,89 @@ mod tests {
             .map(|row| row.unwrap())
             .collect();
         assert_eq!(seqs, vec![1, 2]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn recovery_reads_expose_unfinished_runs_and_non_idle_sessions() {
+        use crate::store::Store;
+        use crate::write_queue::{StoreRuntime, WriteQueueConfig};
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("aether.db");
+        drop(Store::open(&path).unwrap());
+        {
+            let connection = Store::open_writer_connection(&path).unwrap();
+            connection
+                .execute_batch(
+                    "INSERT INTO runtimes (id, name, kind, version, created_at, updated_at) \
+                     VALUES ('mock', 'Mock', 'mock', '0.1.0', 1, 1);\
+                     INSERT INTO sessions (id, runtime_id, title, status, created_at, updated_at) \
+                     VALUES ('01J0000000000000000000000A', 'mock', 't', 'running', 1, 1);",
+                )
+                .unwrap();
+            for (run_id, message_id, status) in [
+                (
+                    "01J000000000000000000000R1",
+                    "01J000000000000000000000M1",
+                    "queued",
+                ),
+                (
+                    "01J000000000000000000000R2",
+                    "01J000000000000000000000M2",
+                    "running",
+                ),
+                (
+                    "01J000000000000000000000R3",
+                    "01J000000000000000000000M3",
+                    "succeeded",
+                ),
+            ] {
+                connection
+                    .execute(
+                        "INSERT INTO messages (id, session_id, role, content, seq, created_at) \
+                         VALUES (?1, '01J0000000000000000000000A', 'user', 'hi', 0, 1)",
+                        [message_id],
+                    )
+                    .unwrap();
+                connection
+                    .execute(
+                        "INSERT INTO runs (id, session_id, status, input_message_id, started_at) \
+                         VALUES (?1, '01J0000000000000000000000A', ?2, ?3, 1)",
+                        params![run_id, status, message_id],
+                    )
+                    .unwrap();
+            }
+        }
+        let storage = StoreRuntime::open(
+            &path,
+            WriteQueueConfig::default(),
+            &tokio::runtime::Handle::current(),
+        )
+        .unwrap();
+        let reads = storage.reads().clone();
+        let runs = reads.unfinished_runs().await.unwrap();
+        let run_ids: Vec<&str> = runs.iter().map(|run| run.id.as_str()).collect();
+        assert_eq!(
+            run_ids,
+            vec!["01J000000000000000000000R1", "01J000000000000000000000R2"],
+            "未收口 run 必须为 queued + running（succeeded 排除）"
+        );
+        let sessions = reads.sessions_for_recovery().await.unwrap();
+        assert_eq!(sessions.len(), 1, "非 idle 会话必须进入恢复清单");
+        assert_eq!(sessions[0].status, SessionStatus::Running);
+
+        let message = reads
+            .message(&MessageId::new("01J000000000000000000000M1").unwrap())
+            .await
+            .unwrap()
+            .expect("按 id 读消息");
+        assert_eq!(message.content, "hi");
+        assert!(reads
+            .message(&MessageId::new("01J000000000000000000000M9").unwrap())
+            .await
+            .unwrap()
+            .is_none());
+        storage.shutdown().await.unwrap();
     }
 
     #[test]

@@ -335,6 +335,27 @@ impl IpcBackend for SessionBackend {
         })
     }
 
+    /// M3-06 `run_retry`：一键重放（仅终态 run；重放按 ADR-005 Mode R/N，由执行器
+    /// 按 `sessions.config.native_id` 与适配器能力决定）。产生新 run 且旧 run 保留审计。
+    fn run_retry(&self, request: &crate::ipc::dto::RunRetryRequest) -> Result<Value, IpcError> {
+        let manager = self.manager_required()?.clone();
+        let run_id = request.run_id.clone();
+        self.call(async move {
+            let run_id = aether_core::RunId::new(run_id)
+                .map_err(|error| IpcError::internal(format!("run_id 非法：{error}")))?;
+            let ack = manager
+                .retry_run(&run_id)
+                .await
+                .map_err(map_lifecycle_error)?;
+            Ok(json!({
+                "session_id": ack.session_id.as_str(),
+                "run_id": ack.run_id.as_str(),
+                "input_message_id": ack.input_message_id.as_str(),
+                "queued": ack.queued,
+            }))
+        })
+    }
+
     fn messages_page(&self, request: &MessagesPageRequest) -> Result<Value, IpcError> {
         let reads = self.reads_required()?.clone();
         let session_id = request.session_id.clone();
@@ -439,6 +460,8 @@ pub fn map_lifecycle_error(error: LifecycleError) -> IpcError {
         | LifecycleError::SessionBusy { .. }
         | LifecycleError::SessionClosed { .. }
         | LifecycleError::InvalidTransition { .. }
+        | LifecycleError::RunNotFound { .. }
+        | LifecycleError::RunNotRetryable { .. }
         | LifecycleError::PersistDegraded { .. }
         | LifecycleError::StorageBackpressure { .. }
         | LifecycleError::AdapterIsolated { .. } => IpcError::invalid_value(error.to_string()),

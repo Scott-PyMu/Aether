@@ -217,18 +217,28 @@ pub(crate) fn backup_restore(
         .map(JsonPayload)
 }
 
-/// ADR-004：显式 `confirm:true` 才可重启（复用 D2 关闭序列）。
+/// ADR-004/M3-06：显式 `confirm:true` 后触发应用重启（与 `app_exit` 同口径的
+/// 命令层实现——重启属应用生命周期动作，不经 `IpcBackend` 下游）。
+///
+/// 机制：`AppHandle::request_restart()` → `RunEvent::ExitRequested` → 既有退出编排
+/// （D2 关闭序列：广播 shutdown → 适配器终止段 → 存储五步）→ 进程重启并重跑启动
+/// 序列（A4 检测 + `quick_check` + 孤儿清理 + 重启状态重建）。P0 无热恢复（D4）：
+/// 存储降级恢复仅经「修复外部条件 + 本入口重启 + 启动自检」。
 #[tauri::command]
 #[specta::specta]
 pub(crate) fn app_restart(
     state: tauri::State<'_, IpcState>,
     payload: JsonPayload,
 ) -> Result<JsonPayload, IpcError> {
-    let request: AppRestartRequest = parse_strict(payload.into_value())?;
-    state
-        .backend_ready()?
-        .app_restart(&request)
-        .map(JsonPayload)
+    let _request: AppRestartRequest = parse_strict(payload.into_value())?;
+    let handle = state.app_handle().ok_or_else(|| {
+        IpcError::new(
+            IpcErrorCode::NotImplemented,
+            "应用句柄未接线（仅生产运行形态；框架测试不含应用句柄）",
+        )
+    })?;
+    handle.request_restart();
+    Ok(JsonPayload(serde_json::json!({ "restarting": true })))
 }
 
 /// ADR-004/M3-06：仅终态 run 可重试（`run_id` ULID；状态由后端判定）。
@@ -458,6 +468,7 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         crate::probe::e2e_probe_report,
         crate::startup_probe::e2e_startup_report,
         crate::health_probe::e2e_health_report,
+        crate::m3_06_probe::e2e_m3_06_report,
     ]
 }
 

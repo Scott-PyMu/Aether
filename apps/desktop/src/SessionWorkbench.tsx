@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { appEventStore } from "./aetherStore";
 import { describeIpcError } from "./startup";
 import type { EventStore } from "./eventStore";
+import { useStorageHealth } from "./healthBus";
 import { HistoryOverflowNotice } from "./HistoryOverflowNotice";
 import { Markdown } from "./markdown";
 import {
@@ -79,7 +80,13 @@ export function SessionWorkbench({
   const [lastAck, setLastAck] = useState<{ runId: string; duplicate: boolean } | null>(null);
   /** T1 埋点：会话创建（点击 → `session_create` ack）耗时（毫秒）。 */
   const [createLatencyMs, setCreateLatencyMs] = useState<number | null>(null);
+  /** M3-06：重放进行中的 run（按钮去抖）。 */
+  const [retryingRunId, setRetryingRunId] = useState<string | null>(null);
   const sendInFlight = useRef(false);
+
+  // M3-06：存储降级（只读）联动——发送入口禁用；修复 + 重启前不得恢复。
+  const storageHealth = useStorageHealth();
+  const degraded = storageHealth.status === "degraded";
 
   const eventsState = useSessionEvents(store, activeSessionId ?? NO_SESSION);
   const projection = useMemo(
@@ -89,6 +96,11 @@ export function SessionWorkbench({
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeSessionId) ?? null,
     [sessions, activeSessionId],
+  );
+  /** M3-06：run 视图索引（消息气泡 → 终态/取消原因 → 重试入口）。 */
+  const runViews = useMemo(
+    () => new Map(projection.runs.map((run) => [run.runId, run])),
+    [projection.runs],
   );
 
   const refreshRuntimes = useCallback(async () => {
@@ -226,6 +238,26 @@ export function SessionWorkbench({
       setError(describeIpcError(failure));
     }
   }, [activeSessionId, ipc, refreshSessions]);
+
+  /** M3-06：一键重放（`run_retry`；仅终态 run 由后端判定；新 run 事件流驱动渲染）。 */
+  const onRetryRun = useCallback(
+    async (runId: string) => {
+      if (retryingRunId !== null) {
+        return;
+      }
+      setRetryingRunId(runId);
+      setError(null);
+      try {
+        await ipc.retryRun(runId);
+        await refreshSessions();
+      } catch (failure) {
+        setError(describeIpcError(failure));
+      } finally {
+        setRetryingRunId(null);
+      }
+    },
+    [ipc, refreshSessions, retryingRunId],
+  );
 
   const interruptible =
     projection.activeRunId !== null || activeSession?.status === "running";
@@ -384,33 +416,72 @@ export function SessionWorkbench({
             testId="message-list"
             className="message-list"
             itemKey={(bubble) => bubble.key}
-            renderItem={(bubble) => (
-              <article
-                className={`message-bubble message-${bubble.role}`}
-                data-testid="message-bubble"
-                data-role={bubble.role}
-                data-streaming={String(bubble.streaming)}
-                data-run-id={bubble.runId ?? ""}
-                data-key={bubble.key}
-              >
-                <span className="message-role">
-                  {bubble.role === "user" ? "你" : "助手"}
-                </span>
-                <div className="message-content">
-                  {bubble.role === "user" ? (
-                    // 用户输入按纯文本渲染（不解释 Markdown；预格式保留换行）。
-                    <span className="message-plain">{bubble.text}</span>
-                  ) : (
-                    <Markdown text={bubble.text} />
-                  )}
-                </div>
-                {bubble.streaming ? (
-                  <span className="message-streaming" data-testid="streaming-indicator">
-                    生成中…
+            renderItem={(bubble) => {
+              // M3-06：失败/中断的 run 提供重试（仅终态 run 可重试；降级期禁用）。
+              const runView = bubble.runId ? runViews.get(bubble.runId) : undefined;
+              const retryable =
+                bubble.role === "assistant" &&
+                (runView?.status === "failed" || runView?.status === "cancelled");
+              const interruptedByDegraded =
+                runView?.status === "cancelled" &&
+                runView.cancelReason === "persist_degraded";
+              return (
+                <article
+                  className={`message-bubble message-${bubble.role}`}
+                  data-testid="message-bubble"
+                  data-role={bubble.role}
+                  data-streaming={String(bubble.streaming)}
+                  data-run-id={bubble.runId ?? ""}
+                  data-key={bubble.key}
+                >
+                  <span className="message-role">
+                    {bubble.role === "user" ? "你" : "助手"}
                   </span>
-                ) : null}
-              </article>
-            )}
+                  <div className="message-content">
+                    {bubble.role === "user" ? (
+                      // 用户输入按纯文本渲染（不解释 Markdown；预格式保留换行）。
+                      <span className="message-plain">{bubble.text}</span>
+                    ) : (
+                      <Markdown text={bubble.text} />
+                    )}
+                  </div>
+                  {bubble.streaming ? (
+                    <span className="message-streaming" data-testid="streaming-indicator">
+                      生成中…
+                    </span>
+                  ) : null}
+                  {retryable && bubble.runId ? (
+                    <div
+                      className="message-run-actions"
+                      data-testid="run-actions"
+                      data-run-id={bubble.runId}
+                    >
+                      <span
+                        className="run-outcome"
+                        data-testid="run-outcome"
+                        data-status={runView?.status}
+                        data-code={runView?.errorCode ?? ""}
+                      >
+                        {runView?.status === "failed"
+                          ? `运行失败：${runView.errorCode ?? "run_failed"}`
+                          : interruptedByDegraded
+                            ? "已中断（存储降级）"
+                            : "已中断"}
+                      </span>
+                      <button
+                        type="button"
+                        data-testid="run-retry"
+                        data-run-id={bubble.runId}
+                        disabled={degraded || retryingRunId !== null}
+                        onClick={() => void onRetryRun(bubble.runId as string)}
+                      >
+                        重试
+                      </button>
+                    </div>
+                  ) : null}
+                </article>
+              );
+            }}
           />
           {projection.bubbles.length === 0 ? (
             <p className="stream-empty" data-testid="message-stream-empty">
@@ -440,7 +511,7 @@ export function SessionWorkbench({
             data-testid="composer-input"
             placeholder="输入消息（Ctrl+Enter 发送）"
             value={draft}
-            disabled={!activeSessionId}
+            disabled={!activeSessionId || degraded}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
@@ -452,11 +523,21 @@ export function SessionWorkbench({
           <button
             type="button"
             data-testid="composer-send"
-            disabled={!activeSessionId || sending || draft.trim().length === 0}
+            disabled={!activeSessionId || degraded || sending || draft.trim().length === 0}
             onClick={() => void onSend()}
           >
             发送
           </button>
+          {degraded ? (
+            // M3-06：降级（只读）期发送入口禁用；恢复走 app_restart（D4 无热恢复）。
+            <p
+              className="composer-degraded-hint"
+              data-testid="composer-degraded-hint"
+              role="alert"
+            >
+              存储降级（只读）：发送已禁用；修复磁盘/目录/权限后重启应用。
+            </p>
+          ) : null}
         </div>
 
         {error ? (

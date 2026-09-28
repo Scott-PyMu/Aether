@@ -82,6 +82,14 @@ export interface MessageRow {
   created_at: number;
 }
 
+/** `run_retry` 回执（M3-06：一键重放产生的新 run；旧 run 保留审计）。 */
+export interface RunRetryResult {
+  session_id: string;
+  run_id: string;
+  input_message_id: string;
+  queued: boolean;
+}
+
 /** `messages_page` 响应（事件补读 + 最近一页消息历史）。 */
 export interface MessagesPageResult {
   session_id: string;
@@ -130,6 +138,8 @@ export interface SessionIpc {
   interruptSession(sessionId: string): Promise<SessionInterruptReport>;
   disposeSession(sessionId: string): Promise<{ session_id: string; status: SessionStatus }>;
   messagesPage(input: MessagesPageInput): Promise<MessagesPageResult>;
+  /** M3-06：仅终态（failed/timeout/cancelled）run 可重试（ADR-004）。 */
+  retryRun(runId: string): Promise<RunRetryResult>;
 }
 
 /** 生产实现（Tauri IPC；命令入参统一 `payload` 包装，与生成绑定一致）。 */
@@ -158,6 +168,9 @@ export const sessionIpc: SessionIpc = {
   },
   async messagesPage(input) {
     return invoke<MessagesPageResult>("messages_page", { payload: input });
+  },
+  async retryRun(runId) {
+    return invoke<RunRetryResult>("run_retry", { payload: { run_id: runId } });
   },
 };
 

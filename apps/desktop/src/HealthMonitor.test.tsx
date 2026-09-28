@@ -78,6 +78,36 @@ describe("HealthMonitor（M2-07 DoD4/DoD5）", () => {
     expect(banner.textContent).toContain("连续 3 次写事务尝试失败");
   });
 
+  // M3-06 DoD3：降级恢复引导仅 app_restart（修复外部条件 + 重启核心 + 启动自检；
+  // 无「一键恢复/热恢复」按钮，D4/ADR-004）。
+  it("降级态：提供 app_restart 恢复入口（点击触发）且无热恢复入口", async () => {
+    pollingMock.mockReturnValue(
+      state({
+        status: "degraded",
+        report: {
+          storage_state: "persist_degraded",
+          write_queue_depth: 0,
+          runtimes: null,
+          ts: 1,
+          degrade_trigger: "space_guard",
+        },
+      }),
+    );
+    restartMock.mockResolvedValue(undefined);
+    render(<HealthMonitor />);
+
+    const banner = screen.getByTestId("storage-degraded");
+    expect(banner.textContent).toContain("运行中的任务已中断");
+    expect(screen.getByTestId("storage-degraded-hint").textContent).toContain("无热恢复");
+    const restart = screen.getByTestId("storage-degraded-restart");
+    expect(banner.textContent).not.toContain("一键恢复");
+
+    fireEvent.click(restart);
+    await vi.waitFor(() => {
+      expect(restartMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("正常态与加载态锚点（E2E 断言用）", () => {
     pollingMock.mockReturnValue(state({ status: "normal" }));
     const { unmount } = render(<HealthMonitor />);

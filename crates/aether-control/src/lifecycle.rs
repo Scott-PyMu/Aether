@@ -61,6 +61,9 @@ use crate::ulid;
 pub const RUN_STREAM_TIMEOUT_MS: i64 = 120_000;
 /// 断流超时错误码（`run.failed.error.code`）。
 pub const RUN_STREAM_TIMEOUT_CODE: &str = "run_stream_timeout";
+/// 核心重启中断错误码（M3-06 重启状态重建）：未收口 run 在启动收口时写入
+/// `run.failed.error.code`（可重试；`run_retry` 准入口径为终态）。
+pub const RUN_INTERRUPTED_CODE: &str = "run_interrupted";
 /// 会话执行任务 panic 错误码（M2-07；D2 失败表「JoinError 记录 + 会话标 failed」）。
 pub const RUN_TASK_PANIC_CODE: &str = "task_panic";
 /// 看门狗巡检周期（常量级调参；DoD 只约束 120s 判定，不约束巡检频率）。
@@ -151,6 +154,27 @@ pub struct InterruptReport {
     pub cancelled_waiting_run: Option<RunId>,
 }
 
+/// `run_retry` 回执（M3-06）：重放产生的新 run 与复用的输入消息；旧 run 保留审计。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetryAck {
+    pub session_id: SessionId,
+    /// 重放产生的新 run（旧 run 行不改动）。
+    pub run_id: RunId,
+    /// 重放的输入消息（原 run 的 `input_message_id`，不新增消息行）。
+    pub input_message_id: MessageId,
+    /// 是否进入等待队列（当前有 run 在执行；D8 串行不变）。
+    pub queued: bool,
+}
+
+/// 重启状态重建报告（M3-06）：核心重启后未收口 run/会话的收口清单。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReconcileReport {
+    /// 被收口为 `failed`（`run_interrupted`，可重试）的 run。
+    pub runs_failed: Vec<RunId>,
+    /// 被收回 `idle` 的会话。
+    pub sessions_reset: Vec<SessionId>,
+}
+
 /// 生命周期错误（`code()` 为稳定错误码，命令层直接映射）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LifecycleError {
@@ -170,6 +194,15 @@ pub enum LifecycleError {
     InvalidTransition {
         from: SessionStatus,
         to: SessionStatus,
+    },
+    /// 重试目标 run 不存在（M3-06 `run_retry`）。
+    RunNotFound {
+        run_id: RunId,
+    },
+    /// 重试目标 run 非终态（M3-06：仅 failed/timeout/cancelled 可重试）。
+    RunNotRetryable {
+        run_id: RunId,
+        status: aether_core::RunStatus,
     },
     /// 存储降级（D4：拒绝新 run）。
     PersistDegraded {
@@ -211,6 +244,8 @@ impl LifecycleError {
             Self::SessionBusy { .. } => "session_busy",
             Self::SessionClosed { .. } => "session_closed",
             Self::InvalidTransition { .. } => "invalid_session_transition",
+            Self::RunNotFound { .. } => "run_not_found",
+            Self::RunNotRetryable { .. } => "run_not_retryable",
             Self::PersistDegraded { .. } => "persist_degraded",
             Self::StorageBackpressure { .. } => "storage_backpressure",
             Self::AdapterIsolated { .. } => "storage_backpressure",
@@ -235,6 +270,12 @@ impl std::fmt::Display for LifecycleError {
             Self::InvalidTransition { from, to } => {
                 write!(f, "非法会话状态转移：{from} → {to}")
             }
+            Self::RunNotFound { run_id } => write!(f, "run 不存在（run_not_found）：{run_id}"),
+            Self::RunNotRetryable { run_id, status } => write!(
+                f,
+                "run 非终态（run_not_retryable）：{run_id} 状态为 {status}；\
+                 仅 failed/timeout/cancelled 可重试（ADR-004）"
+            ),
             Self::PersistDegraded { reason } => {
                 write!(f, "存储降级（persist_degraded）：拒绝新 run；{reason}")
             }
@@ -560,6 +601,228 @@ impl SessionManager {
     /// 读取 run 行（验收断言/重试准入用）。
     pub async fn run(&self, run_id: &RunId) -> Result<Option<Run>, LifecycleError> {
         Ok(self.inner.reads.run(run_id).await?)
+    }
+
+    /// 一键重放（M3-06 `run_retry`；ADR-004/ADR-005）：
+    /// - 准入：run 存在且为终态（`failed`/`timeout`/`cancelled`）；会话非终态；
+    ///   管线准入（`persist_degraded`/背压）与适配器级背压检查；
+    /// - 重放输入：复用原 run 的 `input_message_id`（**不新增用户消息行**），
+    ///   正文取自该消息；新 run 重新编号，**旧 run 行保留审计**；
+    /// - 重放模式：由执行器按 ADR-005 决定——存在 `sessions.config.native_id` 且
+    ///   适配器支持时走 Mode R（原生恢复），否则 Mode N（新会话重发）；本层不
+    ///   自行判定模式，仅负责重新派发。
+    pub async fn retry_run(&self, run_id: &RunId) -> Result<RetryAck, LifecycleError> {
+        let run =
+            self.inner
+                .reads
+                .run(run_id)
+                .await?
+                .ok_or_else(|| LifecycleError::RunNotFound {
+                    run_id: run_id.clone(),
+                })?;
+        if !run_is_retryable(run.status) {
+            return Err(LifecycleError::RunNotRetryable {
+                run_id: run_id.clone(),
+                status: run.status,
+            });
+        }
+        let input_message_id =
+            run.input_message_id
+                .clone()
+                .ok_or_else(|| LifecycleError::Internal {
+                    reason: format!("run {run_id} 缺少输入消息，无法重放（审计数据不完整）"),
+                })?;
+        let input_message = self
+            .inner
+            .reads
+            .message(&input_message_id)
+            .await?
+            .ok_or_else(|| LifecycleError::Internal {
+                reason: format!(
+                    "run {run_id} 的输入消息 {input_message_id} 不存在（审计数据不完整）"
+                ),
+            })?;
+
+        self.inner
+            .pipeline
+            .admission()
+            .map_err(LifecycleError::from)?;
+
+        let mut state = lock_state(&self.inner).await;
+        self.hydrate_locked(&mut state, &run.session_id).await?;
+        {
+            let session = state.sessions.get(&run.session_id).ok_or_else(|| {
+                LifecycleError::SessionNotFound {
+                    session_id: run.session_id.clone(),
+                }
+            })?;
+            if session.fsm.is_terminal() {
+                return Err(LifecycleError::SessionClosed {
+                    session_id: run.session_id.clone(),
+                    status: session.fsm.status(),
+                });
+            }
+            if session.active.is_some() && session.waiting.is_some() {
+                return Err(LifecycleError::SessionBusy {
+                    session_id: run.session_id.clone(),
+                });
+            }
+            self.check_backpressure(&session.runtime_id)?;
+        }
+
+        let now = self.inner.clock.now_ms();
+        let retry_run = Run {
+            id: RunId::new(ulid::generate()).map_err(internal_from)?,
+            session_id: run.session_id.clone(),
+            status: aether_core::RunStatus::Queued,
+            input_message_id: Some(input_message_id.clone()),
+            error: None,
+            started_at: now,
+            finished_at: None,
+        };
+        self.inner
+            .write
+            .execute(StoreCommand::InsertRun {
+                run: retry_run.clone(),
+            })
+            .await?;
+
+        let queued = {
+            let session = state.sessions.get_mut(&run.session_id).ok_or_else(|| {
+                LifecycleError::SessionNotFound {
+                    session_id: run.session_id.clone(),
+                }
+            })?;
+            let runtime_id = session.runtime_id.clone();
+            if session.active.is_none() {
+                let cancel = RunCancelToken::child_of(&session.cancel);
+                session.active = Some(ActiveRun {
+                    run_id: retry_run.id.clone(),
+                    input_message_id: input_message_id.clone(),
+                    runtime_id,
+                    text: input_message.content.clone(),
+                    last_activity_ms: now,
+                    cancel,
+                });
+                false
+            } else {
+                session.waiting = Some(QueuedRun {
+                    run_id: retry_run.id.clone(),
+                    input_message_id: input_message_id.clone(),
+                    runtime_id,
+                    text: input_message.content.clone(),
+                });
+                true
+            }
+        };
+        drop(state);
+
+        if !queued {
+            self.spawn_run(run.session_id.clone(), retry_run.id.clone())
+                .await;
+        }
+        Ok(RetryAck {
+            session_id: run.session_id,
+            run_id: retry_run.id,
+            input_message_id,
+            queued,
+        })
+    }
+
+    /// 重启状态重建（M3-06；D5「运行中崩溃 → 在途 run 标 failed，可重试」口径）：
+    /// 核心重启后（存储/管线就绪、会话管理器构造完成）调用一次：
+    /// 1. `queued`/`running` run → `failed`（错误码 [`RUN_INTERRUPTED_CODE`]，
+    ///    `recoverable=true`）+ `run.failed` 事件（先日志后广播，经管线）；
+    /// 2. 非终态、非空闲会话（`creating`/`running`/`waiting_permission`/`paused`）→
+    ///    `idle` + `session.status_changed` 事件。
+    ///
+    /// 语义：崩溃前**未确认**的 run 不伪造完成；收口为失败后经 `run_retry` 重放
+    /// （Mode R/N 由执行器按 ADR-005 决定）。逐条尽力收口：单条失败仅记录诊断，
+    /// 不阻断其余条目。
+    pub async fn reconcile_interrupted_runs(&self) -> Result<ReconcileReport, LifecycleError> {
+        let runs = self.inner.reads.unfinished_runs().await?;
+        let mut report = ReconcileReport::default();
+        for run in runs {
+            let session = match self.inner.reads.session(&run.session_id).await? {
+                Some(session) => session,
+                None => {
+                    tracing::warn!(
+                        run_id = %run.id,
+                        session_id = %run.session_id,
+                        "重启收口：run 的会话行缺失，跳过（仅记录）"
+                    );
+                    continue;
+                }
+            };
+            let error = ErrorInfo {
+                code: RUN_INTERRUPTED_CODE.to_owned(),
+                message: "核心重启中断：run 未收到终态（未确认），已按失败收口，可重试（M3-06）"
+                    .to_owned(),
+                recoverable: true,
+            };
+            if let Err(failure) = self
+                .finish_run(
+                    &run.id,
+                    aether_core::RunStatus::Failed,
+                    Some(error.code.clone()),
+                )
+                .await
+            {
+                tracing::warn!(run_id = %run.id, error = %failure, "重启收口：run 行更新失败，跳过");
+                continue;
+            }
+            if let Err(failure) = self
+                .emit(
+                    &run.session_id,
+                    Some(&run.id),
+                    &session.runtime_id,
+                    EventPayload::RunFailed(RunFailedPayload {
+                        run_id: run.id.clone(),
+                        error,
+                    }),
+                )
+                .await
+            {
+                tracing::warn!(run_id = %run.id, error = %failure, "重启收口：run.failed 事件提交失败（仅记录）");
+            }
+            report.runs_failed.push(run.id);
+        }
+
+        let sessions = self.inner.reads.sessions_for_recovery().await?;
+        for session in sessions {
+            let now = self.inner.clock.now_ms();
+            if let Err(failure) = self
+                .inner
+                .write
+                .execute(StoreCommand::UpdateSessionStatus {
+                    session_id: session.id.clone(),
+                    status: SessionStatus::Idle,
+                    updated_at: now,
+                    closed_at: None,
+                })
+                .await
+            {
+                tracing::warn!(session_id = %session.id, error = %failure, "重启收口：会话行更新失败，跳过");
+                continue;
+            }
+            if let Err(failure) = self
+                .emit(
+                    &session.id,
+                    None,
+                    &session.runtime_id,
+                    EventPayload::SessionStatusChanged(SessionStatusChangedPayload {
+                        session_id: session.id.clone(),
+                        from: session.status,
+                        to: SessionStatus::Idle,
+                    }),
+                )
+                .await
+            {
+                tracing::warn!(session_id = %session.id, error = %failure, "重启收口：会话状态事件提交失败（仅记录）");
+            }
+            report.sessions_reset.push(session.id);
+        }
+        Ok(report)
     }
 
     /// 发送消息（ack 快路径）：消息与 run 行提交后立即返回。

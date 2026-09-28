@@ -112,6 +112,10 @@ record(
   "verify-m3-02（会话工作台：创建/发送/流式/中断 E2E + 运行时选择器 + 模型透传 + 10k 滚动基准 + messages_page 真实后端与生产补读路径；需 Bun）",
   run(node, [path.join(repoRoot, "scripts", "test", "m3-02", "verify-m3-02.mjs")]),
 );
+record(
+  "verify-m3-06（崩溃恢复体验：T4 kill -9 ×20 已确认零丢失 + run_retry Mode R/N + 重启状态重建 + 降级恢复引导；E2E 需真实 WebView，见 Windows CI）",
+  run(node, [path.join(repoRoot, "scripts", "test", "m3-06", "verify-m3-06.mjs"), "--skip-e2e"]),
+);
 
 if (!quick) {
   record("verify-coverage-gate", run(node, [path.join(repoRoot, "scripts", "test", "verify-coverage-gate.mjs")]));

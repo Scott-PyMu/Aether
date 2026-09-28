@@ -181,7 +181,8 @@ body {
   overflow-wrap: anywhere;
 }
 
-.health-unresponsive button {
+.health-unresponsive button,
+.health-degraded button {
   align-self: flex-start;
   background-color: #2a2f37;
   border: 1px solid #3a3f47;
@@ -191,9 +192,53 @@ body {
   padding: 0.5rem 1rem;
 }
 
-.health-unresponsive button:disabled {
+.health-unresponsive button:disabled,
+.health-degraded button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+/* M3-06：降级恢复引导（仅 app_restart；无热恢复按钮）。 */
+.health-recovery-hint {
+  color: #d9c08a;
+  font-size: 0.8rem;
+  margin: 0;
+}
+
+/* M3-06：消息气泡上的 run 终态与重试入口。 */
+.message-run-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.35rem;
+}
+
+.run-outcome {
+  color: #e8a7a7;
+  font-size: 0.8rem;
+}
+
+.message-run-actions button {
+  background-color: #2a2f37;
+  border: 1px solid #3a3f47;
+  border-radius: 4px;
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 0.2rem 0.6rem;
+}
+
+.message-run-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+/* M3-06：降级期发送入口提示。 */
+.composer-degraded-hint {
+  color: #f6b26b;
+  flex-basis: 100%;
+  font-size: 0.8rem;
+  margin: 0.25rem 0 0;
 }
 
 .health-error {
@@ -432,6 +477,7 @@ body {
 
 .composer {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
 }
 

@@ -21,7 +21,15 @@ export const commands = {
 	backupList: (payload: unknown | null) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("backup_list", { payload })),
 	/**  ADR-004/D13：外部候选先 canonicalize（存在性 + `.db` 后缀）再进入恢复七步。 */
 	backupRestore: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("backup_restore", { payload })),
-	/**  ADR-004：显式 `confirm:true` 才可重启（复用 D2 关闭序列）。 */
+	/**
+	 *  ADR-004/M3-06：显式 `confirm:true` 后触发应用重启（与 `app_exit` 同口径的
+	 *  命令层实现——重启属应用生命周期动作，不经 `IpcBackend` 下游）。
+	 * 
+	 *  机制：`AppHandle::request_restart()` → `RunEvent::ExitRequested` → 既有退出编排
+	 *  （D2 关闭序列：广播 shutdown → 适配器终止段 → 存储五步）→ 进程重启并重跑启动
+	 *  序列（A4 检测 + `quick_check` + 孤儿清理 + 重启状态重建）。P0 无热恢复（D4）：
+	 *  存储降级恢复仅经「修复外部条件 + 本入口重启 + 启动自检」。
+	 */
 	appRestart: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("app_restart", { payload })),
 	/**  ADR-004/M3-06：仅终态 run 可重试（`run_id` ULID；状态由后端判定）。 */
 	runRetry: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("run_retry", { payload })),

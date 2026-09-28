@@ -68,9 +68,27 @@ export function HealthMonitor() {
       >
         <p className="health-title">存储降级（只读）</p>
         <p className="health-detail">
-          触发源：{trigger}；写入与新 run 已拒绝（P0 无热恢复：修复外部条件后重启核心）。
+          触发源：{trigger}；写入与新任务已停止；运行中的任务已中断（可重试）。
           {report?.detail ? ` ${report.detail}` : ""}
         </p>
+        {/* M3-06：恢复引导仅提供 app_restart（修复外部条件 + 重启核心 + 启动自检）；
+            不提供任何「一键恢复/热恢复」按钮（D4/ADR-004）。 */}
+        <p className="health-recovery-hint" data-testid="storage-degraded-hint">
+          恢复方式：修复磁盘/目录/权限后重启应用（P0 无热恢复）。
+        </p>
+        <button
+          type="button"
+          data-testid="storage-degraded-restart"
+          onClick={onRestart}
+          disabled={restartPending}
+        >
+          重启应用
+        </button>
+        {restartError ? (
+          <p className="health-error" data-testid="storage-degraded-restart-error">
+            {restartError}
+          </p>
+        ) : null}
       </section>
     );
   }

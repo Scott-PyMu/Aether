@@ -45,6 +45,8 @@ export interface RunView {
   errorCode?: string;
   errorMessage?: string;
   recoverable?: boolean;
+  /** 取消原因（`run.cancelled.payload.reason`；`persist_degraded` 为存储降级中断）。 */
+  cancelReason?: string;
 }
 
 export interface SessionProjection {
@@ -214,7 +216,11 @@ export function projectSession(
       }
       case "run.cancelled": {
         if (runId) {
-          runs.set(runId, { runId, status: "cancelled" });
+          runs.set(runId, {
+            runId,
+            status: "cancelled",
+            cancelReason: asString(payload.reason),
+          });
           if (activeRunId === runId) {
             activeRunId = null;
           }

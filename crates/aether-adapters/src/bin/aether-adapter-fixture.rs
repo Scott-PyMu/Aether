@@ -9,6 +9,8 @@
 //! aether-adapter-fixture --mode deaf   --seconds 60   # hello + initialize 后不响应心跳
 //! aether-adapter-fixture --mode deaf   --seconds 300 --survive-eof  # 孤儿场景（核心强杀后仍存活）
 //! aether-adapter-fixture --mode silent --seconds 60   # 存活但不发 hello（握手超时）
+//! # M3-06 Mode R 恢复夹具：最小 D6 会话面（create 带 native_id → resumed=true）
+//! aether-adapter-fixture --mode session --session-log <path> [--seconds 60]
 //! # M1-10 资源告警夹具（M4-01 复用）：真实分配内存，按跨重启计数交替超限/回落
 //! aether-adapter-fixture --mode deaf --seconds 30 --mb 160 \
 //!     --mb-cycle-file <path> [--launch-token T]
@@ -33,6 +35,9 @@ enum Mode {
     StderrCrash,
     Deaf,
     Silent,
+    /// M3-06：最小 D6 会话面（`session.create/send/interrupt/dispose`），
+    /// `session.create` 携带 `native_id` → `resumed=true`（Mode R 恢复验证宿主）。
+    Session,
 }
 
 impl Mode {
@@ -43,6 +48,7 @@ impl Mode {
             "stderr-crash" => Some(Self::StderrCrash),
             "deaf" => Some(Self::Deaf),
             "silent" => Some(Self::Silent),
+            "session" => Some(Self::Session),
             _ => None,
         }
     }
@@ -64,6 +70,8 @@ struct Args {
     /// 仅当 N 为偶数时按 `--mb` 分配——用于「超限 / 回落」跨进程交替
     /// （释放内存后宿主可能保留物理页，进程级回落不受影响）。
     mb_cycle_file: Option<std::path::PathBuf>,
+    /// M3-06 会话夹具：`session.create`/`session.send` 调用记录（JSON Lines 追加）。
+    session_log: Option<std::path::PathBuf>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -77,6 +85,7 @@ fn parse_args() -> Result<Args, String> {
         survive_eof: false,
         mb: 0,
         mb_cycle_file: None,
+        session_log: None,
     };
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let mut index = 0;
@@ -112,6 +121,7 @@ fn parse_args() -> Result<Args, String> {
                     .map_err(|error| format!("--mb 非法：{error}"))?
             }
             "--mb-cycle-file" => args.mb_cycle_file = Some(value()?.into()),
+            "--session-log" => args.session_log = Some(value()?.into()),
             "--survive-eof" => args.survive_eof = true,
             "--launch-token" => args.launch_token = Some(value()?),
             other if other.starts_with("--launch-token=") => {
@@ -157,11 +167,332 @@ fn run(args: &Args) -> Result<(), String> {
             std::process::exit(args.exit_code);
         }
         Mode::Deaf => serve_deaf(args),
+        Mode::Session => serve_session(args),
     }
 }
 
 fn sleep_seconds(seconds: u64) {
     std::thread::sleep(Duration::from_secs(seconds));
+}
+
+/// M3-06 会话夹具状态（单会话最小投影）。
+#[derive(Default)]
+struct SessionFixtureState {
+    /// `client_msg_id` → 适配器 run id（ADR-005 适配器侧幂等）。
+    client_msg_ids: std::collections::HashMap<String, String>,
+    /// 在途 run（`long` 触发后保持不返回终态，等待 `session.interrupt`）。
+    active_run: Option<String>,
+    disposed: bool,
+}
+
+/// 会话夹具调用记录（JSON Lines 追加；M3-06 测试断言 `resumed`/`session_id`）。
+fn log_session_call(args: &Args, payload: serde_json::Value) {
+    let Some(path) = &args.session_log else {
+        return;
+    };
+    let line = match serde_json::to_string(&payload) {
+        Ok(line) => line,
+        Err(_) => return,
+    };
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(file, "{line}");
+        let _ = file.flush();
+    }
+}
+
+/// 写一行 JSON-RPC 帧（响应/通知共用）。
+fn write_frame(frame: &serde_json::Value) -> Result<(), String> {
+    let stdout = std::io::stdout();
+    let mut handle = stdout.lock();
+    let text = serde_json::to_string(frame).map_err(|error| format!("序列化：{error}"))?;
+    writeln!(handle, "{text}").map_err(|error| format!("写帧：{error}"))?;
+    handle.flush().map_err(|error| format!("flush：{error}"))
+}
+
+/// 夹具内 ULID 形状 id（26 字符、首字符 ≤7；仅需唯一与形状合法）。
+fn fixture_ulid(counter: u64) -> String {
+    format!("01J{counter:023}")
+}
+
+/// 会话事件信封（`event` 通知；信封 9 字段，seq 由核心 sequencer 重排）。
+fn session_event(
+    session_id: &str,
+    run_id: &str,
+    event_counter: &mut u64,
+    event_type: &str,
+    payload: serde_json::Value,
+) -> serde_json::Value {
+    *event_counter += 1;
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "event",
+        "params": {
+            "v": 1,
+            "id": fixture_ulid(100_000 + *event_counter),
+            "session_id": session_id,
+            "run_id": run_id,
+            "runtime_id": "fixture",
+            "seq": *event_counter,
+            "ts": 1_700_000_000_000i64,
+            "type": event_type,
+            "payload": payload,
+        },
+    })
+}
+
+/// M3-06 最小 D6 会话面（Mode R 恢复验证宿主；不修改 DSH/hermes 源码的独立夹具）。
+///
+/// - `session.create`：无 `native_id` → 新建 `fixture-sess-<n>` 且返回 `native_id`；
+///   携带 `native_id` → 以该 id 恢复（`resumed=true`）；
+/// - `session.send`：`client_msg_id` 幂等；`fail-once` → 仅首次 `run.failed`
+///   （重放成功；M3-06 重放验证）；`fail*` → 恒 `run.failed`；`long` → 保持
+///   在途直至 `session.interrupt`（`run.cancelled`）；其余 → 2 delta + 终稿 + 完成；
+/// - 调用记录写入 `--session-log`（JSON Lines）。
+fn serve_session(args: &Args) -> Result<(), String> {
+    let hello = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "hello",
+        "params": {
+            "protocol": "1.0",
+            "runtime": {"name": "fixture", "version": "0.1.0", "capabilities": ["session.create", "session.send"]},
+        },
+    });
+    write_frame(&hello)?;
+
+    let mut sessions: std::collections::HashMap<String, SessionFixtureState> =
+        std::collections::HashMap::new();
+    let mut session_counter: u64 = 0;
+    let mut event_counter: u64 = 0;
+    // `fail-once` 为**进程级**首次消费（Mode R 恢复会重建会话状态，进程级计数跨恢复保持）。
+    let mut fail_once_used = false;
+    let stdin = std::io::stdin();
+    let mut reader = stdin.lock();
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let read = reader
+            .read_line(&mut line)
+            .map_err(|error| format!("读 stdin：{error}"))?;
+        if read == 0 {
+            return Ok(()); // 核心退出（stdin EOF）。
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let frame: serde_json::Value = match serde_json::from_str(trimmed) {
+            Ok(frame) => frame,
+            Err(_) => continue,
+        };
+        let id = frame.get("id").cloned().unwrap_or(serde_json::Value::Null);
+        let method = frame
+            .get("method")
+            .and_then(|method| method.as_str())
+            .unwrap_or_default()
+            .to_owned();
+        let params = frame
+            .get("params")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        let respond = |result: serde_json::Value| -> Result<(), String> {
+            write_frame(&serde_json::json!({"jsonrpc": "2.0", "id": id, "result": result}))
+        };
+        let respond_error = |code: i64, message: &str| -> Result<(), String> {
+            write_frame(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": {"code": code, "message": message},
+            }))
+        };
+        match method.as_str() {
+            "initialize" => respond(serde_json::json!({"acknowledged": true}))?,
+            "session.create" => {
+                session_counter += 1;
+                let native_id = params
+                    .get("native_id")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_owned);
+                let resumed = native_id.is_some();
+                let session_id =
+                    native_id.unwrap_or_else(|| format!("fixture-sess-{session_counter}"));
+                sessions.insert(session_id.clone(), SessionFixtureState::default());
+                log_session_call(
+                    args,
+                    serde_json::json!({
+                        "method": "session.create",
+                        "session_id": session_id,
+                        "native_id": session_id,
+                        "resumed": resumed,
+                    }),
+                );
+                respond(serde_json::json!({
+                    "session_id": session_id,
+                    "native_id": session_id,
+                    "resumed": resumed,
+                    "created_at": 1_700_000_000_000i64,
+                }))?;
+            }
+            "session.send" => {
+                let session_id = params
+                    .get("session_id")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
+                    .to_owned();
+                let client_msg_id = params
+                    .get("client_msg_id")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
+                    .to_owned();
+                let text = params
+                    .get("text")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
+                    .to_owned();
+                let Some(session) = sessions.get_mut(&session_id) else {
+                    respond_error(1005, &format!("会话不存在: {session_id}"))?;
+                    continue;
+                };
+                if session.disposed {
+                    respond_error(1005, &format!("会话已关闭: {session_id}"))?;
+                    continue;
+                }
+                if let Some(existing) = session.client_msg_ids.get(&client_msg_id) {
+                    respond(serde_json::json!({
+                        "accepted": true,
+                        "run_id": existing,
+                        "duplicate": true,
+                    }))?;
+                    continue;
+                }
+                let run_id = fixture_ulid(200_000 + session_counter * 1_000 + event_counter);
+                session
+                    .client_msg_ids
+                    .insert(client_msg_id.clone(), run_id.clone());
+                log_session_call(
+                    args,
+                    serde_json::json!({
+                        "method": "session.send",
+                        "session_id": session_id,
+                        "client_msg_id": client_msg_id,
+                        "text": text,
+                    }),
+                );
+                write_frame(&session_event(
+                    &session_id,
+                    &run_id,
+                    &mut event_counter,
+                    "run.started",
+                    serde_json::json!({"run_id": run_id}),
+                ))?;
+                let fail_once = text == "fail-once" && !fail_once_used;
+                if fail_once {
+                    fail_once_used = true;
+                }
+                if fail_once || (text.starts_with("fail") && text != "fail-once") {
+                    write_frame(&session_event(
+                        &session_id,
+                        &run_id,
+                        &mut event_counter,
+                        "run.failed",
+                        serde_json::json!({
+                            "run_id": run_id,
+                            "error": {"code": "fixture_fail", "message": "夹具注入失败", "recoverable": true},
+                        }),
+                    ))?;
+                } else if text == "long" {
+                    // 保持在途：终态由 `session.interrupt` 收口（崩溃/中断场景）。
+                    session.active_run = Some(run_id.clone());
+                } else {
+                    let message_id = fixture_ulid(300_000 + event_counter);
+                    let mut content = String::new();
+                    for fragment in ["fixture-", "done"] {
+                        content.push_str(fragment);
+                        write_frame(&session_event(
+                            &session_id,
+                            &run_id,
+                            &mut event_counter,
+                            "message.delta",
+                            serde_json::json!({"message_id": message_id, "text": fragment}),
+                        ))?;
+                    }
+                    write_frame(&session_event(
+                        &session_id,
+                        &run_id,
+                        &mut event_counter,
+                        "message.completed",
+                        serde_json::json!({
+                            "message": {
+                                "id": message_id,
+                                "session_id": session_id,
+                                "run_id": run_id,
+                                "role": "assistant",
+                                "content": content,
+                                "created_at": 1_700_000_000_000i64,
+                            },
+                            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                        }),
+                    ))?;
+                    write_frame(&session_event(
+                        &session_id,
+                        &run_id,
+                        &mut event_counter,
+                        "run.completed",
+                        serde_json::json!({
+                            "run_id": run_id,
+                            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                        }),
+                    ))?;
+                }
+                respond(serde_json::json!({"accepted": true, "run_id": run_id}))?;
+            }
+            "session.interrupt" => {
+                let session_id = params
+                    .get("session_id")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
+                    .to_owned();
+                let Some(session) = sessions.get_mut(&session_id) else {
+                    respond_error(1005, &format!("会话不存在: {session_id}"))?;
+                    continue;
+                };
+                let interrupted = session.active_run.take();
+                if let Some(run_id) = &interrupted {
+                    write_frame(&session_event(
+                        &session_id,
+                        run_id,
+                        &mut event_counter,
+                        "run.cancelled",
+                        serde_json::json!({"run_id": run_id, "reason": "interrupted"}),
+                    ))?;
+                }
+                respond(serde_json::json!({
+                    "interrupted": interrupted.is_some(),
+                    "run_id": interrupted,
+                }))?;
+            }
+            "session.dispose" => {
+                let session_id = params
+                    .get("session_id")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
+                    .to_owned();
+                if let Some(session) = sessions.get_mut(&session_id) {
+                    session.disposed = true;
+                }
+                respond(serde_json::json!({"disposed": true}))?;
+            }
+            "health.ping" => respond(serde_json::json!({"status": "ok"}))?,
+            "shutdown" => {
+                respond(serde_json::json!({"ok": true}))?;
+                return Ok(());
+            }
+            other => respond_error(-32601, &format!("未知方法：{other}"))?,
+        }
+    }
 }
 
 /// 资源夹具（M1-10 增量 / M4-01 复用）：真实分配 `--mb` MiB 并逐页触写。

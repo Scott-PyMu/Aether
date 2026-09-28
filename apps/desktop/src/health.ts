@@ -13,6 +13,16 @@ export const HEALTH_TIMEOUT_MS = 15_000;
 
 export type StorageState = "normal" | "persist_degraded";
 
+/**
+ * 健康轮询状态（M2-07；M3-06 经 `healthBus` 共享给工作台）。
+ *
+ * - `loading`：首轮查询进行中（含 ADR-007 过渡窗口 `core_not_ready`）；
+ * - `normal`：`storage_state=normal`；
+ * - `degraded`：`storage_state=persist_degraded`（只读；发送入口禁用，M3-06）；
+ * - `unresponsive`：15s 无响应（「核心未响应」+ 重启入口）。
+ */
+export type HealthStatus = "loading" | "normal" | "degraded" | "unresponsive";
+
 /** `health.runtimes` 条目（`null` = 监督器未接线；`[]` = 已接线无 runtime）。 */
 export interface RuntimeSummary {
   id: string;

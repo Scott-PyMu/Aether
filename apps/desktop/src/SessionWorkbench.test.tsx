@@ -113,6 +113,13 @@ function fakeIpc(overrides: Partial<SessionIpc> = {}): SessionIpc {
       status: "completed" as SessionStatus,
     })),
     messagesPage: vi.fn(async () => emptyPage()),
+    // M3-06：一键重放命令面（本文件不消费；缺省替身保持接口完整）。
+    retryRun: vi.fn(async () => ({
+      session_id: SESSION,
+      run_id: RUN_1,
+      input_message_id: "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+      queued: false,
+    })),
     ...overrides,
   };
 }
