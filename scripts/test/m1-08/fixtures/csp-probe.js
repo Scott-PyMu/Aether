@@ -54,7 +54,22 @@
     );
   }
 
-  setTimeout(function () {
-    report(collect());
-  }, 1500);
+  // 等待预期四类指令的违规事件齐备再回报（或 5s 上限）：
+  // `frame-src` 违规依赖 iframe 加载被阻断的事件时序，CI 冷启动/高负载下可能晚于
+  // 固定 1.5s；固定等待会漏报（断言不变，仅消除报告时序竞态）。
+  var REQUIRED_PREFIXES = ["script-src", "style-src", "img-src", "frame-src"];
+  function directivesReady() {
+    return REQUIRED_PREFIXES.every(function (prefix) {
+      return violations.some(function (violation) {
+        return (violation.directive || "").indexOf(prefix) === 0;
+      });
+    });
+  }
+  var deadline = Date.now() + 5000;
+  var timer = setInterval(function () {
+    if (directivesReady() || Date.now() > deadline) {
+      clearInterval(timer);
+      report(collect());
+    }
+  }, 100);
 })();

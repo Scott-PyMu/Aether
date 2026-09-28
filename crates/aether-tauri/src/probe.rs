@@ -10,6 +10,7 @@
 //! - `AETHER_E2E_PROBE_REPORT <json>`
 //! - `AETHER_E2E_NAV_ALLOW|NAV_BLOCK|NAV_EXTERNAL <url>`
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde_json::Value;
@@ -31,6 +32,14 @@ pub const REPORT_LINE: &str = "AETHER_E2E_PROBE_REPORT";
 pub const NAV_ALLOW_LINE: &str = "AETHER_E2E_NAV_ALLOW";
 pub const NAV_BLOCK_LINE: &str = "AETHER_E2E_NAV_BLOCK";
 pub const NAV_EXTERNAL_LINE: &str = "AETHER_E2E_NAV_EXTERNAL";
+
+/// 主窗口 React 引导回执（`ui-bootstrapped` 事件已上报）。
+///
+/// CI 冷启动（WebView2 初始化可达 10s+）下，探针页排队回报与外链导航（触发退出）
+/// 可能早于主窗口挂载；退出前等待该回执（有界），消除夹具时序竞态——断言不变。
+static UI_BOOTSTRAPPED: AtomicBool = AtomicBool::new(false);
+/// 退出前等待主窗口引导回执的上限（CI 冷启动余量；E2E 脚本总超时 45s）。
+const UI_BOOTSTRAP_WAIT: Duration = Duration::from_secs(20);
 
 /// 探针是否启用。
 pub fn is_enabled() -> bool {
@@ -70,11 +79,16 @@ fn watch_main_window_bootstrap<R: Runtime>(app: AppHandle<R>) {
     })()"#;
 
     std::thread::spawn(move || {
-        for _ in 0..20 {
+        // 轮询窗口覆盖 CI 冷启动（WebView2 初始化 + 主窗口挂载可达 10s+）；
+        // 退出路径另行等待回执（见 `record_navigation`），两者共同消除竞态。
+        for _ in 0..120 {
+            if UI_BOOTSTRAPPED.load(Ordering::SeqCst) {
+                return;
+            }
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.eval(SCRIPT);
             }
-            std::thread::sleep(Duration::from_millis(300));
+            std::thread::sleep(Duration::from_millis(500));
         }
     });
 }
@@ -101,12 +115,21 @@ pub fn record_navigation<R: Runtime>(
     let app = webview.app_handle().clone();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(250));
+        // 有界等待主窗口引导回执：探针窗口与主窗口并行加载，CI 冷启动下主窗口
+        // 可能晚于探针页回报挂载；引导未回执则按上限退出（真实失败仍被 E2E 断言）。
+        let deadline = std::time::Instant::now() + UI_BOOTSTRAP_WAIT;
+        while !UI_BOOTSTRAPPED.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(100));
+        }
         app.exit(0);
     });
 }
 
-/// 记录页面回报的探针结果。
+/// 记录页面回报的探针结果（`ui-bootstrapped` 置位退出等待标志）。
 pub fn record_report(payload: &Value) {
+    if payload.get("event").and_then(Value::as_str) == Some("ui-bootstrapped") {
+        UI_BOOTSTRAPPED.store(true, Ordering::SeqCst);
+    }
     match serde_json::to_string(payload) {
         Ok(serialized) => println!("{REPORT_LINE} {serialized}"),
         Err(error) => eprintln!("[aether] 探针回报序列化失败：{error}"),
