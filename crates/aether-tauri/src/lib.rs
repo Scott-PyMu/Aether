@@ -225,6 +225,8 @@ fn build_backend(
     // M3-02：会话后端（生命周期 + 适配器执行器 + 消息分页）随核心启动接线。
     let mut session_manager: Option<aether_control::SessionManager> = None;
     let mut adapter_executor: Option<std::sync::Arc<adapter_executor::AdapterRunExecutor>> = None;
+    // M3-03：权限中心命令面（`permissions_pending`/`permission_resolve`）的服务句柄。
+    let mut permission_service: Option<aether_control::PermissionService> = None;
     let (health, storage_slot, pipeline, reads) = match core_health::boot_core_full(
         &data_dir, &handle, runtimes,
     ) {
@@ -266,6 +268,42 @@ fn build_backend(
                 Some(executor) => executor.clone(),
                 None => std::sync::Arc::new(adapter_executor::UnavailableExecutor),
             };
+            // M3-03：权限中心真实接线（D9）——待审批清单/决议 IPC 的合法数据源。
+            // 策略引擎绑定工作区根：P0 工作区绑定（workspace_set/D14）随 M3-08 落地，
+            // 在绑定前以数据目录为基准目录；执行器权限网关仍为 `None`（M3-02 边界 9），
+            // 不产生回环请求，本基准不改变任何既有语义（M3-08 接管工作区基准）。
+            match aether_security::PolicyEngine::new(&data_dir) {
+                Ok(policy) => {
+                    let service = aether_control::PermissionService::new(
+                        aether_control::PermissionConfig::default(),
+                        std::sync::Arc::new(aether_control::SystemClock),
+                        policy,
+                        write.clone(),
+                        reads.clone(),
+                        pipeline.clone(),
+                    );
+                    // D9：核心重启后待审批恢复（等待者随旧核心退出，仅恢复台账）。
+                    match handle.block_on(service.restore_pending()) {
+                        Ok(restored) => tracing::info!(
+                            restored,
+                            "权限待审批已恢复（D9：核心重启后 pending 恢复）"
+                        ),
+                        Err(error) => {
+                            tracing::warn!(error = %error, "权限待审批恢复失败（继续启动）")
+                        }
+                    }
+                    // D9：300s 超时巡检（deny + 审计；落盘成功才广播 permission.resolved）。
+                    let background = service.spawn_background(&handle);
+                    tracing::info!(background, "权限超时巡检已启动（300s → deny + 审计）");
+                    permission_service = Some(service);
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        "权限策略引擎初始化失败：权限中心命令回 core_not_ready（不伪造空队列）"
+                    );
+                }
+            }
             let manager = aether_control::SessionManager::new(
                 aether_control::LifecycleConfig::default(),
                 std::sync::Arc::new(aether_control::SystemClock),
@@ -347,6 +385,11 @@ fn build_backend(
         if let Some(manager) = &session_manager {
             orchestrator.install_session_manager(manager.clone());
         }
+        // M3-03：退出序列先停权限超时巡检，再进入管线/存储关闭（D2 顺序不引入新阶段，
+        // 仅复用既有「停止后台任务」段）。
+        if let Some(service) = &permission_service {
+            orchestrator.install_permission_service(service.clone());
+        }
         Some(orchestrator)
     } else {
         None
@@ -362,15 +405,19 @@ fn build_backend(
         });
     let inner: std::sync::Arc<dyn ipc::IpcBackend> =
         std::sync::Arc::new(runtime_control::RuntimeControlBackend::new(health, control));
+    let mut session_backend = session_backend::SessionBackend::new(
+        inner,
+        session_manager,
+        adapter_executor,
+        reads,
+        supervisor,
+        handle,
+    );
+    if let Some(service) = permission_service {
+        session_backend = session_backend.with_permissions(service);
+    }
     BackendBundle {
-        backend: std::sync::Arc::new(session_backend::SessionBackend::new(
-            inner,
-            session_manager,
-            adapter_executor,
-            reads,
-            supervisor,
-            handle,
-        )),
+        backend: std::sync::Arc::new(session_backend),
         shutdown: orchestrator,
     }
 }

@@ -109,6 +109,10 @@ record(
   const aetherStore = read("apps/desktop/src/aetherStore.ts");
   const backfillSource = read("apps/desktop/src/backfillSource.ts");
   const workbench = read("apps/desktop/src/SessionWorkbench.tsx");
+  // M3-03/Q8：状态条（`session-status`/`run-status`/`interrupt`）已并入 `TopBar`
+  // （UI-UX §2.5/Q8；锚点未改名、语义不变）——静态检查按「工作台组合」读取两者。
+  const topBar = read("apps/desktop/src/TopBar.tsx");
+  const workbenchComposition = `${workbench}\n${topBar}`;
   const required = [
     [sessionBackend, "fn messages_page", "messages_page 真实后端"],
     [sessionBackend, "events_page", "按 last_seq 补读 events 表"],
@@ -132,7 +136,9 @@ record(
     [backfillSource, "readback_gap_too_large", "同码透传判定"],
     [workbench, "runtime-selector", "运行时选择器"],
     [workbench, "capability-badge", "能力徽标"],
-    [workbench, "session-status", "状态条"],
+    [workbenchComposition, "session-status", "状态条"],
+    [workbenchComposition, "run-status", "run 状态"],
+    [workbenchComposition, "interrupt", "中断入口"],
     [workbench, "VirtualList", "消息流虚拟滚动"],
     [workbench, "Markdown", "消息流 Markdown"],
   ];

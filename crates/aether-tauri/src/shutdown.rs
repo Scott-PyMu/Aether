@@ -189,6 +189,8 @@ pub struct AppShutdown {
     monitors: Mutex<Vec<(String, JoinHandle<()>)>>,
     /// 会话管理器（M3-02）：退出时停止看门狗/事件监听后台任务。
     session_manager: Mutex<Option<aether_control::SessionManager>>,
+    /// 权限服务（M3-03）：退出时停止 300s 超时巡检后台任务。
+    permission_service: Mutex<Option<aether_control::PermissionService>>,
     handle: tokio::runtime::Handle,
     budget: Duration,
 }
@@ -207,6 +209,7 @@ impl AppShutdown {
             storage,
             monitors: Mutex::new(monitors),
             session_manager: Mutex::new(None),
+            permission_service: Mutex::new(None),
             handle,
             budget: APP_EXIT_BUDGET,
         })
@@ -219,6 +222,15 @@ impl AppShutdown {
             Err(poisoned) => poisoned.into_inner(),
         };
         *slot = Some(manager);
+    }
+
+    /// 接线权限服务（M3-03；退出序列停止其 300s 超时巡检后台任务）。
+    pub fn install_permission_service(&self, service: aether_control::PermissionService) {
+        let mut slot = match self.permission_service.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *slot = Some(service);
     }
 
     /// 退出预算（测试可观测）。
@@ -251,6 +263,17 @@ impl AppShutdown {
             };
             if let Some(manager) = manager {
                 manager.shutdown_background().await;
+            }
+        }
+
+        // 0.6 停止权限超时巡检（M3-03：300s sweep 不得在关闭期间触达写队列）。
+        {
+            let service = match self.permission_service.lock() {
+                Ok(mut guard) => guard.take(),
+                Err(poisoned) => poisoned.into_inner().take(),
+            };
+            if let Some(service) = service {
+                service.shutdown_background().await;
             }
         }
 

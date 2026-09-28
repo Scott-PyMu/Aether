@@ -274,12 +274,19 @@ body {
 /* ===== M3-02：会话工作台（会话列表 / 运行时选择器 / 消息流 / 状态条） ===== */
 
 .workbench {
-  display: grid;
-  grid-template-columns: 18rem 1fr;
-  gap: 1rem;
-  width: min(72rem, 96vw);
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  width: min(88rem, 96vw);
   margin: 1rem auto;
   text-align: left;
+}
+
+.workbench-columns {
+  display: grid;
+  grid-template-columns: 18rem minmax(0, 1fr) 20rem;
+  gap: 1rem;
+  align-items: start;
 }
 
 .workbench-sidebar {
@@ -539,6 +546,349 @@ body {
   color: inherit;
   cursor: pointer;
   padding: 0.4rem 0.9rem;
+}
+
+/* ===== M3-03：顶栏（Q8 状态条合并）/ 右栏（S-03 权限 + S-04 运行时） ===== */
+
+.workbench-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  border: 1px solid #3a3f47;
+  border-radius: 6px;
+  background-color: #1d2026;
+  padding: 0.45rem 0.65rem;
+}
+
+.topbar-left,
+.topbar-right {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.topbar-left {
+  min-width: 0;
+}
+
+.topbar-app {
+  font-weight: 600;
+}
+
+.topbar-session-title {
+  max-width: 16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar-session-title.muted {
+  color: #9aa0a6;
+}
+
+.topbar-session-status {
+  border: 1px solid #3a3f47;
+  border-radius: 999px;
+  color: #b9c0c7;
+  font-size: 0.72rem;
+  padding: 0.05rem 0.45rem;
+}
+
+.topbar-middle {
+  flex: 1;
+  min-width: 12rem;
+}
+
+.topbar-middle .session-status-bar {
+  border: none;
+  padding: 0;
+}
+
+.runtime-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.runtime-badge {
+  border: 1px solid #3a3f47;
+  border-radius: 999px;
+  color: #b9c0c7;
+  font-size: 0.72rem;
+  padding: 0.05rem 0.45rem;
+}
+
+.runtime-badge.runtime-ready {
+  border-color: #3f5f3f;
+  color: #8fd18f;
+}
+
+.runtime-badge.runtime-degraded {
+  border-color: #6b5a2e;
+  color: #f6b26b;
+}
+
+.runtime-badge.runtime-disabled {
+  border-color: #7a3b3b;
+  color: #e8a7a7;
+}
+
+.storage-indicator,
+.pending-permission-badge {
+  color: #9aa0a6;
+  font-size: 0.75rem;
+}
+
+.storage-indicator.storage-persist_degraded,
+.storage-indicator.storage-unresponsive {
+  color: #e8a7a7;
+}
+
+.right-panel-toggle {
+  background-color: #2a2f37;
+  border: 1px solid #3a3f47;
+  border-radius: 4px;
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.78rem;
+  padding: 0.25rem 0.6rem;
+}
+
+.workbench-right {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+@media (max-width: 1279px) {
+  .workbench-columns {
+    grid-template-columns: 18rem minmax(0, 1fr);
+  }
+
+  .workbench-right {
+    display: none;
+  }
+
+  .workbench-right[data-open="true"] {
+    display: flex;
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 20rem;
+    max-width: 90vw;
+    overflow-y: auto;
+    background-color: #14161a;
+    border-left: 1px solid #3a3f47;
+    padding: 1rem;
+    z-index: 20;
+  }
+}
+
+@media (min-width: 1280px) {
+  .right-panel-toggle {
+    display: none;
+  }
+}
+
+.runtime-panel,
+.permission-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  border: 1px solid #3a3f47;
+  border-radius: 6px;
+  background-color: #1d2026;
+  padding: 0.6rem 0.7rem;
+}
+
+.runtime-panel-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.runtime-panel-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  border: 1px solid #3a3f47;
+  border-radius: 4px;
+  padding: 0.4rem 0.55rem;
+}
+
+.runtime-panel-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.runtime-panel-status {
+  color: #9aa0a6;
+  font-size: 0.78rem;
+}
+
+.runtime-panel-item[data-status="ready"] .runtime-panel-status {
+  color: #8fd18f;
+}
+
+.runtime-panel-item[data-status="degraded"] .runtime-panel-status {
+  color: #f6b26b;
+}
+
+.runtime-panel-item[data-status="disabled"] .runtime-panel-status {
+  color: #e8a7a7;
+}
+
+.runtime-panel-reason,
+.runtime-panel-capabilities,
+.runtime-panel-remedy,
+.runtime-panel-notice,
+.runtime-panel-empty {
+  color: #9aa0a6;
+  font-size: 0.78rem;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.runtime-panel-notice {
+  color: #8fd18f;
+}
+
+.runtime-panel-error,
+.permission-error {
+  color: #e8a7a7;
+  font-size: 0.8rem;
+  margin: 0;
+}
+
+.runtime-panel-actions,
+.permission-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.runtime-panel-actions button,
+.permission-actions button {
+  background-color: #2a2f37;
+  border: 1px solid #3a3f47;
+  border-radius: 4px;
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.78rem;
+  padding: 0.25rem 0.65rem;
+}
+
+.runtime-panel-actions button:disabled,
+.permission-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.permission-queue-count {
+  display: inline-block;
+  margin-left: 0.4rem;
+  border: 1px solid #3a3f47;
+  border-radius: 999px;
+  color: #b9c0c7;
+  font-size: 0.72rem;
+  padding: 0 0.4rem;
+}
+
+.permission-empty {
+  color: #9aa0a6;
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.permission-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  border: 1px solid #6b5a2e;
+  border-radius: 6px;
+  background-color: #241f14;
+  padding: 0.6rem 0.7rem;
+}
+
+.permission-card.resolved {
+  border-color: #3a3f47;
+  background-color: #1d2026;
+}
+
+.permission-card-title {
+  font-size: 0.9rem;
+  margin: 0;
+}
+
+.permission-action {
+  color: #f6b26b;
+  font-size: 0.8rem;
+  margin: 0;
+}
+
+.permission-targets {
+  display: grid;
+  grid-template-columns: 5rem 1fr;
+  gap: 0.15rem 0.5rem;
+  margin: 0;
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
+.permission-targets dt {
+  color: #9aa0a6;
+}
+
+.permission-targets dd {
+  margin: 0;
+}
+
+.permission-timeout-note {
+  color: #d9c08a;
+  font-size: 0.78rem;
+  margin: 0;
+}
+
+.permission-queue-note {
+  color: #9aa0a6;
+  font-size: 0.78rem;
+  margin: 0;
+}
+
+.permission-boundary {
+  color: #9aa0a6;
+  font-size: 0.72rem;
+  margin: 0;
+}
+
+.permission-resolved-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.permission-resolved-list .permission-card {
+  flex-direction: row;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+  padding: 0.35rem 0.55rem;
+}
+
+.permission-resolved-result {
+  color: #9aa0a6;
 }
 
 /* ===== Markdown 渲染 ===== */

@@ -733,6 +733,64 @@ jobs:
             echo "::error title=m3-02-tail::$line"
           done
 
+  # M3-03：权限中心与运行状态面板（设计 D9/D5；UI-UX S-03/S-04）。
+  # 覆盖：待审批清单/原文与规范化对照/允许·拒绝·超时（IPC → 真实适配器收到决议，
+  # 零直通；含 M2-10 异常路径：deny/超时/once/session/重启 pending）、同会话并发排队、
+  # 降级横幅与 disabled 运行时不可创建会话（前端 + 后端防线）。
+  permission-center:
+    name: Permission center (M3-03)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: 安装 Tauri Linux 系统依赖（webkit2gtk 等）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: 安装 Linux 系统依赖（keyring/secret-service 需要 libdbus）
+        run: sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: M3-03 验证（审批卡/对照/决策/队列/超时 + 降级与 disabled 联动 + IPC 回环到适配器）
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/test/m3-03/verify-m3-03.mjs 2>&1 | tee m3-03-verify.log
+      - name: M3-03 失败诊断（公开 annotation，便于无凭据取证）
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "### M3-03 verify 失败输出（断言 + tail 30）"
+            echo '```text'
+            grep -E "阻断|缺少|panicked|assertion|FAIL |error\[|AssertionError" m3-03-verify.log 2>/dev/null | tail -12 || true
+            echo '--- tail 30 ---'
+            tail -30 m3-03-verify.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -A 20 "===== verify-m3-03 =====" m3-03-verify.log 2>/dev/null | tail -12 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m3-03-summary::$line"
+          done
+          grep -E "阻断|缺少|panicked|assertion|AssertionError" m3-03-verify.log 2>/dev/null | tail -4 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m3-03-assert::$line"
+          done
+          tail -4 m3-03-verify.log 2>/dev/null | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m3-03-tail::$line"
+          done
+
   m3-06-recovery:
     name: Crash recovery (M3-06)
     runs-on: ubuntu-22.04

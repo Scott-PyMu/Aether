@@ -113,6 +113,10 @@ record(
   run(node, [path.join(repoRoot, "scripts", "test", "m3-02", "verify-m3-02.mjs")]),
 );
 record(
+  "verify-m3-03（权限中心与运行状态面板：审批卡对照/决策/队列/超时 + 降级与 disabled 联动 + IPC 回环到适配器；需 Bun）",
+  run(node, [path.join(repoRoot, "scripts", "test", "m3-03", "verify-m3-03.mjs")]),
+);
+record(
   "verify-m3-06（崩溃恢复体验：T4 kill -9 ×20 已确认零丢失 + run_retry Mode R/N + 重启状态重建 + 降级恢复引导；E2E 需真实 WebView，见 Windows CI）",
   run(node, [path.join(repoRoot, "scripts", "test", "m3-06", "verify-m3-06.mjs"), "--skip-e2e"]),
 );

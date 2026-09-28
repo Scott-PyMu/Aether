@@ -194,3 +194,17 @@ export const RUNTIME_STATUS_LABELS: Record<RuntimeStatus, string> = {
   degraded: "降级",
   disabled: "已禁用",
 };
+
+/**
+ * 运行时 `status_reason` 展示文案（M3-03；UI-UX §3.2/§5，D5 五种 + 握手超时）。
+ *
+ * 未知 reason 原样展示（不隐藏诊断信息）。
+ */
+export const RUNTIME_REASON_LABELS: Record<string, string> = {
+  start_failed: "启动失败",
+  handshake_timeout: "握手超时",
+  crash_loop: "崩溃循环",
+  version_mismatch: "版本不匹配",
+  untrusted: "未受信任（非官方清单）",
+  storage_backpressure: "存储背压隔离",
+};

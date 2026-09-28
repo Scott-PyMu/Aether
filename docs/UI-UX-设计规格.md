@@ -602,7 +602,11 @@ stateDiagram-v2
 | M3-03 | 审批操作 | `permission-allow-once` / `permission-allow-session` / `permission-deny` | — |
 | M3-03 | 超时 | `permission-timeout-note` | `data-remaining-ms` |
 | M3-03 | 运行时面板 | `runtime-panel` / `runtime-panel-item` / `runtime-retry` / `runtime-enable` | `data-runtime-id`、`data-status`、`data-reason` |
+| M3-03 | 运行时面板-补充 | `runtime-panel-empty`（空注册表）/ `runtime-remedy`（untrusted/version_mismatch 修复说明）/ `runtime-control-notice` | `data-code`（错误元素） |
 | M3-03 | 顶栏 | `topbar` / `runtime-badge` / `storage-indicator` / `pending-permission-badge` | `data-status`、`data-count` |
+| M3-03 | 右栏/抽屉 | `right-panel` / `right-panel-toggle` | `data-open`（≥1280 常驻；<1280 抽屉） |
+| M3-03 | 审批队列补充 | `permission-queue-note`（还有 N 条排队）/ `permission-error` | `data-code`（错误元素） |
+| M3-03 | 通用错误码 | `workbench-error` / `permission-error` / `runtime-control-error` 补 `data-code`（M3-03 实现登记；`startup-error` 归 M1-06） | `data-code` |
 | M3-06 | 降级横幅操作 | `storage-degraded-restart` / `storage-degraded-diagnostics` | — |
 | M3-06 | 背压提示 | `storage-backpressure-notice` | `data-scope`（run/adapter） |
 | M3-06 | 过渡窗口 | `core-not-ready-banner` | — |

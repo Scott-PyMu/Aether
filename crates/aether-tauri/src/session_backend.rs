@@ -1,16 +1,20 @@
-//! 会话命令与消息分页的真实后端（M3-02）。
+//! 会话命令与消息分页的真实后端（M3-02；M3-03 增加权限中心命令面）。
 //!
 //! 覆盖 D7 命令面中的会话族与消息分页：
 //! - `session_list` / `session_create` / `session_send` / `session_interrupt` /
 //!   `session_dispose`：薄适配 [`aether_control::SessionManager`]（状态机/run 串行/
-//!   幂等/ack 快路径语义全部在控制层，本层不复刻）；
+//!   幂等/ack 快路径语义全部在控制层，本层不复刻）；`session_create` 额外拒绝
+//!   `disabled` 运行时（D5：`disabled` 不可用于新会话，M3-03 DoD3）；
 //! - `messages_page`：双层契约（详见 [`MessagesPageResponse`]）——按 `last_seq` 读
 //!   **events 表**（D4 补读语义；`messages.seq` 与 `events.seq` 是两条独立序列，
 //!   事件流连续性只能由 events 表承载）；`last_seq` 缺省返回**尾部**一页事件
 //!   （升序）并叠加 `messages` 表**尾部**一页消息基线（升序；仅该分支返回）。
 //!   缺口 > [`aether_control::READBACK_MAX_GAP`]（10k）→ `readback_gap_too_large`
 //!   同码透传（ADR-009 决策 2）；
-//! - `runtimes_list`：监督器注册表快照（含 hello 上报的能力清单）。
+//! - `runtimes_list`：监督器注册表快照（含 hello 上报的能力清单）；
+//! - `permissions_pending` / `permission_resolve`（M3-03）：薄适配
+//!   [`aether_control::PermissionService`]（策略/审批队列/300s 超时/审计语义全部在
+//!   控制层，本层不复刻）；响应形状与错误映射见本模块文档与 M3-03 证据。
 //!
 //! 桥接口径与 `runtime_control` 一致：async 服务 spawn 到核心运行时 + `std::sync::mpsc`
 //! 同步等待（不阻塞运行时线程），30s 硬超时。
@@ -21,16 +25,21 @@ use std::time::Duration;
 
 use aether_adapters::connection::ConnectionState;
 use aether_adapters::supervisor::Supervisor;
-use aether_control::{LifecycleError, SessionManager, READBACK_MAX_GAP};
-use aether_core::{EventEnvelope, Message, Runtime, RuntimeId, SessionId, SessionStatus};
+use aether_control::{
+    LifecycleError, PermissionError, PermissionService, SessionManager, READBACK_MAX_GAP,
+};
+use aether_core::{
+    EventEnvelope, Message, PermissionDecision, PermissionScope, Runtime, RuntimeId, RuntimeStatus,
+    SessionId, SessionStatus,
+};
 use aether_store::{ReadPool, SessionQuery};
 use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::ipc::backend::IpcBackend;
 use crate::ipc::dto::{
-    MessagesPageRequest, SessionCreateRequest, SessionIdRequest, SessionListRequest,
-    SessionSendRequest,
+    MessagesPageRequest, PermissionResolveRequest, PermissionsPendingRequest, SessionCreateRequest,
+    SessionIdRequest, SessionListRequest, SessionSendRequest,
 };
 use crate::ipc::error::{IpcError, IpcErrorCode};
 
@@ -73,6 +82,8 @@ pub struct SessionBackend {
     executor: Option<Arc<AdapterRunExecutor>>,
     reads: Option<ReadPool>,
     supervisor: Option<Arc<Supervisor>>,
+    /// 权限服务（M3-03；`None` = 未接线 → 权限命令回 `core_not_ready`）。
+    permissions: Option<PermissionService>,
     handle: tokio::runtime::Handle,
     timeout: Duration,
     /// 自动补读缺口上限（默认 [`READBACK_MAX_GAP`]；常量级调参，测试注入用）。
@@ -94,10 +105,18 @@ impl SessionBackend {
             executor,
             reads,
             supervisor,
+            permissions: None,
             handle,
             timeout: SESSION_COMMAND_TIMEOUT,
             gap_limit: READBACK_MAX_GAP,
         }
+    }
+
+    /// 注入权限服务（M3-03；`permissions_pending` / `permission_resolve` 的真实数据源）。
+    #[must_use]
+    pub fn with_permissions(mut self, permissions: PermissionService) -> Self {
+        self.permissions = Some(permissions);
+        self
     }
 
     /// 覆盖自动补读缺口上限（测试/故障注入；默认 `READBACK_MAX_GAP`）。
@@ -120,7 +139,15 @@ impl SessionBackend {
 
     fn reads_required(&self) -> Result<&ReadPool, IpcError> {
         self.reads.as_ref().ok_or_else(|| {
-            IpcError::core_not_ready("会话后端未接线：读连接池不可用（启动失败或未完成）")
+            IpcError::core_not_ready("会话后端未接线：read 连接池不可用（启动失败或未完成）")
+        })
+    }
+
+    fn permissions_required(&self) -> Result<&PermissionService, IpcError> {
+        self.permissions.as_ref().ok_or_else(|| {
+            IpcError::core_not_ready(
+                "权限服务未接线：permissions_pending / permission_resolve 不可用",
+            )
         })
     }
 
@@ -230,6 +257,15 @@ impl IpcBackend for SessionBackend {
                     )
                 })?;
                 let (status, reason) = runtime.summary_snapshot();
+                // M3-03 DoD3（D5）：`disabled` 运行时不可创建会话；修复后经
+                // `runtime_enable` / `runtime_retry` 恢复。校验在命令层委托的此处，
+                // 防止 UI 之外的调用路径绕过。
+                if status == RuntimeStatus::Disabled {
+                    let detail = reason.map(|reason| reason.as_str()).unwrap_or("disabled");
+                    return Err(IpcError::invalid_value(format!(
+                        "runtime {runtime_id:?} 已禁用（{detail}），不可创建会话；请先修复并重新启用"
+                    )));
+                }
                 let manifest = runtime.manifest();
                 let (version, capabilities) = match runtime.connection().await {
                     Some(connection) => match connection.state() {
@@ -425,6 +461,73 @@ impl IpcBackend for SessionBackend {
             .map_err(|error| IpcError::internal(format!("消息分页序列化失败：{error}")))
         })
     }
+
+    /// M3-03 `permissions_pending`：待审批清单（D9；可按会话过滤）。
+    ///
+    /// 响应为数组（按 `requested_at` 升序，即审批队列顺序），条目字段见 M3-03 证据
+    /// （`id` / `request_id` / `session_id` / `resource` / `action` / `target` /
+    /// `canonical_target` / `requested_at` / `timeout_ms`）。UI 以 `target` 与
+    /// `canonical_target` 并排对照展示（D9 评审 #10 防视觉欺骗）。
+    fn permissions_pending(&self, request: &PermissionsPendingRequest) -> Result<Value, IpcError> {
+        let service = self.permissions_required()?;
+        let filter = match &request.session_id {
+            Some(session_id) => Some(
+                SessionId::new(session_id.clone())
+                    .map_err(|error| IpcError::invalid_format("session_id", error.to_string()))?,
+            ),
+            None => None,
+        };
+        let timeout_ms = service.config().ask_timeout_ms;
+        let items: Vec<Value> = service
+            .pending_list(filter.as_ref())
+            .iter()
+            .map(|ticket| {
+                json!({
+                    "id": ticket.id,
+                    "request_id": ticket.request_id,
+                    "session_id": ticket.session_id,
+                    "resource": ticket.resource,
+                    "action": ticket.action,
+                    "target": ticket.target,
+                    "canonical_target": ticket.canonical_target,
+                    "requested_at": ticket.requested_at,
+                    "timeout_ms": timeout_ms,
+                })
+            })
+            .collect();
+        Ok(Value::Array(items))
+    }
+
+    /// M3-03 `permission_resolve`：用户决议（D9：`once` / `session` 授权；`deny` 拒绝）。
+    ///
+    /// DTO 决策 → 控制层（`once` → allow+once；`session` → allow+session；`deny` → deny）。
+    /// 非待审批（已决议/已超时/不存在）→ `invalid_value` + 稳定业务码
+    /// `permission_not_pending`（不新增 IPC 错误码枚举，口径同 `session_busy`）。
+    fn permission_resolve(&self, request: &PermissionResolveRequest) -> Result<Value, IpcError> {
+        let service = self.permissions_required()?.clone();
+        let request_id = request.request_id.clone();
+        let (decision, scope) = match request.decision {
+            crate::ipc::dto::PermissionDecision::Once => {
+                (PermissionDecision::Allow, Some(PermissionScope::Once))
+            }
+            crate::ipc::dto::PermissionDecision::Session => {
+                (PermissionDecision::Allow, Some(PermissionScope::Session))
+            }
+            crate::ipc::dto::PermissionDecision::Deny => (PermissionDecision::Deny, None),
+        };
+        self.call(async move {
+            let ticket = service
+                .resolve(&request_id, decision, scope)
+                .await
+                .map_err(map_permission_error)?;
+            Ok(json!({
+                "request_id": request_id,
+                "decision": decision.as_str(),
+                "scope": scope.map(|scope| scope.as_str()),
+                "ticket_id": ticket.id,
+            }))
+        })
+    }
 }
 
 fn parse_session_id(value: &str) -> Result<SessionId, IpcError> {
@@ -465,6 +568,29 @@ pub fn map_lifecycle_error(error: LifecycleError) -> IpcError {
         | LifecycleError::PersistDegraded { .. }
         | LifecycleError::StorageBackpressure { .. }
         | LifecycleError::AdapterIsolated { .. } => IpcError::invalid_value(error.to_string()),
+    }
+}
+
+/// 权限服务错误 → IPC 结构化错误（M3-03；不新增 IPC 错误码枚举）。
+///
+/// 业务类错误（不在待审批队列 / 非法资源 / 会话不存在）用 `invalid_value` 并在消息中
+/// 携带稳定业务码（`permission_not_pending` / `invalid_permission_resource` /
+/// `session_not_found`），口径同 `session_busy`：UI 按 `message` 展示，行为判定
+/// 不依赖文案。存储/管线/内部错误用 `internal`。
+pub fn map_permission_error(error: PermissionError) -> IpcError {
+    match &error {
+        PermissionError::NotPending { .. } => {
+            IpcError::invalid_value(format!("{error}（permission_not_pending）"))
+        }
+        PermissionError::InvalidResource { .. } => {
+            IpcError::invalid_value(format!("{error}（invalid_permission_resource）"))
+        }
+        PermissionError::SessionNotFound { .. } => {
+            IpcError::invalid_value(format!("{error}（session_not_found）"))
+        }
+        PermissionError::Storage { .. }
+        | PermissionError::Pipeline { .. }
+        | PermissionError::Internal { .. } => IpcError::internal(error.to_string()),
     }
 }
 
