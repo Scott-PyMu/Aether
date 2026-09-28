@@ -17,7 +17,7 @@ use aether_security::{
 };
 use m2_support::{
     build_manager, build_permission_service, create_session, manual_clock, permission_request,
-    wait_for, ScriptedExecutor, TestCore,
+    wait_for, wait_permissions_pending, ScriptedExecutor, TestCore,
 };
 use serde_json::Value;
 
@@ -412,6 +412,12 @@ async fn pending_survives_restart_and_times_out_after_300s() {
             Duration::from_secs(3)
         )
         .await
+    );
+    // 内存入队先于持久化（写队列异步提交）；等待 DB 行落库后再断言，消除
+    // CI 高负载/覆盖率插桩下的时序竞态（断言语义不变：pending 必须已持久化）。
+    assert!(
+        wait_permissions_pending(&harness.core.reads(), 1).await,
+        "pending 必须已持久化"
     );
     let pending_rows = harness
         .core
