@@ -230,6 +230,12 @@ async fn restart_reconciles_unfinished_runs_and_sessions() {
         wait_run_status(&manager, &running.run_id, RunStatus::Running).await,
         "第一条应在执行中"
     );
+    // run.started 之后会话状态机才落库 `running`；崩溃点必须等待两行都收口，
+    // 否则 CI 高负载下「会话仍 idle」会使重启收口无会话可收回（竞态，非实现缺陷）。
+    assert!(
+        wait_session_status(&manager, &session.id, SessionStatus::Running).await,
+        "崩溃前会话必须已落库 running（重启状态重建的前置）"
+    );
 
     // 模拟核心崩溃：关闭存储/管线（不执行 run 终态收口），在既有数据目录上重开。
     let (temp, db_path) = core.shutdown().await;

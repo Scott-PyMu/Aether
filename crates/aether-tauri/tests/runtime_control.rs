@@ -49,6 +49,14 @@ fn fixture_with_backend(dir: TempDir, backend: Arc<dyn IpcBackend>) -> Fixture {
     Fixture { app, webview, dir }
 }
 
+/// Mock invoke 的 URL：Tauri 桌面（Windows）为 `http://tauri.localhost`，
+/// 非 Windows 为 `tauri://localhost`；否则 ACL 校验按远程来源拒绝请求
+/// （与 `m1_06_picker.rs` / `m1_06_startup_ipc.rs` 同口径）。
+#[cfg(windows)]
+const INVOKE_URL: &str = "http://tauri.localhost";
+#[cfg(not(windows))]
+const INVOKE_URL: &str = "tauri://localhost";
+
 fn invoke(
     webview: &WebviewWindow<MockRuntime>,
     command: &str,
@@ -65,7 +73,7 @@ fn invoke(
             cmd: command.into(),
             callback: tauri::ipc::CallbackFn(0),
             error: tauri::ipc::CallbackFn(1),
-            url: "http://tauri.localhost".parse().expect("URL"),
+            url: INVOKE_URL.parse().expect("URL"),
             body,
             headers: Default::default(),
             invoke_key: INVOKE_KEY.to_string(),
