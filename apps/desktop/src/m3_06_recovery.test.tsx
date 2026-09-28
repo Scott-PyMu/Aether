@@ -200,6 +200,7 @@ describe("M3-06 崩溃恢复体验（前端）", () => {
           degrade_trigger: "write_failure",
         },
         error: null,
+        errorCode: null,
       });
     });
     await waitFor(() => {
@@ -237,6 +238,7 @@ describe("M3-06 崩溃恢复体验（前端）", () => {
           ts: 1,
         },
         error: null,
+        errorCode: null,
       });
     });
     fireEvent.change(screen.getByTestId("composer-input"), { target: { value: "hi" } });
@@ -244,5 +246,61 @@ describe("M3-06 崩溃恢复体验（前端）", () => {
       expect((screen.getByTestId("composer-send") as HTMLButtonElement).disabled).toBe(false);
     });
     expect(screen.queryByTestId("composer-degraded-hint")).toBeNull();
+    expect(screen.queryByTestId("storage-backpressure-notice")).toBeNull();
+  });
+
+  // M3-06（UI-UX 锚点）：临时背压提示——L2 写队列高水位（scope=run）与适配器
+  // 背压隔离（scope=adapter）区分；与 persist_degraded（只读）不混用。
+  it("storage-backpressure-notice：L2（写队列 >4096）→ scope=run", async () => {
+    const ipc = fakeIpc();
+    render(<SessionWorkbench store={newStore()} ipc={ipc} />);
+    fireEvent.click(await screen.findByTestId("session-item"));
+    await screen.findByTestId("composer-input");
+    act(() => {
+      publishHealthState({
+        status: "normal",
+        report: {
+          storage_state: "normal",
+          write_queue_depth: 4_097,
+          runtimes: [],
+          ts: 1,
+        },
+        error: null,
+        errorCode: null,
+      });
+    });
+    const notice = await screen.findByTestId("storage-backpressure-notice");
+    expect(notice.getAttribute("data-scope")).toBe("run");
+    expect(notice.textContent).toContain("L2");
+    // 临时背压只提示、不禁用发送（拒绝由核心准入执行；队列回落自动解除，
+    // 与 persist_degraded 的发送禁用/修复+重启路径区分）。
+    fireEvent.change(screen.getByTestId("composer-input"), { target: { value: "hi" } });
+    expect((screen.getByTestId("composer-send") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("storage-backpressure-notice：适配器背压隔离 → scope=adapter", async () => {
+    const ipc = fakeIpc();
+    render(<SessionWorkbench store={newStore()} ipc={ipc} />);
+    fireEvent.click(await screen.findByTestId("session-item"));
+    await screen.findByTestId("composer-input");
+    act(() => {
+      publishHealthState({
+        status: "normal",
+        report: {
+          storage_state: "normal",
+          write_queue_depth: 10,
+          runtimes: [
+            { id: "mock", status: "degraded", status_reason: "storage_backpressure" },
+          ],
+          ts: 1,
+        },
+        error: null,
+        errorCode: null,
+      });
+    });
+    const notice = await screen.findByTestId("storage-backpressure-notice");
+    expect(notice.getAttribute("data-scope")).toBe("adapter");
+    expect(notice.textContent).toContain("storage_backpressure");
+    expect(notice.textContent).toContain("mock");
   });
 });

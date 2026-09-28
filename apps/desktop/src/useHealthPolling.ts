@@ -18,7 +18,7 @@ import {
   type HealthStatus,
 } from "./health";
 import { publishHealthState } from "./healthBus";
-import { describeIpcError } from "./startup";
+import { describeIpcError, ipcErrorCode } from "./startup";
 
 export type { HealthStatus };
 
@@ -27,6 +27,8 @@ export interface HealthState {
   report: HealthReport | null;
   /** 最近一次失败原因（诊断展示；成功即清空）。 */
   error: string | null;
+  /** 最近一次失败的结构化错误码（M3-06：`core_not_ready` 过渡窗口横幅判别）。 */
+  errorCode: string | null;
 }
 
 export interface HealthPollingOptions {
@@ -45,6 +47,7 @@ export function useHealthPolling(options: HealthPollingOptions = {}): HealthStat
     status: "loading",
     report: null,
     error: null,
+    errorCode: null,
   });
 
   useEffect(() => {
@@ -61,6 +64,7 @@ export function useHealthPolling(options: HealthPollingOptions = {}): HealthStat
         status: report.storage_state === "persist_degraded" ? "degraded" : "normal",
         report,
         error: null,
+        errorCode: null,
       });
     };
 
@@ -83,6 +87,7 @@ export function useHealthPolling(options: HealthPollingOptions = {}): HealthStat
           setState((previous) => ({
             ...previous,
             error: describeIpcError(error),
+            errorCode: ipcErrorCode(error),
           }));
         })
         .finally(() => {

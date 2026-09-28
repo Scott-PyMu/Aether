@@ -181,9 +181,11 @@ if (skipE2e) {
     [probe, "AETHER_E2E_M3_06_PROBE", "M3-06 E2E 探针在案"],
     [healthBus, "publishHealthState", "健康共享总线（单轮询源）"],
     [healthMonitor, "storage-degraded-restart", "降级横幅 app_restart 入口"],
+    [healthMonitor, "core-not-ready-banner", "启动序列过渡窗口横幅（ADR-007 增量 2）"],
     [workbench, "composer-degraded-hint", "降级期发送入口禁用提示"],
     [workbench, "run-retry", "失败/中断 run 重试入口"],
     [workbench, "已中断（存储降级）", "降级中断提示"],
+    [workbench, "storage-backpressure-notice", "临时背压提示（L2/适配器隔离）"],
   ];
   for (const [source, needle, label] of required) {
     if (!source.includes(needle)) problems.push(`${label}: 缺少 ${needle}`);

@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { appEventStore } from "./aetherStore";
 import { describeIpcError } from "./startup";
 import type { EventStore } from "./eventStore";
+import { STORAGE_L2_THRESHOLD } from "./health";
 import { useStorageHealth } from "./healthBus";
 import { HistoryOverflowNotice } from "./HistoryOverflowNotice";
 import { Markdown } from "./markdown";
@@ -87,6 +88,20 @@ export function SessionWorkbench({
   // M3-06：存储降级（只读）联动——发送入口禁用；修复 + 重启前不得恢复。
   const storageHealth = useStorageHealth();
   const degraded = storageHealth.status === "degraded";
+  // M3-06 `storage-backpressure-notice`（D8/ADR-004 临时背压，与 persist_degraded 区分）：
+  // - scope=run：写队列 > L2（4096）→ 新 run 被拒，队列回落（≤1024）自动解除；
+  // - scope=adapter：适配器 `degraded + status_reason=storage_backpressure` 隔离中，
+  //   重启后自动解除。仅提示，不改变发送入口（拒绝由核心准入执行）。
+  const queueDepth = storageHealth.report?.write_queue_depth ?? 0;
+  const queueBackpressured = !degraded && queueDepth > STORAGE_L2_THRESHOLD;
+  const isolatedRuntime = (storageHealth.report?.runtimes ?? []).find(
+    (runtime) => runtime.status === "degraded" && runtime.status_reason === "storage_backpressure",
+  );
+  const backpressureScope = queueBackpressured
+    ? "run"
+    : isolatedRuntime
+      ? "adapter"
+      : null;
 
   const eventsState = useSessionEvents(store, activeSessionId ?? NO_SESSION);
   const projection = useMemo(
@@ -504,6 +519,19 @@ export function SessionWorkbench({
               </li>
             ))}
           </ul>
+        ) : null}
+
+        {backpressureScope ? (
+          <p
+            className="storage-backpressure-notice"
+            data-testid="storage-backpressure-notice"
+            data-scope={backpressureScope}
+            role="status"
+          >
+            {backpressureScope === "run"
+              ? "存储写队列高水位（L2）：新任务暂被拒绝，队列回落至 ≤1024 后自动恢复。"
+              : `适配器 ${isolatedRuntime?.id ?? ""} 背压隔离中（storage_backpressure）：重启后自动解除。`}
+          </p>
         ) : null}
 
         <div className="composer" data-testid="composer">

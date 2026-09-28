@@ -13,7 +13,7 @@ import { describeIpcError } from "./startup";
 import { useHealthPolling } from "./useHealthPolling";
 
 export function HealthMonitor() {
-  const { status, report, error } = useHealthPolling();
+  const { status, report, error, errorCode } = useHealthPolling();
   const [restartError, setRestartError] = useState<string | null>(null);
   const [restartPending, setRestartPending] = useState(false);
 
@@ -98,6 +98,19 @@ export function HealthMonitor() {
       <p className="health-normal" data-testid="health-normal">
         核心正常（storage_state=normal）
       </p>
+    );
+  }
+
+  // M3-06：启动序列过渡窗口（ADR-007 增量 2）——后端注入前 `health` 返回
+  // `core_not_ready`；按结构化错误码判别（不做文案匹配），完成后自动消失。
+  if (status === "loading" && errorCode === "core_not_ready") {
+    return (
+      <section className="health-starting" data-testid="core-not-ready-banner" role="status">
+        <p className="health-title">核心启动中…</p>
+        <p className="health-detail">
+          启动序列尚未完成（存储/管线注入前）；启动门命令（startup_*）仍可用。
+        </p>
+      </section>
     );
   }
 

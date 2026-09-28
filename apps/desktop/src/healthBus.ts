@@ -13,9 +13,16 @@ export interface HealthBusState {
   status: HealthStatus;
   report: HealthReport | null;
   error: string | null;
+  /** 结构化错误码（M3-06：`core_not_ready` 过渡窗口判别；无则 `null`）。 */
+  errorCode: string | null;
 }
 
-const INITIAL: HealthBusState = { status: "loading", report: null, error: null };
+const INITIAL: HealthBusState = {
+  status: "loading",
+  report: null,
+  error: null,
+  errorCode: null,
+};
 
 let current: HealthBusState = INITIAL;
 const listeners = new Set<() => void>();

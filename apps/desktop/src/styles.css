@@ -205,6 +205,30 @@ body {
   margin: 0;
 }
 
+/* M3-06：启动序列过渡窗口（core_not_ready；非告警，仅状态提示）。 */
+.health-starting {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-width: 46rem;
+  margin: 1rem auto 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid #3a4a6b;
+  border-radius: 6px;
+  background-color: #17202e;
+}
+
+.health-starting .health-title {
+  color: #9fb8e8;
+}
+
+/* M3-06：临时背压提示（D8/ADR-004；L2 写队列高水位 / 适配器背压隔离）。 */
+.storage-backpressure-notice {
+  color: #f6b26b;
+  font-size: 0.8rem;
+  margin: 0.25rem 0;
+}
+
 /* M3-06：消息气泡上的 run 终态与重试入口。 */
 .message-run-actions {
   display: flex;

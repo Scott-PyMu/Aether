@@ -97,3 +97,19 @@ export function describeIpcError(error: unknown): string {
   }
   return String(error);
 }
+
+/**
+ * 提取 IPC 结构化错误码（无 `code` 字段时返回 `null`）。
+ *
+ * M3-06：`health` 的启动序列过渡窗口返回 `core_not_ready`（ADR-007 增量 2）——
+ * UI 按结构化错误码判别 `core-not-ready-banner`，不做文案匹配。
+ */
+export function ipcErrorCode(error: unknown): string | null {
+  if (typeof error === "object" && error !== null) {
+    const code = (error as Record<string, unknown>).code;
+    if (typeof code === "string" && code.length > 0) {
+      return code;
+    }
+  }
+  return null;
+}

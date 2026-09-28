@@ -10,6 +10,14 @@ import { invoke } from "@tauri-apps/api/core";
 export const HEALTH_POLL_INTERVAL_MS = 5_000;
 /** 无响应判定窗口（D2/ADR-007 A.3：15s 无响应 → 「核心未响应」+ 重启入口）。 */
 export const HEALTH_TIMEOUT_MS = 15_000;
+/**
+ * 写队列 L2 阈值（D8/ADR-004 冻结值 4096；`storage-backpressure-notice` 展示用）。
+ *
+ * 与核心侧 `EventPipeline::admission()` 的 L2 口径一致：写队列 >4096 时拒绝新 run
+ * （`storage_backpressure`），队列回落 ≤1024 自动解除（仅队列维度，与
+ * `persist_degraded` 的修复+重启路径区分）。
+ */
+export const STORAGE_L2_THRESHOLD = 4_096;
 
 export type StorageState = "normal" | "persist_degraded";
 

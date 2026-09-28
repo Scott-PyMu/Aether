@@ -18,6 +18,7 @@ const state = (overrides: Partial<HealthState>): HealthState => ({
   status: "loading",
   report: null,
   error: null,
+  errorCode: null,
   ...overrides,
 });
 
@@ -106,6 +107,29 @@ describe("HealthMonitor（M2-07 DoD4/DoD5）", () => {
     await vi.waitFor(() => {
       expect(restartMock).toHaveBeenCalledTimes(1);
     });
+  });
+
+  // M3-06：启动序列过渡窗口（ADR-007 增量 2）——`health` 返回 `core_not_ready`
+  // 时展示 core-not-ready-banner（按结构化错误码判别），后端注入后自动消失。
+  it("过渡窗口：core_not_ready → core-not-ready-banner", () => {
+    pollingMock.mockReturnValue(
+      state({
+        status: "loading",
+        error: "核心后端未就绪：启动序列尚未完成（存储/管线注入前）",
+        errorCode: "core_not_ready",
+      }),
+    );
+    const { unmount } = render(<HealthMonitor />);
+    const banner = screen.getByTestId("core-not-ready-banner");
+    expect(banner.textContent).toContain("核心启动中");
+    expect(screen.queryByTestId("health-loading")).toBeNull();
+    unmount();
+
+    // 其他错误（无结构化码）：保持通用加载态，不误报过渡横幅。
+    pollingMock.mockReturnValue(state({ status: "loading", error: "IPC 失败" }));
+    render(<HealthMonitor />);
+    expect(screen.queryByTestId("core-not-ready-banner")).toBeNull();
+    expect(screen.getByTestId("health-loading")).toBeTruthy();
   });
 
   it("正常态与加载态锚点（E2E 断言用）", () => {

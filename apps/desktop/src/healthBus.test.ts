@@ -31,13 +31,14 @@ describe("healthBus（M3-06）", () => {
         degrade_trigger: "write_failure",
       },
       error: null,
+      errorCode: null,
     });
     expect(listener).toHaveBeenCalledTimes(1);
     expect(healthBusSnapshot().status).toBe("degraded");
     expect(healthBusSnapshot().report?.storage_state).toBe("persist_degraded");
 
     unsubscribe();
-    publishHealthState({ status: "normal", report: null, error: null });
+    publishHealthState({ status: "normal", report: null, error: null, errorCode: null });
     expect(listener).toHaveBeenCalledTimes(1);
     expect(healthBusSnapshot().status).toBe("normal");
   });
@@ -46,7 +47,12 @@ describe("healthBus（M3-06）", () => {
     const listener = vi.fn();
     subscribeHealthBus(listener);
     resetHealthBusForTests();
-    publishHealthState({ status: "unresponsive", report: null, error: "timeout" });
+    publishHealthState({
+      status: "unresponsive",
+      report: null,
+      error: "timeout",
+      errorCode: null,
+    });
     expect(listener).not.toHaveBeenCalled();
     expect(healthBusSnapshot().status).toBe("unresponsive");
   });
