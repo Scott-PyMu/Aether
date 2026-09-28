@@ -797,6 +797,10 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: TS 覆盖率门禁（vitest --coverage，阈值 70）
+        # AETHER_COVERAGE_LINES 同时被 vitest 配置（阈值）与 M3-02 滚动基准夹具消费：
+        # 插桩模式下仅断言结构上界（v8 插桩放大渲染开销，计时不参与判定，M3-02 边界 7）。
+        env:
+          AETHER_COVERAGE_LINES: "70"
         run: pnpm -r --if-present coverage
 
       - uses: dtolnay/rust-toolchain@stable
