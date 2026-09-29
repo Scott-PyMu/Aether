@@ -18,7 +18,7 @@ use aether_adapters::protocol::DisabledReason;
 use aether_adapters::supervisor::{
     default_ledger_path, AdapterLedger, AdmissionPolicy, CleanupReport, NoopObserver,
     RuntimeManifest, RuntimeSpec, StartOutcome, Supervisor, SupervisorConfig, SupervisorError,
-    SysinfoProbe, SystemTreeKiller,
+    SupervisorObserver, SysinfoProbe, SystemTreeKiller,
 };
 use aether_core::RuntimeStatus;
 use serde::Serialize;
@@ -292,9 +292,24 @@ impl IpcBackend for RuntimeControlBackend {
 ///
 /// 台账路径默认 `~/.aether/run/adapters.json`（D5）；失败时返回错误，调用方降级为
 /// `control = None`（命令回 `core_not_ready`），不影响 `health`。
+///
+/// 观察者默认 [`NoopObserver`]；M3-07 起生产装配经
+/// [`boot_supervisor_with_observer`] 注入审计落库出口（见 `audit_bridge`）。
 pub fn boot_supervisor(
     specs: Vec<RuntimeSpec>,
     ledger_path: Option<&Path>,
+) -> Result<Supervisor, SupervisorError> {
+    boot_supervisor_with_observer(specs, ledger_path, Arc::new(NoopObserver))
+}
+
+/// 带观察者的监督器构造（M3-07：适配器状态变化审计落库出口注入点）。
+///
+/// 观察者语义与冻结契约一致（`docs/M1-10-证据.md` §6）：状态转移与审计记录
+/// 经 `SupervisorObserver` 上报；本函数只做装配，不复刻/不放宽监督语义。
+pub fn boot_supervisor_with_observer(
+    specs: Vec<RuntimeSpec>,
+    ledger_path: Option<&Path>,
+    observer: Arc<dyn SupervisorObserver>,
 ) -> Result<Supervisor, SupervisorError> {
     let ledger_path = ledger_path
         .map(Path::to_path_buf)
@@ -305,7 +320,7 @@ pub fn boot_supervisor(
         specs,
         SupervisorConfig::d5(),
         AdmissionPolicy::official(),
-        Arc::new(NoopObserver),
+        observer,
         Arc::new(Mutex::new(ledger)),
         Arc::new(SysinfoProbe::new()),
         Arc::new(SystemTreeKiller),
@@ -315,6 +330,14 @@ pub fn boot_supervisor(
 /// 便捷构造（空注册表；测试/生产启动）。
 pub fn boot_empty_supervisor(ledger_path: Option<&Path>) -> Result<Supervisor, SupervisorError> {
     boot_supervisor(Vec::new(), ledger_path)
+}
+
+/// 带观察者的空注册表构造（M3-07 生产装配：延迟审计出口）。
+pub fn boot_empty_supervisor_with_observer(
+    ledger_path: Option<&Path>,
+    observer: Arc<dyn SupervisorObserver>,
+) -> Result<Supervisor, SupervisorError> {
+    boot_supervisor_with_observer(Vec::new(), ledger_path, observer)
 }
 
 /// 单 spec 便捷构造（测试用）。

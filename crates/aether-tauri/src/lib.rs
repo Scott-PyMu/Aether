@@ -14,6 +14,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 pub mod adapter_executor;
+pub mod audit_bridge;
 pub mod backup_control;
 pub mod bindings;
 pub mod config;
@@ -226,8 +227,14 @@ fn build_backend(
 
     // M2-07（ADR-007 §5-2）：监督器摘要接线在 health 之前完成，
     // `health.runtimes` 与监督器状态一一对应（字段映射冻结）。
+    // M3-07（D9/SE-03）：审计出口经延迟观察者装配——监督器先于存储构造，
+    // 存储就绪后注入 `StoreAuditObserver`（此前监督器无状态转移/审计活动）。
+    let deferred_audit_observer = std::sync::Arc::new(audit_bridge::DeferredObserver::new());
     let supervisor: Option<std::sync::Arc<aether_adapters::supervisor::Supervisor>> =
-        match runtime_control::boot_empty_supervisor(None) {
+        match runtime_control::boot_empty_supervisor_with_observer(
+            None,
+            deferred_audit_observer.clone(),
+        ) {
             Ok(supervisor) => Some(std::sync::Arc::new(supervisor)),
             Err(error) => {
                 tracing::warn!(error = %error, "监督器台账初始化失败：runtime 控制命令回 core_not_ready");
@@ -264,6 +271,11 @@ fn build_backend(
             if let Some(outcome) = &restore_outcome {
                 backup_control::write_boot_restore_audit(&write, &handle, outcome);
             }
+            // M3-07（D9/SE-03）：适配器状态变化/监督审计落库出口接线（存储就绪后、
+            // 启动序列尾段（孤儿清理/预热）前完成；此前监督器无回调活动）。
+            deferred_audit_observer.set(std::sync::Arc::new(
+                audit_bridge::StoreAuditObserver::new(write.clone(), handle.clone()),
+            ));
             // M3-04：备份/恢复命令面的存储句柄（读写队列均已就绪）。
             let backup_deps = (reads.clone(), write.clone());
             // M2-07 DoD3：核心 RSS 巡检（2GB 告警 / 2.5GB 强制 delta 限流；

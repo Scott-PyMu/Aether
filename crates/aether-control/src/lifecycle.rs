@@ -44,7 +44,9 @@ use aether_core::{
     SessionId, SessionStatus, SessionStatusChangedPayload, SessionSummary, TokenUsage, WorkspaceId,
     ENVELOPE_FIELDS, EVENT_ENVELOPE_VERSION,
 };
-use aether_store::{ReadPool, SessionQuery, StoreCommand, StoreError, StoreOutcome, WriteQueue};
+use aether_store::{
+    AuditLogRecord, ReadPool, SessionQuery, StoreCommand, StoreError, StoreOutcome, WriteQueue,
+};
 use serde_json::{json, Value};
 use tokio::runtime::Handle;
 use tokio::sync::Mutex as AsyncMutex;
@@ -525,6 +527,18 @@ impl SessionManager {
                 session: session.clone(),
             })
             .await?;
+        // M3-07（D9/SE-03 最小审计）：会话生命周期边界事件落审计（创建）。
+        self.insert_audit(
+            &session_id,
+            "user",
+            "session.created",
+            "created",
+            json!({
+                "runtime_id": runtime_id.as_str(),
+                "title": title,
+            }),
+        )
+        .await?;
         self.emit(
             &session_id,
             None,
@@ -545,26 +559,8 @@ impl SessionManager {
         .await?;
         let mut fsm = aether_core::SessionFsm::new(SessionStatus::Creating);
         let change = fsm.transition(SessionStatus::Idle)?;
-        self.inner
-            .write
-            .execute(StoreCommand::UpdateSessionStatus {
-                session_id: session_id.clone(),
-                status: SessionStatus::Idle,
-                updated_at: now,
-                closed_at: None,
-            })
+        self.persist_status_and_emit(&session_id, change, false, &runtime_id)
             .await?;
-        self.emit(
-            &session_id,
-            None,
-            &runtime_id,
-            EventPayload::SessionStatusChanged(SessionStatusChangedPayload {
-                session_id: session_id.clone(),
-                from: change.from,
-                to: change.to,
-            }),
-        )
-        .await?;
 
         let mut state = lock_state(&self.inner).await;
         let cancel = self.inner.cancel_tree.session_token(&session_id, None);
@@ -804,6 +800,23 @@ impl SessionManager {
             {
                 tracing::warn!(session_id = %session.id, error = %failure, "重启收口：会话行更新失败，跳过");
                 continue;
+            }
+            // M3-07（D9/SE-03）：重启收口的状态回退同样计入会话生命周期审计（尽力而为）。
+            if let Err(failure) = insert_audit_inner(
+                &self.inner,
+                &session.id,
+                "system",
+                "session.status_changed",
+                &status_transition_result(session.status, SessionStatus::Idle),
+                json!({
+                    "from": session.status.as_str(),
+                    "to": SessionStatus::Idle.as_str(),
+                    "recovered": true,
+                }),
+            )
+            .await
+            {
+                tracing::warn!(session_id = %session.id, error = %failure, "重启收口：审计写入失败（仅记录）");
             }
             if let Err(failure) = self
                 .emit(
@@ -1067,6 +1080,17 @@ impl SessionManager {
         self.persist_status_and_emit(session_id, change, true, &runtime_id)
             .await?;
         drop(state);
+        // M3-07（D9/SE-03 最小审计）：会话生命周期边界事件落审计（关闭）。
+        self.insert_audit(
+            session_id,
+            "user",
+            "session.closed",
+            target.as_str(),
+            json!({
+                "closed_at": now,
+            }),
+        )
+        .await?;
         self.emit(
             session_id,
             None,
@@ -1323,6 +1347,19 @@ impl SessionManager {
                 closed_at: if closed { Some(now) } else { None },
             })
             .await?;
+        // M3-07（D9/SE-03 最小审计）：会话生命周期状态转移落审计。
+        insert_audit_inner(
+            &self.inner,
+            session_id,
+            "system",
+            "session.status_changed",
+            &status_transition_result(change.from, change.to),
+            json!({
+                "from": change.from.as_str(),
+                "to": change.to.as_str(),
+            }),
+        )
+        .await?;
         self.emit(
             session_id,
             None,
@@ -1353,6 +1390,22 @@ impl SessionManager {
             })
             .await?;
         Ok(())
+    }
+
+    /// 会话生命周期审计写入（M3-07；D9/SE-03 P0 最小集）。
+    ///
+    /// 经单写队列追加 `audit_log` 行（`actor`/`resource`/`result`/`ts` 齐备；应用层
+    /// 无 UPDATE/DELETE 路径）。审计动作限定三类：会话生命周期 / 权限决议 /
+    /// 适配器状态变化。
+    async fn insert_audit(
+        &self,
+        session_id: &SessionId,
+        actor: &str,
+        action: &str,
+        result: &str,
+        detail: Value,
+    ) -> Result<(), LifecycleError> {
+        insert_audit_inner(&self.inner, session_id, actor, action, result, detail).await
     }
 
     async fn emit(
@@ -2003,6 +2056,19 @@ async fn persist_status_inner(
             closed_at: if closed { Some(now) } else { None },
         })
         .await?;
+    // M3-07（D9/SE-03 最小审计）：会话生命周期状态转移落审计。
+    insert_audit_inner(
+        inner,
+        session_id,
+        "system",
+        "session.status_changed",
+        &status_transition_result(change.from, change.to),
+        json!({
+            "from": change.from.as_str(),
+            "to": change.to.as_str(),
+        }),
+    )
+    .await?;
     emit_inner(
         inner,
         session_id,
@@ -2063,6 +2129,38 @@ fn internal_from(error: impl std::fmt::Display) -> LifecycleError {
     LifecycleError::Internal {
         reason: error.to_string(),
     }
+}
+
+/// 会话状态转移的审计 `result` 文案（`from→to`；与事件 payload 同源信息）。
+fn status_transition_result(from: SessionStatus, to: SessionStatus) -> String {
+    format!("{}→{}", from.as_str(), to.as_str())
+}
+
+/// 追加会话生命周期审计行（M3-07；D9/SE-03 P0 最小集，经单写队列）。
+async fn insert_audit_inner(
+    inner: &Arc<ManagerInner>,
+    session_id: &SessionId,
+    actor: &str,
+    action: &str,
+    result: &str,
+    detail: Value,
+) -> Result<(), LifecycleError> {
+    let record = AuditLogRecord {
+        id: ulid::generate(),
+        session_id: Some(session_id.as_str().to_owned()),
+        runtime_id: None,
+        actor: actor.to_owned(),
+        action: action.to_owned(),
+        resource: Some(format!("session:{}", session_id.as_str())),
+        detail: Some(detail.to_string()),
+        result: Some(result.to_owned()),
+        ts: inner.clock.now_ms(),
+    };
+    inner
+        .write
+        .execute(StoreCommand::InsertAudit { record })
+        .await?;
+    Ok(())
 }
 
 /// 取状态锁并以 `OwnedMappedMutexGuard` 返回（`OwnedMutexGuard` 非 `Send`，

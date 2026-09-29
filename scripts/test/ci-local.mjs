@@ -128,6 +128,10 @@ record(
   "verify-m3-06（崩溃恢复体验：T4 kill -9 ×20 已确认零丢失 + run_retry Mode R/N + 重启状态重建 + 降级恢复引导；E2E 需真实 WebView，见 Windows CI）",
   run(node, [path.join(repoRoot, "scripts", "test", "m3-06", "verify-m3-06.mjs"), "--skip-e2e"]),
 );
+record(
+  "verify-m3-07（审计最小集：三类注入动作 ↔ 审计条数 1:1 + 应用层无 UPDATE/DELETE 静态审计 + actor/resource/result/ts schema 断言）",
+  run(node, [path.join(repoRoot, "scripts", "test", "m3-07", "verify-m3-07.mjs")]),
+);
 
 if (!quick) {
   record("verify-coverage-gate", run(node, [path.join(repoRoot, "scripts", "test", "verify-coverage-gate.mjs")]));
