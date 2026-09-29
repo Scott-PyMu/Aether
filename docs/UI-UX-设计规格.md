@@ -1,17 +1,17 @@
-# Aether UI/UX 设计规格 v0.2（已评审通过）
+# Aether UI/UX 设计规格 v0.3（v0.2 已评审通过；v0.3 为 M3-12 锚点登记）
 
 | 项 | 内容 |
 |---|---|
-| 文档 | Aether UI/UX 设计规格 v0.2（已评审通过） |
-| 依据基线 | 《需求文档》v0.7、《设计文档》v1.10（冻结，含 ADR-001–010）、《实施计划与验收标准》v1.17、`AGENTS.md`、ADR-010 |
+| 文档 | Aether UI/UX 设计规格 v0.3（v0.2 已评审通过；v0.3 为 M3-12 锚点登记） |
+| 依据基线 | 《需求文档》v0.7、《设计文档》v1.10（冻结，含 ADR-001–010）、《实施计划与验收标准》v1.18（ADR-011）、`AGENTS.md`、ADR-010/ADR-011 |
 | 参考对象 | Proma（proma-ai/Proma）信息组织范式；Hermes Studio / Ekko Studio（EKKOLearnAI/hermes-studio）界面范式（仅借鉴公开界面思路，不拷贝代码，A11/SE-05） |
 | 效力 | **本文件不构成冻结基线**。与设计文档冲突时以设计文档为准；本文件中的实现偏差须先提 ADR（AGENTS §3） |
-| 适用范围 | P0 前端（M3-01…M3-08）与 E2E；P1+ 仅作预留说明，不进入排期 |
-| 状态 | **已评审通过（2026-09-24，随 ADR-010 批次）**；v0.2 已回流 ADR-010（文件引用面板 / 思考深度 / 模型与供应商配置，M3-09/M3-10/M3-11）；本文件仍不构成冻结基线（与设计文档冲突以设计文档为准）；「开放问题」未关闭前不得据此定稿 |
+| 适用范围 | P0 前端（M3-01…M3-12）与 E2E；P1+ 仅作预留说明，不进入排期 |
+| 状态 | **已评审通过（2026-09-24，随 ADR-010 批次）**；v0.2 已回流 ADR-010（文件引用面板 / 思考深度 / 模型与供应商配置，M3-09/M3-10/M3-11）；**v0.3（2026-09-29）：按 ADR-011 决策 5 登记 M3-12 分组锚点契约并冻结（§7.3），依据基线同步计划 v1.18**；本文件仍不构成冻结基线（与设计文档冲突以设计文档为准）；「开放问题」未关闭前不得据此定稿 |
 
 **阅读顺序**：§0 硬约束与参考采纳 → §1 界面清单 → §2 线框 → §3 状态图 → §4 组件矩阵 → §5 文案表 → §6 Token/可访问性 → §7 E2E 选择器 → §8 范围冻结 → §9 开放问题。
 
-**与实现现状的关系**（截至 M3-02）：启动加载态、数据目录阻断页、核心健康横幅、会话工作台（左列表 + 中消息流 + 底部输入 + 会话状态条）已实现；本规格中「顶栏合并状态」「右栏辅助面板」「权限审批卡」「备份/恢复页」「设置/诊断/关于页」为 M3-03…M3-08 目标形态，标注了对应任务；v0.2 增补 ADR-010 三项（S-11 文件引用面板、思考深度、模型与供应商配置，M3-09/M3-10/M3-11）。
+**与实现现状的关系**（截至 M3-02）：启动加载态、数据目录阻断页、核心健康横幅、会话工作台（左列表 + 中消息流 + 底部输入 + 会话状态条）已实现；本规格中「顶栏合并状态」「右栏辅助面板」「权限审批卡」「备份/恢复页」「设置/诊断/关于页」为 M3-03…M3-08 目标形态，标注了对应任务；v0.2 增补 ADR-010 三项（S-11 文件引用面板、思考深度、模型与供应商配置，M3-09/M3-10/M3-11）；v0.3 按 ADR-011 登记 M3-12 会话列表分组锚点（§7.3，冻结）。
 
 ---
 
@@ -559,7 +559,7 @@ stateDiagram-v2
 
 ---
 
-## 7. E2E 选择器契约（M3-01…M3-08）
+## 7. E2E 选择器契约（M3-01…M3-12）
 
 ### 7.1 命名规则
 
@@ -592,7 +592,7 @@ stateDiagram-v2
 | 历史缺口 | `history-overflow` / `history-reload` / `history-reload-error` | — |
 | 事件桥（迁往诊断页） | `event-bridge-status` | — |
 
-### 7.3 待实现锚点（M3-03…M3-08）
+### 7.3 待实现锚点（M3-03…M3-12）
 
 | 任务 | 界面 | data-testid | 关键状态属性 |
 |---|---|---|---|
@@ -627,8 +627,12 @@ stateDiagram-v2
 | M3-11 | 供应商表单 | `provider-form` / `provider-name-input` / `provider-base-url-input` / `provider-api-key-input` / `provider-api-key-ref-readonly` / `provider-enabled-switch` / `provider-form-save` / `provider-form-back` | — |
 | M3-11 | 供应商模型 | `provider-model-item` / `provider-model-toggle` / `provider-model-add` | `data-model-id`、`data-enabled` |
 | M3-11 | 模型选择器 | `model-selector` / `model-selector-item` / `model-selector-empty` | `data-provider-id`、`data-model-id` |
+| M3-12 | 会话列表分组 | `session-group` / `session-group-title` | `data-group`（running/waiting_permission/failed/other；固定组序：运行中 → 等待审批 → 失败 → 其他；空组隐藏） |
+| M3-12 | 会话列表容器（结构变更） | `session-list` / `session-item` / `session-item-status`（既有锚点，不重命名；由扁平列表改为分组容器） | `data-session-id`、`data-active`（组内归属不变） |
 | 通用 | 覆盖层 | `overlay-<name>`（settings/backup/diagnostics/about）/ `overlay-back` | — |
 | 通用 | 错误码 | 所有错误元素补 `data-code`（`workbench-error`、`startup-error`、`permission-*` 等） | `data-code` |
+
+> **M3-12 锚点契约（2026-09-29 按 ADR-011 决策 5 登记并冻结）**：`session-group` / `data-group` / `session-group-title` 及 `session-list` 结构变更自本版冻结，实施时不得重命名（§7.1 规则 5；重命名视为破坏性变更）；断言接口（`data-group` 序列 = 非空组固定组序子集、空组不渲染、等待组增删、`session-item` 不得跨组错位）见 `docs/M3-03-遗留项处置草案.md` §5.2 与 `docs/adr/ADR-011-m3-12-waiting-state-grouping.md` 决策 5。
 
 ### 7.4 使用约束
 
