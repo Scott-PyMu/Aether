@@ -1103,3 +1103,103 @@ body {
   margin-top: 0.65rem;
   color: var(--ae-danger, #d66f6f);
 }
+
+/* ===== M3-05：诊断导出 / 设置 / 关于 / 备份提醒 ===== */
+
+.diagnostics-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.diagnostics-entry-capacity { margin: 0; font-size: 0.85rem; color: #9aa4af; }
+.diagnostics-entry-capacity[data-level="warn"] { color: var(--ae-warning, #e0a458); }
+.diagnostics-entry-capacity[data-level="critical"] { color: var(--ae-danger, #d66f6f); }
+
+.diagnostics-page,
+.settings-page,
+.about-page {
+  max-width: 720px;
+  margin: 3rem auto;
+  padding: 1.25rem;
+  background-color: #1d2026;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-height: calc(100vh - 6rem);
+  overflow-y: auto;
+}
+
+.diagnostics-header,
+.settings-header,
+.about-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.diagnostics-target-section,
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border-top: 1px solid #2c3138;
+  padding-top: 0.75rem;
+}
+
+.diagnostics-target-section label,
+.backup-create label,
+.backup-restore-external label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.diagnostics-actions,
+.settings-actions,
+.about-actions,
+.backup-reminder-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.diagnostics-note,
+.settings-note { margin: 0; font-size: 0.85rem; color: #9aa4af; }
+
+.diagnostics-result {
+  margin: 0;
+  padding: 0.5rem 0.65rem;
+  border-radius: 6px;
+  background-color: #1d2a1d;
+  border-left: 3px solid var(--ae-success, #7fbf7f);
+  word-break: break-all;
+}
+
+.diagnostics-result[data-result="failed"] {
+  background-color: #2a1d1d;
+  border-left-color: var(--ae-danger, #d66f6f);
+}
+
+.diagnostics-error,
+.settings-error { color: var(--ae-danger, #d66f6f); }
+
+.backup-reminder {
+  margin-bottom: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 6px;
+  background-color: #2a2418;
+  border-left: 3px solid var(--ae-warning, #e0a458);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.settings-toggle { display: inline-flex; gap: 0.5rem; align-items: center; }
+
+.settings-placeholder { color: #9aa4af; }
+
+.settings-notice { color: var(--ae-success, #7fbf7f); margin: 0; }

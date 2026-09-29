@@ -12,7 +12,12 @@ import { requestAppRestart } from "./health";
 import { describeIpcError } from "./startup";
 import { useHealthPolling } from "./useHealthPolling";
 
-export function HealthMonitor() {
+export interface HealthMonitorProps {
+  /** M3-05：降级横幅「导出诊断」入口（打开 S-07 诊断导出页）。 */
+  onOpenDiagnostics?: () => void;
+}
+
+export function HealthMonitor({ onOpenDiagnostics }: HealthMonitorProps = {}) {
   const { status, report, error, errorCode } = useHealthPolling();
   const [restartError, setRestartError] = useState<string | null>(null);
   const [restartPending, setRestartPending] = useState(false);
@@ -84,6 +89,16 @@ export function HealthMonitor() {
         >
           重启应用
         </button>
+        {/* M3-05：降级期诊断导出入口（D4：读/备份/导出可用）。 */}
+        {onOpenDiagnostics ? (
+          <button
+            type="button"
+            data-testid="storage-degraded-diagnostics"
+            onClick={onOpenDiagnostics}
+          >
+            导出诊断
+          </button>
+        ) : null}
         {restartError ? (
           <p className="health-error" data-testid="storage-degraded-restart-error">
             {restartError}

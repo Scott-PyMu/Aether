@@ -45,7 +45,10 @@ pub use migration::{
     checksum, migrate, migrate_with, AppliedMigration, MigrationFile, EMBEDDED_MIGRATIONS,
     MIGRATIONS_TABLE,
 };
-pub use ops::{AuditLogRecord, PermissionRecord, SessionQuery, StoreCommand, StoreOutcome};
+pub use ops::{
+    AuditLogRecord, PermissionRecord, SessionQuery, StoreCommand, StoreOutcome, StoreSummary,
+    SUMMARY_TABLES,
+};
 pub use pragma::PragmaSnapshot;
 pub use store::{quick_check, ExportReport, IntegrityReport, Store, StoreMode, TableExport};
 pub use write_queue::{

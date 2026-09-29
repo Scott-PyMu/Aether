@@ -16,6 +16,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { appEventStore } from "./aetherStore";
 import { describeIpcError, ipcErrorCode } from "./startup";
+import { diagnosticsIpc as productionDiagnosticsIpc, type DiagnosticsIpc } from "./diagnostics";
+import { DiagnosticsEntry } from "./DiagnosticsEntry";
 import type { EventStore } from "./eventStore";
 import { STORAGE_L2_THRESHOLD } from "./health";
 import { useStorageHealth } from "./healthBus";
@@ -54,6 +56,10 @@ export interface SessionWorkbenchProps {
   historyLimit?: number;
   streamItemHeight?: number;
   streamHeight?: number;
+  /** M3-05：右栏诊断分区（提供时渲染；打开 S-07 诊断导出页）。 */
+  onOpenDiagnostics?: () => void;
+  /** M3-05：诊断 IPC 注入（测试替身；缺省 = 生产 Tauri 实现）。 */
+  diagnosticsIpc?: DiagnosticsIpc;
 }
 
 function mergeMessages(previous: MessageRow[], incoming: MessageRow[]): MessageRow[] {
@@ -74,6 +80,8 @@ export function SessionWorkbench({
   historyLimit = DEFAULT_HISTORY_LIMIT,
   streamItemHeight = STREAM_ITEM_HEIGHT,
   streamHeight = STREAM_VIEWPORT_HEIGHT,
+  onOpenDiagnostics,
+  diagnosticsIpc: diagnosticsIpcProp = productionDiagnosticsIpc,
 }: SessionWorkbenchProps) {
   const [runtimes, setRuntimes] = useState<RuntimeInfo[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
@@ -647,6 +655,9 @@ export function SessionWorkbench({
             events={eventsState.events}
             onPendingCount={setPendingPermissionCount}
           />
+          {onOpenDiagnostics ? (
+            <DiagnosticsEntry ipc={diagnosticsIpcProp} onOpen={onOpenDiagnostics} />
+          ) : null}
         </aside>
       </div>
     </section>

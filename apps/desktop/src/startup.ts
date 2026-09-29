@@ -59,6 +59,8 @@ export interface StartupSnapshot {
   message?: string;
   migration?: MigrationOutcome;
   pending_migration?: PendingMigration;
+  /** M3-05：安全级别（A3 凭据库自检结果；缺省 = 未探测）。 */
+  security_level?: { level: "os" | "degraded"; detail: string };
 }
 
 export async function fetchStartup(): Promise<StartupSnapshot> {

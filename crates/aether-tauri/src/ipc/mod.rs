@@ -179,7 +179,12 @@ impl IpcState {
         }
     }
 
-    pub(crate) fn allowed_roots(&self) -> &[PathBuf] {
+    /// 路径白名单根目录（`validate_user_path` 的配套访问器）。
+    ///
+    /// M3-05 起诊断导出改用 ADR-003 决策 19 的外部路径语义（选择器 + canonicalize +
+    /// 空间护栏，不做默认目录信任），生产不再依赖本白名单；保留该访问器供
+    /// 路径白名单类命令与测试复用（`validate_user_path` 仍为默认拒绝实现）。
+    pub fn allowed_roots(&self) -> &[PathBuf] {
         &self.allowed_roots
     }
 }

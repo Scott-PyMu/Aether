@@ -39,9 +39,11 @@ pub enum SessionStatus {
 
 /// 设置键白名单（默认拒绝）。
 ///
-/// M1-08 尚无已批准设置项；后续里程碑（M3-05 等）在实现设置能力时，先在此登记
-/// 键名并同步 `settings` 表语义，再放开对应命令。未登记键一律 `invalid_enum`。
-pub const SETTINGS_KEY_ALLOWLIST: &[&str] = &[];
+/// M1-08 尚无已批准设置项；后续里程碑在实现设置能力时，先在此登记键名并同步
+/// `settings` 表语义，再放开对应命令。未登记键一律 `invalid_enum`。
+/// M3-05 登记：`backup.reminder`（D13「7 天未备份提醒可开关」；布尔，缺省 `true`；
+/// UI-UX Q9/Q10 裁定为全局开关）。工作区绑定键（M3-08）尚未登记。
+pub const SETTINGS_KEY_ALLOWLIST: &[&str] = &["backup.reminder"];
 
 #[derive(Debug, Deserialize, specta::Type)]
 #[serde(deny_unknown_fields)]
@@ -477,6 +479,14 @@ impl CommandRequest for StartupPickTargetRequest {}
 #[serde(deny_unknown_fields)]
 pub struct ExportDiagnosticsRequest {
     pub target_dir: String,
+}
+
+impl ExportDiagnosticsRequest {
+    /// 导出目标目录的规范化结果（ADR-003 决策 19：导出到外部路径；经系统选择器选择，
+    /// 不做默认目录信任；canonicalize + 存在目录，空间护栏在后端执行）。
+    pub fn canonical_target_dir(&self) -> Result<std::path::PathBuf, IpcError> {
+        path::validate_backup_target_dir(&self.target_dir)
+    }
 }
 
 impl CommandRequest for ExportDiagnosticsRequest {

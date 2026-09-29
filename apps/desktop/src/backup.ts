@@ -37,6 +37,8 @@ export interface BackupCapacity {
 export interface BackupListResponse {
   backups: BackupRecord[];
   capacity: BackupCapacity;
+  /** M3-05：7 天未备份提醒（核心时钟计算；`enabled` = 设置开关，`due` = 是否到期）。 */
+  reminder?: import("./settings").BackupReminder;
 }
 
 export interface BackupCreateResult {

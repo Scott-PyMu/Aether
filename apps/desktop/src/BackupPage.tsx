@@ -20,11 +20,19 @@ import {
   type BackupRecord,
   type BackupRestoreSource,
 } from "./backup";
+import {
+  BACKUP_REMINDER_KEY,
+  settingsIpc as productionSettingsIpc,
+  type BackupReminder,
+  type SettingsIpc,
+} from "./settings";
 import { describeIpcError, ipcErrorCode } from "./startup";
 
 export interface BackupPageProps {
   /** IPC 契约（缺省 = 生产 Tauri 实现；测试注入替身）。 */
   ipc?: BackupIpc;
+  /** 设置 IPC（M3-05：备份提醒开关；缺省 = 生产实现）。 */
+  settings?: SettingsIpc;
   /** 返回工作台（`overlay-back`）。 */
   onBack: () => void;
 }
@@ -33,9 +41,14 @@ type PendingRestore =
   | { source: "internal"; id: string }
   | { source: "external"; path: string };
 
-export function BackupPage({ ipc = backupIpc, onBack }: BackupPageProps) {
+export function BackupPage({
+  ipc = backupIpc,
+  settings = productionSettingsIpc,
+  onBack,
+}: BackupPageProps) {
   const [backups, setBackups] = useState<BackupRecord[]>([]);
   const [capacity, setCapacity] = useState<BackupCapacity | null>(null);
+  const [reminder, setReminder] = useState<BackupReminder | null>(null);
   const [label, setLabel] = useState("");
   const [externalPath, setExternalPath] = useState("");
   const [pending, setPending] = useState<PendingRestore | null>(null);
@@ -52,6 +65,7 @@ export function BackupPage({ ipc = backupIpc, onBack }: BackupPageProps) {
       const response = await ipc.list();
       setBackups(response.backups);
       setCapacity(response.capacity);
+      setReminder(response.reminder ?? null);
     } catch (failure) {
       setError(describeIpcError(failure));
       setErrorCode(ipcErrorCode(failure));
@@ -61,6 +75,17 @@ export function BackupPage({ ipc = backupIpc, onBack }: BackupPageProps) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // M3-05/D13：7 天未备份提醒（可关闭）——「稍后」仅关闭提醒开关并刷新。
+  const dismissReminder = useCallback(async () => {
+    try {
+      await settings.set(BACKUP_REMINDER_KEY, false);
+      await refresh();
+    } catch (failure) {
+      setError(describeIpcError(failure));
+      setErrorCode(ipcErrorCode(failure));
+    }
+  }, [refresh, settings]);
 
   const resetMessages = useCallback(() => {
     setNotice(null);
@@ -182,6 +207,34 @@ export function BackupPage({ ipc = backupIpc, onBack }: BackupPageProps) {
               ? `容量警告（≥2GB）：${capacityText}`
               : capacityText}
         </p>
+
+        {reminder && reminder.enabled && reminder.due ? (
+          <div
+            className="backup-reminder"
+            data-testid="backup-reminder"
+            data-reason={reminder.reason ?? ""}
+            role="alert"
+          >
+            <span>
+              {reminder.reason === "never"
+                ? "尚未创建过备份（D13：建议定期手动备份）。"
+                : "距上次备份已超过 7 天（D13：建议尽快备份）。"}
+            </span>
+            <span className="backup-reminder-actions">
+              <button type="button" disabled={busy} onClick={() => void create(null)}>
+                立即备份
+              </button>
+              <button
+                type="button"
+                data-testid="backup-reminder-dismiss"
+                disabled={busy}
+                onClick={() => void dismissReminder()}
+              >
+                关闭提醒
+              </button>
+            </span>
+          </div>
+        ) : null}
 
         <section className="backup-create">
           <h3>手动备份</h3>

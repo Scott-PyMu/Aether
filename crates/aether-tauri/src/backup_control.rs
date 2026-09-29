@@ -45,12 +45,86 @@ pub const BACKUP_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 pub const CAPACITY_WARN_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 /// 容量巡检强烈提示阈值（D13：5GB）。
 pub const CAPACITY_CRITICAL_BYTES: u64 = 5 * 1024 * 1024 * 1024;
+/// 容量阈值覆盖环境变量（M3-05 DoD2「阈值参数化模拟」；仅调参，不改变语义）。
+pub const CAPACITY_WARN_ENV: &str = "AETHER_CAPACITY_WARN_BYTES";
+/// 容量强提示阈值覆盖环境变量（M3-05 DoD2）。
+pub const CAPACITY_CRITICAL_ENV: &str = "AETHER_CAPACITY_CRITICAL_BYTES";
 /// 备份台账 `kind`：应用 `backups` 目录。
 pub const BACKUP_KIND_INTERNAL: &str = "internal";
 /// 备份台账 `kind`：用户选择的外部目录（M3-04 登记）。
 pub const BACKUP_KIND_EXTERNAL: &str = "external";
 /// 审计动作（D13 第 7 步）。
 pub const AUDIT_ACTION_RESTORE: &str = "backup.restore";
+
+/// 容量阈值配置（D13：2GB 警告 / 5GB 强烈提示；M3-05 起参数化注入）。
+///
+/// 语义不变，仅允许测试/演练通过构造注入或环境变量模拟阈值（常量级调参，
+/// 记录于任务证据；不改变 `ok|warn|critical` 三档口径）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CapacityConfig {
+    pub warn_bytes: u64,
+    pub critical_bytes: u64,
+}
+
+impl Default for CapacityConfig {
+    fn default() -> Self {
+        Self {
+            warn_bytes: CAPACITY_WARN_BYTES,
+            critical_bytes: CAPACITY_CRITICAL_BYTES,
+        }
+    }
+}
+
+impl CapacityConfig {
+    /// 以显式阈值构造（测试/演练注入）。
+    pub fn with_limits(warn_bytes: u64, critical_bytes: u64) -> Self {
+        Self {
+            warn_bytes,
+            critical_bytes,
+        }
+    }
+
+    /// 从环境变量读取覆盖（未设置/非法 → 默认值；仅调参）。
+    pub fn from_env() -> Self {
+        let mut config = Self::default();
+        if let Some(value) = parse_env_bytes(CAPACITY_WARN_ENV) {
+            config.warn_bytes = value;
+        }
+        if let Some(value) = parse_env_bytes(CAPACITY_CRITICAL_ENV) {
+            config.critical_bytes = value;
+        }
+        config
+    }
+
+    /// 容量等级：`ok` / `warn` / `critical`（与 M3-04 `backup_list` 同一口径）。
+    pub fn level(&self, total_bytes: u64) -> &'static str {
+        if total_bytes >= self.critical_bytes {
+            "critical"
+        } else if total_bytes >= self.warn_bytes {
+            "warn"
+        } else {
+            "ok"
+        }
+    }
+
+    /// 容量投影（`backup_list.capacity` 与诊断包共用形状）。
+    pub fn to_json(&self, db_bytes: u64, wal_bytes: u64) -> Value {
+        let total_bytes = db_bytes.saturating_add(wal_bytes);
+        json!({
+            "db_bytes": db_bytes,
+            "wal_bytes": wal_bytes,
+            "total_bytes": total_bytes,
+            "warn_bytes": self.warn_bytes,
+            "critical_bytes": self.critical_bytes,
+            "level": self.level(total_bytes),
+        })
+    }
+}
+
+fn parse_env_bytes(name: &str) -> Option<u64> {
+    let raw = std::env::var(name).ok()?;
+    raw.trim().parse::<u64>().ok()
+}
 
 /// 空间护栏探针（ADR-003 决策 19；生产为 [`NativeSpaceProbe`]，测试注入固定值）。
 pub trait SpaceProbe: Send + Sync + 'static {
@@ -82,6 +156,7 @@ pub struct BackupControlBackend {
     handle: tokio::runtime::Handle,
     timeout: Duration,
     space: Arc<dyn SpaceProbe>,
+    capacity: CapacityConfig,
 }
 
 impl BackupControlBackend {
@@ -100,6 +175,7 @@ impl BackupControlBackend {
             handle,
             timeout: BACKUP_COMMAND_TIMEOUT,
             space: Arc::new(NativeSpaceProbe),
+            capacity: CapacityConfig::from_env(),
         }
     }
 
@@ -108,6 +184,18 @@ impl BackupControlBackend {
     pub fn with_space_probe(mut self, space: Arc<dyn SpaceProbe>) -> Self {
         self.space = space;
         self
+    }
+
+    /// 注入容量阈值（M3-05 DoD2：参数化模拟警告/强提示；语义不变）。
+    #[must_use]
+    pub fn with_capacity_config(mut self, capacity: CapacityConfig) -> Self {
+        self.capacity = capacity;
+        self
+    }
+
+    /// 当前容量阈值（诊断包与巡检复用同一注入实例）。
+    pub fn capacity_config(&self) -> CapacityConfig {
+        self.capacity
     }
 
     /// 数据库路径（数据目录 `aether.db`，M1-06 约定）。
@@ -300,24 +388,10 @@ impl IpcBackend for BackupControlBackend {
 
         let db_bytes = file_len(&self.db_path());
         let wal_bytes = file_len(&wal_path(&self.db_path()));
-        let total_bytes = db_bytes.saturating_add(wal_bytes);
-        let level = if total_bytes >= CAPACITY_CRITICAL_BYTES {
-            "critical"
-        } else if total_bytes >= CAPACITY_WARN_BYTES {
-            "warn"
-        } else {
-            "ok"
-        };
+        let capacity = self.capacity.to_json(db_bytes, wal_bytes);
         Ok(json!({
             "backups": all,
-            "capacity": {
-                "db_bytes": db_bytes,
-                "wal_bytes": wal_bytes,
-                "total_bytes": total_bytes,
-                "warn_bytes": CAPACITY_WARN_BYTES,
-                "critical_bytes": CAPACITY_CRITICAL_BYTES,
-                "level": level,
-            },
+            "capacity": capacity,
         }))
     }
 
@@ -553,7 +627,7 @@ fn wal_path(db_path: &Path) -> PathBuf {
     PathBuf::from(format!("{}-wal", db_path.display()))
 }
 
-fn file_len(path: &Path) -> u64 {
+pub(crate) fn file_len(path: &Path) -> u64 {
     std::fs::metadata(path)
         .map(|metadata| metadata.len())
         .unwrap_or(0)

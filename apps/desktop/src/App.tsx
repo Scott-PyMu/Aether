@@ -1,15 +1,18 @@
 import { APP_VERSION, PROTOCOL_VERSION } from "@aether/protocol";
 import { useCallback, useEffect, useState } from "react";
 
+import { AboutPage } from "./AboutPage";
 import { BackupPage } from "./BackupPage";
+import { DiagnosticsPage } from "./DiagnosticsPage";
 import { EventBridgeIndicator } from "./EventBridgeIndicator";
 import { HealthMonitor } from "./HealthMonitor";
 import { SessionWorkbench } from "./SessionWorkbench";
+import { SettingsPage } from "./SettingsPage";
 import { StartupGate } from "./StartupGate";
 import { describeIpcError, fetchStartup, type StartupSnapshot } from "./startup";
 
-/** 单窗口覆盖层视图（M3-04；UI-UX §1.1：不使用 URL 路由）。 */
-type AppView = "workbench" | "backup";
+/** 单窗口覆盖层视图（M3-04/M3-05；UI-UX §1.1：不使用 URL 路由）。 */
+type AppView = "workbench" | "backup" | "diagnostics" | "settings" | "about";
 
 export function App() {
   const [startup, setStartup] = useState<StartupSnapshot | null>(null);
@@ -70,7 +73,7 @@ export function App() {
       <p className="app-data-dir" data-testid="app-data-dir">
         数据目录：{startup.data_dir}
       </p>
-      <p>
+      <p className="app-nav">
         <button
           type="button"
           data-testid="backup-open"
@@ -78,12 +81,53 @@ export function App() {
         >
           备份与恢复
         </button>
+        <button
+          type="button"
+          data-testid="settings-open"
+          onClick={() => setView("settings")}
+        >
+          设置
+        </button>
+        <button
+          type="button"
+          data-testid="diagnostics-open"
+          onClick={() => setView("diagnostics")}
+        >
+          诊断
+        </button>
+        <button
+          type="button"
+          data-testid="about-open"
+          onClick={() => setView("about")}
+        >
+          关于
+        </button>
       </p>
-      <HealthMonitor />
+      <HealthMonitor onOpenDiagnostics={() => setView("diagnostics")} />
       <EventBridgeIndicator />
-      <SessionWorkbench />
+      <SessionWorkbench onOpenDiagnostics={() => setView("diagnostics")} />
       {view === "backup" ? (
         <BackupPage onBack={() => setView("workbench")} />
+      ) : null}
+      {view === "diagnostics" ? (
+        <DiagnosticsPage onBack={() => setView("workbench")} />
+      ) : null}
+      {view === "settings" ? (
+        <SettingsPage
+          dataDir={startup.data_dir}
+          securityLevel={startup.security_level ?? null}
+          onBack={() => setView("workbench")}
+          onOpenBackup={() => setView("backup")}
+          onOpenDiagnostics={() => setView("diagnostics")}
+          onOpenAbout={() => setView("about")}
+        />
+      ) : null}
+      {view === "about" ? (
+        <AboutPage
+          dataDir={startup.data_dir}
+          onBack={() => setView("workbench")}
+          onOpenDiagnostics={() => setView("diagnostics")}
+        />
       ) : null}
     </main>
   );

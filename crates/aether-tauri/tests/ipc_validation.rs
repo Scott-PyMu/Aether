@@ -287,7 +287,6 @@ fn malformed_samples_return_structured_errors_and_do_not_reach_backend() {
     let fixture = fixture("malformed");
     let overlong_text = "x".repeat(MAX_MESSAGE_BYTES + 1);
     let long_title = "标".repeat(MAX_TITLE_CHARS + 1);
-    let outside = fixture.outside.to_string_lossy().to_string();
     let external_db = fixture.outside.join("candidate.db");
     std::fs::write(&external_db, b"not a database").expect("写入外部候选 .db");
     let external_txt = fixture.outside.join("candidate.txt");
@@ -296,12 +295,6 @@ fn malformed_samples_return_structured_errors_and_do_not_reach_backend() {
     let sync_root = fixture.outside.join("OneDrive").join("workspace");
     std::fs::create_dir_all(&sync_root).expect("创建同步盘样本目录");
     let inside = fixture.root.to_string_lossy().to_string();
-    let traversal = fixture
-        .root
-        .join("..")
-        .join(fixture.outside.file_name().expect("outside 目录名"))
-        .to_string_lossy()
-        .to_string();
 
     let samples: Vec<(&str, Value, &str, Option<&str>)> = vec![
         (
@@ -424,15 +417,17 @@ fn malformed_samples_return_structured_errors_and_do_not_reach_backend() {
             "path_rejected",
             None,
         ),
+        // M3-05/ADR-003 决策 19：诊断导出目标为外部路径（选择器选择，不做默认目录信任）；
+        // 不存在目录 / 非目录（文件）仍必须拒绝。
         (
             "export_diagnostics",
-            json!({ "target_dir": outside }),
+            json!({ "target_dir": missing_db.to_string_lossy() }),
             "path_rejected",
             None,
         ),
         (
             "export_diagnostics",
-            json!({ "target_dir": traversal }),
+            json!({ "target_dir": external_txt.to_string_lossy() }),
             "path_rejected",
             None,
         ),
@@ -656,6 +651,23 @@ fn valid_requests_reach_backend_exactly_once() {
             json!({ "target_dir": inside }),
             "export_diagnostics",
         ),
+        // M3-05/ADR-003 决策 19：诊断导出目标支持外部目录（选择器路径不在允许根内也合法）。
+        (
+            "export_diagnostics",
+            json!({ "target_dir": long_path(&fixture.outside) }),
+            "export_diagnostics",
+        ),
+        // M3-05：设置键白名单已登记 `backup.reminder`（合法形态到达后端）。
+        (
+            "settings_get",
+            json!({ "key": "backup.reminder" }),
+            "settings_get",
+        ),
+        (
+            "settings_set",
+            json!({ "key": "backup.reminder", "value": true }),
+            "settings_set",
+        ),
         // ADR-007 决策 1：health 无参数（缺省载荷与空对象两种合法调用方式）。
         ("health", Value::Null, "health"),
         ("health", json!({}), "health"),
@@ -673,7 +685,7 @@ fn valid_requests_reach_backend_exactly_once() {
         );
     }
 
-    // settings_* 的键白名单当前为空（默认拒绝），合法形态也应返回 invalid_enum。
+    // settings_*：未登记键（默认拒绝）返回 invalid_enum；已登记键在合法样本中到达后端。
     for (command, payload) in [
         ("settings_get", json!({ "key": "theme" })),
         ("settings_set", json!({ "key": "theme", "value": true })),
@@ -707,6 +719,9 @@ fn valid_requests_reach_backend_exactly_once() {
         "workspace_set",
         "workspace_set",
         "export_diagnostics",
+        "export_diagnostics",
+        "settings_get",
+        "settings_set",
         "health",
         "health",
     ]

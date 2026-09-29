@@ -15,7 +15,6 @@ use super::dto::{
     StartupMigrateRequest, StartupPickTargetRequest, WorkspaceSetRequest,
 };
 use super::error::{IpcError, IpcErrorCode};
-use super::path;
 use super::validate::{parse_no_params, parse_strict};
 use super::IpcState;
 use crate::json_payload::JsonPayload;
@@ -317,7 +316,7 @@ pub(crate) fn export_diagnostics(
     payload: JsonPayload,
 ) -> Result<JsonPayload, IpcError> {
     let request: ExportDiagnosticsRequest = parse_strict(payload.into_value())?;
-    let canonical = path::validate_user_path(&request.target_dir, state.allowed_roots())?;
+    let canonical = request.canonical_target_dir()?;
     state
         .backend_ready()?
         .export_diagnostics(&request, &canonical)

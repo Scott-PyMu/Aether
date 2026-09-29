@@ -18,6 +18,7 @@ pub mod backup_control;
 pub mod bindings;
 pub mod config;
 pub mod core_health;
+pub mod diagnostics_control;
 pub mod disk;
 pub mod event_bridge;
 pub mod ipc;
@@ -28,6 +29,7 @@ pub mod nav;
 pub mod permission_loop;
 pub mod picker;
 pub mod runtime_control;
+pub mod security_level;
 pub mod session_backend;
 pub mod shutdown;
 pub mod single_instance;
@@ -95,6 +97,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // E2E 探针可注入指针写入失败（复现「复制完成、写指针失败」窗口）。
     #[cfg(debug_assertions)]
     let gate = startup_probe::maybe_override_pointer_writer(gate);
+    // M3-05（D10/A3）：安全级别启动探针（OS 凭据库写→读→删自检；失败 → degraded），
+    // 结果随 `startup_get` 快照供设置页只读展示（P0 不挂载加密文件，见模块说明）。
+    gate.set_security_level(security_level::probe());
     let startup = std::sync::Arc::new(gate);
     #[cfg(debug_assertions)]
     startup_probe::record_phase(&startup);
@@ -102,21 +107,28 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // M2-07 DoD6（ADR-007 §5-1）：P0 运行期日志汇聚端接线（环形缓冲 + 数据目录文件）。
     // 启动门未就绪（同步盘阻断）时不触碰候选目录，仅环形缓冲；文件不可写同样退化。
-    match startup.snapshot().phase {
+    // M3-05：句柄保留并注入诊断后端（诊断包「日志汇聚产物」段）。
+    let log_sink: Option<std::sync::Arc<logging::LogSink>> = match startup.snapshot().phase {
         startup::StartupPhase::Ready => {
             match logging::init_for_data_dir(std::path::Path::new(&startup.snapshot().data_dir)) {
-                Ok(_sink) => {}
-                Err(error) => eprintln!("[aether] {error}（继续以无汇聚端运行）"),
+                Ok(sink) => Some(sink),
+                Err(error) => {
+                    eprintln!("[aether] {error}（继续以无汇聚端运行）");
+                    None
+                }
             }
         }
         _ => {
-            if logging::init(logging::LogSink::new(logging::DEFAULT_RING_CAPACITY)).is_err() {
+            let sink = logging::LogSink::new(logging::DEFAULT_RING_CAPACITY);
+            if logging::init(std::sync::Arc::clone(&sink)).is_err() {
                 eprintln!("[aether] 日志汇聚端接线失败（继续以无汇聚端运行）");
             }
+            Some(sink)
         }
-    }
+    };
 
-    // 路径白名单根目录随 M3-05（诊断导出）接入；未配置即默认拒绝。
+    // 路径白名单根目录（`validate_user_path` 配套；M3-05 起诊断导出走 ADR-003 决策 19
+    // 外部路径语义，不再依赖该白名单——保持默认拒绝口径供白名单类命令复用）。
     // debug + E2E 探针可注入固定目录选择器（迁移主路径自动化）；生产用系统选择器。
     #[cfg(debug_assertions)]
     let state = match startup_probe::injected_picker() {
@@ -140,7 +152,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
             // 单实例插件已初始化：此处才做「库打开 + quick_check」与管线启动（D2 顺序），
             // 并注入已 manage 的状态（窗口加载期状态始终可用）。
-            let bundle = build_backend(&startup_for_boot, app.handle());
+            let bundle = build_backend(&startup_for_boot, app.handle(), log_sink.clone());
             let _ = app.state::<ipc::IpcState>().install_backend(bundle.backend);
             // M2-08：应用退出编排接线（存储五步 + 适配器终止段；未接线则退出直接放行）。
             if let Some(orchestrator) = bundle.shutdown {
@@ -197,6 +209,7 @@ struct BackendBundle {
 fn build_backend(
     startup: &std::sync::Arc<startup::StartupGate>,
     app: &tauri::AppHandle,
+    log_sink: Option<std::sync::Arc<logging::LogSink>>,
 ) -> BackendBundle {
     if startup.ensure_ready().is_err() {
         return BackendBundle {
@@ -233,6 +246,9 @@ fn build_backend(
     let mut adapter_executor: Option<std::sync::Arc<adapter_executor::AdapterRunExecutor>> = None;
     // M3-03：权限中心命令面（`permissions_pending`/`permission_resolve`）的服务句柄。
     let mut permission_service: Option<aether_control::PermissionService> = None;
+    // M3-05：诊断后端依赖（成功分支注入真实健康/读/写/日志/任务 dump；降级分支注入降级快照）。
+    let diagnostics_deps: Option<diagnostics_control::DiagnosticsDeps>;
+    let runtimes_for_diagnostics = std::sync::Arc::clone(&runtimes);
     let (health, storage_slot, pipeline, reads, backup_deps) = match core_health::boot_core_full(
         &data_dir, &handle, runtimes,
     ) {
@@ -319,7 +335,7 @@ fn build_backend(
             let manager = aether_control::SessionManager::new(
                 aether_control::LifecycleConfig::default(),
                 std::sync::Arc::new(aether_control::SystemClock),
-                write,
+                write.clone(),
                 reads.clone(),
                 pipeline.clone(),
                 run_executor,
@@ -341,6 +357,25 @@ fn build_backend(
             tracing::info!(background, "会话生命周期后台任务已启动（看门狗/事件监听）");
             session_manager = Some(manager);
             adapter_executor = executor;
+            // M3-05（D11/D13）：诊断后端依赖——真实健康提供者 + 日志汇聚端 + 任务 dump
+            // 源（M2-05 缓冲）+ 读/写句柄（库摘要/设置/提醒）。
+            diagnostics_deps = Some(diagnostics_control::DiagnosticsDeps {
+                data_dir: data_dir.clone(),
+                reads: Some(reads.clone()),
+                write: Some(write.clone()),
+                handle: handle.clone(),
+                health: core_health::HealthProvider::new(
+                    std::sync::Arc::new(pipeline.clone())
+                        as std::sync::Arc<dyn core_health::PipelineHealthSource>,
+                    runtimes_for_diagnostics,
+                ),
+                logs: log_sink.clone(),
+                task_dumps: session_manager.clone().map(|manager| {
+                    std::sync::Arc::new(manager)
+                        as std::sync::Arc<dyn diagnostics_control::TaskDumpSource>
+                }),
+                security: None,
+            });
             (
                 std::sync::Arc::new(core) as std::sync::Arc<dyn ipc::IpcBackend>,
                 Some(slot),
@@ -351,8 +386,20 @@ fn build_backend(
         }
         Err(error) => {
             tracing::error!(error = %error, "核心健康源启动失败：按只读降级呈现 health");
+            let reason = error.to_string();
+            // M3-05/D4：降级启动态诊断包仍可导出（健康快照/容量/日志；库摘要与配置缺失）。
+            diagnostics_deps = Some(diagnostics_control::DiagnosticsDeps {
+                data_dir: data_dir.clone(),
+                reads: None,
+                write: None,
+                handle: handle.clone(),
+                health: core_health::degraded_provider(&reason),
+                logs: log_sink.clone(),
+                task_dumps: None,
+                security: None,
+            });
             (
-                std::sync::Arc::new(core_health::degraded_backend(&error.to_string()))
+                std::sync::Arc::new(core_health::degraded_backend(&reason))
                     as std::sync::Arc<dyn ipc::IpcBackend>,
                 None,
                 None,
@@ -427,6 +474,14 @@ fn build_backend(
             Some(reads),
             Some(write),
             handle.clone(),
+        )),
+        None => inner,
+    };
+    // M3-05（D11/D13）：诊断/容量装饰器——诊断包导出（脱敏 + 日志/健康/库摘要整合）、
+    // `backup_list.reminder`（7 天未备份提醒）、已登记设置键读写。
+    let inner: std::sync::Arc<dyn ipc::IpcBackend> = match diagnostics_deps {
+        Some(deps) => std::sync::Arc::new(diagnostics_control::DiagnosticsControlBackend::new(
+            inner, deps,
         )),
         None => inner,
     };

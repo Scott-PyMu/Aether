@@ -115,6 +115,14 @@ pub enum StoreCommand {
     InsertBackup { record: BackupRecord },
     /// 删除备份台账行（M3-04 保留策略：超出保留份数的最旧记录）。
     DeleteBackup { id: String },
+    /// 写入/更新设置项（`settings` 表；值为 JSON 文本，M3-05 备份提醒开关）。
+    ///
+    /// 单写者约束：设置写路径同样经 [`crate::WriteQueue::execute`]（AGENTS §2.4）。
+    UpsertSetting {
+        key: String,
+        value: String,
+        updated_at: i64,
+    },
 }
 
 /// 写命令结果。
@@ -451,6 +459,23 @@ pub(crate) fn apply_command(
             let transaction = connection.transaction().map_err(txn_failed)?;
             let affected = transaction
                 .execute("DELETE FROM backups WHERE id = ?1", [id])
+                .map_err(txn_failed)?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::Applied { affected })
+        }
+        StoreCommand::UpsertSetting {
+            key,
+            value,
+            updated_at,
+        } => {
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            let affected = transaction
+                .execute(
+                    "INSERT INTO settings (key, value, updated_at) VALUES (?1, ?2, ?3) \
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value, \
+                     updated_at = excluded.updated_at",
+                    params![key, value, updated_at],
+                )
                 .map_err(txn_failed)?;
             transaction.commit().map_err(txn_failed)?;
             Ok(StoreOutcome::Applied { affected })
@@ -902,6 +927,85 @@ impl ReadPool {
         })
         .await
     }
+
+    /// 读取单个设置项（M3-05；不存在为 `None`；值按 JSON 文本原样返回）。
+    pub async fn setting(&self, key: &str) -> Result<Option<String>, StoreError> {
+        let key = key.to_owned();
+        self.with_connection(move |connection| {
+            connection
+                .query_row(
+                    "SELECT value FROM settings WHERE key = ?1",
+                    [key.as_str()],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .map_err(StoreError::from)
+        })
+        .await
+    }
+
+    /// 全量设置项（诊断包「脱敏配置」段；按 key 升序保证输出稳定）。
+    pub async fn settings(&self) -> Result<Vec<(String, String)>, StoreError> {
+        self.with_connection(move |connection| {
+            let mut statement =
+                connection.prepare("SELECT key, value FROM settings ORDER BY key ASC")?;
+            let rows = statement.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            let mut settings = Vec::new();
+            for row in rows {
+                settings.push(row?);
+            }
+            Ok(settings)
+        })
+        .await
+    }
+
+    /// 库摘要（诊断包「库摘要」段；M3-05 DoD1/DoD4）：
+    /// `schema_migrations` 最大版本 + 关键表行数（表名升序，便于扫描/比对）。
+    pub async fn store_summary(&self) -> Result<StoreSummary, StoreError> {
+        self.with_connection(move |connection| {
+            let schema_version: Option<i64> = connection
+                .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                    row.get(0)
+                })
+                .optional()?;
+            let mut tables = BTreeMap::new();
+            for table in SUMMARY_TABLES {
+                let count: i64 =
+                    connection.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                        row.get(0)
+                    })?;
+                tables.insert((*table).to_owned(), count);
+            }
+            Ok(StoreSummary {
+                schema_version,
+                tables,
+            })
+        })
+        .await
+    }
+}
+
+/// 诊断库摘要涉及的表（清单；输出按键名升序，与 [`StoreSummary::tables`] 一致）。
+pub const SUMMARY_TABLES: &[&str] = &[
+    "events",
+    "sessions",
+    "runs",
+    "messages",
+    "permissions",
+    "audit_log",
+    "backups",
+    "settings",
+];
+
+/// 库摘要（诊断包；M3-05）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct StoreSummary {
+    /// `schema_migrations` 最大版本（无迁移记录为 `None`）。
+    pub schema_version: Option<i64>,
+    /// 关键表行数（表名 → 行数；键名升序）。
+    pub tables: BTreeMap<String, i64>,
 }
 
 fn read_backup_row(row: &Row<'_>) -> rusqlite::Result<BackupRecord> {
@@ -1386,5 +1490,117 @@ mod tests {
         )
         .unwrap();
         assert_eq!(second, StoreOutcome::Applied { affected: 0 });
+    }
+
+    /// M3-05：设置项 upsert + 读回（同一 key 覆盖更新；值按 JSON 文本存储）。
+    #[test]
+    fn upsert_setting_roundtrips_and_overwrites() {
+        let mut connection = migrated_connection();
+        let first = apply_command(
+            &mut connection,
+            &StoreCommand::UpsertSetting {
+                key: "backup.reminder".to_owned(),
+                value: "true".to_owned(),
+                updated_at: 10,
+            },
+        )
+        .unwrap();
+        assert_eq!(first, StoreOutcome::Applied { affected: 1 });
+
+        let stored: String = connection
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'backup.reminder'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, "true");
+
+        let updated = apply_command(
+            &mut connection,
+            &StoreCommand::UpsertSetting {
+                key: "backup.reminder".to_owned(),
+                value: "false".to_owned(),
+                updated_at: 20,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            updated,
+            StoreOutcome::Applied { affected: 1 },
+            "同 key 覆盖更新不新增行"
+        );
+        let (value, updated_at): (String, i64) = connection
+            .query_row(
+                "SELECT value, updated_at FROM settings WHERE key = 'backup.reminder'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((value.as_str(), updated_at), ("false", 20));
+        let rows: i64 = connection
+            .query_row("SELECT COUNT(*) FROM settings", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 1, "upsert 语义：单 key 单行");
+    }
+
+    /// M3-05：`ReadPool::setting` / `ReadPool::settings` 读侧（不存在为 None）。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn read_pool_exposes_setting_values() {
+        use crate::store::Store;
+        use crate::write_queue::{StoreRuntime, WriteQueueConfig};
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("aether.db");
+        drop(Store::open(&path).unwrap());
+        let storage = StoreRuntime::open(
+            &path,
+            WriteQueueConfig::default(),
+            &tokio::runtime::Handle::current(),
+        )
+        .unwrap();
+        let reads = storage.reads().clone();
+        let write = storage.queue().clone();
+
+        assert!(reads.setting("backup.reminder").await.unwrap().is_none());
+        write
+            .execute(StoreCommand::UpsertSetting {
+                key: "backup.reminder".to_owned(),
+                value: "true".to_owned(),
+                updated_at: 1,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            reads.setting("backup.reminder").await.unwrap().as_deref(),
+            Some("true")
+        );
+        write
+            .execute(StoreCommand::UpsertSetting {
+                key: "workspace.root".to_owned(),
+                value: "\"C:/ws\"".to_owned(),
+                updated_at: 2,
+            })
+            .await
+            .unwrap();
+        let all = reads.settings().await.unwrap();
+        assert_eq!(
+            all,
+            vec![
+                ("backup.reminder".to_owned(), "true".to_owned()),
+                ("workspace.root".to_owned(), "\"C:/ws\"".to_owned()),
+            ],
+            "全量读按 key 升序"
+        );
+        let summary = reads.store_summary().await.unwrap();
+        assert_eq!(summary.schema_version, Some(2), "迁移到 0002");
+        assert_eq!(summary.tables.get("settings"), Some(&2), "settings 行数");
+        assert_eq!(summary.tables.len(), SUMMARY_TABLES.len());
+        let mut table_order: Vec<&str> = summary.tables.keys().map(String::as_str).collect();
+        table_order.sort_unstable();
+        let mut expected: Vec<&str> = SUMMARY_TABLES.to_vec();
+        expected.sort_unstable();
+        assert_eq!(table_order, expected, "库摘要表清单齐备且键名可排序");
+        storage.shutdown().await.unwrap();
     }
 }

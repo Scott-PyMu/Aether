@@ -84,6 +84,9 @@ pub struct StartupSnapshot {
     /// 未完成的迁移（指针写入失败窗口）：UI 可提供「完成迁移」入口。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pending_migration: Option<PendingMigration>,
+    /// 安全级别（M3-05；`run()` 启动探针注入；测试构造的门缺省不序列化）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub security_level: Option<crate::security_level::SecurityLevelView>,
 }
 
 /// 未完成迁移（供 UI 展示「完成迁移」）。
@@ -112,6 +115,8 @@ pub struct StartupGate {
     migration_probe: Arc<dyn MigrationProbe>,
     pointer_writer: Arc<dyn PointerWriter>,
     state_path: Option<PathBuf>,
+    /// 安全级别（M3-05；`run()` 启动探针注入一次）。
+    security_level: std::sync::OnceLock<crate::security_level::SecurityLevelView>,
 }
 
 impl StartupGate {
@@ -169,7 +174,13 @@ impl StartupGate {
             migration_probe: Arc::new(NativeMigrationProbe),
             pointer_writer: Arc::new(NativePointerWriter),
             state_path,
+            security_level: std::sync::OnceLock::new(),
         }
+    }
+
+    /// 注入安全级别快照（M3-05；`run()` 启动探针调用一次，幂等）。
+    pub fn set_security_level(&self, view: crate::security_level::SecurityLevelView) {
+        let _ = self.security_level.set(view);
     }
 
     /// 注入迁移前置探针（测试覆盖可写/空间分支；生产默认原生探针）。
@@ -209,6 +220,7 @@ impl StartupGate {
             migration_probe: Arc::new(NativeMigrationProbe),
             pointer_writer: Arc::new(NativePointerWriter),
             state_path,
+            security_level: std::sync::OnceLock::new(),
         }
     }
 
@@ -231,6 +243,7 @@ impl StartupGate {
             message,
             migration: None,
             pending_migration: self.pending_migration(&data_dir),
+            security_level: self.security_level.get().cloned(),
         }
     }
 

@@ -283,6 +283,11 @@ impl IpcBackend for CoreHealthBackend {
 ///
 /// 触发源按 D3 口径记为 `integrity_failure`（库损坏/校验失败家族）；具体原因进 `detail`。
 pub fn degraded_backend(reason: &str) -> CoreHealthBackend {
+    CoreHealthBackend::new(degraded_provider(reason), None)
+}
+
+/// 启动失败降级快照的只读提供者（M3-05：诊断包降级态仍可导出健康段）。
+pub fn degraded_provider(reason: &str) -> HealthProvider {
     let snapshot = StorageHealthSnapshot {
         storage_state: "persist_degraded".to_owned(),
         write_queue_depth: 0,
@@ -290,12 +295,9 @@ pub fn degraded_backend(reason: &str) -> CoreHealthBackend {
         degraded_since_ms: Some(now_ms()),
         detail: Some(reason.to_owned()),
     };
-    CoreHealthBackend::new(
-        HealthProvider::new(
-            Arc::new(StaticHealthSource::new(snapshot)),
-            Arc::new(StaticRuntimeSummaries::unwired()),
-        ),
-        None,
+    HealthProvider::new(
+        Arc::new(StaticHealthSource::new(snapshot)),
+        Arc::new(StaticRuntimeSummaries::unwired()),
     )
 }
 

@@ -618,6 +618,11 @@ stateDiagram-v2
 | M3-05 | 诊断页 | `diagnostics-page` / `diagnostics-target` / `diagnostics-pick` / `diagnostics-export` / `diagnostics-result` | `data-result` |
 | M3-05 | 设置页 | `settings-page` / `settings-data-dir` / `settings-security-level` / `settings-backup-reminder` / `settings-workspace` | `data-level`（os/degraded） |
 | M3-05 | 关于页 | `about-page` / `about-version` / `about-protocol` / `about-security-boundary` / `about-beta-marker` | — |
+| M3-05 | 覆盖层导航（实现登记） | `settings-open` / `diagnostics-open` / `about-open`（顶栏入口） | — |
+| M3-05 | 诊断页补充（实现登记） | `diagnostics-capacity`（`data-level`）/ `diagnostics-error`（`data-code`） | `data-level` |
+| M3-05 | 右栏诊断分区（实现登记） | `right-panel-diagnostics` / `diagnostics-entry-capacity`（`data-level`）/ `diagnostics-entry-open` | `data-level` |
+| M3-05 | 设置/关于补充（实现登记） | `settings-open-backup` / `settings-open-diagnostics` / `settings-open-about` / `settings-notice` / `settings-error` / `about-data-dir` / `about-open-diagnostics` | `data-code`（错误元素） |
+| M3-05 | 备份提醒（实现登记） | `backup-reminder` / `backup-reminder-dismiss` | `data-reason`（never/stale） |
 | M3-08 | 工作区 | `workspace-pick` / `workspace-root` / `workspace-apply` / `workspace-result` | — |
 | M3-09 | 文件面板 | `file-panel` / `file-panel-empty` / `file-panel-session-tab` / `file-panel-project-tab` | — |
 | M3-09 | 文件引用项 | `ref-item` / `ref-remove` | `data-ref-kind`（session/project）、`data-artifact-id`、`data-path` |

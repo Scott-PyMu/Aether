@@ -121,6 +121,10 @@ record(
   run(node, [path.join(repoRoot, "scripts", "test", "m3-04", "verify-m3-04.mjs")]),
 );
 record(
+  "verify-m3-05（诊断与容量巡检：诊断包脱敏 0 命中/日志汇聚整合/阈值参数化容量横幅/7 天未备份提醒开关/降级导出；证据归档）",
+  run(node, [path.join(repoRoot, "scripts", "test", "m3-05", "verify-m3-05.mjs")]),
+);
+record(
   "verify-m3-06（崩溃恢复体验：T4 kill -9 ×20 已确认零丢失 + run_retry Mode R/N + 重启状态重建 + 降级恢复引导；E2E 需真实 WebView，见 Windows CI）",
   run(node, [path.join(repoRoot, "scripts", "test", "m3-06", "verify-m3-06.mjs"), "--skip-e2e"]),
 );
