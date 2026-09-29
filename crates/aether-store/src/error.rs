@@ -36,6 +36,14 @@ pub enum StoreError {
     SafeModeUnavailable { path: PathBuf, reason: String },
     /// 备份目标已存在（`VACUUM INTO` 不允许覆盖已有文件）。
     BackupTargetExists { path: PathBuf },
+    /// 备份台账中不存在该 id（M3-04 `backup_restore` 内部来源）。
+    BackupNotFound { id: String },
+    /// 恢复候选校验失败（不是库 / quick_check 失败 / 缺 `schema_migrations`；D13 七步第 2 步）。
+    BackupCandidateInvalid { path: PathBuf, reason: String },
+    /// 备份/恢复目标可用空间不足（ADR-003 决策 19：可用空间 < `db+wal` ×1.2）。
+    BackupSpaceInsufficient { required: u64, available: u64 },
+    /// 恢复现场日志（journal）不可读/非法（M3-04 中断恢复路径）。
+    RestoreJournalInvalid { path: PathBuf, reason: String },
     /// 路径无法转换为 UTF-8（SQLite 文件名接口要求）。
     NonUtf8Path { path: PathBuf },
     /// 写队列深度超过 L2 阈值：拒绝新工作准入（D8；错误码 `storage_backpressure`）。
@@ -106,6 +114,10 @@ impl StoreError {
             Self::SafeModeWriteRefused { .. } => "safe_mode_write_refused",
             Self::SafeModeUnavailable { .. } => "safe_mode_unavailable",
             Self::BackupTargetExists { .. } => "backup_target_exists",
+            Self::BackupNotFound { .. } => "backup_not_found",
+            Self::BackupCandidateInvalid { .. } => "backup_candidate_invalid",
+            Self::BackupSpaceInsufficient { .. } => "backup_space_insufficient",
+            Self::RestoreJournalInvalid { .. } => "restore_journal_invalid",
             Self::NonUtf8Path { .. } => "non_utf8_path",
             Self::StorageBackpressure { .. } => "storage_backpressure",
             Self::WriteTransactionFailed { .. } => "write_transaction_failed",
@@ -155,6 +167,24 @@ impl fmt::Display for StoreError {
             Self::BackupTargetExists { path } => {
                 write!(f, "备份目标已存在，拒绝覆盖：{}", path.display())
             }
+            Self::BackupNotFound { id } => write!(f, "备份台账中不存在 id：{id}"),
+            Self::BackupCandidateInvalid { path, reason } => write!(
+                f,
+                "恢复候选校验失败（{}）：{reason}（D13 恢复七步第 2 步）",
+                path.display()
+            ),
+            Self::BackupSpaceInsufficient {
+                required,
+                available,
+            } => write!(
+                f,
+                "目标可用空间不足：可用 {available} 字节 < 需求 {required} 字节（当前 db+wal ×1.2，ADR-003 决策 19）"
+            ),
+            Self::RestoreJournalInvalid { path, reason } => write!(
+                f,
+                "恢复现场日志不可用（{}）：{reason}",
+                path.display()
+            ),
             Self::NonUtf8Path { path } => {
                 write!(f, "路径不是合法 UTF-8，无法传给 SQLite：{}", path.display())
             }
@@ -276,6 +306,33 @@ mod tests {
                 "拒绝覆盖",
             ),
             (
+                StoreError::BackupNotFound {
+                    id: "01J000000000000000000000B1".to_owned(),
+                },
+                "备份台账中不存在",
+            ),
+            (
+                StoreError::BackupCandidateInvalid {
+                    path: PathBuf::from("candidate.db"),
+                    reason: "quick_check 失败".to_owned(),
+                },
+                "候选校验失败",
+            ),
+            (
+                StoreError::BackupSpaceInsufficient {
+                    required: 120,
+                    available: 100,
+                },
+                "可用空间不足",
+            ),
+            (
+                StoreError::RestoreJournalInvalid {
+                    path: PathBuf::from("aether.db.restore-journal.json"),
+                    reason: "JSON 解析失败".to_owned(),
+                },
+                "恢复现场日志",
+            ),
+            (
                 StoreError::NonUtf8Path {
                     path: PathBuf::from("bad.db"),
                 },
@@ -342,6 +399,10 @@ mod tests {
             "safe_mode_write_refused",
             "safe_mode_unavailable",
             "backup_target_exists",
+            "backup_not_found",
+            "backup_candidate_invalid",
+            "backup_space_insufficient",
+            "restore_journal_invalid",
             "non_utf8_path",
             "storage_backpressure",
             "write_transaction_failed",

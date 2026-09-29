@@ -102,6 +102,7 @@ dependencies = [
  "aether-core",
  "hex",
  "rusqlite",
+ "serde",
  "serde_json",
  "sha2",
  "tempfile",
@@ -125,6 +126,7 @@ dependencies = [
  "sha2",
  "specta",
  "specta-typescript",
+ "sysinfo",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -134,6 +136,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "ulid",
  "url",
  "winreg",
 ]

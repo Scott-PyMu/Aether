@@ -69,9 +69,9 @@ impl MigrationError {
 /// 迁移前置探针（可注入；生产默认 [`NativeMigrationProbe`]）。
 ///
 /// - 可写校验：原生实现为「创建并删除探针文件」；
-/// - 空间护栏：`Ok(None)` 表示未知（不阻断）——原生实现暂返回未知，真实磁盘探针
-///   按 ADR-003 决策 19 在 M3-04（备份/导出）统一接线；测试替身可返回固定值以覆盖
-///   「空间不足」分支。
+/// - 空间护栏：`Ok(None)` 表示未知（不阻断）；原生实现经 [`crate::disk`] 真实探针
+///   （ADR-003 决策 19，M3-04 接线；与备份外部路径共享同一探针）；测试替身可返回
+///   固定值以覆盖「空间不足」分支。
 pub trait MigrationProbe: Send + Sync {
     fn ensure_target_writable(&self, target: &Path) -> Result<(), MigrationError> {
         ensure_dir_writable(target)
@@ -83,23 +83,19 @@ pub trait MigrationProbe: Send + Sync {
     }
 }
 
-/// 原生迁移探针：真实可写校验 + 空间未知（待 M3-04 接线）。
+/// 原生迁移探针：真实可写校验 + 真实磁盘空间探针（M3-04）。
 pub struct NativeMigrationProbe;
 
-impl MigrationProbe for NativeMigrationProbe {}
+impl MigrationProbe for NativeMigrationProbe {
+    fn available_bytes(&self, target: &Path) -> Result<Option<u64>, String> {
+        crate::disk::available_bytes(target).map(Some)
+    }
+}
 
-/// 目标目录可写性探针（创建并删除隐藏探针文件）。
+/// 目标目录可写性探针（创建并删除隐藏探针文件；与备份外部路径共享 [`crate::disk`]）。
 pub fn ensure_dir_writable(dir: &Path) -> Result<(), MigrationError> {
-    let probe = dir.join(format!(".aether-write-probe-{}", std::process::id()));
-    std::fs::write(&probe, b"probe").map_err(|error| {
-        MigrationError::new(
-            MigrationErrorKind::TargetNotWritable,
-            format!("迁移目标不可写（{}）：{error}", dir.display()),
-        )
-    })?;
-    std::fs::remove_file(&probe)
-        .map_err(|error| io_error(MigrationErrorKind::Io, &probe, &error))?;
-    Ok(())
+    crate::disk::ensure_writable(dir)
+        .map_err(|message| MigrationError::new(MigrationErrorKind::TargetNotWritable, message))
 }
 
 /// 源目录所需可用空间（全部文件字节数上取整 ×1.2）。

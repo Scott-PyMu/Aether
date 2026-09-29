@@ -24,7 +24,9 @@ pub fn validate_user_path(raw: &str, allowed_roots: &[PathBuf]) -> Result<PathBu
     }
 
     let within = allowed_roots.iter().any(|root| {
-        let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.clone());
+        let canonical_root = std::fs::canonicalize(root)
+            .map(crate::startup::detect::strip_verbatim)
+            .unwrap_or_else(|_| root.clone());
         is_within(&canonical, &canonical_root)
     });
     if !within {
@@ -53,6 +55,20 @@ pub fn validate_external_file(raw: &str, extension: &str) -> Result<PathBuf, Ipc
         return Err(IpcError::path_rejected(format!(
             "候选文件必须以 .{extension} 结尾"
         )));
+    }
+    Ok(canonical)
+}
+
+/// 校验备份/导出外部目标目录（D13 `backup_create.target_dir`）：绝对路径、存在且为目录。
+///
+/// 与迁移目标不同，备份产物可位于同步盘（备份到云端目录是合理用法）；本校验只做
+/// canonicalize 与形态检查，可写性与空间护栏在命令后端执行（ADR-003 决策 19）。
+pub fn validate_backup_target_dir(raw: &str) -> Result<PathBuf, IpcError> {
+    let canonical = canonicalize_checked(raw)?;
+    if !canonical.is_dir() {
+        return Err(IpcError::path_rejected(
+            "备份目标必须是已存在的目录（不能是文件）",
+        ));
     }
     Ok(canonical)
 }
@@ -170,9 +186,14 @@ fn canonicalize_checked(raw: &str) -> Result<PathBuf, IpcError> {
 
     reject_windows_special_forms(raw)?;
 
-    std::fs::canonicalize(&candidate).map_err(|error| {
-        IpcError::path_rejected(format!("路径不可解析（canonicalize 失败）：{error}"))
-    })
+    // Windows canonicalize 会带 `\\?\` verbatim 前缀（本地路径）；统一剥离为常规形式，
+    // 保证返回值可回传给路径类命令（外部候选/备份目标/工作区）——与启动检测同口径
+    // （UNC 输入已在 `reject_windows_special_forms` 拒绝，剥离不会引入歧义）。
+    std::fs::canonicalize(&candidate)
+        .map(crate::startup::detect::strip_verbatim)
+        .map_err(|error| {
+            IpcError::path_rejected(format!("路径不可解析（canonicalize 失败）：{error}"))
+        })
 }
 
 /// `path` 是否位于 `root` 之下或等于 `root`（按组件比较；Windows 大小写不敏感）。

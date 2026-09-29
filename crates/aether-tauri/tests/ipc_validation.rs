@@ -105,7 +105,11 @@ impl IpcBackend for RecordingBackend {
         self.record("settings_set")
     }
 
-    fn backup_create(&self, _request: &BackupCreateRequest) -> Result<Value, IpcError> {
+    fn backup_create(
+        &self,
+        _request: &BackupCreateRequest,
+        _canonical_target_dir: Option<&Path>,
+    ) -> Result<Value, IpcError> {
         self.record("backup_create")
     }
 

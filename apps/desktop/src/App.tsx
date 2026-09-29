@@ -1,15 +1,20 @@
 import { APP_VERSION, PROTOCOL_VERSION } from "@aether/protocol";
 import { useCallback, useEffect, useState } from "react";
 
+import { BackupPage } from "./BackupPage";
 import { EventBridgeIndicator } from "./EventBridgeIndicator";
 import { HealthMonitor } from "./HealthMonitor";
 import { SessionWorkbench } from "./SessionWorkbench";
 import { StartupGate } from "./StartupGate";
 import { describeIpcError, fetchStartup, type StartupSnapshot } from "./startup";
 
+/** 单窗口覆盖层视图（M3-04；UI-UX §1.1：不使用 URL 路由）。 */
+type AppView = "workbench" | "backup";
+
 export function App() {
   const [startup, setStartup] = useState<StartupSnapshot | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [view, setView] = useState<AppView>("workbench");
 
   useEffect(() => {
     let active = true;
@@ -65,9 +70,21 @@ export function App() {
       <p className="app-data-dir" data-testid="app-data-dir">
         数据目录：{startup.data_dir}
       </p>
+      <p>
+        <button
+          type="button"
+          data-testid="backup-open"
+          onClick={() => setView("backup")}
+        >
+          备份与恢复
+        </button>
+      </p>
       <HealthMonitor />
       <EventBridgeIndicator />
       <SessionWorkbench />
+      {view === "backup" ? (
+        <BackupPage onBack={() => setView("workbench")} />
+      ) : null}
     </main>
   );
 }

@@ -613,6 +613,7 @@ stateDiagram-v2
 | M3-06 | run 重试 | `run-retry` | `data-run-id` |
 | M3-04 | 备份页 | `backup-page` / `backup-create` / `backup-create-label` / `backup-list` / `backup-item` | `data-backup-id`、`data-kind` |
 | M3-04 | 恢复 | `backup-restore` / `backup-restore-external` / `backup-restore-confirm` / `backup-restore-result` | `data-source`（internal/external）、`data-result` |
+| M3-04 | 备份页补充（实现登记） | `backup-create-external`（外部目录选择）/ `backup-restore-external-submit` / `backup-open`（顶栏入口）/ `backup-notice` / `backup-empty` / `backup-error` | `data-code`（错误元素） |
 | M3-04 | 容量 | `capacity-status` | `data-level`（ok/warn/critical） |
 | M3-05 | 诊断页 | `diagnostics-page` / `diagnostics-target` / `diagnostics-pick` / `diagnostics-export` / `diagnostics-result` | `data-result` |
 | M3-05 | 设置页 | `settings-page` / `settings-data-dir` / `settings-security-level` / `settings-backup-reminder` / `settings-workspace` | `data-level`（os/degraded） |

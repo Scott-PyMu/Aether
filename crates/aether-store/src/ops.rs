@@ -17,6 +17,7 @@ use aether_core::{
 };
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
+use crate::backup::BackupRecord;
 use crate::error::StoreError;
 use crate::write_queue::ReadPool;
 
@@ -110,6 +111,10 @@ pub enum StoreCommand {
     TimeoutPermission { id: String, resolved_at: i64 },
     /// 追加审计行。
     InsertAudit { record: AuditLogRecord },
+    /// 登记备份台账行（M3-04 `backup_create`：`VACUUM INTO` 产物 + 元数据）。
+    InsertBackup { record: BackupRecord },
+    /// 删除备份台账行（M3-04 保留策略：超出保留份数的最旧记录）。
+    DeleteBackup { id: String },
 }
 
 /// 写命令结果。
@@ -406,6 +411,46 @@ pub(crate) fn apply_command(
                         record.ts,
                     ],
                 )
+                .map_err(txn_failed)?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::Applied { affected })
+        }
+        StoreCommand::InsertBackup { record } => {
+            let path = record
+                .path
+                .to_str()
+                .ok_or_else(|| StoreError::NonUtf8Path {
+                    path: record.path.clone(),
+                })?;
+            let size_bytes =
+                i64::try_from(record.size_bytes).map_err(|_| StoreError::Internal {
+                    reason: format!(
+                        "backups.size_bytes 超出 SQLite INTEGER 范围: {}",
+                        record.size_bytes
+                    ),
+                })?;
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            let affected = transaction
+                .execute(
+                    "INSERT INTO backups (id, path, size_bytes, encrypted, kind, created_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![
+                        record.id,
+                        path,
+                        size_bytes,
+                        i64::from(record.encrypted),
+                        record.kind,
+                        record.created_at,
+                    ],
+                )
+                .map_err(txn_failed)?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::Applied { affected })
+        }
+        StoreCommand::DeleteBackup { id } => {
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            let affected = transaction
+                .execute("DELETE FROM backups WHERE id = ?1", [id])
                 .map_err(txn_failed)?;
             transaction.commit().map_err(txn_failed)?;
             Ok(StoreOutcome::Applied { affected })
@@ -807,6 +852,39 @@ impl ReadPool {
         .await
     }
 
+    /// 备份台账清单（M3-04 `backup_list`；按 `created_at` 降序 = 最新在前）。
+    pub async fn backups(&self) -> Result<Vec<BackupRecord>, StoreError> {
+        self.with_connection(move |connection| {
+            let mut statement = connection.prepare(
+                "SELECT id, path, size_bytes, encrypted, kind, created_at FROM backups \
+                 ORDER BY created_at DESC, rowid DESC",
+            )?;
+            let rows = statement.query_map([], read_backup_row)?;
+            let mut records = Vec::new();
+            for row in rows {
+                records.push(row?);
+            }
+            Ok(records)
+        })
+        .await
+    }
+
+    /// 按 id 读取备份台账行（M3-04 `backup_restore` 内部来源；不存在为 `None`）。
+    pub async fn backup(&self, id: &str) -> Result<Option<BackupRecord>, StoreError> {
+        let id = id.to_owned();
+        self.with_connection(move |connection| {
+            connection
+                .query_row(
+                    "SELECT id, path, size_bytes, encrypted, kind, created_at FROM backups WHERE id = ?1",
+                    [id.as_str()],
+                    read_backup_row,
+                )
+                .optional()
+                .map_err(StoreError::from)
+        })
+        .await
+    }
+
     /// 各状态会话计数（诊断/验收断言）。
     pub async fn session_status_counts(&self) -> Result<BTreeMap<String, u64>, StoreError> {
         self.with_connection(move |connection| {
@@ -824,6 +902,19 @@ impl ReadPool {
         })
         .await
     }
+}
+
+fn read_backup_row(row: &Row<'_>) -> rusqlite::Result<BackupRecord> {
+    let size: i64 = row.get(2)?;
+    let size_bytes = u64::try_from(size).map_err(|_| parse_column_error(2, "size_bytes"))?;
+    Ok(BackupRecord {
+        id: row.get(0)?,
+        path: std::path::PathBuf::from(row.get::<_, String>(1)?),
+        size_bytes,
+        encrypted: row.get::<_, i64>(3)? != 0,
+        kind: row.get(4)?,
+        created_at: row.get(5)?,
+    })
 }
 
 fn read_session_row(row: &Row<'_>) -> rusqlite::Result<Session> {

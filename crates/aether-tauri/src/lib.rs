@@ -14,9 +14,11 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 pub mod adapter_executor;
+pub mod backup_control;
 pub mod bindings;
 pub mod config;
 pub mod core_health;
+pub mod disk;
 pub mod event_bridge;
 pub mod ipc;
 pub mod isolation;
@@ -205,6 +207,10 @@ fn build_backend(
     let data_dir = std::path::PathBuf::from(startup.snapshot().data_dir);
     let handle = tauri::async_runtime::handle().inner().clone();
 
+    // M3-04（D13 七步第 3–6 步）：待处理恢复在存储打开**之前**执行（无写者窗口）；
+    // 中断（kill -9）遗留的现场日志在此回滚（DoD4）。结果在核心启动后写审计。
+    let restore_outcome = backup_control::boot_apply_pending_restore(&data_dir);
+
     // M2-07（ADR-007 §5-2）：监督器摘要接线在 health 之前完成，
     // `health.runtimes` 与监督器状态一一对应（字段映射冻结）。
     let supervisor: Option<std::sync::Arc<aether_adapters::supervisor::Supervisor>> =
@@ -227,7 +233,7 @@ fn build_backend(
     let mut adapter_executor: Option<std::sync::Arc<adapter_executor::AdapterRunExecutor>> = None;
     // M3-03：权限中心命令面（`permissions_pending`/`permission_resolve`）的服务句柄。
     let mut permission_service: Option<aether_control::PermissionService> = None;
-    let (health, storage_slot, pipeline, reads) = match core_health::boot_core_full(
+    let (health, storage_slot, pipeline, reads, backup_deps) = match core_health::boot_core_full(
         &data_dir, &handle, runtimes,
     ) {
         Ok(boot) => {
@@ -238,6 +244,12 @@ fn build_backend(
                 write,
                 pipeline,
             } = boot;
+            // M3-04（D13 第 7 步）：恢复请求/启动处理结果写审计（无待处理恢复则跳过）。
+            if let Some(outcome) = &restore_outcome {
+                backup_control::write_boot_restore_audit(&write, &handle, outcome);
+            }
+            // M3-04：备份/恢复命令面的存储句柄（读写队列均已就绪）。
+            let backup_deps = (reads.clone(), write.clone());
             // M2-07 DoD3：核心 RSS 巡检（2GB 告警 / 2.5GB 强制 delta 限流；
             // env 钩子供测试/演练注入阈值）。任务随应用生命周期存活（detached）。
             {
@@ -334,6 +346,7 @@ fn build_backend(
                 Some(slot),
                 Some(pipeline),
                 Some(reads),
+                Some(backup_deps),
             )
         }
         Err(error) => {
@@ -341,6 +354,7 @@ fn build_backend(
             (
                 std::sync::Arc::new(core_health::degraded_backend(&error.to_string()))
                     as std::sync::Arc<dyn ipc::IpcBackend>,
+                None,
                 None,
                 None,
                 None,
@@ -405,6 +419,17 @@ fn build_backend(
         });
     let inner: std::sync::Arc<dyn ipc::IpcBackend> =
         std::sync::Arc::new(runtime_control::RuntimeControlBackend::new(health, control));
+    // M3-04（D13）：备份/恢复命令面装饰器（存储就绪时接线；降级启动时保留内层语义）。
+    let inner: std::sync::Arc<dyn ipc::IpcBackend> = match backup_deps {
+        Some((reads, write)) => std::sync::Arc::new(backup_control::BackupControlBackend::new(
+            inner,
+            data_dir.clone(),
+            Some(reads),
+            Some(write),
+            handle.clone(),
+        )),
+        None => inner,
+    };
     let mut session_backend = session_backend::SessionBackend::new(
         inner,
         session_manager,

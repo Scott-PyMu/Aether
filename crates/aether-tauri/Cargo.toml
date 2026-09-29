@@ -64,6 +64,13 @@ tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
 # aether-control 经 dev-dependency 使用同版本 0.3.23）；`fmt` 提供 MakeWriter 接口。
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std", "registry", "ansi"] }
 url = { version = "2", features = [] }
+# M3-04（ADR-003 决策 19）：真实磁盘可用空间探针——备份/导出外部路径与启动迁移共享。
+# sysinfo 0.30.13 已由 aether-adapters/aether-control 使用（同版本、同 Cargo.lock，MIT）；
+# `Disks`/`available_space` 为默认 API（无额外特性），不引入 unsafe FFI。
+sysinfo = { version = "0.30.13", default-features = false }
+# M3-04：备份/审计行的 ULID 生成（ADR-007 决策 3：生成/解析统一经 `ulid` crate；
+# 版本 =1.1.3 与 aether-control 一致，已在 Cargo.lock，MIT）。
+ulid = "=1.1.3"
 
 # A4 ③：HKCU\Software\Microsoft\OneDrive\Accounts\* 的 UserFolder 比对（winreg 安全封装，
 # 工作区 lint 禁止 unsafe FFI；winreg 0.55 已是依赖图成员）。

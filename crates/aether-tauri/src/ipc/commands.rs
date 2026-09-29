@@ -156,6 +156,8 @@ pub(crate) fn settings_set(
         .map(JsonPayload)
 }
 
+/// M3-04/D13：手动备份（缺省 = 应用 `backups` 目录；`target_dir` = 系统选择器选中的
+/// 外部目录，canonicalize 后进入后端执行空间护栏）。
 #[tauri::command]
 #[specta::specta]
 pub(crate) fn backup_create(
@@ -163,9 +165,10 @@ pub(crate) fn backup_create(
     payload: JsonPayload,
 ) -> Result<JsonPayload, IpcError> {
     let request: BackupCreateRequest = parse_strict(payload.into_value())?;
+    let canonical = request.canonical_target_dir()?;
     state
         .backend_ready()?
-        .backup_create(&request)
+        .backup_create(&request, canonical.as_deref())
         .map(JsonPayload)
 }
 
@@ -203,6 +206,9 @@ pub(crate) async fn health(
 }
 
 /// ADR-004/D13：外部候选先 canonicalize（存在性 + `.db` 后缀）再进入恢复七步。
+///
+/// M3-04：命令层在候选校验通过后请求应用重启（`restart_required`），第 3–6 步由下次
+/// 启动序列在无写者窗口执行（现场日志恢复；D13「恢复流程含核心重启」）。
 #[tauri::command]
 #[specta::specta]
 pub(crate) fn backup_restore(
@@ -211,10 +217,19 @@ pub(crate) fn backup_restore(
 ) -> Result<JsonPayload, IpcError> {
     let request: BackupRestoreRequest = parse_strict(payload.into_value())?;
     let canonical = request.canonical_external_path()?;
-    state
+    let value = state
         .backend_ready()?
-        .backup_restore(&request, canonical.as_deref())
-        .map(JsonPayload)
+        .backup_restore(&request, canonical.as_deref())?;
+    if value
+        .get("restart_required")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        if let Some(handle) = state.app_handle() {
+            handle.request_restart();
+        }
+    }
+    Ok(JsonPayload(value))
 }
 
 /// ADR-004/M3-06：显式 `confirm:true` 后触发应用重启（与 `app_exit` 同口径的

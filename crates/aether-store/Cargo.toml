@@ -17,6 +17,8 @@ sha2 = "0.10"
 hex = "0.4"
 # 安全模式「可读数据导出」的 JSONL 序列化（D3 失败场景应对）。
 serde_json = "1.0"
+# M3-04：备份/恢复台账与报告的序列化（已在 Cargo.lock，MIT/Apache-2.0）。
+serde = { version = "1", features = ["derive"] }
 # 设计 D2/D3：单写任务与读连接池运行在核心 tokio 多线程运行时上（M1-04）。
 # 仅需 rt/sync/time（框架由上层提供）；已在 Cargo.lock（tokio 1.53，MIT）。
 tokio = { version = "1", features = ["rt", "sync", "time"] }

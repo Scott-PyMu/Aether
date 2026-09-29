@@ -71,7 +71,13 @@ pub trait IpcBackend: Send + Sync + 'static {
         Err(IpcError::not_implemented("settings_set"))
     }
 
-    fn backup_create(&self, _request: &BackupCreateRequest) -> Result<Value, IpcError> {
+    /// ADR-004/D13：手动备份（保留 10）；`canonical_target_dir` 为外部目标目录的
+    /// canonicalize 结果（`None` = 应用默认 `backups` 目录）。
+    fn backup_create(
+        &self,
+        _request: &BackupCreateRequest,
+        _canonical_target_dir: Option<&Path>,
+    ) -> Result<Value, IpcError> {
         Err(IpcError::not_implemented("backup_create"))
     }
 

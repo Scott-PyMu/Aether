@@ -16,10 +16,19 @@ export const commands = {
 	permissionResolve: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("permission_resolve", { payload })),
 	settingsGet: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("settings_get", { payload })),
 	settingsSet: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("settings_set", { payload })),
+	/**
+	 *  M3-04/D13：手动备份（缺省 = 应用 `backups` 目录；`target_dir` = 系统选择器选中的
+	 *  外部目录，canonicalize 后进入后端执行空间护栏）。
+	 */
 	backupCreate: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("backup_create", { payload })),
 	/**  ADR-004：无参数命令；缺省载荷等价空对象，任何成员都会被严格模式拒绝。 */
 	backupList: (payload: unknown | null) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("backup_list", { payload })),
-	/**  ADR-004/D13：外部候选先 canonicalize（存在性 + `.db` 后缀）再进入恢复七步。 */
+	/**
+	 *  ADR-004/D13：外部候选先 canonicalize（存在性 + `.db` 后缀）再进入恢复七步。
+	 * 
+	 *  M3-04：命令层在候选校验通过后请求应用重启（`restart_required`），第 3–6 步由下次
+	 *  启动序列在无写者窗口执行（现场日志恢复；D13「恢复流程含核心重启」）。
+	 */
 	backupRestore: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("backup_restore", { payload })),
 	/**
 	 *  ADR-004/M3-06：显式 `confirm:true` 后触发应用重启（与 `app_exit` 同口径的
@@ -110,6 +119,11 @@ export type AppRestartRequest = {
 
 export type BackupCreateRequest = {
 	label?: string | null,
+	/**
+	 *  外部目标目录（D13：经系统目录选择器选择；缺省 = 应用 `backups` 目录）。
+	 *  命令层 canonicalize（绝对路径 + 存在目录）后传入后端；空间校验在后端执行。
+	 */
+	target_dir?: string | null,
 };
 
 /**  `backup_list`（ADR-004）：无参数命令；非空成员一律拒绝。 */

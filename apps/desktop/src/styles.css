@@ -947,3 +947,159 @@ body {
 .md-code-block [data-token="keyword"] {
   color: #82aaff;
 }
+
+/* ===== M3-04 备份与恢复页（S-06；覆盖层）===== */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(8, 10, 13, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 40;
+}
+
+.backup-page {
+  width: min(56rem, 92vw);
+  max-height: 88vh;
+  overflow-y: auto;
+  background-color: #14171c;
+  border: 1px solid #2a3038;
+  border-radius: 8px;
+  padding: 1rem 1.25rem 1.5rem;
+}
+
+.backup-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.backup-header h2 {
+  margin: 0;
+}
+
+.capacity-status {
+  margin: 0.75rem 0;
+  padding: 0.5rem 0.65rem;
+  border-radius: 6px;
+  background-color: #1a1d23;
+  border-left: 3px solid var(--ae-success, #7fbf7f);
+}
+
+.capacity-status[data-level="warn"] {
+  border-left-color: var(--ae-warning, #d6a84f);
+}
+
+.capacity-status[data-level="critical"] {
+  border-left-color: var(--ae-danger, #d66f6f);
+}
+
+.backup-create label,
+.backup-restore-external label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0.5rem 0;
+}
+
+.backup-create input,
+.backup-restore-external input {
+  padding: 0.4rem 0.55rem;
+  background-color: #101216;
+  border: 1px solid #2a3038;
+  border-radius: 4px;
+  color: inherit;
+}
+
+.backup-create-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.backup-create-actions button,
+.backup-item-actions button,
+.backup-restore-external button,
+.backup-restore-confirm-section button {
+  padding: 0.4rem 0.8rem;
+  background-color: #22303f;
+  border: 1px solid #35485c;
+  border-radius: 4px;
+  color: inherit;
+  cursor: pointer;
+}
+
+.backup-create-actions button:disabled,
+.backup-item-actions button:disabled,
+.backup-restore-external button:disabled,
+.backup-restore-confirm-section button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.backup-list {
+  list-style: none;
+  margin: 0.5rem 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.backup-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.65rem;
+  background-color: #1a1d23;
+  border-radius: 6px;
+}
+
+.backup-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.backup-meta {
+  color: #9aa4af;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.backup-restore-confirm-section {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid #4c3a2a;
+  border-radius: 6px;
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.backup-restore-confirm-note {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.backup-restore-result {
+  margin-top: 0.65rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: 6px;
+  background-color: #1d2a1d;
+  border-left: 3px solid var(--ae-success, #7fbf7f);
+}
+
+.backup-restore-result[data-result="failed"] {
+  background-color: #2a1d1d;
+  border-left-color: var(--ae-danger, #d66f6f);
+}
+
+.backup-error {
+  margin-top: 0.65rem;
+  color: var(--ae-danger, #d66f6f);
+}

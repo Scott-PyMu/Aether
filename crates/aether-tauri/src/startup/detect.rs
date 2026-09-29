@@ -590,7 +590,7 @@ pub fn resolve_existing_prefix(path: &Path) -> PathBuf {
 }
 
 #[cfg(windows)]
-fn strip_verbatim(path: PathBuf) -> PathBuf {
+pub(crate) fn strip_verbatim(path: PathBuf) -> PathBuf {
     let text = path.to_string_lossy();
     if let Some(rest) = text.strip_prefix(r"\\?\") {
         if let Some(unc) = rest.strip_prefix(r"UNC\") {
@@ -602,7 +602,7 @@ fn strip_verbatim(path: PathBuf) -> PathBuf {
 }
 
 #[cfg(not(windows))]
-fn strip_verbatim(path: PathBuf) -> PathBuf {
+pub(crate) fn strip_verbatim(path: PathBuf) -> PathBuf {
     path
 }
 

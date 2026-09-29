@@ -227,6 +227,20 @@ impl CommandRequest for SettingsSetRequest {
 pub struct BackupCreateRequest {
     #[serde(default)]
     pub label: Option<String>,
+    /// 外部目标目录（D13：经系统目录选择器选择；缺省 = 应用 `backups` 目录）。
+    /// 命令层 canonicalize（绝对路径 + 存在目录）后传入后端；空间校验在后端执行。
+    #[serde(default)]
+    pub target_dir: Option<String>,
+}
+
+impl BackupCreateRequest {
+    /// 外部目标目录的规范化结果（缺省来源为 `None`）。
+    pub fn canonical_target_dir(&self) -> Result<Option<std::path::PathBuf>, IpcError> {
+        match &self.target_dir {
+            Some(target_dir) => path::validate_backup_target_dir(target_dir).map(Some),
+            None => Ok(None),
+        }
+    }
 }
 
 impl CommandRequest for BackupCreateRequest {
@@ -235,6 +249,9 @@ impl CommandRequest for BackupCreateRequest {
             ensure_not_empty(label, "label")?;
             ensure_max_chars(label, "label", MAX_LABEL_CHARS)?;
             reject_control_chars(label, "label", false)?;
+        }
+        if let Some(target_dir) = &self.target_dir {
+            ensure_not_empty(target_dir, "target_dir")?;
         }
         Ok(())
     }

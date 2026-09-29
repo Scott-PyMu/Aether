@@ -528,6 +528,74 @@ impl IpcBackend for SessionBackend {
             }))
         })
     }
+
+    // ===== 装饰器透传（M3-04 修正）：外层未覆写的方法必须显式委派给内层，
+    // 否则会命中 trait 默认 `not_implemented`，令内层已实现命令在生产链路上不可达
+    // （设置、运行时控制、工作区、诊断导出、备份族）。=====
+
+    fn settings_get(
+        &self,
+        request: &crate::ipc::dto::SettingsGetRequest,
+    ) -> Result<Value, IpcError> {
+        self.inner.settings_get(request)
+    }
+
+    fn settings_set(
+        &self,
+        request: &crate::ipc::dto::SettingsSetRequest,
+    ) -> Result<Value, IpcError> {
+        self.inner.settings_set(request)
+    }
+
+    fn runtime_retry(
+        &self,
+        request: &crate::ipc::dto::RuntimeRetryRequest,
+    ) -> Result<Value, IpcError> {
+        self.inner.runtime_retry(request)
+    }
+
+    fn runtime_enable(
+        &self,
+        request: &crate::ipc::dto::RuntimeEnableRequest,
+    ) -> Result<Value, IpcError> {
+        self.inner.runtime_enable(request)
+    }
+
+    fn workspace_set(
+        &self,
+        request: &crate::ipc::dto::WorkspaceSetRequest,
+        canonical_root_path: Option<&std::path::Path>,
+    ) -> Result<Value, IpcError> {
+        self.inner.workspace_set(request, canonical_root_path)
+    }
+
+    fn export_diagnostics(
+        &self,
+        request: &crate::ipc::dto::ExportDiagnosticsRequest,
+        canonical_target_dir: &std::path::Path,
+    ) -> Result<Value, IpcError> {
+        self.inner.export_diagnostics(request, canonical_target_dir)
+    }
+
+    fn backup_create(
+        &self,
+        request: &crate::ipc::dto::BackupCreateRequest,
+        canonical_target_dir: Option<&std::path::Path>,
+    ) -> Result<Value, IpcError> {
+        self.inner.backup_create(request, canonical_target_dir)
+    }
+
+    fn backup_list(&self) -> Result<Value, IpcError> {
+        self.inner.backup_list()
+    }
+
+    fn backup_restore(
+        &self,
+        request: &crate::ipc::dto::BackupRestoreRequest,
+        canonical_external_path: Option<&std::path::Path>,
+    ) -> Result<Value, IpcError> {
+        self.inner.backup_restore(request, canonical_external_path)
+    }
 }
 
 fn parse_session_id(value: &str) -> Result<SessionId, IpcError> {
