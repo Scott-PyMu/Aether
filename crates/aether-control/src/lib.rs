@@ -23,6 +23,7 @@ pub mod delta;
 pub mod error;
 pub mod journal;
 pub mod lifecycle;
+pub mod memory;
 pub mod normalizer;
 pub mod permission;
 pub mod pipeline;
@@ -56,6 +57,11 @@ pub use lifecycle::{
     LifecycleError, ReconcileReport, RetryAck, RunExecutor, RunRequest, SendAck, SessionManager,
     MAX_WAITING_RUNS_PER_SESSION, RUN_INTERRUPTED_CODE, RUN_STREAM_TIMEOUT_CODE,
     RUN_STREAM_TIMEOUT_MS, RUN_TASK_PANIC_CODE, WATCHDOG_TICK,
+};
+pub use memory::{
+    compose_memory_injection, evaluate_memory_tool, memory_write_within_limit, MemoryInjection,
+    MemoryTool, MEMORY_FILE_PRIORITY, MEMORY_INJECTION_HEADER, MEMORY_INJECTION_MAX_BYTES,
+    MEMORY_TRUNCATION_MARKER,
 };
 pub use normalizer::{Normalizer, PendingEvent};
 pub use permission::{

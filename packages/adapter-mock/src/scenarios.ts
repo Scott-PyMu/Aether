@@ -134,6 +134,65 @@ export interface PermissionRequestPayload {
   resource: string;
   action: string;
   target: string;
+  /** 写入内容字节数（D9 记忆白名单 1MB 上限判定；读工具省略）。 */
+  content_bytes?: number;
+}
+
+/**
+ * M3-08 工作区记忆工具触发（设计 D14；口径与核心 `aether_control::memory` 一致）：
+ *
+ * - `memory.read|<path>` → `memory.read`（`fs.read` 回环）；
+ * - `memory.append|<path>|<text>` → `memory.append`（`fs.write` 回环 + 原子追加）；
+ * - `memory.write|<path>|<text>` → `memory.write`（`fs.write` 回环 + 原子覆盖）；
+ * - `memory.conflict|<path>|<text>` → 冲突注入：回环允许后先模拟外部修改，
+ *   再按陈旧快照写入（必须 `memory_conflict` 且不覆盖）；
+ * - `memory.slow|<path>|<bytes>` → 分块慢写（写入中断故障注入宿主；不参与 1MB 上限）。
+ *
+ * 事件序列：`tool.call_started` →（`permission.request` 回环）→ `permission.resolved`
+ * → `tool.call_completed`（允许且执行成功）/ `tool.call_failed`（拒绝或执行失败）。
+ */
+export type MemoryToolKind = "read" | "append" | "write" | "conflict" | "slow";
+
+export interface MemoryToolTrigger {
+  kind: MemoryToolKind;
+  toolName: string;
+  target: string;
+  text?: string;
+  bytes?: number;
+}
+
+export const MEMORY_TRIGGER_PREFIX = "memory.";
+export const MEMORY_TOOL_NAMES = ["memory.read", "memory.append", "memory.write"] as const;
+
+export function memoryTriggerForText(text: string): MemoryToolTrigger | undefined {
+  const normalized = text.trim();
+  if (!normalized.startsWith(MEMORY_TRIGGER_PREFIX)) return undefined;
+  const parts = normalized.split("|");
+  const command = (parts[0] ?? "").trim();
+  const target = (parts[1] ?? "").trim();
+  if (!target) return undefined;
+  const payload = parts.length > 2 ? parts.slice(2).join("|") : undefined;
+  switch (command) {
+    case "memory.read":
+      return { kind: "read", toolName: "memory.read", target };
+    case "memory.append":
+      return { kind: "append", toolName: "memory.append", target, text: payload ?? "" };
+    case "memory.write":
+      return { kind: "write", toolName: "memory.write", target, text: payload ?? "" };
+    case "memory.conflict":
+      return { kind: "conflict", toolName: "memory.write", target, text: payload ?? "" };
+    case "memory.slow": {
+      const parsed = Number.parseInt((payload ?? "").trim(), 10);
+      return {
+        kind: "slow",
+        toolName: "memory.write",
+        target,
+        bytes: Number.isFinite(parsed) && parsed > 0 ? parsed : 65_536,
+      };
+    }
+    default:
+      return undefined;
+  }
 }
 
 export function buildToolCallStarted(

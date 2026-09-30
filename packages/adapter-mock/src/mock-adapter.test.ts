@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -679,5 +679,213 @@ describe("Mock 适配器：故障注入", () => {
     await harness.start();
     const hello = harness.frames.find((frame) => frame.method === "hello");
     expect(hello?.params?.protocol).toBe("2.0");
+  });
+});
+
+describe("Mock 适配器：M3-08 工作区记忆工具（D14）", () => {
+  it("`memory.write`：经回环允许后真实原子写，事件序列 started → resolved → completed", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "aether-m3-08-mock-write-"));
+    const harness = new Harness();
+    await harness.start();
+    const sessionId = await harness.createSession();
+    const target = path.join(dir, "AGENTS.md");
+    const runId = await harness.sendMessage(
+      sessionId,
+      `memory.write|${target}|会话 A 写入的记忆`,
+    );
+    const request = await harness.waitForFrame(
+      (frame) => frame.method === "permission.request",
+      "permission.request",
+    );
+    const params = request.params as {
+      request_id: string;
+      resource: string;
+      action: string;
+      target: string;
+      content_bytes?: number;
+    };
+    expect(params.resource).toBe("fs.write");
+    expect(params.action).toBe("write");
+    expect(params.target).toBe(target);
+    expect(params.content_bytes).toBe(Buffer.byteLength("会话 A 写入的记忆", "utf8"));
+
+    // 决议前不得执行写/产出终态（真实回环）。
+    expect(() => readFileSync(target)).toThrow();
+    await harness.requestResult("permission.resolve", {
+      request_id: params.request_id,
+      decision: "allow",
+      scope: "once",
+    });
+    await harness.waitForEvent("run.completed");
+    expect(toolEventTypes(eventTypesBetween(harness, runId))).toEqual([
+      "tool.call_started",
+      "permission.resolved",
+      "tool.call_completed",
+    ]);
+    expect(readFileSync(target, "utf8")).toBe("会话 A 写入的记忆");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("`memory.append`：读取现值后追加（跨会话写读口径）", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "aether-m3-08-mock-append-"));
+    const target = path.join(dir, "AETHER.md");
+    writeFileSync(target, "第一段|");
+    const harness = new Harness();
+    await harness.start();
+    const sessionId = await harness.createSession();
+    await harness.sendMessage(sessionId, `memory.append|${target}|第二段`);
+    const request = await harness.waitForFrame(
+      (frame) => frame.method === "permission.request",
+      "permission.request",
+    );
+    await harness.requestResult("permission.resolve", {
+      request_id: (request.params as { request_id: string }).request_id,
+      decision: "allow",
+      scope: "once",
+    });
+    await harness.waitForEvent("run.completed");
+    expect(readFileSync(target, "utf8")).toBe("第一段|第二段");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("`memory.read`：resource=fs.read、无 content_bytes；拒绝路径不执行读取", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "aether-m3-08-mock-read-"));
+    const target = path.join(dir, "CLAUDE.md");
+    writeFileSync(target, "读我");
+    const harness = new Harness();
+    await harness.start();
+    const sessionId = await harness.createSession();
+    const runId = await harness.sendMessage(sessionId, `memory.read|${target}`);
+    const request = await harness.waitForFrame(
+      (frame) => frame.method === "permission.request",
+      "permission.request",
+    );
+    const params = request.params as {
+      request_id: string;
+      resource: string;
+      action: string;
+      content_bytes?: number;
+    };
+    expect(params.resource).toBe("fs.read");
+    expect(params.action).toBe("read");
+    expect(params.content_bytes).toBeUndefined();
+    await harness.requestResult("permission.resolve", {
+      request_id: params.request_id,
+      decision: "allow",
+      scope: "once",
+    });
+    await harness.waitForEvent("run.completed");
+    expect(toolEventTypes(eventTypesBetween(harness, runId))).toEqual([
+      "tool.call_started",
+      "permission.resolved",
+      "tool.call_completed",
+    ]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("拒绝（工作区外/越权）→ tool.call_failed(denied) 且不产生文件", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "aether-m3-08-mock-deny-"));
+    const target = path.join(dir, "outside.md");
+    const harness = new Harness();
+    await harness.start();
+    const sessionId = await harness.createSession();
+    const runId = await harness.sendMessage(sessionId, `memory.write|${target}|越权`);
+    const request = await harness.waitForFrame(
+      (frame) => frame.method === "permission.request",
+      "permission.request",
+    );
+    await harness.requestResult("permission.resolve", {
+      request_id: (request.params as { request_id: string }).request_id,
+      decision: "deny",
+    });
+    await harness.waitForEvent("run.completed");
+    expect(toolEventTypes(eventTypesBetween(harness, runId))).toEqual([
+      "tool.call_started",
+      "permission.resolved",
+      "tool.call_failed",
+    ]);
+    const failed = harness.events().find((frame) => frame.params?.type === "tool.call_failed");
+    expect((failed?.params?.payload as { error: { code: string } }).error.code).toBe("denied");
+    expect(() => readFileSync(target)).toThrow();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("`memory.conflict`：外部修改后写入 → memory_conflict 且不覆盖", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "aether-m3-08-mock-conflict-"));
+    const target = path.join(dir, "AGENTS.md");
+    writeFileSync(target, "原始内容");
+    const harness = new Harness();
+    await harness.start();
+    const sessionId = await harness.createSession();
+    const runId = await harness.sendMessage(sessionId, `memory.conflict|${target}|本次写入`);
+    const request = await harness.waitForFrame(
+      (frame) => frame.method === "permission.request",
+      "permission.request",
+    );
+    await harness.requestResult("permission.resolve", {
+      request_id: (request.params as { request_id: string }).request_id,
+      decision: "allow",
+      scope: "once",
+    });
+    await harness.waitForEvent("run.completed");
+    expect(toolEventTypes(eventTypesBetween(harness, runId))).toEqual([
+      "tool.call_started",
+      "permission.resolved",
+      "tool.call_failed",
+    ]);
+    const failed = harness.events().find((frame) => frame.params?.type === "tool.call_failed");
+    expect((failed?.params?.payload as { error: { code: string } }).error.code).toBe(
+      "memory_conflict",
+    );
+    expect(readFileSync(target, "utf8")).toBe("原始内容外部修改");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("`memory.slow`：分块慢写（写入中断演练宿主），完成后内容完整", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "aether-m3-08-mock-slow-"));
+    const target = path.join(dir, "AGENTS.md");
+    const harness = new Harness();
+    await harness.start();
+    const sessionId = await harness.createSession();
+    const runId = await harness.sendMessage(sessionId, `memory.slow|${target}|8192`);
+    const request = await harness.waitForFrame(
+      (frame) => frame.method === "permission.request",
+      "permission.request",
+    );
+    await harness.requestResult("permission.resolve", {
+      request_id: (request.params as { request_id: string }).request_id,
+      decision: "allow",
+      scope: "once",
+    });
+    await harness.waitForEvent("run.completed");
+    expect(readFileSync(target, "utf8")).toHaveLength(8192);
+    expect(toolEventTypes(eventTypesBetween(harness, runId))).toContain("tool.call_completed");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("tools.list 声明三记忆工具；session.create 记录 system_prompt 注入", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "aether-m3-08-mock-log-"));
+    const logPath = path.join(dir, "session-log.jsonl");
+    const harness = new Harness({ sessionLog: logPath });
+    await harness.start();
+    const tools = await harness.requestResult("tools.list", {});
+    const names = (tools.tools as Array<{ name: string }>).map((tool) => tool.name);
+    for (const expected of ["memory.read", "memory.append", "memory.write"]) {
+      expect(names).toContain(expected);
+    }
+    await harness.requestResult("session.create", {
+      title: "注入观测",
+      system_prompt: "# 工作区约定\n来源：AGENTS.md\n\n内容",
+    });
+    await harness.waitForFrame(() => readFileSync(logPath, "utf8").includes("system_prompt"), "session-log");
+    const record = JSON.parse(readFileSync(logPath, "utf8").trim()) as {
+      method: string;
+      system_prompt: string;
+      has_system_prompt: boolean;
+    };
+    expect(record.method).toBe("session.create");
+    expect(record.has_system_prompt).toBe(true);
+    expect(record.system_prompt).toContain("工作区约定");
+    rmSync(dir, { recursive: true, force: true });
   });
 });

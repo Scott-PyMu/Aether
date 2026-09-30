@@ -35,6 +35,8 @@ export interface CliOptions {
   longStreamIntervalMs?: number;
   /** M2-09：附件目录（缺省回退 `AETHER_ARTIFACTS_DIR`）。 */
   artifactsDir?: string;
+  /** M3-08：会话调用记录路径（缺省回退 `AETHER_MOCK_SESSION_LOG`；注入观测）。 */
+  sessionLog?: string;
   /** D5 启动令牌（仅合法 ULID；非法/缺失为 undefined）。 */
   launchToken?: string;
 }
@@ -114,6 +116,9 @@ export function parseArgs(argv: string[], warn: (line: string) => void): CliOpti
       case "--artifacts-dir":
         options.artifactsDir = requireValue(argv, ++index, flag);
         break;
+      case "--session-log":
+        options.sessionLog = requireValue(argv, ++index, flag);
+        break;
       case "--no-hello":
         options.injections.push("no-hello");
         break;
@@ -181,6 +186,8 @@ export async function runCli(streams: CliStreams): Promise<void> {
   }
   // M2-09：`--artifacts-dir` 优先，缺省回退 `AETHER_ARTIFACTS_DIR`（监督器 spawn 注入）。
   mockOptions.artifactsDir = options.artifactsDir ?? process.env.AETHER_ARTIFACTS_DIR;
+  // M3-08：`--session-log` 优先，缺省回退 `AETHER_MOCK_SESSION_LOG`（注入 E2E 观测）。
+  mockOptions.sessionLog = options.sessionLog ?? process.env.AETHER_MOCK_SESSION_LOG;
 
   const mock = new MockAdapter(mockOptions);
   try {

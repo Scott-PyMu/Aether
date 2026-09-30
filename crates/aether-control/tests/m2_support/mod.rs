@@ -322,7 +322,7 @@ pub fn permission_request(
 /// 创建测试会话并返回会话。
 pub async fn create_session(manager: &SessionManager, title: &str) -> Session {
     manager
-        .create_session(mock_runtime(), title, None, None)
+        .create_session(mock_runtime(), title, None, None, None)
         .await
         .unwrap()
 }

@@ -13,7 +13,7 @@ use std::str::FromStr;
 
 use aether_core::{
     Message, MessageId, MessageRole, PermissionDecision, PermissionScope, PermissionStatus, Run,
-    RunId, RunStatus, Runtime, Session, SessionId, SessionStatus, WorkspaceId,
+    RunId, RunStatus, Runtime, Session, SessionId, SessionStatus, Workspace, WorkspaceId,
 };
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
@@ -123,6 +123,10 @@ pub enum StoreCommand {
         value: String,
         updated_at: i64,
     },
+    /// 写入/更新工作区行（M3-08 `workspace_set`；`workspaces` 表，按 id upsert）。
+    ///
+    /// 单写者约束：工作区写路径同样经 [`crate::WriteQueue::execute`]（AGENTS §2.4）。
+    UpsertWorkspace { workspace: Workspace },
 }
 
 /// 写命令结果。
@@ -475,6 +479,30 @@ pub(crate) fn apply_command(
                      ON CONFLICT(key) DO UPDATE SET value = excluded.value, \
                      updated_at = excluded.updated_at",
                     params![key, value, updated_at],
+                )
+                .map_err(txn_failed)?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::Applied { affected })
+        }
+        StoreCommand::UpsertWorkspace { workspace } => {
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            let memory_files = serde_json::to_string(&workspace.memory_files)
+                .map_err(|error| serialization_failed("workspaces.memory_files", &error))?;
+            let affected = transaction
+                .execute(
+                    "INSERT INTO workspaces (id, name, root_path, memory_files, created_at, updated_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+                     ON CONFLICT(id) DO UPDATE SET name = excluded.name, \
+                     root_path = excluded.root_path, memory_files = excluded.memory_files, \
+                     updated_at = excluded.updated_at",
+                    params![
+                        workspace.id.as_str(),
+                        workspace.name,
+                        workspace.root_path,
+                        memory_files,
+                        workspace.created_at,
+                        workspace.updated_at,
+                    ],
                 )
                 .map_err(txn_failed)?;
             transaction.commit().map_err(txn_failed)?;
@@ -961,6 +989,65 @@ impl ReadPool {
         .await
     }
 
+    /// 按 id 读取工作区（不存在为 `None`；M3-08 `workspace_set` 的 `workspace_id` 分支）。
+    pub async fn workspace(
+        &self,
+        workspace_id: &WorkspaceId,
+    ) -> Result<Option<Workspace>, StoreError> {
+        let id = workspace_id.as_str().to_owned();
+        self.with_connection(move |connection| {
+            connection
+                .query_row(
+                    "SELECT id, name, root_path, memory_files, created_at, updated_at \
+                     FROM workspaces WHERE id = ?1",
+                    [id.as_str()],
+                    read_workspace_row,
+                )
+                .optional()
+                .map_err(StoreError::from)
+        })
+        .await
+    }
+
+    /// 按 root_path 读取工作区（canonical 路径精确匹配；不存在为 `None`）。
+    ///
+    /// M3-08：`workspace_set` 的 `root_path` 分支按 canonical 路径复用既有行
+    /// （同一目录重复绑定幂等）。
+    pub async fn workspace_by_root(
+        &self,
+        root_path: &str,
+    ) -> Result<Option<Workspace>, StoreError> {
+        let root = root_path.to_owned();
+        self.with_connection(move |connection| {
+            connection
+                .query_row(
+                    "SELECT id, name, root_path, memory_files, created_at, updated_at \
+                     FROM workspaces WHERE root_path = ?1 LIMIT 1",
+                    [root.as_str()],
+                    read_workspace_row,
+                )
+                .optional()
+                .map_err(StoreError::from)
+        })
+        .await
+    }
+
+    /// 最近绑定的工作区（启动恢复当前工作区；按 `updated_at` 降序取首行）。
+    pub async fn workspaces_latest(&self) -> Result<Option<Workspace>, StoreError> {
+        self.with_connection(move |connection| {
+            connection
+                .query_row(
+                    "SELECT id, name, root_path, memory_files, created_at, updated_at \
+                     FROM workspaces ORDER BY updated_at DESC, rowid DESC LIMIT 1",
+                    [],
+                    read_workspace_row,
+                )
+                .optional()
+                .map_err(StoreError::from)
+        })
+        .await
+    }
+
     /// 库摘要（诊断包「库摘要」段；M3-05 DoD1/DoD4）：
     /// `schema_migrations` 最大版本 + 关键表行数（表名升序，便于扫描/比对）。
     pub async fn store_summary(&self) -> Result<StoreSummary, StoreError> {
@@ -1018,6 +1105,19 @@ fn read_backup_row(row: &Row<'_>) -> rusqlite::Result<BackupRecord> {
         encrypted: row.get::<_, i64>(3)? != 0,
         kind: row.get(4)?,
         created_at: row.get(5)?,
+    })
+}
+
+fn read_workspace_row(row: &Row<'_>) -> rusqlite::Result<Workspace> {
+    let memory_files: String = row.get(3)?;
+    Ok(Workspace {
+        id: WorkspaceId::new(row.get::<_, String>(0)?).map_err(|_| parse_column_error(0, "id"))?,
+        name: row.get(1)?,
+        root_path: row.get(2)?,
+        memory_files: serde_json::from_str(&memory_files)
+            .map_err(|_| parse_column_error(3, "memory_files"))?,
+        created_at: row.get(4)?,
+        updated_at: row.get(5)?,
     })
 }
 

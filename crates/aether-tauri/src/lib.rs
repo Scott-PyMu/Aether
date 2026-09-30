@@ -256,170 +256,177 @@ fn build_backend(
     // M3-05：诊断后端依赖（成功分支注入真实健康/读/写/日志/任务 dump；降级分支注入降级快照）。
     let diagnostics_deps: Option<diagnostics_control::DiagnosticsDeps>;
     let runtimes_for_diagnostics = std::sync::Arc::clone(&runtimes);
-    let (health, storage_slot, pipeline, reads, backup_deps) = match core_health::boot_core_full(
-        &data_dir, &handle, runtimes,
-    ) {
-        Ok(boot) => {
-            let core_health::CoreBoot {
-                backend: core,
-                storage: slot,
-                reads,
-                write,
-                pipeline,
-            } = boot;
-            // M3-04（D13 第 7 步）：恢复请求/启动处理结果写审计（无待处理恢复则跳过）。
-            if let Some(outcome) = &restore_outcome {
-                backup_control::write_boot_restore_audit(&write, &handle, outcome);
-            }
-            // M3-07（D9/SE-03）：适配器状态变化/监督审计落库出口接线（存储就绪后、
-            // 启动序列尾段（孤儿清理/预热）前完成；此前监督器无回调活动）。
-            deferred_audit_observer.set(std::sync::Arc::new(
-                audit_bridge::StoreAuditObserver::new(write.clone(), handle.clone()),
-            ));
-            // M3-04：备份/恢复命令面的存储句柄（读写队列均已就绪）。
-            let backup_deps = (reads.clone(), write.clone());
-            // M2-07 DoD3：核心 RSS 巡检（2GB 告警 / 2.5GB 强制 delta 限流；
-            // env 钩子供测试/演练注入阈值）。任务随应用生命周期存活（detached）。
-            {
-                let patrol = aether_control::ResourcePatrol::with_env();
-                let _patrol_task = patrol.start(pipeline.clone(), &handle);
-                // M3-01（D7/D8）：`aether://event` 事件桥接线（管线广播 → WebView 单通道）。
-                // 桥接只读转发；慢消费 `Lagged(k)` 不阻塞管线（见 event_bridge 模块说明）。
-                let metrics = event_bridge::spawn_app(app, &pipeline);
-                tracing::info!(
-                    channel = bindings::EVENT_CHANNEL,
-                    "事件桥已接线（采样计数见诊断）"
-                );
-                let _ = metrics;
-            }
-            // M3-02：真实 run 执行器（适配器会话客户端）；权限网关接线随工作区
-            // （M3-08）落地——当前以 `None` 交付，不伪造回环（D9 边界）。
-            let executor = supervisor.as_ref().map(|supervisor| {
-                std::sync::Arc::new(adapter_executor::AdapterRunExecutor::new(
-                    std::sync::Arc::clone(supervisor),
-                    pipeline.clone(),
-                    reads.clone(),
-                    write.clone(),
-                    handle.clone(),
-                    None,
-                ))
-            });
-            let run_executor: std::sync::Arc<dyn aether_control::RunExecutor> = match &executor {
-                Some(executor) => executor.clone(),
-                None => std::sync::Arc::new(adapter_executor::UnavailableExecutor),
-            };
-            // M3-03：权限中心真实接线（D9）——待审批清单/决议 IPC 的合法数据源。
-            // 策略引擎绑定工作区根：P0 工作区绑定（workspace_set/D14）随 M3-08 落地，
-            // 在绑定前以数据目录为基准目录；执行器权限网关仍为 `None`（M3-02 边界 9），
-            // 不产生回环请求，本基准不改变任何既有语义（M3-08 接管工作区基准）。
-            match aether_security::PolicyEngine::new(&data_dir) {
-                Ok(policy) => {
-                    let service = aether_control::PermissionService::new(
-                        aether_control::PermissionConfig::default(),
-                        std::sync::Arc::new(aether_control::SystemClock),
-                        policy,
-                        write.clone(),
-                        reads.clone(),
-                        pipeline.clone(),
+    let (health, storage_slot, pipeline, reads, backup_deps, write_slot) =
+        match core_health::boot_core_full(&data_dir, &handle, runtimes) {
+            Ok(boot) => {
+                let core_health::CoreBoot {
+                    backend: core,
+                    storage: slot,
+                    reads,
+                    write,
+                    pipeline,
+                } = boot;
+                // M3-04（D13 第 7 步）：恢复请求/启动处理结果写审计（无待处理恢复则跳过）。
+                if let Some(outcome) = &restore_outcome {
+                    backup_control::write_boot_restore_audit(&write, &handle, outcome);
+                }
+                // M3-07（D9/SE-03）：适配器状态变化/监督审计落库出口接线（存储就绪后、
+                // 启动序列尾段（孤儿清理/预热）前完成；此前监督器无回调活动）。
+                deferred_audit_observer.set(std::sync::Arc::new(
+                    audit_bridge::StoreAuditObserver::new(write.clone(), handle.clone()),
+                ));
+                // M3-04：备份/恢复命令面的存储句柄（读写队列均已就绪）。
+                let backup_deps = (reads.clone(), write.clone());
+                // M2-07 DoD3：核心 RSS 巡检（2GB 告警 / 2.5GB 强制 delta 限流；
+                // env 钩子供测试/演练注入阈值）。任务随应用生命周期存活（detached）。
+                {
+                    let patrol = aether_control::ResourcePatrol::with_env();
+                    let _patrol_task = patrol.start(pipeline.clone(), &handle);
+                    // M3-01（D7/D8）：`aether://event` 事件桥接线（管线广播 → WebView 单通道）。
+                    // 桥接只读转发；慢消费 `Lagged(k)` 不阻塞管线（见 event_bridge 模块说明）。
+                    let metrics = event_bridge::spawn_app(app, &pipeline);
+                    tracing::info!(
+                        channel = bindings::EVENT_CHANNEL,
+                        "事件桥已接线（采样计数见诊断）"
                     );
-                    // D9：核心重启后待审批恢复（等待者随旧核心退出，仅恢复台账）。
-                    match handle.block_on(service.restore_pending()) {
-                        Ok(restored) => tracing::info!(
-                            restored,
-                            "权限待审批已恢复（D9：核心重启后 pending 恢复）"
-                        ),
-                        Err(error) => {
-                            tracing::warn!(error = %error, "权限待审批恢复失败（继续启动）")
+                    let _ = metrics;
+                }
+                // M3-03：权限中心真实接线（D9）——待审批清单/决议 IPC 的合法数据源。
+                // 策略引擎先绑定数据目录（M3-03 兜底基准）；M3-08 起该基准与工作区绑定
+                // 同源——启动恢复（`restore_workspace_binding`）与 `workspace_set` 会将
+                // 同一 `PermissionService` 的策略引擎换根到工作区 canonical 路径。
+                match aether_security::PolicyEngine::new(&data_dir) {
+                    Ok(policy) => {
+                        let service = aether_control::PermissionService::new(
+                            aether_control::PermissionConfig::default(),
+                            std::sync::Arc::new(aether_control::SystemClock),
+                            policy,
+                            write.clone(),
+                            reads.clone(),
+                            pipeline.clone(),
+                        );
+                        // D9：核心重启后待审批恢复（等待者随旧核心退出，仅恢复台账）。
+                        match handle.block_on(service.restore_pending()) {
+                            Ok(restored) => tracing::info!(
+                                restored,
+                                "权限待审批已恢复（D9：核心重启后 pending 恢复）"
+                            ),
+                            Err(error) => {
+                                tracing::warn!(error = %error, "权限待审批恢复失败（继续启动）")
+                            }
                         }
+                        // D9：300s 超时巡检（deny + 审计；落盘成功才广播 permission.resolved）。
+                        let background = service.spawn_background(&handle);
+                        tracing::info!(background, "权限超时巡检已启动（300s → deny + 审计）");
+                        permission_service = Some(service);
                     }
-                    // D9：300s 超时巡检（deny + 审计；落盘成功才广播 permission.resolved）。
-                    let background = service.spawn_background(&handle);
-                    tracing::info!(background, "权限超时巡检已启动（300s → deny + 审计）");
-                    permission_service = Some(service);
+                    Err(error) => {
+                        tracing::warn!(
+                            error = %error,
+                            "权限策略引擎初始化失败：权限中心命令回 core_not_ready（不伪造空队列）"
+                        );
+                    }
                 }
-                Err(error) => {
-                    tracing::warn!(
-                        error = %error,
-                        "权限策略引擎初始化失败：权限中心命令回 core_not_ready（不伪造空队列）"
-                    );
+                // M3-08 DoD7（关闭 M3-02 边界 9）：执行器权限网关由 `None` 切至核心
+                // `PermissionService`（与 IPC 权限中心同一实例）——适配器 `permission.request`
+                // 通知 100% 经策略矩阵/审批回环，零直通。
+                let permission_gate = permission_service
+                    .as_ref()
+                    .map(|service| permission_loop::PermissionServiceGate::new(service.clone()));
+                // M3-02：真实 run 执行器（适配器会话客户端 + M2-10 权限回环）。
+                let executor = supervisor.as_ref().map(|supervisor| {
+                    std::sync::Arc::new(adapter_executor::AdapterRunExecutor::new(
+                        std::sync::Arc::clone(supervisor),
+                        pipeline.clone(),
+                        reads.clone(),
+                        write.clone(),
+                        handle.clone(),
+                        permission_gate,
+                    ))
+                });
+                let run_executor: std::sync::Arc<dyn aether_control::RunExecutor> = match &executor
+                {
+                    Some(executor) => executor.clone(),
+                    None => std::sync::Arc::new(adapter_executor::UnavailableExecutor),
+                };
+                let manager = aether_control::SessionManager::new(
+                    aether_control::LifecycleConfig::default(),
+                    std::sync::Arc::new(aether_control::SystemClock),
+                    write.clone(),
+                    reads.clone(),
+                    pipeline.clone(),
+                    run_executor,
+                );
+                // M3-06 重启状态重建（D5「运行中崩溃 → 在途 run 标 failed，可重试」）：
+                // 启动序列内、UI ready 握手前收口上一进程崩溃遗留的 queued/running run
+                // 与非空闲会话（未确认不伪造完成；收口后可经 run_retry 重放）。
+                match handle.block_on(manager.reconcile_interrupted_runs()) {
+                    Ok(report) => tracing::info!(
+                        runs_failed = report.runs_failed.len(),
+                        sessions_reset = report.sessions_reset.len(),
+                        "重启状态重建完成（未收口 run/会话已收口）"
+                    ),
+                    Err(error) => {
+                        tracing::warn!(error = %error, "重启状态重建失败（继续启动；未收口项保留待下次）")
+                    }
                 }
+                let background = manager.spawn_background(&handle);
+                tracing::info!(background, "会话生命周期后台任务已启动（看门狗/事件监听）");
+                session_manager = Some(manager);
+                adapter_executor = executor;
+                // M3-05（D11/D13）：诊断后端依赖——真实健康提供者 + 日志汇聚端 + 任务 dump
+                // 源（M2-05 缓冲）+ 读/写句柄（库摘要/设置/提醒）。
+                diagnostics_deps = Some(diagnostics_control::DiagnosticsDeps {
+                    data_dir: data_dir.clone(),
+                    reads: Some(reads.clone()),
+                    write: Some(write.clone()),
+                    handle: handle.clone(),
+                    health: core_health::HealthProvider::new(
+                        std::sync::Arc::new(pipeline.clone())
+                            as std::sync::Arc<dyn core_health::PipelineHealthSource>,
+                        runtimes_for_diagnostics,
+                    ),
+                    logs: log_sink.clone(),
+                    task_dumps: session_manager.clone().map(|manager| {
+                        std::sync::Arc::new(manager)
+                            as std::sync::Arc<dyn diagnostics_control::TaskDumpSource>
+                    }),
+                    security: None,
+                });
+                (
+                    std::sync::Arc::new(core) as std::sync::Arc<dyn ipc::IpcBackend>,
+                    Some(slot),
+                    Some(pipeline),
+                    Some(reads),
+                    Some(backup_deps),
+                    Some(write),
+                )
             }
-            let manager = aether_control::SessionManager::new(
-                aether_control::LifecycleConfig::default(),
-                std::sync::Arc::new(aether_control::SystemClock),
-                write.clone(),
-                reads.clone(),
-                pipeline.clone(),
-                run_executor,
-            );
-            // M3-06 重启状态重建（D5「运行中崩溃 → 在途 run 标 failed，可重试」）：
-            // 启动序列内、UI ready 握手前收口上一进程崩溃遗留的 queued/running run
-            // 与非空闲会话（未确认不伪造完成；收口后可经 run_retry 重放）。
-            match handle.block_on(manager.reconcile_interrupted_runs()) {
-                Ok(report) => tracing::info!(
-                    runs_failed = report.runs_failed.len(),
-                    sessions_reset = report.sessions_reset.len(),
-                    "重启状态重建完成（未收口 run/会话已收口）"
-                ),
-                Err(error) => {
-                    tracing::warn!(error = %error, "重启状态重建失败（继续启动；未收口项保留待下次）")
-                }
+            Err(error) => {
+                tracing::error!(error = %error, "核心健康源启动失败：按只读降级呈现 health");
+                let reason = error.to_string();
+                // M3-05/D4：降级启动态诊断包仍可导出（健康快照/容量/日志；库摘要与配置缺失）。
+                diagnostics_deps = Some(diagnostics_control::DiagnosticsDeps {
+                    data_dir: data_dir.clone(),
+                    reads: None,
+                    write: None,
+                    handle: handle.clone(),
+                    health: core_health::degraded_provider(&reason),
+                    logs: log_sink.clone(),
+                    task_dumps: None,
+                    security: None,
+                });
+                (
+                    std::sync::Arc::new(core_health::degraded_backend(&reason))
+                        as std::sync::Arc<dyn ipc::IpcBackend>,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
             }
-            let background = manager.spawn_background(&handle);
-            tracing::info!(background, "会话生命周期后台任务已启动（看门狗/事件监听）");
-            session_manager = Some(manager);
-            adapter_executor = executor;
-            // M3-05（D11/D13）：诊断后端依赖——真实健康提供者 + 日志汇聚端 + 任务 dump
-            // 源（M2-05 缓冲）+ 读/写句柄（库摘要/设置/提醒）。
-            diagnostics_deps = Some(diagnostics_control::DiagnosticsDeps {
-                data_dir: data_dir.clone(),
-                reads: Some(reads.clone()),
-                write: Some(write.clone()),
-                handle: handle.clone(),
-                health: core_health::HealthProvider::new(
-                    std::sync::Arc::new(pipeline.clone())
-                        as std::sync::Arc<dyn core_health::PipelineHealthSource>,
-                    runtimes_for_diagnostics,
-                ),
-                logs: log_sink.clone(),
-                task_dumps: session_manager.clone().map(|manager| {
-                    std::sync::Arc::new(manager)
-                        as std::sync::Arc<dyn diagnostics_control::TaskDumpSource>
-                }),
-                security: None,
-            });
-            (
-                std::sync::Arc::new(core) as std::sync::Arc<dyn ipc::IpcBackend>,
-                Some(slot),
-                Some(pipeline),
-                Some(reads),
-                Some(backup_deps),
-            )
-        }
-        Err(error) => {
-            tracing::error!(error = %error, "核心健康源启动失败：按只读降级呈现 health");
-            let reason = error.to_string();
-            // M3-05/D4：降级启动态诊断包仍可导出（健康快照/容量/日志；库摘要与配置缺失）。
-            diagnostics_deps = Some(diagnostics_control::DiagnosticsDeps {
-                data_dir: data_dir.clone(),
-                reads: None,
-                write: None,
-                handle: handle.clone(),
-                health: core_health::degraded_provider(&reason),
-                logs: log_sink.clone(),
-                task_dumps: None,
-                security: None,
-            });
-            (
-                std::sync::Arc::new(core_health::degraded_backend(&reason))
-                    as std::sync::Arc<dyn ipc::IpcBackend>,
-                None,
-                None,
-                None,
-                None,
-            )
-        }
-    };
+        };
 
     // M2-08 启动序列尾段（D2：库打开 + quick_check → 孤儿清理 → 迁移/预热）：
     // 清理台账残留（强杀核心后的孤儿）；预热 enabled 适配器；接线心跳监控（T5b）。
@@ -503,10 +510,24 @@ fn build_backend(
         adapter_executor,
         reads,
         supervisor,
-        handle,
+        handle.clone(),
     );
     if let Some(service) = permission_service {
         session_backend = session_backend.with_permissions(service);
+    }
+    // M3-08：工作区写路径接线（`workspace_set` 落库）与启动恢复（最近绑定工作区 →
+    // 新会话记忆注入 + 权限基准同源；旧会话不迁移）。
+    if let Some(write) = write_slot {
+        session_backend = session_backend.with_workspace_store(write);
+    }
+    match handle.block_on(session_backend.restore_workspace_binding()) {
+        Ok(Some(binding)) => tracing::info!(
+            workspace_id = %binding.id,
+            root_path = %binding.root_path.display(),
+            "工作区绑定已恢复（M3-08：权限基准与记忆注入同源）"
+        ),
+        Ok(None) => tracing::info!("无工作区绑定（workspace_set 前权限基准为数据目录）"),
+        Err(error) => tracing::warn!(error = %error, "工作区绑定恢复失败（继续启动）"),
     }
     BackendBundle {
         backend: std::sync::Arc::new(session_backend),

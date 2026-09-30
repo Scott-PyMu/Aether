@@ -200,7 +200,9 @@ struct PermissionInner {
 struct ServiceInner {
     config: PermissionConfig,
     clock: SharedClock,
-    policy: PolicyEngine,
+    /// 策略引擎（M3-08：工作区绑定换根经 [`PermissionService::set_workspace_root`]，
+    /// 请求评估时取锁读取——单锁粒度覆盖一次同步评估，不跨 await 持有）。
+    policy: Mutex<PolicyEngine>,
     write: WriteQueue,
     reads: ReadPool,
     pipeline: EventPipeline,
@@ -227,7 +229,7 @@ impl PermissionService {
             inner: Arc::new(ServiceInner {
                 config,
                 clock,
-                policy,
+                policy: Mutex::new(policy),
                 write,
                 reads,
                 pipeline,
@@ -241,8 +243,23 @@ impl PermissionService {
         &self.inner.config
     }
 
-    pub fn workspace_root(&self) -> &std::path::Path {
-        self.inner.policy.workspace_root()
+    /// 当前策略引擎绑定的工作区根（canonical；D14 权限基准目录）。
+    pub fn workspace_root_path(&self) -> std::path::PathBuf {
+        lock_policy(&self.inner).workspace_root().to_path_buf()
+    }
+
+    /// 换绑工作区根（M3-08 `workspace_set`；ADR-004 决策 3：P0 仅对新会话生效）。
+    ///
+    /// 同步重建 [`PolicyEngine`]（路径守卫 canonicalize 必须成功）；后续权限评估
+    /// （含执行器回环）立即使用新基准目录。P0 单工作区模型下全局生效；已有会话的
+    /// `sessions.workspace_id` 不迁移（迁移属 P1）。
+    pub fn set_workspace_root(
+        &self,
+        root: &std::path::Path,
+    ) -> Result<(), aether_security::PathGuardError> {
+        let policy = PolicyEngine::new(root)?;
+        *lock_policy(&self.inner) = policy;
+        Ok(())
     }
 
     /// 启动时恢复待审批（DoD3：核心重启后 pending 恢复）。
@@ -300,7 +317,8 @@ impl PermissionService {
             target: request.target.as_deref(),
             content_bytes: request.content_bytes,
         };
-        let verdict = self.inner.policy.evaluate(&policy_request);
+        // 同步评估期间取策略锁（不跨 await 持有）；换绑后立即生效。
+        let verdict = lock_policy(&self.inner).evaluate(&policy_request);
         let requested_target = request.target.clone();
         let canonical_target = verdict
             .canonical_target
@@ -979,6 +997,13 @@ fn ticket_from_record(record: &PermissionRecord) -> ApprovalTicket {
 
 fn lock_inner(inner: &Arc<ServiceInner>) -> std::sync::MutexGuard<'_, PermissionInner> {
     match inner.inner.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+fn lock_policy(inner: &Arc<ServiceInner>) -> std::sync::MutexGuard<'_, PolicyEngine> {
+    match inner.policy.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     }

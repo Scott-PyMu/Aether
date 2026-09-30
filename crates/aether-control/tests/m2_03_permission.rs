@@ -787,7 +787,7 @@ async fn background_sweeper_times_out_and_accessors_work() {
         },
     );
     assert_eq!(service.config().sweep_tick, Duration::from_millis(20));
-    assert!(service.workspace_root().is_dir());
+    assert!(service.workspace_root_path().is_dir());
     assert_eq!(
         service.spawn_background(&tokio::runtime::Handle::current()),
         1

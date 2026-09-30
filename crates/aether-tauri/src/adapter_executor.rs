@@ -19,7 +19,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use aether_adapters::connection::ConnectionState;
-use aether_adapters::permission_loop::PermissionLoop;
+use aether_adapters::permission_loop::{
+    PermissionGate, PermissionGateFuture, PermissionLoop, PermissionLoopProbe,
+    PermissionLoopRequest, PermissionLoopSnapshot,
+};
 use aether_adapters::session_client::{AdapterSessionClient, RunOutcome};
 use aether_adapters::supervisor::Supervisor;
 use aether_control::{EventPipeline, ExecutorFuture, ExecutorOutcome, RunExecutor, RunRequest};
@@ -42,6 +45,49 @@ pub const ADAPTER_REQUEST_FAILED_CODE: &str = "adapter_request_failed";
 pub const RUN_EXECUTOR_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 /// 未映射 run 事件的本地缓冲上限（超过即丢弃并计数，缺口由核心补读恢复）。
 pub const PENDING_EVENT_LIMIT: usize = 1024;
+
+/// 会话归属映射网关（M3-08 生产接线修正）：适配器 `permission.request.session_id`
+/// 为**适配器会话 id**，须映射为核心 `sessions.id` 后进入权限服务——否则待审批行
+/// 外键失败（`permissions.session_id` → `sessions.id`）且 UI 按核心会话过滤不可见。
+///
+/// 映射命中后替换 `session_id`；未命中（如提前上报）保持原样，由权限服务按
+/// 非法会话处理（存储错误进 `gate_failures`，不静默直通）。
+struct SessionMappingGate {
+    inner: Arc<PermissionServiceGate>,
+    forward: Arc<Mutex<ForwardState>>,
+}
+
+impl PermissionGate for SessionMappingGate {
+    fn decide(&self, mut request: PermissionLoopRequest) -> PermissionGateFuture<'_> {
+        if let Some(adapter_session) = request.session_id.as_deref() {
+            let mapped = lock(&self.forward)
+                .sessions
+                .get(adapter_session)
+                .map(|session| session.as_str().to_owned());
+            if let Some(core_session) = mapped {
+                request.session_id = Some(core_session);
+            }
+        }
+        self.inner.decide(request)
+    }
+}
+
+/// 执行器权限回环聚合（零直通集成断言；M3-08 DoD7）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExecutorPermissionStats {
+    pub snapshot: PermissionLoopSnapshot,
+    pub zero_passthrough: bool,
+}
+
+impl ExecutorPermissionStats {
+    pub fn summary(&self) -> String {
+        format!(
+            "{} aggregate_zero_passthrough={}",
+            self.snapshot.summary(),
+            self.zero_passthrough
+        )
+    }
+}
 
 fn error_info(code: &str, message: impl Into<String>) -> ErrorInfo {
     ErrorInfo {
@@ -145,6 +191,8 @@ pub struct AdapterRunExecutor {
     write: WriteQueue,
     handle: Handle,
     permission_gate: Option<Arc<PermissionServiceGate>>,
+    /// M3-08 DoD7：执行器回环探针集合（每个客户端一个；零直通集成断言来源）。
+    permission_probes: Arc<Mutex<Vec<Arc<PermissionLoopProbe>>>>,
     /// runtime_id → 会话客户端（连接断开后重建）。
     clients: Arc<AsyncMutex<HashMap<String, Arc<AdapterSessionClient>>>>,
     /// 核心会话 → (runtime_id, 适配器会话 id)。
@@ -169,6 +217,7 @@ impl AdapterRunExecutor {
             write,
             handle,
             permission_gate,
+            permission_probes: Arc::new(Mutex::new(Vec::new())),
             clients: Arc::new(AsyncMutex::new(HashMap::new())),
             adapter_sessions: Arc::new(Mutex::new(HashMap::new())),
             forward: Arc::new(Mutex::new(ForwardState::default())),
@@ -178,6 +227,36 @@ impl AdapterRunExecutor {
     /// 事件缓冲溢出计数（诊断/测试）。
     pub fn dropped_events(&self) -> u64 {
         lock(&self.forward).dropped
+    }
+
+    /// 执行器权限回环探针聚合（M3-08 DoD7 零直通集成证据）。
+    ///
+    /// 多客户端（断连重建）时逐字段求和；`zero_passthrough` 需全部客户端满足。
+    pub fn permission_loop_stats(&self) -> ExecutorPermissionStats {
+        let probes = lock(&self.permission_probes);
+        let mut snapshot = PermissionLoopSnapshot {
+            requests_received: 0,
+            requests_invalid: 0,
+            decisions: 0,
+            resolutions_sent: 0,
+            resolution_failures: 0,
+            gate_failures: 0,
+        };
+        let mut zero_passthrough = true;
+        for probe in probes.iter() {
+            let item = probe.snapshot();
+            snapshot.requests_received += item.requests_received;
+            snapshot.requests_invalid += item.requests_invalid;
+            snapshot.decisions += item.decisions;
+            snapshot.resolutions_sent += item.resolutions_sent;
+            snapshot.resolution_failures += item.resolution_failures;
+            snapshot.gate_failures += item.gate_failures;
+            zero_passthrough &= item.zero_passthrough();
+        }
+        ExecutorPermissionStats {
+            snapshot,
+            zero_passthrough,
+        }
     }
 
     /// 关闭适配器会话（`session.dispose` 后由命令层调用；幂等）。
@@ -241,10 +320,16 @@ impl AdapterRunExecutor {
             )
         })?;
         let (sink, receiver) = unbounded_channel();
-        let permission_loop = self
-            .permission_gate
-            .clone()
-            .map(|gate| PermissionLoop::new(gate));
+        let permission_loop = self.permission_gate.clone().map(|gate| {
+            // M3-08：适配器会话 id → 核心会话 id 映射（待审批行外键与 UI 过滤一致）。
+            let mapping: Arc<dyn PermissionGate> = Arc::new(SessionMappingGate {
+                inner: gate,
+                forward: Arc::clone(&self.forward),
+            });
+            let loop_ = PermissionLoop::new(mapping);
+            lock(&self.permission_probes).push(loop_.probe());
+            loop_
+        });
         let client = Arc::new(AdapterSessionClient::with_channels(
             connection,
             permission_loop,
@@ -278,11 +363,14 @@ impl AdapterRunExecutor {
             .get("native_id")
             .and_then(Value::as_str)
             .map(str::to_owned);
+        // M3-08/D14：工作区记忆注入随 `session.create` 下发（`sessions.system_prompt`
+        // 由会话创建路径写入；旧适配器忽略未知字段，ADR-003 兼容）。
         let created = client
-            .create_session(
+            .create_session_with_prompt(
                 Some(&session.title),
                 native_id.as_deref(),
                 session.model.as_deref(),
+                session.system_prompt.as_deref(),
             )
             .await
             .map_err(|error| error_info(ADAPTER_REQUEST_FAILED_CODE, error.to_string()))?;

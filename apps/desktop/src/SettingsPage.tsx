@@ -1,5 +1,5 @@
 /**
- * 设置页（M3-05；设计 D10/D13/D14，UI-UX S-05/§7.3）。
+ * 设置页（M3-05 + M3-08；设计 D10/D13/D14，UI-UX S-05/§7.3）。
  *
  * M3-05 范围：
  * - 数据目录只读展示（`settings-data-dir`）；
@@ -9,12 +9,16 @@
  *   经 `settings_set` 持久化）；
  * - 跳转备份/诊断/关于。
  *
- * 工作区绑定（`settings-workspace`）归 M3-08；本页只放只读占位说明，不提供空按钮。
+ * M3-08 范围（工作区绑定，D14/ADR-004 决策 3）：
+ * - `workspace-pick`（复用 `startup_pick_target` 系统选择器）→ `workspace-root`
+ *   输入展示/可编辑 → `workspace-apply`（`workspace_set`）→ `workspace-result`；
+ * - P0 仅对新会话生效（记忆注入 + 权限基准目录）；已有会话不迁移。
  */
 import { useCallback, useEffect, useState } from "react";
 
 import { BACKUP_REMINDER_KEY, settingsIpc, type SettingsIpc } from "./settings";
 import { describeIpcError, ipcErrorCode } from "./startup";
+import { workspaceIpc, type WorkspaceIpc } from "./workspace";
 
 export interface SettingsSecurityLevel {
   level: "os" | "degraded";
@@ -28,6 +32,8 @@ export interface SettingsPageProps {
   securityLevel?: SettingsSecurityLevel | null;
   /** IPC 契约（缺省 = 生产 Tauri 实现；测试注入替身）。 */
   ipc?: SettingsIpc;
+  /** 工作区绑定 IPC 契约（M3-08；缺省 = 生产实现；测试注入替身）。 */
+  workspace?: WorkspaceIpc;
   onBack: () => void;
   onOpenBackup?: () => void;
   onOpenDiagnostics?: () => void;
@@ -38,6 +44,7 @@ export function SettingsPage({
   dataDir,
   securityLevel = null,
   ipc = settingsIpc,
+  workspace = workspaceIpc,
   onBack,
   onOpenBackup,
   onOpenDiagnostics,
@@ -48,6 +55,13 @@ export function SettingsPage({
   const [error, setError] = useState<string | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // M3-08：工作区绑定（root_path 形式；输入可编辑，选择器可回填）。
+  const [workspaceRoot, setWorkspaceRoot] = useState("");
+  const [workspaceBusy, setWorkspaceBusy] = useState(false);
+  const [workspaceResult, setWorkspaceResult] = useState<{
+    result: "ok" | "failed";
+    text: string;
+  } | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -88,6 +102,48 @@ export function SettingsPage({
     },
     [ipc],
   );
+
+  const pickWorkspace = useCallback(async () => {
+    setError(null);
+    setErrorCode(null);
+    setWorkspaceResult(null);
+    try {
+      const picked = await workspace.pickDirectory();
+      if (picked !== null) {
+        setWorkspaceRoot(picked);
+      }
+    } catch (failure) {
+      setError(describeIpcError(failure));
+      setErrorCode(ipcErrorCode(failure));
+    }
+  }, [workspace]);
+
+  const applyWorkspace = useCallback(async () => {
+    const root = workspaceRoot.trim();
+    if (!root) {
+      setError("请先选择或输入工作区根目录");
+      setErrorCode("invalid_value");
+      return;
+    }
+    setWorkspaceBusy(true);
+    setError(null);
+    setErrorCode(null);
+    setWorkspaceResult(null);
+    try {
+      const result = await workspace.set(root);
+      setWorkspaceRoot(result.root_path);
+      setWorkspaceResult({
+        result: "ok",
+        text: `工作区已绑定：${result.root_path}（新会话按此目录注入记忆并作为权限基准；已有会话不迁移）`,
+      });
+    } catch (failure) {
+      setError(describeIpcError(failure));
+      setErrorCode(ipcErrorCode(failure));
+      setWorkspaceResult({ result: "failed", text: describeIpcError(failure) });
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  }, [workspace, workspaceRoot]);
 
   const securityLevelValue = securityLevel?.level ?? "unknown";
   const securityLevelText =
@@ -148,8 +204,48 @@ export function SettingsPage({
 
         <section className="settings-section">
           <h3>工作区</h3>
-          <p data-testid="settings-workspace" className="settings-placeholder">
-            工作区绑定与权限基准目录由 M3-08 提供（P0 旧会话不迁移，D14）。
+          <label className="settings-workspace-row">
+            工作区根目录
+            <input
+              type="text"
+              data-testid="workspace-root"
+              value={workspaceRoot}
+              placeholder="选择或输入本地目录（如 C:\\Projects\\demo）"
+              disabled={workspaceBusy}
+              onChange={(event) => setWorkspaceRoot(event.target.value)}
+            />
+          </label>
+          <div className="settings-actions">
+            <button
+              type="button"
+              data-testid="workspace-pick"
+              disabled={workspaceBusy}
+              onClick={() => void pickWorkspace()}
+            >
+              选择目录
+            </button>
+            <button
+              type="button"
+              data-testid="workspace-apply"
+              disabled={workspaceBusy || workspaceRoot.trim().length === 0}
+              onClick={() => void applyWorkspace()}
+            >
+              绑定工作区
+            </button>
+          </div>
+          {workspaceResult ? (
+            <p
+              className={workspaceResult.result === "ok" ? "settings-notice" : "settings-error"}
+              data-testid="workspace-result"
+              data-result={workspaceResult.result}
+              role={workspaceResult.result === "failed" ? "alert" : undefined}
+            >
+              {workspaceResult.text}
+            </p>
+          ) : null}
+          <p data-testid="settings-workspace" className="settings-note">
+            绑定后新会话注入工作区记忆（`AGENTS.md` &gt; `AETHER.md` &gt; `CLAUDE.md`，
+            32KB 上限）并以其为权限基准目录；已有会话不迁移（P0，D14）。
           </p>
         </section>
 

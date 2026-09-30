@@ -490,12 +490,17 @@ impl SessionManager {
 
     /// 创建会话：`EnsureRuntime` → 行（`creating`）→ `session.created` →
     /// `creating → idle` → 行 → `session.status_changed`（先日志后广播由管线保证）。
+    ///
+    /// `system_prompt`（M3-08/D14）：工作区记忆注入文本（由调用方按优先级与 32KB
+    /// 上限组合；`None` = 无工作区/无记忆文件）；落 `sessions.system_prompt` 并经
+    /// 执行器 `session.create` 下发适配器。
     pub async fn create_session(
         &self,
         runtime: Runtime,
         title: &str,
         workspace_id: Option<WorkspaceId>,
         model: Option<String>,
+        system_prompt: Option<String>,
     ) -> Result<Session, LifecycleError> {
         // M2-04：L3 熔断/存储侧隔离期拒绝新会话。
         self.check_backpressure(&runtime.id)?;
@@ -510,7 +515,7 @@ impl SessionManager {
             title: title.to_owned(),
             status: SessionStatus::Creating,
             model,
-            system_prompt: None,
+            system_prompt,
             config: json!({}),
             token_usage: TokenUsage::default(),
             created_at: now,

@@ -179,7 +179,7 @@ fn ensure_session(
         updated_at: 1,
     };
     let session = runtime
-        .block_on(manager.create_session(runtime_row, "T4", None, None))
+        .block_on(manager.create_session(runtime_row, "T4", None, None, None))
         .expect("创建会话");
     let _ = std::fs::write(session_file(state_dir), session.id.as_str());
     session.id

@@ -221,6 +221,21 @@ impl AdapterSessionClient {
         native_id: Option<&str>,
         model: Option<&str>,
     ) -> Result<CreatedSession, SessionClientError> {
+        self.create_session_with_prompt(title, native_id, model, None)
+            .await
+    }
+
+    /// `session.create` + 可选 `system_prompt`（M3-08/D14：工作区记忆注入文本）。
+    ///
+    /// 协议口径（ADR-003：新增字段只增不改语义；未知字段由旧适配器忽略）：
+    /// `system_prompt` 为可选字符串成员，内容由核心按优先级与 32KB 上限组合。
+    pub async fn create_session_with_prompt(
+        &self,
+        title: Option<&str>,
+        native_id: Option<&str>,
+        model: Option<&str>,
+        system_prompt: Option<&str>,
+    ) -> Result<CreatedSession, SessionClientError> {
         let mut params = json!({});
         if let Some(title) = title {
             params["title"] = Value::String(title.to_owned());
@@ -230,6 +245,9 @@ impl AdapterSessionClient {
         }
         if let Some(model) = model {
             params["model"] = Value::String(model.to_owned());
+        }
+        if let Some(system_prompt) = system_prompt {
+            params["system_prompt"] = Value::String(system_prompt.to_owned());
         }
         let response = self
             .connection

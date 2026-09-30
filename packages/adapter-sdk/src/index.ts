@@ -66,3 +66,21 @@ export {
   type MethodHandler,
 } from "./adapter";
 export { stdinLines, stdoutWriter, stderrLogger, type LineWriter } from "./stdio";
+export {
+  appendMemory,
+  atomicWriteMemory,
+  MEMORY_CONFLICT_CODE,
+  MEMORY_FILE_MAX_BYTES,
+  MEMORY_FILE_PRIORITY,
+  MEMORY_INJECTION_MAX_BYTES,
+  MEMORY_READ_FAILED_CODE,
+  MEMORY_WRITE_FAILED_CODE,
+  MemoryToolError,
+  memoryFileCandidates,
+  readMemory,
+  readMemoryFile,
+  selectMemoryFile,
+  writeMemory,
+  type AtomicWriteOptions,
+  type MemoryFileSnapshot,
+} from "./memory";

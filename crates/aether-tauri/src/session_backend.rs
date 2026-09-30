@@ -20,19 +20,21 @@
 //! 同步等待（不阻塞运行时线程），30s 硬超时。
 
 use std::future::Future;
-use std::sync::Arc;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use aether_adapters::connection::ConnectionState;
 use aether_adapters::supervisor::Supervisor;
 use aether_control::{
-    LifecycleError, PermissionError, PermissionService, SessionManager, READBACK_MAX_GAP,
+    compose_memory_injection, LifecycleError, MemoryInjection, PermissionError, PermissionService,
+    SessionManager, READBACK_MAX_GAP,
 };
 use aether_core::{
     EventEnvelope, Message, PermissionDecision, PermissionScope, Runtime, RuntimeId, RuntimeStatus,
-    SessionId, SessionStatus,
+    SessionId, SessionStatus, Workspace, WorkspaceId,
 };
-use aether_store::{ReadPool, SessionQuery};
+use aether_store::{ReadPool, SessionQuery, StoreCommand, StoreOutcome, WriteQueue};
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -75,6 +77,37 @@ pub struct MessagesPageResponse {
     pub complete: bool,
 }
 
+/// 工作区绑定（M3-08；设计 D14/ADR-004 决策 3）。
+///
+/// 语义：`root_path` 为 canonical 路径；`workspace_set` 后**新会话**按该工作区注入
+/// 记忆文件并把权限基准目录换绑到同一根（`PermissionService` 策略引擎重建）；
+/// 已有会话的 `sessions.workspace_id` 不迁移（P0 口径）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceBinding {
+    pub id: WorkspaceId,
+    pub name: String,
+    pub root_path: std::path::PathBuf,
+}
+
+impl WorkspaceBinding {
+    fn from_row(workspace: &Workspace) -> Self {
+        Self {
+            id: workspace.id.clone(),
+            name: workspace.name.clone(),
+            root_path: std::path::PathBuf::from(&workspace.root_path),
+        }
+    }
+
+    /// 响应形状（`workspace_set` 回执；字段与 `workspaces` 表一致）。
+    fn to_json(&self) -> Value {
+        json!({
+            "workspace_id": self.id.as_str(),
+            "name": self.name,
+            "root_path": self.root_path.to_string_lossy(),
+        })
+    }
+}
+
 /// 会话命令后端（装饰器：其余命令透传内层）。
 pub struct SessionBackend {
     inner: Arc<dyn IpcBackend>,
@@ -84,6 +117,10 @@ pub struct SessionBackend {
     supervisor: Option<Arc<Supervisor>>,
     /// 权限服务（M3-03；`None` = 未接线 → 权限命令回 `core_not_ready`）。
     permissions: Option<PermissionService>,
+    /// 工作区写路径（M3-08 `workspace_set` 的 `workspaces` 落库；`None` = 未接线）。
+    write: Option<WriteQueue>,
+    /// 当前工作区绑定（M3-08；`None` = 未绑定）。
+    workspace: Arc<Mutex<Option<WorkspaceBinding>>>,
     handle: tokio::runtime::Handle,
     timeout: Duration,
     /// 自动补读缺口上限（默认 [`READBACK_MAX_GAP`]；常量级调参，测试注入用）。
@@ -106,6 +143,8 @@ impl SessionBackend {
             reads,
             supervisor,
             permissions: None,
+            write: None,
+            workspace: Arc::new(Mutex::new(None)),
             handle,
             timeout: SESSION_COMMAND_TIMEOUT,
             gap_limit: READBACK_MAX_GAP,
@@ -117,6 +156,51 @@ impl SessionBackend {
     pub fn with_permissions(mut self, permissions: PermissionService) -> Self {
         self.permissions = Some(permissions);
         self
+    }
+
+    /// 注入工作区写路径（M3-08；`workspace_set` 的 `workspaces` 落库与换绑）。
+    #[must_use]
+    pub fn with_workspace_store(mut self, write: WriteQueue) -> Self {
+        self.write = Some(write);
+        self
+    }
+
+    /// 当前工作区绑定（诊断/测试；`None` = 未绑定）。
+    pub fn workspace_binding(&self) -> Option<WorkspaceBinding> {
+        lock_workspace(&self.workspace).clone()
+    }
+
+    /// 启动恢复：最近绑定的工作区（M3-08；无绑定/根不存在 → 不绑定，权限基准保持
+    /// 启动默认）。在核心启动序列内调用一次（存储/权限服务就绪后）。
+    pub async fn restore_workspace_binding(&self) -> Result<Option<WorkspaceBinding>, IpcError> {
+        let Some(reads) = &self.reads else {
+            return Ok(None);
+        };
+        let Some(workspace) = reads
+            .workspaces_latest()
+            .await
+            .map_err(|error| IpcError::internal(format!("工作区恢复读取失败：{error}")))?
+        else {
+            return Ok(None);
+        };
+        let binding = WorkspaceBinding::from_row(&workspace);
+        if !binding.root_path.is_dir() {
+            tracing::warn!(
+                workspace_id = %binding.id,
+                root_path = %binding.root_path.display(),
+                "工作区根不存在：跳过启动绑定（权限基准保持启动默认）"
+            );
+            return Ok(None);
+        }
+        if let Some(service) = &self.permissions {
+            service
+                .set_workspace_root(&binding.root_path)
+                .map_err(|error| {
+                    IpcError::invalid_value(format!("工作区根不可用（策略引擎换根失败）：{error}"))
+                })?;
+        }
+        *lock_workspace(&self.workspace) = Some(binding.clone());
+        Ok(Some(binding))
     }
 
     /// 覆盖自动补读缺口上限（测试/故障注入；默认 `READBACK_MAX_GAP`）。
@@ -241,6 +325,8 @@ impl IpcBackend for SessionBackend {
     fn session_create(&self, request: &SessionCreateRequest) -> Result<Value, IpcError> {
         let manager = self.manager_required()?.clone();
         let supervisor = self.supervisor.clone();
+        let reads = self.reads.clone();
+        let binding = lock_workspace(&self.workspace).clone();
         let runtime_id = request.runtime_id.clone();
         let title = request.title.clone();
         let workspace_id = request.workspace_id.clone();
@@ -297,19 +383,167 @@ impl IpcBackend for SessionBackend {
                     updated_at: now,
                 }
             };
-            let workspace_id =
-                match workspace_id {
-                    Some(value) => Some(aether_core::WorkspaceId::new(value).map_err(|error| {
+            // M3-08/D14：解析工作区（显式 `workspace_id` 白名单校验 → 行存在；缺省 =
+            // 当前绑定），按工作区根组合记忆注入（优先级 + 32KB 截断 + 显式标记）。
+            let resolved_workspace = match workspace_id {
+                Some(value) => {
+                    let id = WorkspaceId::new(value).map_err(|error| {
                         IpcError::internal(format!("workspace_id 非法：{error}"))
-                    })?),
-                    None => None,
-                };
+                    })?;
+                    let reads = reads.clone().ok_or_else(|| {
+                        IpcError::core_not_ready(
+                            "会话后端未接线：workspace_id 存在性校验需要读连接池",
+                        )
+                    })?;
+                    let workspace = reads
+                        .workspace(&id)
+                        .await
+                        .map_err(|error| IpcError::internal(format!("工作区读取失败：{error}")))?
+                        .ok_or_else(|| {
+                            IpcError::invalid_value(format!(
+                                "workspace_id 不存在（{}）；请先经 workspace_set 绑定",
+                                id.as_str()
+                            ))
+                        })?;
+                    Some(workspace)
+                }
+                None => binding.as_ref().map(|binding| Workspace {
+                    id: binding.id.clone(),
+                    name: binding.name.clone(),
+                    root_path: binding.root_path.to_string_lossy().to_string(),
+                    memory_files: Vec::new(),
+                    created_at: 0,
+                    updated_at: 0,
+                }),
+            };
+            let (workspace_id, system_prompt) = match &resolved_workspace {
+                Some(workspace) => {
+                    let injection: MemoryInjection =
+                        compose_memory_injection(Path::new(&workspace.root_path));
+                    if let Some(error) = &injection.read_error {
+                        tracing::warn!(
+                            workspace_id = %workspace.id,
+                            error = %error,
+                            "记忆文件候选读取诊断（继续会话创建）"
+                        );
+                    }
+                    (Some(workspace.id.clone()), injection.render())
+                }
+                None => (None, None),
+            };
             let session = manager
-                .create_session(runtime, &title, workspace_id, model)
+                .create_session(runtime, &title, workspace_id, model, system_prompt)
                 .await
                 .map_err(map_lifecycle_error)?;
             serde_json::to_value(session)
                 .map_err(|error| IpcError::internal(format!("会话序列化失败：{error}")))
+        })
+    }
+
+    /// M3-08 `workspace_set`：绑定/切换工作区（ADR-004 决策 3 / D14）。
+    ///
+    /// - `workspace_id`：ULID 形态已由 DTO 校验；存在性在此复核（不存在 → `invalid_value`）；
+    /// - `root_path`：canonical 路径（命令层已做存在目录 + 同步盘拒绝）→ 复用同路径既有行，
+    ///   否则新建 `workspaces` 行（经单写队列，AGENTS §2.4）；重复绑定幂等；
+    /// - 换绑：更新进程内绑定；`PermissionService` 策略引擎换根到同一 canonical 路径
+    ///   （权限基准与工作区同源，M3-08 DoD7）；已有会话不迁移（P0）。
+    fn workspace_set(
+        &self,
+        request: &crate::ipc::dto::WorkspaceSetRequest,
+        canonical_root_path: Option<&std::path::Path>,
+    ) -> Result<Value, IpcError> {
+        let reads = self.reads_required()?.clone();
+        let write = self.write.clone().ok_or_else(|| {
+            IpcError::core_not_ready("工作区写路径未接线：workspace_set 不可用（启动序列未完成）")
+        })?;
+        let permissions = self.permissions.clone();
+        let binding_slot = Arc::clone(&self.workspace);
+        let workspace_id = request.workspace_id.clone();
+        let canonical_root = canonical_root_path.map(std::path::Path::to_path_buf);
+        self.call(async move {
+            let workspace = match workspace_id {
+                Some(value) => {
+                    let id = WorkspaceId::new(value).map_err(|error| {
+                        IpcError::internal(format!("workspace_id 非法：{error}"))
+                    })?;
+                    reads
+                        .workspace(&id)
+                        .await
+                        .map_err(|error| IpcError::internal(format!("工作区读取失败：{error}")))?
+                        .ok_or_else(|| {
+                            IpcError::invalid_value(format!(
+                                "workspace_id 不存在（{}）；无法绑定未知工作区",
+                                id.as_str()
+                            ))
+                        })?
+                }
+                None => {
+                    let root = canonical_root.ok_or_else(|| {
+                        IpcError::invalid_value("必须且只能提供 workspace_id 或 root_path 之一")
+                    })?;
+                    let root_path = root.to_string_lossy().to_string();
+                    match reads.workspace_by_root(&root_path).await.map_err(|error| {
+                        IpcError::internal(format!("工作区按路径读取失败：{error}"))
+                    })? {
+                        Some(existing) => existing,
+                        None => {
+                            let now = now_ms();
+                            let name = root
+                                .file_name()
+                                .and_then(|value| value.to_str())
+                                .filter(|value| !value.is_empty())
+                                .map(str::to_owned)
+                                .unwrap_or_else(|| root_path.clone());
+                            let workspace = Workspace {
+                                id: WorkspaceId::new(ulid::Ulid::new().to_string()).map_err(
+                                    |error| {
+                                        IpcError::internal(format!(
+                                            "workspace_id 生成失败：{error}"
+                                        ))
+                                    },
+                                )?,
+                                name,
+                                root_path,
+                                // P0 记忆文件清单固定为 D14 三文件名（内置优先级），
+                                // 本列保留用于未来自定义白名单（P1 设置项）。
+                                memory_files: Vec::new(),
+                                created_at: now,
+                                updated_at: now,
+                            };
+                            let outcome = write
+                                .execute(StoreCommand::UpsertWorkspace {
+                                    workspace: workspace.clone(),
+                                })
+                                .await
+                                .map_err(|error| {
+                                    IpcError::internal(format!("工作区落库失败：{error}"))
+                                })?;
+                            if let StoreOutcome::Applied { affected } = outcome {
+                                if affected == 0 {
+                                    return Err(IpcError::internal(
+                                        "工作区落库未影响任何行（不变量破坏）",
+                                    ));
+                                }
+                            }
+                            workspace
+                        }
+                    }
+                }
+            };
+            let binding = WorkspaceBinding::from_row(&workspace);
+            // 权限基准目录与工作区同源（策略引擎换根；换绑失败 → 不更新绑定，
+            // 避免注入基准与权限基准不一致）。
+            if let Some(service) = &permissions {
+                service
+                    .set_workspace_root(&binding.root_path)
+                    .map_err(|error| {
+                        IpcError::invalid_value(format!(
+                            "工作区根不可用（策略引擎换根失败）：{error}"
+                        ))
+                    })?;
+            }
+            *lock_workspace(&binding_slot) = Some(binding.clone());
+            Ok(binding.to_json())
         })
     }
 
@@ -561,14 +795,6 @@ impl IpcBackend for SessionBackend {
         self.inner.runtime_enable(request)
     }
 
-    fn workspace_set(
-        &self,
-        request: &crate::ipc::dto::WorkspaceSetRequest,
-        canonical_root_path: Option<&std::path::Path>,
-    ) -> Result<Value, IpcError> {
-        self.inner.workspace_set(request, canonical_root_path)
-    }
-
     fn export_diagnostics(
         &self,
         request: &crate::ipc::dto::ExportDiagnosticsRequest,
@@ -600,6 +826,16 @@ impl IpcBackend for SessionBackend {
 
 fn parse_session_id(value: &str) -> Result<SessionId, IpcError> {
     SessionId::new(value).map_err(|error| IpcError::internal(format!("session_id 非法：{error}")))
+}
+
+/// 工作区绑定互斥锁（中毒恢复语义与其他模块一致：不因单次 panic 永久拒绝绑定）。
+fn lock_workspace(
+    slot: &Arc<Mutex<Option<WorkspaceBinding>>>,
+) -> std::sync::MutexGuard<'_, Option<WorkspaceBinding>> {
+    match slot.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
 }
 
 /// DTO 会话状态 → 核心状态（取值一一对应；DTO 校验已限定枚举）。

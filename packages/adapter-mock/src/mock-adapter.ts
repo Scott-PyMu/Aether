@@ -21,15 +21,21 @@
  * - 吞吐基准：`bench:<n>` 触发 n 条 `message.delta` 连发（DoD5 ≥1000 delta/s）。
  */
 
-import { promises as fs } from "node:fs";
+import { appendFileSync, promises as fs } from "node:fs";
 import path from "node:path";
 
 import {
   Adapter,
+  appendMemory,
+  atomicWriteMemory,
   ERROR_CODES,
+  MemoryToolError,
   PROTOCOL_VERSION,
+  readMemory,
+  readMemoryFile,
   RpcError,
   ulid,
+  writeMemory,
   type AdapterRuntimeInfo,
   type EnvelopeContext,
 } from "@aether/adapter-sdk";
@@ -40,12 +46,15 @@ import {
   buildToolCallCompleted,
   buildToolCallFailed,
   buildToolCallStarted,
+  memoryTriggerForText,
+  MEMORY_TOOL_NAMES,
   PERMISSION_DENIED_ERROR,
   permissionLoopForText,
   scenarioForText,
   TOOL_CALL_SCENARIOS,
   TOOL_FAILURE_ERROR,
   TOOL_TIMEOUT_ERROR,
+  type MemoryToolTrigger,
   type PermissionLoopDecision,
   type PermissionLoopTrigger,
   type ToolCallScenarioId,
@@ -105,6 +114,11 @@ export interface MockAdapterOptions {
   longStreamIntervalMs?: number;
   /** 附件目录（M2-09/D6：`artifact:` 触发把附件数据体写这里；缺省禁止附件触发）。 */
   artifactsDir?: string;
+  /**
+   * 会话调用记录（M3-08：`session.create` 的 `system_prompt` 注入观测；JSON Lines）。
+   * 供注入 E2E 断言「核心按工作区组合的记忆文本已下发适配器」。
+   */
+  sessionLog?: string;
 }
 
 const DEFAULT_DELTAS = 24;
@@ -152,6 +166,8 @@ interface MockSession {
   disposed: boolean;
   clientMsgIds: Map<string, string>;
   activeRun?: ActiveRun;
+  /** M3-08/D14：`session.create` 收到的记忆注入文本（观测用）。 */
+  systemPrompt?: string;
 }
 
 function emptyUsage(): Record<string, number> {
@@ -176,7 +192,7 @@ export class MockAdapter {
       | "streamIntervalMs"
       | "longStreamIntervalMs"
     >
-  > & { protocol?: string; sendHello: boolean; artifactsDir?: string };
+  > & { protocol?: string; sendHello: boolean; artifactsDir?: string; sessionLog?: string };
 
   private readonly sessions = new Map<string, MockSession>();
   /** M2-10：待决权限请求（`permission.request` 已发、等待核心 `permission.resolve`）。 */
@@ -214,6 +230,7 @@ export class MockAdapter {
       streamIntervalMs: options.streamIntervalMs ?? DEFAULT_INTERVAL_MS,
       longStreamIntervalMs: options.longStreamIntervalMs ?? DEFAULT_LONG_INTERVAL_MS,
       artifactsDir: options.artifactsDir,
+      sessionLog: options.sessionLog,
       protocol,
       sendHello:
         (options.sendHello ?? true) &&
@@ -402,14 +419,25 @@ export class MockAdapter {
         protocol: PROTOCOL_VERSION,
         acknowledged: true,
       }))
-      .handle("session.create", () => {
+      .handle("session.create", (params) => {
         this.sessionCounter += 1;
+        const input = params as { system_prompt?: string };
         const session: MockSession = {
           id: `mock-sess-${this.sessionCounter}`,
           disposed: false,
           clientMsgIds: new Map(),
+          ...(typeof input.system_prompt === "string"
+            ? { systemPrompt: input.system_prompt }
+            : {}),
         };
         this.sessions.set(session.id, session);
+        // M3-08/D14：记忆注入观测记录（JSON Lines；跨会话注入断言）。
+        this.logSessionCall({
+          method: "session.create",
+          session_id: session.id,
+          system_prompt: session.systemPrompt ?? null,
+          has_system_prompt: session.systemPrompt !== undefined,
+        });
         return { session_id: session.id, created_at: Date.now() };
       })
       .handle("session.send", (params) => {
@@ -472,6 +500,12 @@ export class MockAdapter {
             { name: "mock.echo", description: "回显", input_schema: { type: "object" } },
             { name: "mock.read_file", description: "读文件", input_schema: { type: "object" } },
             { name: "mock.write_file", description: "写文件", input_schema: { type: "object" } },
+            // M3-08/D14：工作区记忆三工具（权威映射见 scenarios.ts / 核心 memory.rs）。
+            ...MEMORY_TOOL_NAMES.map((name) => ({
+              name,
+              description: "工作区记忆文件工具（M3-08）",
+              input_schema: { type: "object" },
+            })),
           ],
         };
       })
@@ -536,6 +570,18 @@ export class MockAdapter {
     await this.adapter.emitEvent(context, type, payload);
   }
 
+  /** 会话调用记录（M3-08 注入观测；JSON Lines 追加，失败仅 stderr 诊断不阻断）。 */
+  private logSessionCall(payload: Record<string, unknown>): void {
+    const logPath = this.options.sessionLog;
+    if (!logPath) return;
+    try {
+      appendFileSync(logPath, `${JSON.stringify(payload)}\n`, "utf8");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.options.stderr(`session-log 写入失败: ${detail}`);
+    }
+  }
+
   private delay(ms: number): Promise<void> {
     return new Promise((resolve) => {
       setTimeout(resolve, ms);
@@ -561,7 +607,10 @@ export class MockAdapter {
       await this.emit(context, "run.started", { run_id: runId });
       const scenario = scenarioForText(text);
       const permissionLoop = permissionLoopForText(text);
-      if (permissionLoop) {
+      const memory = memoryTriggerForText(text);
+      if (memory) {
+        await this.runMemoryToolScenario(memory, context, run);
+      } else if (permissionLoop) {
         await this.runPermissionLoopScenario(permissionLoop, context, run);
       } else if (scenario) {
         await this.runToolScenario(scenario, context, run);
@@ -765,20 +814,138 @@ export class MockAdapter {
     await this.emit(context, "run.completed", { run_id: run.runId, usage: emptyUsage() });
   }
 
+  /**
+   * M3-08/D14 工作区记忆工具：`tool.call_started` → `permission.request` 回环 →
+   * `permission.resolved` → 真实文件操作（原子写/冲突判定/读取）→ 工具终态 → `run.completed`。
+   *
+   * 决策完全来自核心权限网关（记忆白名单 allow / 工作区外 deny / 1MB 上限 deny），
+   * 适配器不预设；越权拒绝时不执行任何文件操作。
+   */
+  private async runMemoryToolScenario(
+    trigger: MemoryToolTrigger,
+    context: EnvelopeContext,
+    run: ActiveRun,
+  ): Promise<void> {
+    const startedAt = Date.now();
+    const toolCallId = ulid();
+    const requestId = ulid();
+    const isRead = trigger.kind === "read";
+    const contentBytes =
+      trigger.kind === "append" || trigger.kind === "write" || trigger.kind === "conflict"
+        ? Buffer.byteLength(trigger.text ?? "", "utf8")
+        : undefined;
+    await this.emit(
+      context,
+      "tool.call_started",
+      buildToolCallStarted(toolCallId, trigger.toolName, { path: trigger.target }),
+    );
+
+    const decision = await this.awaitPermissionResolution(context, run, requestId, {
+      resource: isRead ? "fs.read" : "fs.write",
+      action: isRead ? "read" : "write",
+      target: trigger.target,
+      ...(contentBytes !== undefined ? { content_bytes: contentBytes } : {}),
+    });
+    if (decision === undefined) {
+      await this.emit(
+        context,
+        "tool.call_failed",
+        buildToolCallFailed(toolCallId, trigger.toolName, Date.now() - startedAt, TOOL_TIMEOUT_ERROR),
+      );
+      await this.emit(context, "run.cancelled", { run_id: run.runId, reason: "interrupted" });
+      return;
+    }
+    await this.emit(
+      context,
+      "permission.resolved",
+      buildPermissionResolved(requestId, decision.decision, decision.scope),
+    );
+    if (decision.decision === "deny") {
+      // D9 越权：拒绝后不执行任何文件操作。
+      await this.emit(
+        context,
+        "tool.call_failed",
+        buildToolCallFailed(
+          toolCallId,
+          trigger.toolName,
+          Date.now() - startedAt,
+          PERMISSION_DENIED_ERROR,
+        ),
+      );
+      await this.emit(context, "run.completed", { run_id: run.runId, usage: emptyUsage() });
+      return;
+    }
+
+    try {
+      switch (trigger.kind) {
+        case "read":
+          await readMemory(trigger.target);
+          break;
+        case "append":
+          await appendMemory(trigger.target, trigger.text ?? "");
+          break;
+        case "write":
+          await writeMemory(trigger.target, trigger.text ?? "");
+          break;
+        case "conflict": {
+          // 冲突注入：回环允许后先模拟外部修改，再按陈旧快照写入 →
+          // 必须 `memory_conflict` 且不覆盖（D14）。
+          const expected = await readMemoryFile(trigger.target);
+          await fs.writeFile(trigger.target, `${expected.content}外部修改`, "utf8");
+          await atomicWriteMemory(trigger.target, trigger.text ?? "", expected.snapshot);
+          break;
+        }
+        case "slow": {
+          // 写入中断故障注入宿主：分块慢写（目标仅在 rename 后变化）。
+          const bytes = trigger.bytes ?? 65_536;
+          await atomicWriteMemory(trigger.target, "x".repeat(bytes), null, {
+            chunkBytes: 4096,
+            chunkDelayMs: 50,
+          });
+          break;
+        }
+      }
+      await this.emit(
+        context,
+        "tool.call_completed",
+        buildToolCallCompleted(toolCallId, trigger.toolName, Date.now() - startedAt),
+      );
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      const code = error instanceof MemoryToolError ? error.code : "memory_internal";
+      await this.emit(
+        context,
+        "tool.call_failed",
+        buildToolCallFailed(toolCallId, trigger.toolName, Date.now() - startedAt, {
+          code,
+          message: detail,
+          recoverable: true,
+        }),
+      );
+    }
+    await this.emit(context, "run.completed", { run_id: run.runId, usage: emptyUsage() });
+  }
+
   /** 发 `permission.request` 通知并等待核心 `permission.resolve`（中断/销毁 → undefined）。 */
   private async awaitPermissionResolution(
     context: EnvelopeContext,
     run: ActiveRun,
     requestId: string,
-    trigger: PermissionLoopTrigger,
+    spec: {
+      resource: string;
+      action: string;
+      target: string;
+      content_bytes?: number;
+    },
   ): Promise<PermissionLoopDecision | undefined> {
     await this.adapter.emitPermissionRequest({
       request_id: requestId,
       session_id: context.sessionId,
       run_id: context.runId ?? undefined,
-      resource: trigger.resource,
-      action: trigger.action,
-      target: trigger.target,
+      resource: spec.resource,
+      action: spec.action,
+      target: spec.target,
+      ...(spec.content_bytes !== undefined ? { content_bytes: spec.content_bytes } : {}),
     });
     return new Promise<PermissionLoopDecision | undefined>((resolve) => {
       this.permissionWaiters.set(requestId, resolve);
