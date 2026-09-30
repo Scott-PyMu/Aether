@@ -107,6 +107,22 @@ fn remove_database(path: &Path) {
     }
 }
 
+/// 长路径形式（模拟真实系统选择器返回的完整路径）。
+///
+/// CI 的 `%TEMP%` 形如 `C:\Users\RUNNER~1\...`，含 8.3 短名——短名是 D9/T7 的
+/// **拒绝样本**（`reject_windows_special_forms` 在 canonicalize 之前做形态拒绝），
+/// 不能直接作为合法输入；夹具先 canonicalize 并去掉 `\\?\` 前缀，与选择器返回
+/// 完整路径的形态一致（同 `ipc_validation.rs` 的 `long_path` 口径）。
+fn long_path(path: &Path) -> String {
+    let canonical = std::fs::canonicalize(path).expect("canonicalize 夹具路径");
+    let text = canonical.to_string_lossy().to_string();
+    #[cfg(windows)]
+    if let Some(stripped) = text.strip_prefix(r"\\?\") {
+        return stripped.to_string();
+    }
+    text
+}
+
 struct BackendFixture {
     temp: TempDir,
     runtime: tokio::runtime::Runtime,
@@ -172,7 +188,7 @@ impl BackendFixture {
     fn create(&self, target: Option<&Path>) -> Result<Value, aether_tauri::ipc::error::IpcError> {
         let request = BackupCreateRequest {
             label: Some("测试备份".to_owned()),
-            target_dir: target.map(|path| path.to_string_lossy().to_string()),
+            target_dir: target.map(long_path),
         };
         let canonical = request.canonical_target_dir().expect("目标目录校验");
         self.backend.backup_create(&request, canonical.as_deref())
@@ -188,7 +204,7 @@ impl BackendFixture {
     fn restore_external(&self, path: &Path) -> Result<Value, aether_tauri::ipc::error::IpcError> {
         let request = BackupRestoreRequest {
             source: BackupSource::External {
-                path: path.to_string_lossy().to_string(),
+                path: long_path(path),
             },
         };
         let canonical = request.canonical_external_path().expect("外部候选校验");
@@ -245,14 +261,14 @@ fn create_internal_and_external_respects_space_guard() {
     assert!(internal_path.exists());
     assert!(internal["backup"]["size_bytes"].as_u64().unwrap_or(0) > 0);
 
-    // 外部（系统选择器返回原始路径；命令层 canonicalize）。
+    // 外部（系统选择器返回完整路径；命令层 canonicalize）。
     let external_dir = fixture.data_dir().join("external-target");
     std::fs::create_dir_all(&external_dir).expect("外部目录");
     let external = fixture.create(Some(&external_dir)).expect("外部备份成功");
     assert_eq!(external["backup"]["kind"], "external");
     let external_path = PathBuf::from(external["backup"]["path"].as_str().expect("路径"));
     assert!(
-        external_path.starts_with(&external_dir),
+        external_path.starts_with(PathBuf::from(long_path(&external_dir))),
         "产物必须落在选择的外部目录：{}",
         external_path.display()
     );

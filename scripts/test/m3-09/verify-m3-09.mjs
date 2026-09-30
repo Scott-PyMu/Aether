@@ -75,11 +75,24 @@ record(
 );
 
 // ===== 3. 迁移集 ↔ 设计文档附录 C（含 0003 全量 DDL；ADR-010 冻结文本）=====
+//
+// 设计文档为本地基线（`.gitignore` 排除，不入库）：CI 上无该文件，此时跳过
+// 附录 C 静态/实时比对（迁移 0003 的表/约束断言已由 m3_09_artifacts 测试覆盖，
+// 二者均不依赖设计文档）；本地保留完整比对（DoD1 双保险）。
 
-record(
-  "verify:m1-03（迁移集有效 schema ↔ 附录 C 逐项一致；0001/0002 未改）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m1-03", "verify-m1-03.mjs")]),
-);
+const designDoc = path.join(repoRoot, "设计文档.md");
+if (existsSync(designDoc)) {
+  record(
+    "verify:m1-03（迁移集有效 schema ↔ 附录 C 逐项一致；0001/0002 未改）",
+    run(node, [path.join(repoRoot, "scripts", "test", "m1-03", "verify-m1-03.mjs")]),
+  );
+} else {
+  checks.push({
+    name: "verify:m1-03（迁移集 ↔ 附录 C；设计文档未入库，本地专属）",
+    skip: true,
+    reason: "设计文档.md 不在仓库（.gitignore）；迁移 0003 约束断言由 m3_09_artifacts 覆盖",
+  });
+}
 
 // ===== 4. 前端：面板 E2E（DoD5/7 锚点）+ 既有回归 =====
 
