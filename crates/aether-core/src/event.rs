@@ -215,6 +215,9 @@ pub struct SessionSummary {
     pub title: String,
     pub status: SessionStatus,
     pub model: Option<String>,
+    /// 会话级思考深度（0–4；ADR-010 附录 B「允许新增可选字段」声明；旧消费方缺省 2）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_depth: Option<u8>,
     pub created_at: i64,
     pub updated_at: i64,
 }

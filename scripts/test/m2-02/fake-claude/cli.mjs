@@ -252,6 +252,22 @@ async function main() {
       /* 诊断文件可选 */
     }
   }
+  // M3-10：调用观测（仅当显式设置记录文件时；argv + MAX_THINKING_TOKENS 环境）。
+  const invocationFile = process.env.FAKE_CLAUDE_INVOCATION_FILE;
+  if (invocationFile && invocationFile.length > 0) {
+    try {
+      appendFileSync(
+        invocationFile,
+        `${JSON.stringify({
+          argv: process.argv.slice(2),
+          max_thinking_tokens: process.env.MAX_THINKING_TOKENS ?? null,
+        })}\n`,
+        "utf8",
+      );
+    } catch {
+      /* 观测文件可选 */
+    }
+  }
 
   const prompt = (await readPrompt()).trim();
   const sessionId = parsed.sessionId;

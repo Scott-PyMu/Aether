@@ -5,7 +5,11 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { CodexAdapter, type CodexAdapterOptions } from "./codex-adapter";
+import {
+  CodexAdapter,
+  reasoningForThinkingDepth,
+  type CodexAdapterOptions,
+} from "./codex-adapter";
 import type { CodexCliConfig } from "./codex-cli";
 
 const FAKE_CLI = fileURLToPath(
@@ -409,5 +413,63 @@ describe("CodexSessionStore", () => {
     const session = await createSession(harness);
     expect(session.resumed).toBe(false);
     expect(harness.stderr.some((line) => line.includes("别名映射加载失败"))).toBe(true);
+  });
+});
+
+describe("CodexAdapter：思考深度（M3-10 / ADR-010）", () => {
+  it("能力声明 + 档位→reasoning effort 映射（纯函数；越界不覆盖）", async () => {
+    const harness = new Harness();
+    await harness.start();
+    const hello = harness.frames.find((frame) => frame.method === "hello");
+    const runtime = hello?.params?.["runtime"] as Record<string, unknown> | undefined;
+    expect(runtime?.["capabilities"]).toContain("thinking_depth");
+    const initialized = await harness.requestResult("initialize", {});
+    expect(initialized["capabilities"] as string[]).toContain("thinking_depth");
+
+    expect(reasoningForThinkingDepth(0)).toBe("minimal");
+    expect(reasoningForThinkingDepth(1)).toBe("low");
+    expect(reasoningForThinkingDepth(2)).toBe("medium");
+    expect(reasoningForThinkingDepth(3)).toBe("high");
+    expect(reasoningForThinkingDepth(4)).toBe("high");
+    expect(reasoningForThinkingDepth(5)).toBeUndefined();
+    expect(reasoningForThinkingDepth("高")).toBeUndefined();
+  });
+
+  it("会话级 2 → medium；覆盖 0 → minimal；未声明 → CLI 默认 low", { timeout: 40_000 }, async () => {
+    const invocationFile = join(mkdtempSync(join(tmpdir(), "fake-codex-think-")), "invocations.jsonl");
+    const previous = process.env.FAKE_CODEX_INVOCATION_FILE;
+    process.env.FAKE_CODEX_INVOCATION_FILE = invocationFile;
+    try {
+      const harness = new Harness();
+      await harness.start();
+      const session = await harness.requestResult("session.create", { thinking_depth: 2 });
+      const sessionId = String(session.session_id);
+
+      const first = await send(harness, sessionId, "chat-1", "m3-10-c1");
+      expect(await harness.waitTerminal(String(first.run_id))).toBe("run.completed");
+      const second = await harness.requestResult("session.send", {
+        session_id: sessionId,
+        client_msg_id: "m3-10-c2",
+        text: "chat-2",
+        thinking_depth: 0,
+      });
+      expect(await harness.waitTerminal(String(second["run_id"]))).toBe("run.completed");
+
+      const plain = await createSession(harness);
+      const third = await send(harness, String(plain.session_id), "chat-3", "m3-10-c3");
+      expect(await harness.waitTerminal(String(third.run_id))).toBe("run.completed");
+
+      const records = readFileSync(invocationFile, "utf8")
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => JSON.parse(line) as { argv: string[] });
+      expect(records).toHaveLength(3);
+      expect(records[0]?.argv).toContain("model_reasoning_effort=medium");
+      expect(records[1]?.argv).toContain("model_reasoning_effort=minimal");
+      expect(records[2]?.argv).toContain("model_reasoning_effort=low");
+    } finally {
+      if (previous === undefined) delete process.env.FAKE_CODEX_INVOCATION_FILE;
+      else process.env.FAKE_CODEX_INVOCATION_FILE = previous;
+    }
   });
 });

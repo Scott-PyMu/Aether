@@ -54,6 +54,17 @@ pub struct SessionCreateRequest {
     pub workspace_id: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    /// 会话级思考深度（ADR-010 决策 2：0–4，缺省 2；越界 `out_of_range`、
+    /// 类型非法 `invalid_type`）。
+    #[serde(default)]
+    pub thinking_depth: Option<i64>,
+}
+
+impl SessionCreateRequest {
+    /// 请求的思考深度（已校验）；`None` = 缺省（核心按 2 应用）。
+    pub fn thinking_depth_value(&self) -> Result<Option<u8>, IpcError> {
+        thinking_depth_value(self.thinking_depth)
+    }
 }
 
 impl CommandRequest for SessionCreateRequest {
@@ -73,7 +84,21 @@ impl CommandRequest for SessionCreateRequest {
         if let Some(model) = &self.model {
             validate::validate_model(model, "model")?;
         }
+        if let Some(thinking_depth) = self.thinking_depth {
+            validate::validate_thinking_depth(thinking_depth, "thinking_depth")?;
+        }
         Ok(())
+    }
+}
+
+/// 思考深度请求值 → `u8`（0–4；越界 `out_of_range`）。
+///
+/// DTO 以 `i64` 承载以区分错误类别：负数/越界 → `out_of_range`；
+/// 浮点/字符串在 serde 反序列化阶段即 `invalid_type`（ADR-010 B.2 校验矩阵）。
+pub fn thinking_depth_value(value: Option<i64>) -> Result<Option<u8>, IpcError> {
+    match value {
+        Some(value) => validate::validate_thinking_depth(value, "thinking_depth").map(Some),
+        None => Ok(None),
     }
 }
 
@@ -105,6 +130,17 @@ pub struct SessionSendRequest {
     /// 幂等键（ADR-005）：必填 ULID；重复发送同一 `(session_id, client_msg_id)`
     /// 返回既有 message_id/run_id，核心重启后重放同样不重复。
     pub client_msg_id: String,
+    /// 本次 run 的思考深度覆盖（ADR-010 决策 2：0–4；缺省 = 会话级值；
+    /// 仅本次 run，不回写会话级）。
+    #[serde(default)]
+    pub thinking_depth: Option<i64>,
+}
+
+impl SessionSendRequest {
+    /// 请求的思考深度覆盖（已校验）；`None` = 缺省（应用会话级值）。
+    pub fn thinking_depth_value(&self) -> Result<Option<u8>, IpcError> {
+        thinking_depth_value(self.thinking_depth)
+    }
 }
 
 impl CommandRequest for SessionSendRequest {
@@ -119,6 +155,9 @@ impl CommandRequest for SessionSendRequest {
                 "client_msg_id",
                 "必须是 26 位 ULID（ADR-005 幂等键，必填）",
             ));
+        }
+        if let Some(thinking_depth) = self.thinking_depth {
+            validate::validate_thinking_depth(thinking_depth, "thinking_depth")?;
         }
         Ok(())
     }
@@ -245,6 +284,198 @@ impl CommandRequest for ArtifactRemoveRequest {
         }
         Ok(())
     }
+}
+
+/// 供应商类型（ADR-010 决策 3：应用层枚举校验，不加 CHECK；创建后不可改）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, serde::Serialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderType {
+    Anthropic,
+    Openai,
+    Deepseek,
+    Google,
+    Custom,
+}
+
+/// 供应商名称上限（ADR-010 附录 B.1：≤128 字符）。
+pub const MAX_PROVIDER_NAME_CHARS: usize = 128;
+/// Base URL 上限（ADR-010 附录 B.1：≤2048 字符）。
+pub const MAX_PROVIDER_BASE_URL_CHARS: usize = 2048;
+/// API Key 明文上限（ADR-010 附录 B.1：非空 ≤8192 字符；仅传输，不落库）。
+pub const MAX_API_KEY_CHARS: usize = 8192;
+
+/// `providers_list`（ADR-010）：无参数命令；`null`/缺省/空对象合法，任何成员拒绝。
+#[derive(Debug, Default, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct ProvidersListRequest {}
+
+impl CommandRequest for ProvidersListRequest {}
+
+/// `provider_create`（ADR-010 决策 3）：`api_key` 明文仅传输（核心写 keyring）。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderCreateRequest {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub provider_type: ProviderType,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    pub enabled: bool,
+}
+
+impl CommandRequest for ProviderCreateRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        validate_provider_name(&self.name)?;
+        if let Some(base_url) = &self.base_url {
+            if !base_url.is_empty() {
+                validate_provider_base_url(base_url)?;
+            }
+        }
+        if self.provider_type == ProviderType::Custom
+            && !self.base_url.as_deref().is_some_and(|value| !value.is_empty())
+        {
+            return Err(IpcError::missing_field("base_url"));
+        }
+        if let Some(api_key) = &self.api_key {
+            validate_api_key(api_key)?;
+        }
+        Ok(())
+    }
+}
+
+/// `provider_update`（ADR-010 决策 3）：整体更新；`type` 不可改；
+/// `api_key` 三态（缺省=不变、空串=清除、非空=覆盖）；`base_url` 缺省=不变、空串=清除。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderUpdateRequest {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    pub enabled: bool,
+}
+
+impl CommandRequest for ProviderUpdateRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.id) {
+            return Err(IpcError::invalid_format("id", "必须是 26 位 ULID"));
+        }
+        validate_provider_name(&self.name)?;
+        if let Some(base_url) = &self.base_url {
+            if !base_url.is_empty() {
+                validate_provider_base_url(base_url)?;
+            }
+        }
+        if let Some(api_key) = &self.api_key {
+            validate_api_key(api_key)?;
+        }
+        Ok(())
+    }
+}
+
+/// `provider_delete`（ADR-010 决策 3）：内置拒绝（`builtin_provider_undeletable`）。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderDeleteRequest {
+    pub id: String,
+}
+
+impl CommandRequest for ProviderDeleteRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.id) {
+            return Err(IpcError::invalid_format("id", "必须是 26 位 ULID"));
+        }
+        Ok(())
+    }
+}
+
+/// `provider_toggle`（ADR-010 决策 3）：快速启用/停用（内置可停用）。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderToggleRequest {
+    pub id: String,
+    pub enabled: bool,
+}
+
+impl CommandRequest for ProviderToggleRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.id) {
+            return Err(IpcError::invalid_format("id", "必须是 26 位 ULID"));
+        }
+        Ok(())
+    }
+}
+
+/// `provider_model_add`（ADR-010 决策 3）：新增模型（默认启用）；
+/// 重复 `(provider_id, model_id)` → `invalid_value`。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderModelAddRequest {
+    pub provider_id: String,
+    pub model_id: String,
+    pub display_name: String,
+}
+
+impl CommandRequest for ProviderModelAddRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.provider_id) {
+            return Err(IpcError::invalid_format("provider_id", "必须是 26 位 ULID"));
+        }
+        validate::validate_model(&self.model_id, "model_id")?;
+        ensure_not_empty(&self.display_name, "display_name")?;
+        ensure_max_chars(&self.display_name, "display_name", MAX_PROVIDER_NAME_CHARS)?;
+        reject_control_chars(&self.display_name, "display_name", false)
+    }
+}
+
+/// `provider_model_toggle`（ADR-010 决策 3）：模型启用/停用；不存在 →
+/// `provider_model_not_found`。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderModelToggleRequest {
+    pub provider_id: String,
+    pub model_id: String,
+    pub enabled: bool,
+}
+
+impl CommandRequest for ProviderModelToggleRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.provider_id) {
+            return Err(IpcError::invalid_format("provider_id", "必须是 26 位 ULID"));
+        }
+        validate::validate_model(&self.model_id, "model_id")
+    }
+}
+
+fn validate_provider_name(name: &str) -> Result<(), IpcError> {
+    ensure_not_empty(name, "name")?;
+    ensure_max_chars(name, "name", MAX_PROVIDER_NAME_CHARS)?;
+    reject_control_chars(name, "name", false)
+}
+
+/// Base URL 格式（ADR-010 附录 B.1：`https?://` 前缀、≤2048 字符）。
+fn validate_provider_base_url(base_url: &str) -> Result<(), IpcError> {
+    ensure_max_chars(base_url, "base_url", MAX_PROVIDER_BASE_URL_CHARS)?;
+    if !(base_url.starts_with("http://") || base_url.starts_with("https://")) {
+        return Err(IpcError::invalid_format(
+            "base_url",
+            "必须以 http:// 或 https:// 开头",
+        ));
+    }
+    reject_control_chars(base_url, "base_url", false)
+}
+
+/// API Key 明文（仅传输）：非空时 ≤8192 字符（`too_large`）；拒绝控制字符。
+fn validate_api_key(api_key: &str) -> Result<(), IpcError> {
+    if api_key.is_empty() {
+        return Ok(());
+    }
+    ensure_max_chars(api_key, "api_key", MAX_API_KEY_CHARS)?;
+    reject_control_chars(api_key, "api_key", false)
 }
 
 #[derive(Debug, Deserialize, specta::Type)]

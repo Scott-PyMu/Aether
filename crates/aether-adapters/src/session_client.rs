@@ -221,20 +221,23 @@ impl AdapterSessionClient {
         native_id: Option<&str>,
         model: Option<&str>,
     ) -> Result<CreatedSession, SessionClientError> {
-        self.create_session_with_prompt(title, native_id, model, None)
+        self.create_session_with_prompt(title, native_id, model, None, None)
             .await
     }
 
-    /// `session.create` + 可选 `system_prompt`（M3-08/D14：工作区记忆注入文本）。
+    /// `session.create` + 可选 `system_prompt`（M3-08/D14：工作区记忆注入文本）
+    /// + 可选 `thinking_depth`（M3-10/ADR-010：会话级思考深度，0–4；`None` = 不透传）。
     ///
     /// 协议口径（ADR-003：新增字段只增不改语义；未知字段由旧适配器忽略）：
-    /// `system_prompt` 为可选字符串成员，内容由核心按优先级与 32KB 上限组合。
+    /// `system_prompt` 为可选字符串成员，内容由核心按优先级与 32KB 上限组合；
+    /// `thinking_depth` 仅在运行时声明 `thinking_depth` 能力时透传（能力门在核心）。
     pub async fn create_session_with_prompt(
         &self,
         title: Option<&str>,
         native_id: Option<&str>,
         model: Option<&str>,
         system_prompt: Option<&str>,
+        thinking_depth: Option<u8>,
     ) -> Result<CreatedSession, SessionClientError> {
         let mut params = json!({});
         if let Some(title) = title {
@@ -248,6 +251,9 @@ impl AdapterSessionClient {
         }
         if let Some(system_prompt) = system_prompt {
             params["system_prompt"] = Value::String(system_prompt.to_owned());
+        }
+        if let Some(thinking_depth) = thinking_depth {
+            params["thinking_depth"] = json!(thinking_depth);
         }
         let response = self
             .connection
@@ -273,16 +279,30 @@ impl AdapterSessionClient {
         client_msg_id: &str,
         text: &str,
     ) -> Result<SendAck, SessionClientError> {
+        self.send_with_thinking_depth(session_id, client_msg_id, text, None)
+            .await
+    }
+
+    /// `session.send` + 可选 `thinking_depth` 覆盖（M3-10/ADR-010：仅本次 run；
+    /// `None` = 不带字段，适配器使用 `session.create` 时的会话级缺省）。
+    pub async fn send_with_thinking_depth(
+        &self,
+        session_id: &str,
+        client_msg_id: &str,
+        text: &str,
+        thinking_depth: Option<u8>,
+    ) -> Result<SendAck, SessionClientError> {
+        let mut params = json!({
+            "session_id": session_id,
+            "client_msg_id": client_msg_id,
+            "text": text,
+        });
+        if let Some(thinking_depth) = thinking_depth {
+            params["thinking_depth"] = json!(thinking_depth);
+        }
         let response = self
             .connection
-            .request(
-                Method::SessionSend,
-                json!({
-                    "session_id": session_id,
-                    "client_msg_id": client_msg_id,
-                    "text": text,
-                }),
-            )
+            .request(Method::SessionSend, params)
             .await?;
         let run_id = response["run_id"]
             .as_str()

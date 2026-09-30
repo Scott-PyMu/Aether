@@ -108,6 +108,12 @@ pub struct RunRequest {
     pub runtime_id: RuntimeId,
     pub input_message_id: MessageId,
     pub text: String,
+    /// 本次 run 的思考深度请求值（`session.send` 覆盖值或会话级值；ADR-010）。
+    /// 执行器在 run 启动时按运行时能力门判定生效值并落 `runs.thinking_depth`。
+    pub thinking_depth: u8,
+    /// `true` = 来自 `session_send` 显式覆盖（透传 `session.send`，仅本次 run）；
+    /// `false` = 会话级值（透传 `session.create`，`session.send` 不带字段）。
+    pub thinking_override: bool,
     /// 中断令牌（超时/降级/人工中断置位；执行器应尽快返回）。
     pub cancel: RunCancelToken,
 }
@@ -360,6 +366,10 @@ struct ActiveRun {
     input_message_id: MessageId,
     runtime_id: RuntimeId,
     text: String,
+    /// 本次 run 的思考深度请求值（覆盖值或会话级值；ADR-010）。
+    thinking_depth: u8,
+    /// `true` = `session_send` 显式覆盖（透传 `session.send`）。
+    thinking_override: bool,
     last_activity_ms: i64,
     cancel: RunCancelToken,
 }
@@ -369,6 +379,8 @@ struct QueuedRun {
     input_message_id: MessageId,
     runtime_id: RuntimeId,
     text: String,
+    thinking_depth: u8,
+    thinking_override: bool,
 }
 
 struct SessionState {
@@ -502,6 +514,27 @@ impl SessionManager {
         model: Option<String>,
         system_prompt: Option<String>,
     ) -> Result<Session, LifecycleError> {
+        self.create_session_with_depth(
+            runtime,
+            title,
+            workspace_id,
+            model,
+            system_prompt,
+            aether_core::THINKING_DEPTH_DEFAULT,
+        )
+        .await
+    }
+
+    /// 创建会话（ADR-010：显式会话级思考深度；其余语义同 [`Self::create_session`]）。
+    pub async fn create_session_with_depth(
+        &self,
+        runtime: Runtime,
+        title: &str,
+        workspace_id: Option<WorkspaceId>,
+        model: Option<String>,
+        system_prompt: Option<String>,
+        thinking_depth: u8,
+    ) -> Result<Session, LifecycleError> {
         // M2-04：L3 熔断/存储侧隔离期拒绝新会话。
         self.check_backpressure(&runtime.id)?;
         let now = self.inner.clock.now_ms();
@@ -515,6 +548,7 @@ impl SessionManager {
             title: title.to_owned(),
             status: SessionStatus::Creating,
             model,
+            thinking_depth,
             system_prompt,
             config: json!({}),
             token_usage: TokenUsage::default(),
@@ -556,6 +590,7 @@ impl SessionManager {
                     title: title.to_owned(),
                     status: SessionStatus::Creating,
                     model: session.model.clone(),
+                    thinking_depth: Some(thinking_depth),
                     created_at: now,
                     updated_at: now,
                 },
@@ -671,12 +706,25 @@ impl SessionManager {
             self.check_backpressure(&session.runtime_id)?;
         }
 
+        // ADR-010 重放口径：按**会话级值**恢复（忽略该 run 原覆盖值），run 启动时
+        // 重新执行能力门判定（重放行为与新建 run 一致）。
+        let session_row = self
+            .inner
+            .reads
+            .session(&run.session_id)
+            .await?
+            .ok_or_else(|| LifecycleError::SessionNotFound {
+                session_id: run.session_id.clone(),
+            })?;
+        let thinking_depth = session_row.thinking_depth;
+
         let now = self.inner.clock.now_ms();
         let retry_run = Run {
             id: RunId::new(ulid::generate()).map_err(internal_from)?,
             session_id: run.session_id.clone(),
             status: aether_core::RunStatus::Queued,
             input_message_id: Some(input_message_id.clone()),
+            thinking_depth: Some(thinking_depth),
             error: None,
             started_at: now,
             finished_at: None,
@@ -702,6 +750,8 @@ impl SessionManager {
                     input_message_id: input_message_id.clone(),
                     runtime_id,
                     text: input_message.content.clone(),
+                    thinking_depth,
+                    thinking_override: false,
                     last_activity_ms: now,
                     cancel,
                 });
@@ -712,6 +762,8 @@ impl SessionManager {
                     input_message_id: input_message_id.clone(),
                     runtime_id,
                     text: input_message.content.clone(),
+                    thinking_depth,
+                    thinking_override: false,
                 });
                 true
             }
@@ -853,6 +905,19 @@ impl SessionManager {
         text: &str,
         client_msg_id: &str,
     ) -> Result<SendAck, LifecycleError> {
+        self.send_with_thinking_depth(session_id, text, client_msg_id, None)
+            .await
+    }
+
+    /// 发送消息 + 可选本次 run 思考深度覆盖（ADR-010：`session_send` 覆盖仅本次 run，
+    /// 不回写会话级值）。
+    pub async fn send_with_thinking_depth(
+        &self,
+        session_id: &SessionId,
+        text: &str,
+        client_msg_id: &str,
+        thinking_override: Option<u8>,
+    ) -> Result<SendAck, LifecycleError> {
         self.inner
             .pipeline
             .admission()
@@ -883,6 +948,23 @@ impl SessionManager {
             self.check_backpressure(&session.runtime_id)?;
         }
 
+        // ADR-010：run 生效候选值 = 本次覆盖（如有）?? 会话级值；能力门生效值由
+        // 执行器在 run 启动时判定并落库（未支持 → 缺省 2、不回写会话级）。
+        let requested_thinking_depth = match thinking_override {
+            Some(value) => value,
+            None => {
+                self.inner
+                    .reads
+                    .session(session_id)
+                    .await?
+                    .ok_or_else(|| LifecycleError::SessionNotFound {
+                        session_id: session_id.clone(),
+                    })?
+                    .thinking_depth
+            }
+        };
+        let thinking_is_override = thinking_override.is_some();
+
         let now = self.inner.clock.now_ms();
         let message = Message {
             id: MessageId::new(ulid::generate()).map_err(internal_from)?,
@@ -902,6 +984,7 @@ impl SessionManager {
             session_id: session_id.clone(),
             status: aether_core::RunStatus::Queued,
             input_message_id: Some(message.id.clone()),
+            thinking_depth: Some(requested_thinking_depth),
             error: None,
             started_at: now,
             finished_at: None,
@@ -950,6 +1033,8 @@ impl SessionManager {
                     input_message_id: message_id.clone(),
                     runtime_id,
                     text: text.to_owned(),
+                    thinking_depth: requested_thinking_depth,
+                    thinking_override: thinking_is_override,
                     last_activity_ms: now,
                     cancel,
                 });
@@ -960,6 +1045,8 @@ impl SessionManager {
                     input_message_id: message_id.clone(),
                     runtime_id,
                     text: text.to_owned(),
+                    thinking_depth: requested_thinking_depth,
+                    thinking_override: thinking_is_override,
                 });
                 true
             }
@@ -1197,6 +1284,70 @@ impl SessionManager {
             .get(session_id)
             .and_then(|session| session.active.as_ref())
             .map(|active| active.cancel.clone()))
+    }
+
+    /// 等待审批置位（M3-12/ADR-011 决策 1）：同会话 pending 票据计数 `0→1` 时由
+    /// 权限服务观察者接入（组合根经 `PermissionService::set_pending_observer` 装配）。
+    ///
+    /// 置位仅当当前状态为 `running` 时生效（`running → waiting_permission`，复用既有
+    /// 19 边状态机白名单）；非适用态（`idle`/`creating`/终态/已在等待）一律 **no-op**
+    /// ——ask 与 run 终态竞态不产生非法/多余转移。返回是否发生转移。
+    ///
+    /// 状态行与 `session.status_changed` 仅由本管理器落行并广播（单一写者）。
+    pub async fn mark_waiting_permission(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<bool, LifecycleError> {
+        self.transition_if(
+            session_id,
+            SessionStatus::Running,
+            SessionStatus::WaitingPermission,
+        )
+        .await
+    }
+
+    /// 等待审批回程（M3-12/ADR-011 决策 1）：同会话 pending 票据计数 `1→0` 时接入。
+    ///
+    /// 回程仅当当前状态为 `waiting_permission` 时生效（`waiting_permission → running`，
+    /// 运行继续）；其余状态一律 **no-op**——重启恢复票据的迟到决议/超时、run 已收口
+    /// （取消/失败/超时 → 相关转移已由既有收口路径完成）均不产生多余
+    /// `session.status_changed`。返回是否发生转移。
+    pub async fn clear_waiting_permission(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<bool, LifecycleError> {
+        self.transition_if(
+            session_id,
+            SessionStatus::WaitingPermission,
+            SessionStatus::Running,
+        )
+        .await
+    }
+
+    /// 受守卫的等待态转移（置位/回程共用）：仅当前状态恰为 `from` 且 `from → to`
+    /// 命中状态机白名单时转移（落行 + 事件）；否则 no-op（不触碰状态）。
+    async fn transition_if(
+        &self,
+        session_id: &SessionId,
+        from: SessionStatus,
+        to: SessionStatus,
+    ) -> Result<bool, LifecycleError> {
+        let mut state = lock_state(&self.inner).await;
+        self.hydrate_locked(&mut state, session_id).await?;
+        let (change, runtime_id) = {
+            let session = state.sessions.get_mut(session_id).ok_or_else(|| {
+                LifecycleError::SessionNotFound {
+                    session_id: session_id.clone(),
+                }
+            })?;
+            if session.fsm.status() != from || !session.fsm.can_transition(to) {
+                return Ok(false);
+            }
+            (session.fsm.transition(to)?, session.runtime_id.clone())
+        };
+        self.persist_status_and_emit(session_id, change, false, &runtime_id)
+            .await?;
+        Ok(true)
     }
 
     /// 记录 run 活动（事件监听器在任意落盘事件到达时调用；重置断流计时）。
@@ -1457,6 +1608,43 @@ impl SessionManager {
     }
 }
 
+/// 权限服务等待态观察者（M3-12/ADR-011）：把「同会话 pending 计数 0↔1」薄映射到
+/// [`SessionManager::mark_waiting_permission`] / [`SessionManager::clear_waiting_permission`]
+/// （状态守卫在管理器内；非适用态 no-op）。
+///
+/// 仅上报、不阻断：任何控制层错误（如会话行缺失）只记录诊断——权限决议路径
+/// （allow/deny/超时/取消）不因等待态写入失败而改变语义。
+impl crate::permission::PendingTicketObserver for SessionManager {
+    fn on_pending(&self, session_id: SessionId) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            match self.mark_waiting_permission(&session_id).await {
+                Ok(_transitioned) => {}
+                Err(error) => tracing::warn!(
+                    session_id = %session_id,
+                    error = %error,
+                    "等待审批置位失败（仅记录，不阻断权限路径）"
+                ),
+            }
+        })
+    }
+
+    fn on_pending_cleared(
+        &self,
+        session_id: SessionId,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            match self.clear_waiting_permission(&session_id).await {
+                Ok(_transitioned) => {}
+                Err(error) => tracing::warn!(
+                    session_id = %session_id,
+                    error = %error,
+                    "等待审批回程失败（仅记录，不阻断权限路径）"
+                ),
+            }
+        })
+    }
+}
+
 /// 执行器派发与终态落库（独立任务；ack 已返回）。
 ///
 /// 单会话 run 串行：等待队列的提升在**同任务内循环**处理（不递归 spawn——递归
@@ -1670,6 +1858,8 @@ async fn take_run_start(
         input_message_id: active.input_message_id.clone(),
         runtime_id: active.runtime_id.clone(),
         text: active.text.clone(),
+        thinking_depth: active.thinking_depth,
+        thinking_override: active.thinking_override,
         cancel: active.cancel.clone(),
     }))
 }
@@ -1679,6 +1869,8 @@ struct RunStart {
     input_message_id: MessageId,
     runtime_id: RuntimeId,
     text: String,
+    thinking_depth: u8,
+    thinking_override: bool,
     cancel: RunCancelToken,
 }
 
@@ -1693,6 +1885,8 @@ async fn dispatch_and_finalize(
         runtime_id: start.runtime_id.clone(),
         input_message_id: start.input_message_id.clone(),
         text: start.text.clone(),
+        thinking_depth: start.thinking_depth,
+        thinking_override: start.thinking_override,
         cancel: start.cancel.clone(),
     };
     // queued → running（行）→ run.started（事件）→ 会话 running。
@@ -1769,6 +1963,8 @@ async fn detach_and_prepare(
                 input_message_id: queued.input_message_id,
                 runtime_id: queued.runtime_id,
                 text: queued.text,
+                thinking_depth: queued.thinking_depth,
+                thinking_override: queued.thinking_override,
                 // M2-05：提升的 run 亦为会话取消树子节点。
                 cancel: RunCancelToken::child_of(&session.cancel),
             });
@@ -1778,6 +1974,8 @@ async fn detach_and_prepare(
                     input_message_id: next_run.input_message_id.clone(),
                     runtime_id: next_run.runtime_id.clone(),
                     text: next_run.text.clone(),
+                    thinking_depth: next_run.thinking_depth,
+                    thinking_override: next_run.thinking_override,
                     last_activity_ms: inner.clock.now_ms(),
                     cancel: next_run.cancel.clone(),
                 });

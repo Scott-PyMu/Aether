@@ -181,7 +181,9 @@ describe("SessionWorkbench（M3-02）", () => {
     });
     const ipc = fakeIpc({
       listRuntimes: async () => [runtime({ status: "ready" })],
-      listSessions: async () => created,
+      // 返回新数组（不返回被原地 push 的同一引用）：`sessions` 状态按不可变语义更新，
+      // M3-12 分组 useMemo 才会按依赖变化重算。
+      listSessions: async () => [...created],
       createSession,
     });
     render(<SessionWorkbench store={newStore()} ipc={ipc} />);
@@ -200,6 +202,8 @@ describe("SessionWorkbench（M3-02）", () => {
       runtime_id: "mock",
       title: "覆盖模型会话",
       model: "deepseek-v4-pro",
+      // M3-10/ADR-010：会话级思考深度随 `session_create` 透传（本次未调整 → 缺省 2）。
+      thinking_depth: 2,
     });
     const item = await screen.findByTestId("session-item");
     expect(item.getAttribute("data-active")).toBe("true");

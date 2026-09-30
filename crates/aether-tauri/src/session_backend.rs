@@ -32,7 +32,8 @@ use aether_control::{
 };
 use aether_core::{
     EventEnvelope, Message, PermissionDecision, PermissionScope, Runtime, RuntimeId, RuntimeStatus,
-    SessionId, SessionStatus, Workspace, WorkspaceId,
+    SessionId, SessionStatus, Workspace, WorkspaceId, THINKING_DEPTH_CAPABILITY,
+    THINKING_DEPTH_DEFAULT,
 };
 use aether_store::{
     ArtifactRecord, ReadPool, SessionQuery, StoreCommand, StoreOutcome, WriteQueue,
@@ -43,14 +44,17 @@ use serde_json::{json, Value};
 use crate::ipc::backend::IpcBackend;
 use crate::ipc::dto::{
     ArtifactAddRequest, ArtifactRemoveRequest, ArtifactsListRequest, MessagesPageRequest,
-    PermissionResolveRequest, PermissionsPendingRequest, SessionCreateRequest, SessionIdRequest,
-    SessionListRequest, SessionSendRequest,
+    PermissionResolveRequest, PermissionsPendingRequest, ProviderCreateRequest,
+    ProviderDeleteRequest, ProviderModelAddRequest, ProviderModelToggleRequest,
+    ProviderToggleRequest, ProviderUpdateRequest, ProvidersListRequest, SessionCreateRequest,
+    SessionIdRequest, SessionListRequest, SessionSendRequest,
 };
 use crate::ipc::error::{IpcError, IpcErrorCode};
 use crate::ipc::path::ArtifactPath;
 use crate::json_payload::JsonPayload;
 
 use crate::adapter_executor::AdapterRunExecutor;
+use crate::provider_control::ProviderControl;
 
 /// 会话命令硬超时（`session.create`/`session.send` 含适配器调用预算，D6 方法表 30s）。
 pub const SESSION_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
@@ -82,11 +86,28 @@ pub struct MessagesPageResponse {
     pub complete: bool,
 }
 
+/// 非阻断警告条目（ADR-010 决策 4：`warnings[].code` 为独立命名空间，非
+/// `IpcErrorCode`；登记位 = ADR-006 附录 B「警告码」子表，首项
+/// `thinking_depth_unsupported`）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
+pub struct SessionWarning {
+    /// 警告码（稳定契约；当前唯一取值 `thinking_depth_unsupported`）。
+    pub code: String,
+    /// 关联请求字段。
+    pub field: String,
+    /// 关联运行时 id。
+    pub runtime_id: String,
+    /// 展示文案（不参与逻辑判断）。
+    pub message: String,
+}
+
 /// `session_list` / `session_create` 响应元素定型 DTO（ADR-010 附录 B.4）。
 ///
 /// 字段与核心 `Session` 域实体一一对应；新增可选 `workspace_root`（由
 /// `sessions.workspace_id` → `workspaces.root_path` 解析，**未绑定工作区省略**；
-/// 只出现在响应、不进事件 payload）。M3-10 将在此追加 `thinking_depth`。
+/// 只出现在响应、不进事件 payload）与可选 `thinking_depth`（会话级档位，M3-10）。
+/// 可选 `warnings` 为 `session_create` 同步能力门判定结果（ADR-010 决策 2：
+/// 尽力而为交付；`session_list` 不回填、无警告省略）。
 ///
 /// `config` / `token_usage` 用 [`JsonPayload`] 透传（与 `AetherEvent.payload` 同口径：
 /// specta rc.25 对 `serde_json::Value` 的内联递归定义会栈溢出）。
@@ -99,6 +120,8 @@ pub struct SessionSummary {
     pub title: String,
     pub status: crate::ipc::dto::SessionStatus,
     pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_depth: Option<u8>,
     pub system_prompt: Option<String>,
     pub config: JsonPayload,
     pub token_usage: JsonPayload,
@@ -107,6 +130,8 @@ pub struct SessionSummary {
     pub closed_at: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace_root: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warnings: Option<Vec<SessionWarning>>,
 }
 
 impl SessionSummary {
@@ -131,6 +156,7 @@ impl SessionSummary {
             title: session.title.clone(),
             status: session_status_to_dto(session.status),
             model: session.model.clone(),
+            thinking_depth: Some(session.thinking_depth),
             system_prompt: session.system_prompt.clone(),
             config: JsonPayload(session.config.clone()),
             token_usage: JsonPayload(token_usage),
@@ -138,8 +164,34 @@ impl SessionSummary {
             updated_at: session.updated_at,
             closed_at: session.closed_at,
             workspace_root,
+            warnings: None,
         })
     }
+
+    /// 同步能力门警告（`session_create`：runtime ready 且未声明 `thinking_depth`）。
+    pub fn with_warnings(mut self, warnings: Option<Vec<SessionWarning>>) -> Self {
+        self.warnings = warnings;
+        self
+    }
+}
+
+/// 能力门同步判定（ADR-010 决策 2）：runtime ready 且未声明 `thinking_depth` 能力时
+/// 返回 `warnings[0].code="thinking_depth_unsupported"`（非阻断；延迟判定路径——
+/// runtime 未 ready——不产生响应警告，以 `SessionSummary.thinking_depth` 回显为准）。
+pub fn thinking_depth_warning(
+    runtime_ready: bool,
+    capabilities: &[String],
+    runtime_id: &str,
+) -> Option<Vec<SessionWarning>> {
+    if runtime_ready && !capabilities.iter().any(|item| item == THINKING_DEPTH_CAPABILITY) {
+        return Some(vec![SessionWarning {
+            code: "thinking_depth_unsupported".to_owned(),
+            field: "thinking_depth".to_owned(),
+            runtime_id: runtime_id.to_owned(),
+            message: "当前运行时不支持思考深度，已按默认档位运行".to_owned(),
+        }]);
+    }
+    None
 }
 
 /// 工作区绑定（M3-08；设计 D14/ADR-004 决策 3）。
@@ -184,6 +236,8 @@ pub struct SessionBackend {
     permissions: Option<PermissionService>,
     /// 工作区写路径（M3-08 `workspace_set` 的 `workspaces` 落库；`None` = 未接线）。
     write: Option<WriteQueue>,
+    /// 供应商命令执行体（M3-11；`None` = 未接线 → 供应商命令回 `core_not_ready`）。
+    providers: Option<ProviderControl>,
     /// 当前工作区绑定（M3-08；`None` = 未绑定）。
     workspace: Arc<Mutex<Option<WorkspaceBinding>>>,
     handle: tokio::runtime::Handle,
@@ -209,6 +263,7 @@ impl SessionBackend {
             supervisor,
             permissions: None,
             write: None,
+            providers: None,
             workspace: Arc::new(Mutex::new(None)),
             handle,
             timeout: SESSION_COMMAND_TIMEOUT,
@@ -229,6 +284,22 @@ impl SessionBackend {
     pub fn with_workspace_store(mut self, write: WriteQueue) -> Self {
         self.write = Some(write);
         self
+    }
+
+    /// 注入供应商命令执行体（M3-11：`providers_list` / `provider_*` 七命令）。
+    #[must_use]
+    pub fn with_providers(mut self, providers: ProviderControl) -> Self {
+        self.providers = Some(providers);
+        self
+    }
+
+    /// 供应商命令执行体（未接线 → 供应商命令回 `core_not_ready`）。
+    fn providers_required(&self) -> Result<&ProviderControl, IpcError> {
+        self.providers.as_ref().ok_or_else(|| {
+            IpcError::core_not_ready(
+                "供应商后端未接线：providers_list / provider_* 不可用（启动序列未完成）",
+            )
+        })
     }
 
     /// 存储写路径（未接线 → 引用写命令回 `core_not_ready`）。
@@ -436,6 +507,7 @@ impl IpcBackend for SessionBackend {
         let title = request.title.clone();
         let workspace_id = request.workspace_id.clone();
         let model = request.model.clone();
+        let thinking_depth_request = request.thinking_depth_value()?;
         self.call(async move {
             let runtime = {
                 let supervisor = supervisor.ok_or_else(|| {
@@ -458,19 +530,22 @@ impl IpcBackend for SessionBackend {
                     )));
                 }
                 let manifest = runtime.manifest();
-                let (version, capabilities) = match runtime.connection().await {
+                // `connection_ready`：ADR-010 能力门判定时机——runtime ready（连接
+                // Ready/Degraded）时同步判定；cold/starting（Connecting/无连接）接受
+                // 请求并按延迟判定处理（会话照常创建，不做响应警告）。
+                let (version, capabilities, connection_ready) = match runtime.connection().await {
                     Some(connection) => match connection.state() {
                         ConnectionState::Ready(hello) | ConnectionState::Degraded { hello, .. } => {
-                            (hello.runtime.version, hello.runtime.capabilities)
+                            (hello.runtime.version, hello.runtime.capabilities, true)
                         }
                         ConnectionState::Connecting | ConnectionState::Disconnected(_) => {
-                            (manifest.version.clone(), Vec::new())
+                            (manifest.version.clone(), Vec::new(), false)
                         }
                     },
-                    None => (manifest.version.clone(), Vec::new()),
+                    None => (manifest.version.clone(), Vec::new(), false),
                 };
                 let now = now_ms();
-                Runtime {
+                let runtime_row = Runtime {
                     id: RuntimeId::new(manifest.id.clone()).map_err(|error| {
                         IpcError::internal(format!("runtime_id 非法（监督器 manifest）：{error}"))
                     })?,
@@ -486,8 +561,10 @@ impl IpcBackend for SessionBackend {
                     last_seen_at: None,
                     created_at: now,
                     updated_at: now,
-                }
+                };
+                (runtime_row, connection_ready)
             };
+            let (runtime, connection_ready) = runtime;
             // M3-08/D14：解析工作区（显式 `workspace_id` 白名单校验 → 行存在；缺省 =
             // 当前绑定），按工作区根组合记忆注入（优先级 + 32KB 截断 + 显式标记）。
             let resolved_workspace = match workspace_id {
@@ -536,16 +613,39 @@ impl IpcBackend for SessionBackend {
                 }
                 None => (None, None),
             };
+            // M3-10/ADR-010 能力门（同步判定路径）：runtime ready 且未声明
+            // `thinking_depth` → 会话级落缺省 2 + 响应携带非阻断警告（尽力而为）；
+            // ready 且声明 → 维持请求值；runtime 未 ready → 接受请求并按延迟判定
+            // （会话照常创建；无响应警告，以 `SessionSummary.thinking_depth` 回显为准，
+            // run 启动时由执行器再判定）。
+            let warnings = thinking_depth_warning(
+                connection_ready,
+                &runtime.capabilities,
+                runtime.id.as_str(),
+            );
+            let effective_depth = if connection_ready && warnings.is_some() {
+                THINKING_DEPTH_DEFAULT
+            } else {
+                thinking_depth_request.unwrap_or(THINKING_DEPTH_DEFAULT)
+            };
             let session = manager
-                .create_session(runtime, &title, workspace_id, model, system_prompt)
+                .create_session_with_depth(
+                    runtime,
+                    &title,
+                    workspace_id,
+                    model,
+                    system_prompt,
+                    effective_depth,
+                )
                 .await
                 .map_err(map_lifecycle_error)?;
             // ADR-010 附录 B.4：响应定型为 `SessionSummary`（`workspace_root` 取自
-            // 本会话解析出的工作区；未绑定省略）。
+            // 本会话解析出的工作区；未绑定省略；`thinking_depth` 回显生效值）。
             let workspace_root = resolved_workspace
                 .as_ref()
                 .map(|workspace| workspace.root_path.clone());
-            let summary = SessionSummary::from_session(&session, workspace_root)?;
+            let summary =
+                SessionSummary::from_session(&session, workspace_root)?.with_warnings(warnings);
             serde_json::to_value(summary)
                 .map_err(|error| IpcError::internal(format!("会话序列化失败：{error}")))
         })
@@ -750,24 +850,104 @@ impl IpcBackend for SessionBackend {
         })
     }
 
+    // ===== M3-11（ADR-010 决策 3）：模型与供应商配置七命令（薄转发 [`ProviderControl`]；
+    // 校验/密钥写入/落库语义全部在 provider_control，本层不复刻）。=====
+
+    fn providers_list(&self, request: &ProvidersListRequest) -> Result<Value, IpcError> {
+        self.providers_required()?.providers_list(request)
+    }
+
+    fn provider_create(&self, request: &ProviderCreateRequest) -> Result<Value, IpcError> {
+        self.providers_required()?.provider_create(request)
+    }
+
+    fn provider_update(&self, request: &ProviderUpdateRequest) -> Result<Value, IpcError> {
+        self.providers_required()?.provider_update(request)
+    }
+
+    fn provider_delete(&self, request: &ProviderDeleteRequest) -> Result<Value, IpcError> {
+        self.providers_required()?.provider_delete(request)
+    }
+
+    fn provider_toggle(&self, request: &ProviderToggleRequest) -> Result<Value, IpcError> {
+        self.providers_required()?.provider_toggle(request)
+    }
+
+    fn provider_model_add(&self, request: &ProviderModelAddRequest) -> Result<Value, IpcError> {
+        self.providers_required()?.provider_model_add(request)
+    }
+
+    fn provider_model_toggle(
+        &self,
+        request: &ProviderModelToggleRequest,
+    ) -> Result<Value, IpcError> {
+        self.providers_required()?.provider_model_toggle(request)
+    }
+
     fn session_send(&self, request: &SessionSendRequest) -> Result<Value, IpcError> {
         let manager = self.manager_required()?.clone();
+        let reads = self.reads.clone();
+        let supervisor = self.supervisor.clone();
         let session_id = request.session_id.clone();
         let text = request.text.clone();
         let client_msg_id = request.client_msg_id.clone();
+        let thinking_override = request.thinking_depth_value()?;
         self.call(async move {
             let session_id = parse_session_id(&session_id)?;
+            // M3-10/ADR-010 能力门（同步判定路径，尽力而为）：run 执行前的 runtime
+            // ready 快照；未 ready（cold/starting）→ 延迟判定（不产生响应警告，
+            // run 启动时由执行器按同一门再判定）。覆盖请求仅影响本次 run。
+            let warnings = match (&reads, &supervisor) {
+                (Some(reads), Some(supervisor)) => {
+                    let mut warnings = None;
+                    if let Some(session) = reads
+                        .session(&session_id)
+                        .await
+                        .map_err(|error| IpcError::internal(format!("会话读取失败：{error}")))?
+                    {
+                        if let Some(runtime) = supervisor.get(session.runtime_id.as_str()) {
+                            if let Some(connection) = runtime.connection().await {
+                                let (capabilities, ready) = match connection.state() {
+                                    ConnectionState::Ready(hello)
+                                    | ConnectionState::Degraded { hello, .. } => {
+                                        (hello.runtime.capabilities, true)
+                                    }
+                                    ConnectionState::Connecting
+                                    | ConnectionState::Disconnected(_) => (Vec::new(), false),
+                                };
+                                warnings = thinking_depth_warning(
+                                    ready,
+                                    &capabilities,
+                                    session.runtime_id.as_str(),
+                                );
+                            }
+                        }
+                    }
+                    warnings
+                }
+                _ => None,
+            };
             let ack = manager
-                .send(&session_id, &text, &client_msg_id)
+                .send_with_thinking_depth(
+                    &session_id,
+                    &text,
+                    &client_msg_id,
+                    thinking_override,
+                )
                 .await
                 .map_err(map_lifecycle_error)?;
-            Ok(json!({
+            let mut response = json!({
                 "session_id": ack.session_id.as_str(),
                 "message_id": ack.message_id.as_str(),
                 "run_id": ack.run_id.as_str(),
                 "queued": ack.queued,
                 "duplicate": ack.duplicate,
-            }))
+            });
+            if let Some(warnings) = warnings {
+                response["warnings"] = serde_json::to_value(warnings)
+                    .map_err(|error| IpcError::internal(format!("警告序列化失败：{error}")))?;
+            }
+            Ok(response)
         })
     }
 

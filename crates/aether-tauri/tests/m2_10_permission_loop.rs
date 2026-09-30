@@ -236,6 +236,7 @@ impl TestCore {
             title: format!("m2-10-{session_id}"),
             status: SessionStatus::Idle,
             model: None,
+            thinking_depth: aether_core::THINKING_DEPTH_DEFAULT,
             system_prompt: None,
             config: json!({}),
             token_usage: TokenUsage::default(),

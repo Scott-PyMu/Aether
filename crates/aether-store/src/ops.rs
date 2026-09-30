@@ -53,6 +53,36 @@ pub struct ArtifactRecord {
     pub created_at: i64,
 }
 
+/// 供应商行（`providers` 表；ADR-010 决策 3：模型与供应商配置）。
+///
+/// `api_key_ref` 只存 `keychain://aether/provider/<id>` 引用（密钥本体在 OS 凭据库 /
+/// A3 降级加密文件，D10）；`is_builtin=1` 的内置供应商（迁移 0003 播种 4 条）
+/// 不可删除（`provider_delete` 命令层硬拒绝）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderRecord {
+    pub id: String,
+    pub name: String,
+    /// `anthropic` / `openai` / `deepseek` / `google` / `custom`（应用层校验）。
+    pub provider_type: String,
+    pub base_url: Option<String>,
+    pub api_key_ref: Option<String>,
+    pub enabled: bool,
+    pub is_builtin: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// 供应商模型行（`provider_models` 表；`UNIQUE(provider_id, model_id)`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderModelRecord {
+    pub id: String,
+    pub provider_id: String,
+    pub model_id: String,
+    pub display_name: String,
+    pub enabled: bool,
+    pub created_at: i64,
+}
+
 /// 审计行（`audit_log` 表；P0 最小集：会话生命周期 + 权限请求/决议 + 适配器状态变化）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditLogRecord {
@@ -89,8 +119,20 @@ pub enum StoreCommand {
         config: serde_json::Value,
         updated_at: i64,
     },
+    /// 改写会话级思考深度（ADR-010 能力门延迟判定：runtime ready 后未声明
+    /// `thinking_depth` 能力 → 按缺省 2 改写；M3-10）。
+    UpdateSessionThinkingDepth {
+        session_id: SessionId,
+        thinking_depth: u8,
+        updated_at: i64,
+    },
     /// 插入 run 行。
     InsertRun { run: Run },
+    /// 改写 run 生效思考深度（ADR-010 能力门：runtime 未声明能力 → 落缺省 2；M3-10）。
+    UpdateRunThinkingDepth {
+        run_id: RunId,
+        thinking_depth: u8,
+    },
     /// 启动排队中的 run（`queued → running`，记录 `started_at`）。
     StartRun { run_id: RunId, started_at: i64 },
     /// 更新 run 终态（`status` / `error` / `finished_at`）。
@@ -153,6 +195,33 @@ pub enum StoreCommand {
     RemoveArtifact {
         session_id: SessionId,
         artifact_id: String,
+    },
+    /// 插入供应商行（M3-11 `provider_create`；ADR-010 决策 3）。
+    ///
+    /// 单写者约束：供应商写路径同样经 [`crate::WriteQueue::execute`]（AGENTS §2.4）。
+    InsertProvider { provider: ProviderRecord },
+    /// 整体更新供应商行（M3-11 `provider_update`；名称/Base URL/引用/启用态/更新时间）。
+    ///
+    /// `api_key_ref` 以调用方解析的三态结果整体写入（缺省=不变 / 空串=清除 / 非空=覆盖）；
+    /// `type` 创建后不可改（本命令不携带）。
+    UpdateProvider { provider: ProviderRecord },
+    /// 删除供应商行（M3-11 `provider_delete`；`provider_models` 经 `ON DELETE CASCADE`
+    /// 级联删除；不存在时影响 0 行——存在性由命令层先行判定）。
+    DeleteProvider { id: String },
+    /// 快速启用/停用供应商（M3-11 `provider_toggle`；内置可停用）。
+    SetProviderEnabled {
+        id: String,
+        enabled: bool,
+        updated_at: i64,
+    },
+    /// 插入供应商模型（M3-11 `provider_model_add`；重复 `(provider_id, model_id)`
+    /// 由 `UNIQUE` 约束拒绝并映射 [`crate::StoreError::DuplicateProviderModel`]）。
+    InsertProviderModel { model: ProviderModelRecord },
+    /// 启用/停用供应商模型（M3-11 `provider_model_toggle`）。
+    SetProviderModelEnabled {
+        provider_id: String,
+        model_id: String,
+        enabled: bool,
     },
 }
 
@@ -224,8 +293,8 @@ pub(crate) fn apply_command(
             let affected = transaction
                 .execute(
                     "INSERT INTO sessions (id, runtime_id, workspace_id, parent_session_id, title, status, \
-                     model, system_prompt, config, token_usage, created_at, updated_at, closed_at) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                     model, thinking_depth, system_prompt, config, token_usage, created_at, updated_at, closed_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                     params![
                         session.id.as_str(),
                         session.runtime_id.as_str(),
@@ -234,6 +303,7 @@ pub(crate) fn apply_command(
                         session.title,
                         session.status.as_str(),
                         session.model,
+                        session.thinking_depth,
                         session.system_prompt,
                         config,
                         token_usage,
@@ -279,9 +349,38 @@ pub(crate) fn apply_command(
             transaction.commit().map_err(txn_failed)?;
             Ok(StoreOutcome::Applied { affected })
         }
+        StoreCommand::UpdateSessionThinkingDepth {
+            session_id,
+            thinking_depth,
+            updated_at,
+        } => {
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            let affected = transaction
+                .execute(
+                    "UPDATE sessions SET thinking_depth = ?2, updated_at = ?3 WHERE id = ?1",
+                    params![session_id.as_str(), i64::from(*thinking_depth), updated_at],
+                )
+                .map_err(txn_failed)?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::Applied { affected })
+        }
         StoreCommand::InsertRun { run } => {
             let transaction = connection.transaction().map_err(txn_failed)?;
             let affected = insert_run(&transaction, run)?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::Applied { affected })
+        }
+        StoreCommand::UpdateRunThinkingDepth {
+            run_id,
+            thinking_depth,
+        } => {
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            let affected = transaction
+                .execute(
+                    "UPDATE runs SET thinking_depth = ?2 WHERE id = ?1",
+                    params![run_id.as_str(), i64::from(*thinking_depth)],
+                )
+                .map_err(txn_failed)?;
             transaction.commit().map_err(txn_failed)?;
             Ok(StoreOutcome::Applied { affected })
         }
@@ -588,6 +687,121 @@ pub(crate) fn apply_command(
             transaction.commit().map_err(txn_failed)?;
             Ok(StoreOutcome::Applied { affected })
         }
+        StoreCommand::InsertProvider { provider } => {
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            let affected = transaction
+                .execute(
+                    "INSERT INTO providers (id, name, type, base_url, api_key_ref, enabled, is_builtin, \
+                     created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    params![
+                        provider.id,
+                        provider.name,
+                        provider.provider_type,
+                        provider.base_url,
+                        provider.api_key_ref,
+                        i64::from(provider.enabled),
+                        i64::from(provider.is_builtin),
+                        provider.created_at,
+                        provider.updated_at,
+                    ],
+                )
+                .map_err(txn_failed)?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::Applied { affected })
+        }
+        StoreCommand::UpdateProvider { provider } => {
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            let affected = transaction
+                .execute(
+                    "UPDATE providers SET name = ?2, base_url = ?3, api_key_ref = ?4, enabled = ?5, \
+                     updated_at = ?6 WHERE id = ?1",
+                    params![
+                        provider.id,
+                        provider.name,
+                        provider.base_url,
+                        provider.api_key_ref,
+                        i64::from(provider.enabled),
+                        provider.updated_at,
+                    ],
+                )
+                .map_err(txn_failed)?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::Applied { affected })
+        }
+        StoreCommand::DeleteProvider { id } => {
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            let affected = transaction
+                .execute("DELETE FROM providers WHERE id = ?1", [id])
+                .map_err(txn_failed)?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::Applied { affected })
+        }
+        StoreCommand::SetProviderEnabled {
+            id,
+            enabled,
+            updated_at,
+        } => {
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            let affected = transaction
+                .execute(
+                    "UPDATE providers SET enabled = ?2, updated_at = ?3 WHERE id = ?1",
+                    params![id, i64::from(*enabled), updated_at],
+                )
+                .map_err(txn_failed)?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::Applied { affected })
+        }
+        StoreCommand::InsertProviderModel { model } => {
+            // 重复 `(provider_id, model_id)` 由 `UNIQUE` 约束拒绝；将 SQLite 约束冲突
+            // 显式映射为 [`StoreError::DuplicateProviderModel`]，供命令层稳定应答
+            // `invalid_value`（ADR-010 附录 B.1）。
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            let duplicate: Option<i64> = transaction
+                .query_row(
+                    "SELECT 1 FROM provider_models WHERE provider_id = ?1 AND model_id = ?2",
+                    params![model.provider_id, model.model_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(txn_failed)?;
+            if duplicate.is_some() {
+                return Err(StoreError::DuplicateProviderModel {
+                    provider_id: model.provider_id.clone(),
+                    model_id: model.model_id.clone(),
+                });
+            }
+            let affected = transaction
+                .execute(
+                    "INSERT INTO provider_models (id, provider_id, model_id, display_name, enabled, \
+                     created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![
+                        model.id,
+                        model.provider_id,
+                        model.model_id,
+                        model.display_name,
+                        i64::from(model.enabled),
+                        model.created_at,
+                    ],
+                )
+                .map_err(txn_failed)?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::Applied { affected })
+        }
+        StoreCommand::SetProviderModelEnabled {
+            provider_id,
+            model_id,
+            enabled,
+        } => {
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            let affected = transaction
+                .execute(
+                    "UPDATE provider_models SET enabled = ?3 WHERE provider_id = ?1 AND model_id = ?2",
+                    params![provider_id, model_id, i64::from(*enabled)],
+                )
+                .map_err(txn_failed)?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::Applied { affected })
+        }
     }
 }
 
@@ -630,13 +844,14 @@ fn insert_message(connection: &Connection, message: &Message) -> Result<usize, S
 fn insert_run(connection: &Connection, run: &Run) -> Result<usize, StoreError> {
     connection
         .execute(
-            "INSERT INTO runs (id, session_id, status, input_message_id, error, started_at, finished_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO runs (id, session_id, status, input_message_id, thinking_depth, error, started_at, finished_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 run.id.as_str(),
                 run.session_id.as_str(),
                 run.status.as_str(),
                 run.input_message_id.as_ref().map(MessageId::as_str),
+                run.thinking_depth.map(i64::from),
                 run.error,
                 run.started_at,
                 run.finished_at,
@@ -738,7 +953,7 @@ impl SessionQuery {
         let limit = i64::from(self.limit.unwrap_or(500).min(500));
         let sql = format!(
             "SELECT id, runtime_id, workspace_id, parent_session_id, title, status, model, system_prompt, \
-             config, token_usage, created_at, updated_at, closed_at FROM sessions{where_clause} \
+             config, token_usage, created_at, updated_at, closed_at, thinking_depth FROM sessions{where_clause} \
              ORDER BY created_at DESC, rowid DESC LIMIT ?"
         );
         values.push(Box::new(limit));
@@ -754,7 +969,7 @@ impl ReadPool {
             connection
                 .query_row(
                     "SELECT id, runtime_id, workspace_id, parent_session_id, title, status, model, \
-                     system_prompt, config, token_usage, created_at, updated_at, closed_at \
+                     system_prompt, config, token_usage, created_at, updated_at, closed_at, thinking_depth \
                      FROM sessions WHERE id = ?1",
                     [session.as_str()],
                     read_session_row,
@@ -788,7 +1003,7 @@ impl ReadPool {
         self.with_connection(move |connection| {
             connection
                 .query_row(
-                    "SELECT id, session_id, status, input_message_id, error, started_at, finished_at \
+                    "SELECT id, session_id, status, input_message_id, thinking_depth, error, started_at, finished_at \
                      FROM runs WHERE id = ?1",
                     [run.as_str()],
                     read_run_row,
@@ -824,7 +1039,7 @@ impl ReadPool {
     pub async fn unfinished_runs(&self) -> Result<Vec<Run>, StoreError> {
         self.with_connection(move |connection| {
             let mut statement = connection.prepare(
-                "SELECT id, session_id, status, input_message_id, error, started_at, finished_at \
+                "SELECT id, session_id, status, input_message_id, thinking_depth, error, started_at, finished_at \
                  FROM runs WHERE status IN ('queued', 'running') ORDER BY started_at ASC, rowid ASC",
             )?;
             let rows = statement.query_map([], read_run_row)?;
@@ -843,7 +1058,8 @@ impl ReadPool {
         self.with_connection(move |connection| {
             let mut statement = connection.prepare(
                 "SELECT id, runtime_id, workspace_id, parent_session_id, title, status, model, \
-                 system_prompt, config, token_usage, created_at, updated_at, closed_at FROM sessions \
+                 system_prompt, config, token_usage, created_at, updated_at, closed_at, thinking_depth \
+                 FROM sessions \
                  WHERE status NOT IN ('idle', 'completed', 'failed', 'cancelled') \
                  ORDER BY created_at ASC, rowid ASC",
             )?;
@@ -971,6 +1187,81 @@ impl ReadPool {
                 artifacts.push(row?);
             }
             Ok(artifacts)
+        })
+        .await
+    }
+
+    /// 供应商清单（M3-11 `providers_list` 语义；按 `created_at` 升序、`rowid` 兜底）。
+    pub async fn providers(&self) -> Result<Vec<ProviderRecord>, StoreError> {
+        self.with_connection(move |connection| {
+            let mut statement = connection.prepare(
+                "SELECT id, name, type, base_url, api_key_ref, enabled, is_builtin, created_at, updated_at \
+                 FROM providers ORDER BY created_at ASC, rowid ASC",
+            )?;
+            let rows = statement.query_map([], read_provider_row)?;
+            let mut providers = Vec::new();
+            for row in rows {
+                providers.push(row?);
+            }
+            Ok(providers)
+        })
+        .await
+    }
+
+    /// 按 id 读取供应商（不存在为 `None`）。
+    pub async fn provider(&self, id: &str) -> Result<Option<ProviderRecord>, StoreError> {
+        let id = id.to_owned();
+        self.with_connection(move |connection| {
+            connection
+                .query_row(
+                    "SELECT id, name, type, base_url, api_key_ref, enabled, is_builtin, created_at, updated_at \
+                     FROM providers WHERE id = ?1",
+                    [id.as_str()],
+                    read_provider_row,
+                )
+                .optional()
+                .map_err(StoreError::from)
+        })
+        .await
+    }
+
+    /// 供应商模型清单（M3-11 `providers_list`；全量按 `created_at` 升序、`rowid` 兜底；
+    /// 调用方按 `provider_id` 归组）。
+    pub async fn provider_models(&self) -> Result<Vec<ProviderModelRecord>, StoreError> {
+        self.with_connection(move |connection| {
+            let mut statement = connection.prepare(
+                "SELECT id, provider_id, model_id, display_name, enabled, created_at \
+                 FROM provider_models ORDER BY created_at ASC, rowid ASC",
+            )?;
+            let rows = statement.query_map([], read_provider_model_row)?;
+            let mut models = Vec::new();
+            for row in rows {
+                models.push(row?);
+            }
+            Ok(models)
+        })
+        .await
+    }
+
+    /// 按 `(provider_id, model_id)` 读取供应商模型（不存在为 `None`；M3-11
+    /// `provider_model_toggle` 的存在性判定）。
+    pub async fn provider_model(
+        &self,
+        provider_id: &str,
+        model_id: &str,
+    ) -> Result<Option<ProviderModelRecord>, StoreError> {
+        let provider_id = provider_id.to_owned();
+        let model_id = model_id.to_owned();
+        self.with_connection(move |connection| {
+            connection
+                .query_row(
+                    "SELECT id, provider_id, model_id, display_name, enabled, created_at \
+                     FROM provider_models WHERE provider_id = ?1 AND model_id = ?2",
+                    params![provider_id, model_id],
+                    read_provider_model_row,
+                )
+                .optional()
+                .map_err(StoreError::from)
         })
         .await
     }
@@ -1254,6 +1545,8 @@ fn read_session_row(row: &Row<'_>) -> rusqlite::Result<Session> {
         created_at: row.get(10)?,
         updated_at: row.get(11)?,
         closed_at: row.get(12)?,
+        thinking_depth: u8::try_from(row.get::<_, i64>(13)?)
+            .map_err(|_| parse_column_error(13, "thinking_depth"))?,
     })
 }
 
@@ -1273,9 +1566,15 @@ fn read_run_row(row: &Row<'_>) -> rusqlite::Result<Run> {
                 MessageId::new(value).map_err(|_| parse_column_error(3, "input_message_id"))
             })
             .transpose()?,
-        error: row.get(4)?,
-        started_at: row.get(5)?,
-        finished_at: row.get(6)?,
+        thinking_depth: row
+            .get::<_, Option<i64>>(4)?
+            .map(|value| {
+                u8::try_from(value).map_err(|_| parse_column_error(4, "thinking_depth"))
+            })
+            .transpose()?,
+        error: row.get(5)?,
+        started_at: row.get(6)?,
+        finished_at: row.get(7)?,
     })
 }
 
@@ -1349,6 +1648,31 @@ fn read_artifact_row(row: &Row<'_>) -> rusqlite::Result<ArtifactRecord> {
     })
 }
 
+fn read_provider_row(row: &Row<'_>) -> rusqlite::Result<ProviderRecord> {
+    Ok(ProviderRecord {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        provider_type: row.get(2)?,
+        base_url: row.get(3)?,
+        api_key_ref: row.get(4)?,
+        enabled: row.get::<_, i64>(5)? != 0,
+        is_builtin: row.get::<_, i64>(6)? != 0,
+        created_at: row.get(7)?,
+        updated_at: row.get(8)?,
+    })
+}
+
+fn read_provider_model_row(row: &Row<'_>) -> rusqlite::Result<ProviderModelRecord> {
+    Ok(ProviderModelRecord {
+        id: row.get(0)?,
+        provider_id: row.get(1)?,
+        model_id: row.get(2)?,
+        display_name: row.get(3)?,
+        enabled: row.get::<_, i64>(4)? != 0,
+        created_at: row.get(5)?,
+    })
+}
+
 fn parse_optional_json(
     value: Option<String>,
     index: usize,
@@ -1410,6 +1734,7 @@ mod tests {
             title: "t".to_owned(),
             status: SessionStatus::Idle,
             model: None,
+            thinking_depth: aether_core::THINKING_DEPTH_DEFAULT,
             system_prompt: None,
             config: serde_json::json!({}),
             token_usage: TokenUsage::default(),
@@ -1441,6 +1766,7 @@ mod tests {
             session_id: SessionId::new(session_id).unwrap(),
             status: RunStatus::Queued,
             input_message_id: Some(MessageId::new(message_id).unwrap()),
+            thinking_depth: None,
             error: None,
             started_at: 11,
             finished_at: None,

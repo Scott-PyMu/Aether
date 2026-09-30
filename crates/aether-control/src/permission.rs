@@ -15,8 +15,15 @@
 //!
 //! T6（100 次并发 ask）语义：服务层不限制同会话并发 pending（每请求独立等待者与行），
 //! 无丢失/重复/死锁；「同一会话最多 1 个待审批」是 UI 排队展示口径（M3 工作台）。
+//!
+//! M3-12（ADR-011）：同会话 pending 票据计数 `0→1` / `1→0` 时经
+//! [`PendingTicketObserver`] **只上报**等待态变化（组合根注入 `SessionManager`）；
+//! 本模块不写会话状态、不落 `session.status_changed`（状态写入唯一入口 =
+//! `SessionManager`；DoD1 静态检查口径）。
 
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -95,6 +102,27 @@ impl PermissionResolution {
     pub fn is_allowed(&self) -> bool {
         self.decision == PermissionDecision::Allow
     }
+}
+
+/// 待审批票据的会话归属观察者（M3-12/ADR-011）。
+///
+/// 权限服务在**同一会话的待审批票据计数**发生 `0→1`（首张票据入队）与 `1→0`
+/// （最后一张票据摘除）时通知观察者；观察者**只上报**等待态变化，会话状态的落行与
+/// `session.status_changed` 广播仍只由 `SessionManager` 执行（DoD1 静态检查口径：
+/// 本模块不得出现会话状态写入调用）。
+///
+/// 组合根两阶段装配：`PermissionService` 构造后、`SessionManager` 就绪时经
+/// [`PermissionService::set_pending_observer`] 注入；未注入时语义与 M2-03 一致
+/// （不产生等待态写入）。
+pub trait PendingTicketObserver: Send + Sync + 'static {
+    /// 同会话 pending 计数 `0→1`（进入等待审批）。
+    fn on_pending(&self, session_id: SessionId) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
+
+    /// 同会话 pending 计数 `1→0`（退出等待审批）。
+    fn on_pending_cleared(
+        &self,
+        session_id: SessionId,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
 }
 
 /// 权限服务错误（稳定错误码）。
@@ -208,6 +236,8 @@ struct ServiceInner {
     pipeline: EventPipeline,
     inner: Mutex<PermissionInner>,
     background: Mutex<Vec<JoinHandle<()>>>,
+    /// 等待态观察者（M3-12/ADR-011；`None` = 未装配 → 不产生等待态写入）。
+    observer: Mutex<Option<Arc<dyn PendingTicketObserver>>>,
 }
 
 /// 权限服务（克隆共享同一实例）。
@@ -235,12 +265,21 @@ impl PermissionService {
                 pipeline,
                 inner: Mutex::new(PermissionInner::default()),
                 background: Mutex::new(Vec::new()),
+                observer: Mutex::new(None),
             }),
         }
     }
 
     pub fn config(&self) -> &PermissionConfig {
         &self.inner.config
+    }
+
+    /// 装配等待态观察者（M3-12/ADR-011；组合根在 `SessionManager` 就绪后调用）。
+    ///
+    /// 观察者只接收「同会话 pending 计数 0↔1」通知，不参与策略/审批决策；
+    /// 未装配时本服务语义与 M2-03 完全一致。
+    pub fn set_pending_observer(&self, observer: Arc<dyn PendingTicketObserver>) {
+        *lock_observer(&self.inner) = Some(observer);
     }
 
     /// 当前策略引擎绑定的工作区根（canonical；D14 权限基准目录）。
@@ -407,6 +446,15 @@ impl PermissionService {
             requested_at: now,
         };
         let (tx, rx) = oneshot::channel();
+        // M3-12/ADR-011：入队前判定该会话 pending 计数是否 `0→1`（首张票据）。
+        // 竞争窗口安全：另一并发 ask 先插入时本判定为 `false`；两者均为 `true` 时
+        // 观察者第二次上报命中 `SessionManager` 的状态守卫（非 running → no-op）。
+        let first_pending_for_session = request.session_id.as_ref().is_some_and(|session_id| {
+            lock_inner(&self.inner)
+                .queue
+                .pending_for_session(session_id.as_str())
+                .is_empty()
+        });
         {
             let mut inner = lock_inner(&self.inner);
             if !inner.queue.insert(ticket.clone()) {
@@ -449,6 +497,9 @@ impl PermissionService {
             Some(verdict.reason.clone()),
         )
         .await?;
+        if first_pending_for_session {
+            self.notify_pending(request.session_id.as_ref()).await;
+        }
 
         let resolution = self.wait_for_resolution(&id, rx, cancel).await?;
         Ok(resolution)
@@ -514,7 +565,7 @@ impl PermissionService {
         decision: PermissionDecision,
         scope: Option<PermissionScope>,
     ) -> Result<ApprovalTicket, PermissionError> {
-        let (ticket, waiter) = {
+        let (ticket, waiter, cleared) = {
             let mut inner = lock_inner(&self.inner);
             let ticket = inner
                 .queue
@@ -526,8 +577,11 @@ impl PermissionService {
                 })?;
             inner.queue.remove(&ticket.id);
             let waiter = inner.waiters.remove(&ticket.id);
-            (ticket, waiter)
+            let cleared = cleared_session_after_removal(&inner, &ticket);
+            (ticket, waiter, cleared)
         };
+        // M3-12/ADR-011：票据摘除为唯一仲裁点——移除后该会话 pending 归零 → 上报回程。
+        self.notify_pending_cleared(cleared).await;
 
         let resolved_at = self.inner.clock.now_ms();
         let (out_decision, out_scope) = match decision {
@@ -630,6 +684,17 @@ impl PermissionService {
             let mut inner = lock_inner(&self.inner);
             inner.queue.expire(now)
         };
+        // M3-12/ADR-011：批量摘除后按会话判定 `1→0`（白名单去重，每会话至多一次回程）。
+        let cleared = {
+            let inner = lock_inner(&self.inner);
+            let mut sessions: Vec<SessionId> = expired
+                .iter()
+                .filter_map(|ticket| cleared_session_after_removal(&inner, ticket))
+                .collect();
+            sessions.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+            sessions.dedup();
+            sessions
+        };
         let mut timed_out = Vec::new();
         for ticket in expired {
             let waiter = {
@@ -639,6 +704,9 @@ impl PermissionService {
             if self.finalize_timeout(&ticket, waiter).await.is_ok() {
                 timed_out.push(ticket.request_id);
             }
+        }
+        for session_id in cleared {
+            self.notify_pending_cleared(Some(session_id)).await;
         }
         timed_out
     }
@@ -674,8 +742,30 @@ impl PermissionService {
 
     // ===== 内部 =====
 
+    /// 等待态置位上报（M3-12/ADR-011）：未装配观察者 / 会话 id 非法 → no-op。
+    async fn notify_pending(&self, session_id: Option<&SessionId>) {
+        let Some(session_id) = session_id.cloned() else {
+            return;
+        };
+        let observer = lock_observer(&self.inner).clone();
+        if let Some(observer) = observer {
+            observer.on_pending(session_id).await;
+        }
+    }
+
+    /// 等待态回程上报（M3-12/ADR-011）：`None`（该会话仍有 pending / 无会话归属）→ no-op。
+    async fn notify_pending_cleared(&self, session_id: Option<SessionId>) {
+        let Some(session_id) = session_id else {
+            return;
+        };
+        let observer = lock_observer(&self.inner).clone();
+        if let Some(observer) = observer {
+            observer.on_pending_cleared(session_id).await;
+        }
+    }
+
     async fn timeout_ticket(&self, id: &str) -> Result<PermissionResolution, PermissionError> {
-        let (ticket, waiter) = {
+        let (ticket, waiter, cleared) = {
             let mut inner = lock_inner(&self.inner);
             let ticket = inner
                 .queue
@@ -684,8 +774,10 @@ impl PermissionService {
                     request_id: id.to_owned(),
                 })?;
             let waiter = inner.waiters.remove(&ticket.id);
-            (ticket, waiter)
+            let cleared = cleared_session_after_removal(&inner, &ticket);
+            (ticket, waiter, cleared)
         };
+        self.notify_pending_cleared(cleared).await;
         self.finalize_timeout(&ticket, waiter).await
     }
 
@@ -695,13 +787,16 @@ impl PermissionService {
         &self,
         id: &str,
     ) -> Result<Option<PermissionResolution>, PermissionError> {
-        let (ticket, waiter) = {
+        let (ticket, waiter, cleared) = {
             let mut inner = lock_inner(&self.inner);
             let Some(ticket) = inner.queue.remove(id) else {
                 return Ok(None);
             };
-            (ticket, inner.waiters.remove(id))
+            let waiter = inner.waiters.remove(id);
+            let cleared = cleared_session_after_removal(&inner, &ticket);
+            (ticket, waiter, cleared)
         };
+        self.notify_pending_cleared(cleared).await;
         self.finalize_cancelled(&ticket, waiter).await.map(Some)
     }
 
@@ -995,6 +1090,23 @@ fn ticket_from_record(record: &PermissionRecord) -> ApprovalTicket {
     }
 }
 
+/// 票据摘除后的「同会话 pending `1→0`」判定（M3-12/ADR-011）。
+///
+/// **调用方必须持有 `inner` 锁且票据已从队列移除**——摘除是唯一仲裁点，同一票据
+/// 只会经一条移除路径（决议/超时/取消）摘除，故每会话的回程通知恰好一次。
+/// 返回 `None`：票据无会话归属，或该会话仍有其他 pending 票据。
+fn cleared_session_after_removal(
+    inner: &PermissionInner,
+    ticket: &ApprovalTicket,
+) -> Option<SessionId> {
+    let session = ticket.session_id.as_deref()?;
+    if inner.queue.pending_for_session(session).is_empty() {
+        SessionId::new(session.to_owned()).ok()
+    } else {
+        None
+    }
+}
+
 fn lock_inner(inner: &Arc<ServiceInner>) -> std::sync::MutexGuard<'_, PermissionInner> {
     match inner.inner.lock() {
         Ok(guard) => guard,
@@ -1011,6 +1123,15 @@ fn lock_policy(inner: &Arc<ServiceInner>) -> std::sync::MutexGuard<'_, PolicyEng
 
 fn lock_background(inner: &Arc<ServiceInner>) -> std::sync::MutexGuard<'_, Vec<JoinHandle<()>>> {
     match inner.background.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+fn lock_observer(
+    inner: &Arc<ServiceInner>,
+) -> std::sync::MutexGuard<'_, Option<Arc<dyn PendingTicketObserver>>> {
+    match inner.observer.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     }

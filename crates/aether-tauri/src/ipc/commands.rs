@@ -10,10 +10,12 @@ use super::dto::{
     AppExitRequest, AppRestartRequest, ArtifactAddRequest, ArtifactRemoveRequest,
     ArtifactsListRequest, BackupCreateRequest, BackupListRequest, BackupRestoreRequest,
     ExportDiagnosticsRequest, HealthRequest, MessagesPageRequest, PermissionResolveRequest,
-    PermissionsPendingRequest, RefPickKind, RefPickRequest, RunRetryRequest, RuntimeEnableRequest,
-    RuntimeRetryRequest, SessionCreateRequest, SessionIdRequest, SessionListRequest,
-    SessionSendRequest, SettingsGetRequest, SettingsSetRequest, StartupGetRequest,
-    StartupMigrateRequest, StartupPickTargetRequest, WorkspaceSetRequest,
+    PermissionsPendingRequest, ProviderCreateRequest, ProviderDeleteRequest,
+    ProviderModelAddRequest, ProviderModelToggleRequest, ProviderToggleRequest,
+    ProviderUpdateRequest, ProvidersListRequest, RefPickKind, RefPickRequest, RunRetryRequest,
+    RuntimeEnableRequest, RuntimeRetryRequest, SessionCreateRequest, SessionIdRequest,
+    SessionListRequest, SessionSendRequest, SettingsGetRequest, SettingsSetRequest,
+    StartupGetRequest, StartupMigrateRequest, StartupPickTargetRequest, WorkspaceSetRequest,
 };
 use super::error::{IpcError, IpcErrorCode};
 use super::validate::{parse_no_params, parse_strict};
@@ -398,6 +400,103 @@ pub(crate) fn artifact_remove(
         .map(JsonPayload)
 }
 
+/// ADR-010/M3-11：供应商与模型清单（无参数；非空成员一律拒绝）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn providers_list(
+    state: tauri::State<'_, IpcState>,
+    payload: Option<JsonPayload>,
+) -> Result<JsonPayload, IpcError> {
+    let _request: ProvidersListRequest =
+        parse_no_params(payload.map(JsonPayload::into_value).unwrap_or(Value::Null))?;
+    state.backend_ready()?.providers_list(&_request).map(JsonPayload)
+}
+
+/// ADR-010/M3-11：新建供应商（`api_key` 明文仅传输 → 核心写 keyring → `api_key_ref`）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn provider_create(
+    state: tauri::State<'_, IpcState>,
+    payload: JsonPayload,
+) -> Result<JsonPayload, IpcError> {
+    let request: ProviderCreateRequest = parse_strict(payload.into_value())?;
+    state
+        .backend_ready()?
+        .provider_create(&request)
+        .map(JsonPayload)
+}
+
+/// ADR-010/M3-11：整体更新供应商（`type` 不可改；`api_key` 三态）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn provider_update(
+    state: tauri::State<'_, IpcState>,
+    payload: JsonPayload,
+) -> Result<JsonPayload, IpcError> {
+    let request: ProviderUpdateRequest = parse_strict(payload.into_value())?;
+    state
+        .backend_ready()?
+        .provider_update(&request)
+        .map(JsonPayload)
+}
+
+/// ADR-010/M3-11：删除供应商（内置硬拒绝 `builtin_provider_undeletable`）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn provider_delete(
+    state: tauri::State<'_, IpcState>,
+    payload: JsonPayload,
+) -> Result<JsonPayload, IpcError> {
+    let request: ProviderDeleteRequest = parse_strict(payload.into_value())?;
+    state
+        .backend_ready()?
+        .provider_delete(&request)
+        .map(JsonPayload)
+}
+
+/// ADR-010/M3-11：快速启用/停用供应商（内置可停用）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn provider_toggle(
+    state: tauri::State<'_, IpcState>,
+    payload: JsonPayload,
+) -> Result<JsonPayload, IpcError> {
+    let request: ProviderToggleRequest = parse_strict(payload.into_value())?;
+    state
+        .backend_ready()?
+        .provider_toggle(&request)
+        .map(JsonPayload)
+}
+
+/// ADR-010/M3-11：新增供应商模型（默认启用；重复 `(provider_id, model_id)` →
+/// `invalid_value`）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn provider_model_add(
+    state: tauri::State<'_, IpcState>,
+    payload: JsonPayload,
+) -> Result<JsonPayload, IpcError> {
+    let request: ProviderModelAddRequest = parse_strict(payload.into_value())?;
+    state
+        .backend_ready()?
+        .provider_model_add(&request)
+        .map(JsonPayload)
+}
+
+/// ADR-010/M3-11：模型启用/停用（不存在 → `provider_model_not_found`）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn provider_model_toggle(
+    state: tauri::State<'_, IpcState>,
+    payload: JsonPayload,
+) -> Result<JsonPayload, IpcError> {
+    let request: ProviderModelToggleRequest = parse_strict(payload.into_value())?;
+    state
+        .backend_ready()?
+        .provider_model_toggle(&request)
+        .map(JsonPayload)
+}
+
 /// M1-06：启动门快照（拒绝启动时仍可达；UI 据此渲染门界面）。
 /// ADR-006：无参数命令；缺省载荷等价空对象，任何成员都会被严格模式拒绝。
 #[tauri::command]
@@ -484,9 +583,9 @@ pub(crate) fn app_exit(
 
 /// 命令收集（M3-01/T14：`packages/protocol/src/bindings.ts` 生成用）。
 ///
-/// 与 [`handler`]（release 构建）注册的命令集合一一对应：D7 P0 全集 29 个可调用命令
-/// （ADR-004 七命令、ADR-006 四命令、ADR-007 `health` + ADR-010 文件引用四命令；
-/// 供应商七命令随 M3-11 落地）。debug 构建额外注册的 E2E
+/// 与 [`handler`]（release 构建）注册的命令集合一一对应：D7 P0 全集 36 个可调用命令
+/// （ADR-004 七命令、ADR-006 四命令、ADR-007 `health`、ADR-010 文件引用四命令
+/// 与供应商七命令，M3-09/M3-11 落地）。debug 构建额外注册的 E2E
 /// 探针命令不进入绑定，保证生成物与构建配置无关（生成/校验口径见 `docs/M3-01-证据.md`）。
 ///
 /// 运行期命令注册仍走 [`handler`]：本函数只服务于类型导出，不改变 M1-08 校验契约
@@ -517,6 +616,13 @@ pub fn collected<R: tauri::Runtime>() -> tauri_specta::Commands<R> {
         artifacts_list,
         artifact_add,
         artifact_remove,
+        providers_list,
+        provider_create,
+        provider_update,
+        provider_delete,
+        provider_toggle,
+        provider_model_add,
+        provider_model_toggle,
         export_diagnostics,
         health,
         startup_get,
@@ -557,6 +663,13 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         artifacts_list,
         artifact_add,
         artifact_remove,
+        providers_list,
+        provider_create,
+        provider_update,
+        provider_delete,
+        provider_toggle,
+        provider_model_add,
+        provider_model_toggle,
         export_diagnostics,
         health,
         startup_get,
@@ -597,6 +710,13 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         artifacts_list,
         artifact_add,
         artifact_remove,
+        providers_list,
+        provider_create,
+        provider_update,
+        provider_delete,
+        provider_toggle,
+        provider_model_add,
+        provider_model_toggle,
         export_diagnostics,
         health,
         startup_get,

@@ -187,3 +187,20 @@ describe("Mock CLI --artifacts-dir（M2-09/D6 附件外置）", () => {
     }
   });
 });
+
+describe("Mock CLI --no-thinking-depth（M3-10/ADR-010 能力门负向夹具）", () => {
+  it("--no-thinking-depth 解析；hello 与 initialize 均不声明能力", async () => {
+    const parsed = parseArgs(["--no-thinking-depth"], () => {});
+    expect(parsed.thinkingDepthUnsupported).toBe(true);
+
+    const harness = new CliHarness(["--no-thinking-depth"]);
+    const hello = await harness.waitForHello();
+    expect(
+      (hello.params?.runtime as { capabilities: string[] }).capabilities,
+    ).not.toContain("thinking_depth");
+
+    harness.request("initialize", {}, 1);
+    const response = await harness.waitFor((frame) => frame.id === 1, "initialize");
+    expect(response.result?.capabilities as string[]).not.toContain("thinking_depth");
+  });
+});

@@ -13,6 +13,9 @@
  * - `--name <runtime 名>` / `--runtime-version <ver>`
  * - `--stream-deltas <n>` / `--stream-interval-ms <n>` / `--long-stream-interval-ms <n>`
  * - `--artifacts-dir <path>` 附件目录（M2-09/D6；缺省回退环境变量 `AETHER_ARTIFACTS_DIR`）
+ * - `--session-log <path>` 会话调用观测记录（M3-08；M3-10 追加 thinking_depth）
+ * - `--no-thinking-depth`（M3-10/ADR-010）：hello/initialize 不声明 `thinking_depth`
+ *   能力（能力门负向用例夹具）
  * - `--launch-token=<ULID>`（D5：核心 spawn 注入；合法值仅写 stderr 启动日志，
  *   非法值 warn 后忽略，不阻塞启动；stdout 线协议不受影响）
  */
@@ -37,6 +40,8 @@ export interface CliOptions {
   artifactsDir?: string;
   /** M3-08：会话调用记录路径（缺省回退 `AETHER_MOCK_SESSION_LOG`；注入观测）。 */
   sessionLog?: string;
+  /** M3-10/ADR-010：不声明 `thinking_depth` 能力（能力门负向用例夹具）。 */
+  thinkingDepthUnsupported?: boolean;
   /** D5 启动令牌（仅合法 ULID；非法/缺失为 undefined）。 */
   launchToken?: string;
 }
@@ -122,6 +127,9 @@ export function parseArgs(argv: string[], warn: (line: string) => void): CliOpti
       case "--no-hello":
         options.injections.push("no-hello");
         break;
+      case "--no-thinking-depth":
+        options.thinkingDepthUnsupported = true;
+        break;
       default:
         throw new Error(`未知参数: ${flag || "<empty>"}`);
     }
@@ -188,6 +196,9 @@ export async function runCli(streams: CliStreams): Promise<void> {
   mockOptions.artifactsDir = options.artifactsDir ?? process.env.AETHER_ARTIFACTS_DIR;
   // M3-08：`--session-log` 优先，缺省回退 `AETHER_MOCK_SESSION_LOG`（注入 E2E 观测）。
   mockOptions.sessionLog = options.sessionLog ?? process.env.AETHER_MOCK_SESSION_LOG;
+  if (options.thinkingDepthUnsupported) {
+    mockOptions.thinkingDepthUnsupported = true;
+  }
 
   const mock = new MockAdapter(mockOptions);
   try {

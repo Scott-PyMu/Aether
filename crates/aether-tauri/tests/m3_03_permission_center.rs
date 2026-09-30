@@ -240,6 +240,7 @@ impl TestCore {
             title: format!("m3-03-{session_id}"),
             status: SessionStatus::Idle,
             model: None,
+            thinking_depth: aether_core::THINKING_DEPTH_DEFAULT,
             system_prompt: None,
             config: json!({}),
             token_usage: TokenUsage::default(),
@@ -1023,6 +1024,7 @@ fn disabled_runtime_cannot_create_session() {
                 title: "禁用运行时会话".to_owned(),
                 workspace_id: None,
                 model: None,
+                thinking_depth: None,
             })
             .expect_err("disabled 运行时必须拒绝创建会话");
         assert_eq!(error.code, IpcErrorCode::InvalidValue);

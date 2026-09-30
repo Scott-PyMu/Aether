@@ -180,6 +180,7 @@ fn session_create(backend: &dyn IpcBackend, title: &str, model: Option<&str>) ->
         title: title.to_owned(),
         workspace_id: None,
         model: model.map(str::to_owned),
+        thinking_depth: None,
     };
     backend.session_create(&request).expect("session_create")
 }
@@ -423,6 +424,7 @@ fn session_create_persists_model_and_send_interrupt_dispose_are_wired() {
             session_id: session_id.clone(),
             text: "hello workbench".to_owned(),
             client_msg_id: "01J8ZQ5R0N7W9Y8X6V4T2S0K1N".to_owned(),
+            thinking_depth: None,
         })
         .expect("session_send");
     let run_id = ack["run_id"].as_str().expect("run_id").to_owned();

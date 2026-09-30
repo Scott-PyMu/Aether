@@ -16,6 +16,8 @@
  */
 import { useCallback, useEffect, useState } from "react";
 
+import { ProvidersPage } from "./ProvidersPage";
+import { providersIpc as productionProvidersIpc, type ProvidersIpc } from "./providers";
 import { BACKUP_REMINDER_KEY, settingsIpc, type SettingsIpc } from "./settings";
 import { describeIpcError, ipcErrorCode } from "./startup";
 import { workspaceIpc, type WorkspaceIpc } from "./workspace";
@@ -34,22 +36,29 @@ export interface SettingsPageProps {
   ipc?: SettingsIpc;
   /** 工作区绑定 IPC 契约（M3-08；缺省 = 生产实现；测试注入替身）。 */
   workspace?: WorkspaceIpc;
+  /** 供应商配置 IPC 契约（M3-11；缺省 = 生产实现；测试注入替身）。 */
+  providersIpc?: ProvidersIpc;
   onBack: () => void;
   onOpenBackup?: () => void;
   onOpenDiagnostics?: () => void;
   onOpenAbout?: () => void;
 }
 
+/** 设置页子导航（M3-11：基本设置 / 模型与供应商配置；原型 settings-nav）。 */
+export type SettingsTab = "general" | "providers";
+
 export function SettingsPage({
   dataDir,
   securityLevel = null,
   ipc = settingsIpc,
   workspace = workspaceIpc,
+  providersIpc = productionProvidersIpc,
   onBack,
   onOpenBackup,
   onOpenDiagnostics,
   onOpenAbout,
 }: SettingsPageProps) {
+  const [tab, setTab] = useState<SettingsTab>("general");
   const [reminderEnabled, setReminderEnabled] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -168,6 +177,31 @@ export function SettingsPage({
           </button>
         </header>
 
+        <nav className="settings-subnav" aria-label="设置分类">
+          <button
+            type="button"
+            data-testid="settings-tab-general"
+            data-active={String(tab === "general")}
+            className={tab === "general" ? "settings-tab on" : "settings-tab"}
+            onClick={() => setTab("general")}
+          >
+            基本设置
+          </button>
+          <button
+            type="button"
+            data-testid="settings-tab-providers"
+            data-active={String(tab === "providers")}
+            className={tab === "providers" ? "settings-tab on" : "settings-tab"}
+            onClick={() => setTab("providers")}
+          >
+            模型与供应商配置
+          </button>
+        </nav>
+
+        {tab === "providers" ? <ProvidersPage ipc={providersIpc} /> : null}
+
+        {tab === "general" ? (
+          <>
         <section className="settings-section">
           <h3>数据与安全</h3>
           <p data-testid="settings-data-dir">数据目录：{dataDir}</p>
@@ -273,6 +307,8 @@ export function SettingsPage({
             ) : null}
           </div>
         </section>
+          </>
+        ) : null}
 
         {error ? (
           <p

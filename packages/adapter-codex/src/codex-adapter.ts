@@ -44,7 +44,7 @@ export const RUNTIME_NAME = "codex";
 /** 适配器版本（semver，hello 上报）。 */
 export const ADAPTER_VERSION = "0.1.0";
 
-/** 适配器能力清单（hello/initialize 上报）。 */
+/** 适配器能力清单（hello/initialize 上报；M3-10 增 `thinking_depth`）。 */
 export const RUNTIME_CAPABILITIES: readonly string[] = [
   "session.create",
   "session.send",
@@ -52,7 +52,30 @@ export const RUNTIME_CAPABILITIES: readonly string[] = [
   "session.dispose",
   "tools.list",
   "permission.resolve",
+  // M3-10/ADR-010：档位 0–4 → `model_reasoning_effort`（映射表见 M3-10 证据）。
+  "thinking_depth",
 ];
+
+/**
+ * 思考深度档位 → Codex `model_reasoning_effort`（ADR-010 决策 2）。
+ *
+ * Codex 原生刻度为 minimal/low/medium/high（四档）：本表把 0–4 映射到该刻度，
+ * 档位 4（最大）落于原生上限 high（无 xhigh 时 3/4 同值；映射口径见证据文档）。
+ */
+export const CODEX_REASONING_BY_DEPTH: readonly string[] = [
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "high",
+];
+
+/** 档位 → reasoning effort（越界/非整数 → `undefined`，不覆盖 CLI 默认）。 */
+export function reasoningForThinkingDepth(depth: unknown): string | undefined {
+  if (typeof depth !== "number" || !Number.isInteger(depth)) return undefined;
+  if (depth < 0 || depth >= CODEX_REASONING_BY_DEPTH.length) return undefined;
+  return CODEX_REASONING_BY_DEPTH[depth];
+}
 
 /** CLI stdout 无法解析的行：连续达到该阈值 → 该 run 判不健康（口径同 D6 连续无效帧 20 次）。 */
 export const CLI_INVALID_LINE_THRESHOLD = 20;
@@ -106,10 +129,19 @@ interface CodexSession {
   threadId: string | null;
   resumed: boolean;
   model?: string;
+  /** M3-10/ADR-010：会话级思考深度（0–4；override 优先，仅本次 run）。 */
+  thinkingDepth?: number;
   clientMsgIds: Map<string, string>;
   runs: Map<string, CodexRunState>;
   observedTools: Set<string>;
   disposed: boolean;
+}
+
+/** M3-10：解析思考深度参数（整数 0–4；未知形态忽略，保持适配器宽容）。 */
+function parseThinkingDepth(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isInteger(value)) return undefined;
+  if (value < 0 || value > 4) return undefined;
+  return value;
 }
 
 export interface CodexAdapterOptions {
@@ -224,6 +256,7 @@ export class CodexAdapter {
       workspace?: unknown;
       model?: unknown;
       native_id?: unknown;
+      thinking_depth?: unknown;
     };
     const requested = input.native_id;
     if (requested !== undefined && !isAliasId(requested)) {
@@ -233,6 +266,7 @@ export class CodexAdapter {
       );
     }
     const model = typeof input.model === "string" && input.model.length > 0 ? input.model : undefined;
+    const thinkingDepth = parseThinkingDepth(input.thinking_depth);
     const alias = isAliasId(requested) ? requested : ulid();
     const threadId = isAliasId(requested) ? this.store.lookup(requested) : null;
     const session: CodexSession = {
@@ -241,6 +275,7 @@ export class CodexAdapter {
       threadId,
       resumed: isAliasId(requested) && threadId !== null,
       ...(model !== undefined ? { model } : {}),
+      ...(thinkingDepth !== undefined ? { thinkingDepth } : {}),
       clientMsgIds: new Map(),
       runs: new Map(),
       observedTools: new Set(),
@@ -262,6 +297,7 @@ export class CodexAdapter {
       client_msg_id?: unknown;
       text?: unknown;
       run_id?: unknown;
+      thinking_depth?: unknown;
     };
     const sessionId = typeof input.session_id === "string" ? input.session_id : "";
     const session = this.sessions.get(sessionId);
@@ -294,8 +330,17 @@ export class CodexAdapter {
       invalidStdoutStreak: 0,
       forcedFailure: null,
     };
+    // M3-10/ADR-010：run 启动时判定——`session.send` 覆盖优先（仅本次 run），
+    // 否则会话级值；映射为 `-c model_reasoning_effort=<level>`（未声明档位则沿用
+    // 适配器 CLI 配置的默认强度）。
+    const thinkingDepth = parseThinkingDepth(input.thinking_depth) ?? session.thinkingDepth;
+    const reasoning = reasoningForThinkingDepth(thinkingDepth);
     run.cli = new CodexCliRun({
-      config: { ...this.options.cli, ...(session.model ? { model: session.model } : {}) },
+      config: {
+        ...this.options.cli,
+        ...(session.model ? { model: session.model } : {}),
+        ...(reasoning !== undefined ? { reasoning } : {}),
+      },
       spec: {
         threadId: session.threadId,
         prompt: input.text,

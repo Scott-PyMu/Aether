@@ -6,7 +6,7 @@
 //! P0 实际产生的转移（实现与测试覆盖口径）：
 //! - `creating → idle`（会话创建完成）；`creating → failed`（创建失败）；
 //! - `idle → running`（新 run 准入）；`running → idle`（run 达到终态，会话可继续送消息）；
-//! - `running → waiting_permission → running`（D9 审批等待，归属 M2-03/M2-10）；
+//! - `running → waiting_permission → running`（D9 审批等待，归属 M3-12（ADR-011/v1.18））；
 //! - `running/idle → cancelled`（interrupt/dispose）；`idle → completed`（优雅关闭）。
 //!
 //! `paused` 为 P1 暂停/恢复预留（设计 §4#22：P0 无 pause/resume），转移表一并给出，

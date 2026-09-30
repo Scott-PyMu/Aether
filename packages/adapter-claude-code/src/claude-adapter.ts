@@ -29,6 +29,7 @@ import { randomUUID } from "node:crypto";
 
 import {
   ClaudeCliRun,
+  thinkingBudgetForDepth,
   type ClaudeCliConfig,
   type KillTreeFn,
   type SpawnFn,
@@ -45,7 +46,7 @@ export const RUNTIME_NAME = "claude-code";
 /** 适配器版本（semver，hello 上报）。 */
 export const ADAPTER_VERSION = "0.1.0";
 
-/** 适配器能力清单（hello/initialize 上报；RA-04）。 */
+/** 适配器能力清单（hello/initialize 上报；RA-04；M3-10 增 `thinking_depth`）。 */
 export const RUNTIME_CAPABILITIES: readonly string[] = [
   "session.create",
   "session.send",
@@ -53,6 +54,8 @@ export const RUNTIME_CAPABILITIES: readonly string[] = [
   "session.dispose",
   "tools.list",
   "permission.resolve",
+  // M3-10/ADR-010：档位 0–4 → `MAX_THINKING_TOKENS` 预算（映射表见 M3-10 证据）。
+  "thinking_depth",
 ];
 
 /** CLI stdout 无法解析的行：连续达到该阈值 → 该 run 判不健康（口径同 D6 连续无效帧 20 次）。 */
@@ -126,10 +129,19 @@ interface ClaudeSession {
   /** 原生会话已存在（init 已观察，或由 native_id 恢复）。 */
   nativeCreated: boolean;
   model?: string;
+  /** M3-10/ADR-010：会话级思考深度（0–4；override 优先，仅本次 run）。 */
+  thinkingDepth?: number;
   lastInit: ClaudeInitEvent | null;
   clientMsgIds: Map<string, string>;
   runs: Map<string, ClaudeRunState>;
   disposed: boolean;
+}
+
+/** M3-10：解析思考深度参数（整数 0–4；未知形态忽略，保持适配器宽容）。 */
+function parseThinkingDepth(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isInteger(value)) return undefined;
+  if (value < 0 || value > 4) return undefined;
+  return value;
 }
 
 export interface ClaudeAdapterOptions {
@@ -240,6 +252,7 @@ export class ClaudeCodeAdapter {
       workspace?: unknown;
       model?: unknown;
       native_id?: unknown;
+      thinking_depth?: unknown;
     };
     const requested = input.native_id;
     if (requested !== undefined && !isUuid(requested)) {
@@ -250,12 +263,14 @@ export class ClaudeCodeAdapter {
     }
     const nativeId = isUuid(requested) ? requested : randomUUID();
     const model = typeof input.model === "string" && input.model.length > 0 ? input.model : undefined;
+    const thinkingDepth = parseThinkingDepth(input.thinking_depth);
     const session: ClaudeSession = {
       id: nativeId,
       nativeId,
       resumed: isUuid(requested),
       nativeCreated: isUuid(requested),
       ...(model !== undefined ? { model } : {}),
+      ...(thinkingDepth !== undefined ? { thinkingDepth } : {}),
       lastInit: null,
       clientMsgIds: new Map(),
       runs: new Map(),
@@ -277,6 +292,7 @@ export class ClaudeCodeAdapter {
       client_msg_id?: unknown;
       text?: unknown;
       run_id?: unknown;
+      thinking_depth?: unknown;
     };
     const sessionId = typeof input.session_id === "string" ? input.session_id : "";
     const session = this.sessions.get(sessionId);
@@ -309,6 +325,10 @@ export class ClaudeCodeAdapter {
       invalidStdoutStreak: 0,
       forcedFailure: null,
     };
+    // M3-10/ADR-010：run 启动时判定——`session.send` 覆盖优先（仅本次 run），
+    // 否则会话级值；未声明档位时不注入预算（CLI 默认）。
+    const thinkingDepth = parseThinkingDepth(input.thinking_depth) ?? session.thinkingDepth;
+    const thinkingBudget = thinkingBudgetForDepth(thinkingDepth);
     run.cli = new ClaudeCliRun({
       config: { ...this.options.cli, ...(session.model ? { model: session.model } : {}) },
       spec: {
@@ -316,6 +336,7 @@ export class ClaudeCodeAdapter {
         resume: session.resumed || session.nativeCreated,
         prompt: input.text,
         timeoutMs: this.runTimeoutMs,
+        ...(thinkingBudget !== undefined ? { thinkingBudget } : {}),
       },
       onEvent: (event) => this.onCliEvent(session, run, event),
       onMalformedLine: (line) => this.onCliMalformedLine(run, line),

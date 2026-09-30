@@ -16,6 +16,7 @@ pub mod session_state;
 pub use domain::{
     LogLevel, Message, MessageRole, PermissionDecision, PermissionScope, PermissionStatus, Run,
     RunStatus, Runtime, RuntimeStatus, Session, SessionStatus, TokenUsage, Workspace,
+    THINKING_DEPTH_CAPABILITY, THINKING_DEPTH_DEFAULT, THINKING_DEPTH_MAX, THINKING_DEPTH_MIN,
 };
 pub use error::{EnvelopeError, UnknownValue};
 pub use event::{

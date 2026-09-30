@@ -889,3 +889,77 @@ describe("Mock 适配器：M3-08 工作区记忆工具（D14）", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("Mock 适配器：思考深度能力与观测（M3-10 / ADR-010）", () => {
+  function records(logPath: string): Array<Record<string, unknown>> {
+    return readFileSync(logPath, "utf8")
+      .split("\n")
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+  }
+
+  it("hello/initialize 默认声明 `thinking_depth`；`--no-thinking-depth` 省略", async () => {
+    const supported = new Harness();
+    await supported.start();
+    const hello = supported.frames.find((frame) => frame.method === "hello");
+    expect((hello?.params?.runtime as { capabilities: string[] }).capabilities).toContain(
+      "thinking_depth",
+    );
+    const initialized = await supported.requestResult("initialize", {});
+    expect(initialized.capabilities as string[]).toContain("thinking_depth");
+
+    const unsupported = new Harness({ thinkingDepthUnsupported: true });
+    await unsupported.start();
+    const helloNo = unsupported.frames.find((frame) => frame.method === "hello");
+    expect(
+      (helloNo?.params?.runtime as { capabilities: string[] }).capabilities,
+    ).not.toContain("thinking_depth");
+    const initializedNo = await unsupported.requestResult("initialize", {});
+    expect(initializedNo.capabilities as string[]).not.toContain("thinking_depth");
+  });
+
+  it("session.create / session.send 记录 thinking_depth（缺省 = null + has=false）", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "aether-m3-10-mock-log-"));
+    const logPath = path.join(dir, "session-log.jsonl");
+    const harness = new Harness({ sessionLog: logPath, streamDeltas: 1, streamIntervalMs: 1 });
+    await harness.start();
+    const created = await harness.requestResult("session.create", {
+      title: "思考深度观测",
+      thinking_depth: 4,
+    });
+    await harness.requestResult("session.send", {
+      session_id: created.session_id as string,
+      client_msg_id: "m3-10-c1",
+      text: "hello",
+      thinking_depth: 1,
+    });
+    await harness.requestResult("session.send", {
+      session_id: created.session_id as string,
+      client_msg_id: "m3-10-c2",
+      text: "hello",
+    });
+    await harness.waitForFrame(
+      () => records(logPath).length >= 3,
+      "session-log（create + 两次 send）",
+    );
+    const logRecords = records(logPath);
+    expect(logRecords[0]).toMatchObject({
+      method: "session.create",
+      thinking_depth: 4,
+      has_thinking_depth: true,
+    });
+    expect(logRecords[1]).toMatchObject({
+      method: "session.send",
+      client_msg_id: "m3-10-c1",
+      thinking_depth: 1,
+      has_thinking_depth: true,
+    });
+    expect(logRecords[2]).toMatchObject({
+      method: "session.send",
+      client_msg_id: "m3-10-c2",
+      thinking_depth: null,
+      has_thinking_depth: false,
+    });
+    rmSync(dir, { recursive: true, force: true });
+  });
+});

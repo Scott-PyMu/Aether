@@ -11,9 +11,12 @@ use serde_json::Value;
 use super::dto::{
     AppRestartRequest, ArtifactAddRequest, ArtifactRemoveRequest, ArtifactsListRequest,
     BackupCreateRequest, BackupRestoreRequest, ExportDiagnosticsRequest, MessagesPageRequest,
-    PermissionResolveRequest, PermissionsPendingRequest, RunRetryRequest, RuntimeEnableRequest,
-    RuntimeRetryRequest, SessionCreateRequest, SessionIdRequest, SessionListRequest,
-    SessionSendRequest, SettingsGetRequest, SettingsSetRequest, WorkspaceSetRequest,
+    PermissionResolveRequest, PermissionsPendingRequest, ProviderCreateRequest,
+    ProviderDeleteRequest, ProviderModelAddRequest, ProviderModelToggleRequest,
+    ProviderToggleRequest, ProviderUpdateRequest, ProvidersListRequest, RunRetryRequest,
+    RuntimeEnableRequest, RuntimeRetryRequest, SessionCreateRequest, SessionIdRequest,
+    SessionListRequest, SessionSendRequest, SettingsGetRequest, SettingsSetRequest,
+    WorkspaceSetRequest,
 };
 use super::error::IpcError;
 use super::path::ArtifactPath;
@@ -143,6 +146,46 @@ pub trait IpcBackend: Send + Sync + 'static {
     /// ADR-010/M3-09：删除会话引用（不存在 → 幂等 `{ removed: false }`）。
     fn artifact_remove(&self, _request: &ArtifactRemoveRequest) -> Result<Value, IpcError> {
         Err(IpcError::not_implemented("artifact_remove"))
+    }
+
+    /// ADR-010/M3-11：供应商与模型清单（无参数；**不含 `api_key` 本体**，
+    /// 以 `api_key_ref` 引用呈现；按 `created_at` 升序）。
+    fn providers_list(&self, _request: &ProvidersListRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("providers_list"))
+    }
+
+    /// ADR-010/M3-11：新建供应商；`api_key` 非空 → 经 `aether-security` 写 keyring
+    /// （A3 降级走加密文件）→ 返回/落库 `api_key_ref`。
+    fn provider_create(&self, _request: &ProviderCreateRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("provider_create"))
+    }
+
+    /// ADR-010/M3-11：整体更新（`type` 不可改；`api_key` 三态）。
+    fn provider_update(&self, _request: &ProviderUpdateRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("provider_update"))
+    }
+
+    /// ADR-010/M3-11：删除供应商（内置 → `builtin_provider_undeletable`）。
+    fn provider_delete(&self, _request: &ProviderDeleteRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("provider_delete"))
+    }
+
+    /// ADR-010/M3-11：快速启用/停用（内置可停用）。
+    fn provider_toggle(&self, _request: &ProviderToggleRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("provider_toggle"))
+    }
+
+    /// ADR-010/M3-11：新增模型（默认启用；重复 `(provider_id, model_id)` → `invalid_value`）。
+    fn provider_model_add(&self, _request: &ProviderModelAddRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("provider_model_add"))
+    }
+
+    /// ADR-010/M3-11：模型启用/停用（不存在 → `provider_model_not_found`）。
+    fn provider_model_toggle(
+        &self,
+        _request: &ProviderModelToggleRequest,
+    ) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("provider_model_toggle"))
     }
 
     fn export_diagnostics(

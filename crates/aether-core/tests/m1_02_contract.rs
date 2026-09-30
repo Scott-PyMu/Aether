@@ -26,10 +26,13 @@ use aether_core::{
 use serde_json::{json, Value};
 
 const MIGRATION_SQL: &str = include_str!("../../../migrations/0001_init.sql");
-/// 已发布的增量迁移（ADR-004/ADR-005）：0002 为 `messages` 增加 `client_msg_id` 列
-/// 与唯一约束。结构解析仍以 0001 的 CREATE TABLE 为基，增量列在此数据驱动叠加，
+/// 已发布的增量迁移（ADR-004/ADR-005/ADR-010）：0002 为 `messages` 增加
+/// `client_msg_id` 列与唯一约束；0003 为 `sessions`/`runs` 增加 `thinking_depth`
+/// （并新增 artifacts/providers 表，表结构不在本测试解析范围内）。
+/// 结构解析仍以 0001 的 CREATE TABLE 为基，增量列在此数据驱动叠加，
 /// 保持「实体字段 ↔ 有效 schema」的契约断言不因增量迁移而失真。
 const MIGRATION_0002_SQL: &str = include_str!("../../../migrations/0002_unique_keys.sql");
+const MIGRATION_0003_SQL: &str = include_str!("../../../migrations/0003_p0_ui_extensions.sql");
 
 // ===== 附录 C DDL 静态解析（无 DB 依赖，Windows 本地可运行） =====
 
@@ -151,29 +154,34 @@ fn columns_set(table: &str) -> BTreeSet<String> {
 /// 解析 0002+ 增量迁移中的 `ALTER TABLE <t> ADD COLUMN <name> ...`（数据驱动叠加）。
 fn incremental_columns(table: &str) -> BTreeSet<String> {
     let mut columns = BTreeSet::new();
-    let without_comments: String = MIGRATION_0002_SQL
-        .lines()
+    for sql in [MIGRATION_0002_SQL, MIGRATION_0003_SQL] {
+        for statement in strip_sql_comments(sql).split(';') {
+            let Some(rest) = statement.trim().strip_prefix("ALTER TABLE") else {
+                continue;
+            };
+            let mut tokens = rest.split_whitespace();
+            if tokens.next() != Some(table) {
+                continue;
+            }
+            if tokens.next() == Some("ADD") && tokens.next() == Some("COLUMN") {
+                if let Some(name) = tokens.next() {
+                    columns.insert(name.to_string());
+                }
+            }
+        }
+    }
+    columns
+}
+
+/// 去掉行注释（`-- ...`；增量迁移解析用）。
+fn strip_sql_comments(sql: &str) -> String {
+    sql.lines()
         .map(|line| match line.find("--") {
             Some(index) => &line[..index],
             None => line,
         })
         .collect::<Vec<_>>()
-        .join("\n");
-    for statement in without_comments.split(';') {
-        let Some(rest) = statement.trim().strip_prefix("ALTER TABLE") else {
-            continue;
-        };
-        let mut tokens = rest.split_whitespace();
-        if tokens.next() != Some(table) {
-            continue;
-        }
-        if tokens.next() == Some("ADD") && tokens.next() == Some("COLUMN") {
-            if let Some(name) = tokens.next() {
-                columns.insert(name.to_string());
-            }
-        }
-    }
-    columns
+        .join("\n")
 }
 
 fn json_object_keys(value: &Value) -> BTreeSet<String> {
@@ -248,6 +256,7 @@ fn session_summary() -> SessionSummary {
         title: "会话".to_string(),
         status: SessionStatus::Idle,
         model: Some("mock-model".to_string()),
+        thinking_depth: Some(aether_core::THINKING_DEPTH_DEFAULT),
         created_at: 1,
         updated_at: 2,
     }
@@ -972,6 +981,7 @@ fn sample_session() -> Session {
         title: "会话".to_string(),
         status: SessionStatus::Running,
         model: None,
+        thinking_depth: aether_core::THINKING_DEPTH_DEFAULT,
         system_prompt: None,
         config: json!({"native_id": "n-1"}),
         token_usage: TokenUsage {
@@ -1007,6 +1017,7 @@ fn sample_run() -> Run {
         session_id: SessionId::new("sess-1").unwrap(),
         status: RunStatus::Running,
         input_message_id: Some(MessageId::new("msg-1").unwrap()),
+        thinking_depth: Some(aether_core::THINKING_DEPTH_DEFAULT),
         error: None,
         started_at: 1,
         finished_at: None,

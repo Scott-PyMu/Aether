@@ -17,9 +17,12 @@ use aether_tauri::ipc::backend::IpcBackend;
 use aether_tauri::ipc::dto::{
     AppRestartRequest, ArtifactAddRequest, ArtifactRemoveRequest, ArtifactsListRequest,
     BackupCreateRequest, BackupRestoreRequest, ExportDiagnosticsRequest, MessagesPageRequest,
-    PermissionResolveRequest, PermissionsPendingRequest, RunRetryRequest, RuntimeEnableRequest,
-    RuntimeRetryRequest, SessionCreateRequest, SessionIdRequest, SessionListRequest,
-    SessionSendRequest, SettingsGetRequest, SettingsSetRequest, WorkspaceSetRequest,
+    PermissionResolveRequest, PermissionsPendingRequest, ProviderCreateRequest,
+    ProviderDeleteRequest, ProviderModelAddRequest, ProviderModelToggleRequest,
+    ProviderToggleRequest, ProviderUpdateRequest, ProvidersListRequest, RunRetryRequest,
+    RuntimeEnableRequest, RuntimeRetryRequest, SessionCreateRequest, SessionIdRequest,
+    SessionListRequest, SessionSendRequest, SettingsGetRequest, SettingsSetRequest,
+    WorkspaceSetRequest,
 };
 use aether_tauri::ipc::error::IpcError;
 use aether_tauri::ipc::path::{
@@ -168,6 +171,37 @@ impl IpcBackend for RecordingBackend {
 
     fn artifact_remove(&self, _request: &ArtifactRemoveRequest) -> Result<Value, IpcError> {
         self.record("artifact_remove")
+    }
+
+    fn providers_list(&self, _request: &ProvidersListRequest) -> Result<Value, IpcError> {
+        self.record("providers_list")
+    }
+
+    fn provider_create(&self, _request: &ProviderCreateRequest) -> Result<Value, IpcError> {
+        self.record("provider_create")
+    }
+
+    fn provider_update(&self, _request: &ProviderUpdateRequest) -> Result<Value, IpcError> {
+        self.record("provider_update")
+    }
+
+    fn provider_delete(&self, _request: &ProviderDeleteRequest) -> Result<Value, IpcError> {
+        self.record("provider_delete")
+    }
+
+    fn provider_toggle(&self, _request: &ProviderToggleRequest) -> Result<Value, IpcError> {
+        self.record("provider_toggle")
+    }
+
+    fn provider_model_add(&self, _request: &ProviderModelAddRequest) -> Result<Value, IpcError> {
+        self.record("provider_model_add")
+    }
+
+    fn provider_model_toggle(
+        &self,
+        _request: &ProviderModelToggleRequest,
+    ) -> Result<Value, IpcError> {
+        self.record("provider_model_toggle")
     }
 
     fn export_diagnostics(
@@ -630,6 +664,91 @@ fn malformed_samples_return_structured_errors_and_do_not_reach_backend() {
             "unknown_field",
             Some("unexpected"),
         ),
+        // ===== ADR-010/M3-11：供应商七命令校验矩阵 =====
+        (
+            "providers_list",
+            json!({ "unexpected": 1 }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
+        (
+            "provider_create",
+            json!({ "name": "x", "type": "custom", "base_url": "https://a.example.com", "enabled": true, "unexpected": 1 }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
+        (
+            "provider_create",
+            json!({ "name": "x", "type": "mistral", "base_url": "https://a.example.com", "enabled": true }),
+            "invalid_enum",
+            None,
+        ),
+        (
+            "provider_create",
+            json!({ "name": "x", "type": "custom", "base_url": "ftp://a.example.com", "enabled": true }),
+            "invalid_format",
+            Some("base_url"),
+        ),
+        (
+            "provider_create",
+            json!({ "name": "x", "type": "custom", "enabled": true }),
+            "missing_field",
+            Some("base_url"),
+        ),
+        (
+            "provider_create",
+            json!({ "name": "x", "type": "openai", "api_key": "k".repeat(8193), "enabled": true }),
+            "too_large",
+            Some("api_key"),
+        ),
+        (
+            "provider_create",
+            json!({ "name": "", "type": "openai", "enabled": true }),
+            "invalid_format",
+            Some("name"),
+        ),
+        (
+            "provider_update",
+            json!({ "id": "short", "name": "x", "enabled": true }),
+            "invalid_format",
+            Some("id"),
+        ),
+        (
+            "provider_update",
+            json!({ "id": ULID, "name": "x", "type": "custom", "enabled": true }),
+            "unknown_field",
+            Some("type"),
+        ),
+        (
+            "provider_delete",
+            json!({ "id": "short" }),
+            "invalid_format",
+            Some("id"),
+        ),
+        (
+            "provider_toggle",
+            json!({ "id": ULID }),
+            "missing_field",
+            Some("enabled"),
+        ),
+        (
+            "provider_model_add",
+            json!({ "provider_id": ULID, "model_id": "bad model", "display_name": "X" }),
+            "invalid_format",
+            Some("model_id"),
+        ),
+        (
+            "provider_model_add",
+            json!({ "provider_id": ULID, "model_id": "m", "display_name": "" }),
+            "invalid_format",
+            Some("display_name"),
+        ),
+        (
+            "provider_model_toggle",
+            json!({ "provider_id": "short", "model_id": "m", "enabled": true }),
+            "invalid_format",
+            Some("provider_id"),
+        ),
     ];
 
     for (command, payload, code, field) in samples {
@@ -743,6 +862,48 @@ fn valid_requests_reach_backend_exactly_once() {
             json!({ "session_id": ULID, "artifact_id": ULID }),
             "artifact_remove",
         ),
+        // ADR-010/M3-11：供应商七命令（合法形态到达后端；providers_list 两种调用方式）。
+        ("providers_list", Value::Null, "providers_list"),
+        ("providers_list", json!({}), "providers_list"),
+        (
+            "provider_create",
+            json!({
+                "name": "自定义", "type": "custom", "base_url": "https://api.example.com",
+                "api_key": "unit-placeholder", "enabled": true
+            }),
+            "provider_create",
+        ),
+        (
+            "provider_create",
+            json!({ "name": "OpenAI 兼容", "type": "openai", "enabled": false }),
+            "provider_create",
+        ),
+        (
+            "provider_update",
+            json!({ "id": ULID, "name": "改名", "enabled": true }),
+            "provider_update",
+        ),
+        (
+            "provider_update",
+            json!({ "id": ULID, "name": "清除密钥", "api_key": "", "base_url": "", "enabled": false }),
+            "provider_update",
+        ),
+        ("provider_delete", json!({ "id": ULID }), "provider_delete"),
+        (
+            "provider_toggle",
+            json!({ "id": ULID, "enabled": true }),
+            "provider_toggle",
+        ),
+        (
+            "provider_model_add",
+            json!({ "provider_id": ULID, "model_id": "deepseek-v4-pro", "display_name": "DeepSeek V4 Pro" }),
+            "provider_model_add",
+        ),
+        (
+            "provider_model_toggle",
+            json!({ "provider_id": ULID, "model_id": "deepseek-v4-pro", "enabled": false }),
+            "provider_model_toggle",
+        ),
         (
             "export_diagnostics",
             json!({ "target_dir": inside }),
@@ -818,6 +979,16 @@ fn valid_requests_reach_backend_exactly_once() {
         "artifacts_list",
         "artifact_add",
         "artifact_remove",
+        "providers_list",
+        "providers_list",
+        "provider_create",
+        "provider_create",
+        "provider_update",
+        "provider_update",
+        "provider_delete",
+        "provider_toggle",
+        "provider_model_add",
+        "provider_model_toggle",
         "export_diagnostics",
         "export_diagnostics",
         "settings_get",
@@ -1110,4 +1281,113 @@ fn parse_strict_classifies_serde_errors() {
     assert_eq!(not_object.code.as_str(), "invalid_json");
 
     assert!(parse_strict::<Sample>(json!({ "name": "ok", "optional": 3 })).is_ok());
+}
+
+/// M3-10 DoD5：思考深度校验矩阵（ADR-010 决策 2）——
+/// 0–4 合法（到达后端恰好一次）；5 / -1 → `out_of_range`；1.5 / "高" / true →
+/// `invalid_type`；非法样本不落库、不透传。
+#[test]
+fn thinking_depth_matrix_valid_and_invalid_samples() {
+    let fixture = fixture("m3-10-thinking");
+    let invalid: Vec<(&str, Value, &str, Option<&str>)> = vec![
+        (
+            "session_create",
+            json!({ "runtime_id": "mock", "title": "t", "thinking_depth": 5 }),
+            "out_of_range",
+            Some("thinking_depth"),
+        ),
+        (
+            "session_create",
+            json!({ "runtime_id": "mock", "title": "t", "thinking_depth": -1 }),
+            "out_of_range",
+            Some("thinking_depth"),
+        ),
+        (
+            "session_create",
+            json!({ "runtime_id": "mock", "title": "t", "thinking_depth": 1.5 }),
+            "invalid_type",
+            None,
+        ),
+        (
+            "session_create",
+            json!({ "runtime_id": "mock", "title": "t", "thinking_depth": "高" }),
+            "invalid_type",
+            None,
+        ),
+        (
+            "session_create",
+            json!({ "runtime_id": "mock", "title": "t", "thinking_depth": true }),
+            "invalid_type",
+            None,
+        ),
+        (
+            "session_send",
+            json!({ "session_id": ULID, "text": "hi", "client_msg_id": CLIENT_MSG_ID, "thinking_depth": 9 }),
+            "out_of_range",
+            Some("thinking_depth"),
+        ),
+        (
+            "session_send",
+            json!({ "session_id": ULID, "text": "hi", "client_msg_id": CLIENT_MSG_ID, "thinking_depth": -3 }),
+            "out_of_range",
+            Some("thinking_depth"),
+        ),
+        (
+            "session_send",
+            json!({ "session_id": ULID, "text": "hi", "client_msg_id": CLIENT_MSG_ID, "thinking_depth": 2.5 }),
+            "invalid_type",
+            None,
+        ),
+        (
+            "session_send",
+            json!({ "session_id": ULID, "text": "hi", "client_msg_id": CLIENT_MSG_ID, "thinking_depth": "high" }),
+            "invalid_type",
+            None,
+        ),
+    ];
+    for (command, payload, code, field) in invalid {
+        let result = invoke(&fixture.webview, command, payload.clone());
+        assert_error(result, code, field, &format!("{command} {payload}"));
+        assert!(
+            fixture.backend.calls().is_empty(),
+            "校验失败后不得调用下游（不落库/不透传）：{:?}",
+            fixture.backend.calls()
+        );
+    }
+
+    // 0–4 全部合法；缺省（无字段/null）同样合法。
+    for value in [0i64, 1, 2, 3, 4] {
+        let created = invoke(
+            &fixture.webview,
+            "session_create",
+            json!({ "runtime_id": "mock", "title": "t", "thinking_depth": value }),
+        );
+        assert!(created.is_ok(), "档位 {value} 必须合法：{created:?}");
+        let sent = invoke(
+            &fixture.webview,
+            "session_send",
+            json!({
+                "session_id": ULID,
+                "text": "hi",
+                "client_msg_id": CLIENT_MSG_ID,
+                "thinking_depth": value,
+            }),
+        );
+        assert!(sent.is_ok(), "档位 {value} 必须合法：{sent:?}");
+    }
+    assert!(
+        invoke(
+            &fixture.webview,
+            "session_create",
+            json!({ "runtime_id": "mock", "title": "t", "thinking_depth": Value::Null }),
+        )
+        .is_ok(),
+        "显式 null（缺省）必须合法"
+    );
+    assert_eq!(
+        fixture.backend.calls().len(),
+        11,
+        "合法样本（5 档 × 2 + null）各到达后端恰好一次：{:?}",
+        fixture.backend.calls()
+    );
 }

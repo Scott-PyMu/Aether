@@ -117,8 +117,14 @@ export interface MockAdapterOptions {
   /**
    * 会话调用记录（M3-08：`session.create` 的 `system_prompt` 注入观测；JSON Lines）。
    * 供注入 E2E 断言「核心按工作区组合的记忆文本已下发适配器」。
+   * M3-10：追加 `thinking_depth` 观测（session.create 与 session.send）。
    */
   sessionLog?: string;
+  /**
+   * M3-10/ADR-010：不声明 `thinking_depth` 能力（未支持运行时夹具；hello 与
+   * initialize 的 capabilities 均省略该项）。缺省声明（供 CI 能力门正向用例）。
+   */
+  thinkingDepthUnsupported?: boolean;
 }
 
 const DEFAULT_DELTAS = 24;
@@ -168,6 +174,8 @@ interface MockSession {
   activeRun?: ActiveRun;
   /** M3-08/D14：`session.create` 收到的记忆注入文本（观测用）。 */
   systemPrompt?: string;
+  /** M3-10/ADR-010：`session.create` 收到的思考深度（观测用；未收到为 undefined）。 */
+  thinkingDepth?: number;
 }
 
 function emptyUsage(): Record<string, number> {
@@ -192,7 +200,13 @@ export class MockAdapter {
       | "streamIntervalMs"
       | "longStreamIntervalMs"
     >
-  > & { protocol?: string; sendHello: boolean; artifactsDir?: string; sessionLog?: string };
+  > & {
+    protocol?: string;
+    sendHello: boolean;
+    artifactsDir?: string;
+    sessionLog?: string;
+    thinkingDepthUnsupported: boolean;
+  };
 
   private readonly sessions = new Map<string, MockSession>();
   /** M2-10：待决权限请求（`permission.request` 已发、等待核心 `permission.resolve`）。 */
@@ -231,6 +245,7 @@ export class MockAdapter {
       longStreamIntervalMs: options.longStreamIntervalMs ?? DEFAULT_LONG_INTERVAL_MS,
       artifactsDir: options.artifactsDir,
       sessionLog: options.sessionLog,
+      thinkingDepthUnsupported: options.thinkingDepthUnsupported ?? false,
       protocol,
       sendHello:
         (options.sendHello ?? true) &&
@@ -247,6 +262,8 @@ export class MockAdapter {
         "session.dispose",
         "tools.list",
         "permission.resolve",
+        // M3-10/ADR-010：能力项声明（存在即支持；`--no-thinking-depth` 省略）。
+        ...(this.options.thinkingDepthUnsupported ? [] : ["thinking_depth"]),
       ],
     };
     this.adapter = new Adapter({
@@ -421,7 +438,7 @@ export class MockAdapter {
       }))
       .handle("session.create", (params) => {
         this.sessionCounter += 1;
-        const input = params as { system_prompt?: string };
+        const input = params as { system_prompt?: string; thinking_depth?: number };
         const session: MockSession = {
           id: `mock-sess-${this.sessionCounter}`,
           disposed: false,
@@ -429,14 +446,20 @@ export class MockAdapter {
           ...(typeof input.system_prompt === "string"
             ? { systemPrompt: input.system_prompt }
             : {}),
+          ...(typeof input.thinking_depth === "number"
+            ? { thinkingDepth: input.thinking_depth }
+            : {}),
         };
         this.sessions.set(session.id, session);
         // M3-08/D14：记忆注入观测记录（JSON Lines；跨会话注入断言）。
+        // M3-10：追加思考深度透传观测（`thinking_depth` 仅在能力声明且透传时出现）。
         this.logSessionCall({
           method: "session.create",
           session_id: session.id,
           system_prompt: session.systemPrompt ?? null,
           has_system_prompt: session.systemPrompt !== undefined,
+          thinking_depth: session.thinkingDepth ?? null,
+          has_thinking_depth: session.thinkingDepth !== undefined,
         });
         return { session_id: session.id, created_at: Date.now() };
       })
@@ -445,6 +468,7 @@ export class MockAdapter {
           session_id?: string;
           client_msg_id?: string;
           text?: string;
+          thinking_depth?: number;
         };
         const session = this.session(input.session_id);
         if (!session) {
@@ -460,6 +484,16 @@ export class MockAdapter {
         }
         const runId = ulid();
         session.clientMsgIds.set(clientMsgId, runId);
+        // M3-10：`session.send` 思考深度覆盖观测（仅本次 run；缺省 = 不带字段）。
+        // `run_id` 为适配器侧 id；`client_msg_id` 为请求携带的核心 run id（生产口径）。
+        this.logSessionCall({
+          method: "session.send",
+          session_id: session.id,
+          run_id: runId,
+          client_msg_id: clientMsgId,
+          thinking_depth: typeof input.thinking_depth === "number" ? input.thinking_depth : null,
+          has_thinking_depth: typeof input.thinking_depth === "number",
+        });
         void this.streamRun(session, runId, input.text ?? "");
         return { accepted: true, run_id: runId };
       })

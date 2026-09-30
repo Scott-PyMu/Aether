@@ -1,13 +1,13 @@
-# Aether UI/UX 设计规格 v0.3（v0.2 已评审通过；v0.3 为 M3-12 锚点登记）
+# Aether UI/UX 设计规格 v0.4（v0.2 已评审通过；v0.3 为 M3-12 锚点登记；v0.4 为 M3-11 前置登记）
 
 | 项 | 内容 |
 |---|---|
-| 文档 | Aether UI/UX 设计规格 v0.3（v0.2 已评审通过；v0.3 为 M3-12 锚点登记） |
+| 文档 | Aether UI/UX 设计规格 v0.4（v0.2 已评审通过；v0.3 为 M3-12 锚点登记；v0.4 为 M3-11 前置登记） |
 | 依据基线 | 《需求文档》v0.7、《设计文档》v1.10（冻结，含 ADR-001–010）、《实施计划与验收标准》v1.18（ADR-011）、`AGENTS.md`、ADR-010/ADR-011 |
 | 参考对象 | Proma（proma-ai/Proma）信息组织范式；Hermes Studio / Ekko Studio（EKKOLearnAI/hermes-studio）界面范式（仅借鉴公开界面思路，不拷贝代码，A11/SE-05） |
 | 效力 | **本文件不构成冻结基线**。与设计文档冲突时以设计文档为准；本文件中的实现偏差须先提 ADR（AGENTS §3） |
 | 适用范围 | P0 前端（M3-01…M3-12）与 E2E；P1+ 仅作预留说明，不进入排期 |
-| 状态 | **已评审通过（2026-09-24，随 ADR-010 批次）**；v0.2 已回流 ADR-010（文件引用面板 / 思考深度 / 模型与供应商配置，M3-09/M3-10/M3-11）；**v0.3（2026-09-29）：按 ADR-011 决策 5 登记 M3-12 分组锚点契约并冻结（§7.3），依据基线同步计划 v1.18**；本文件仍不构成冻结基线（与设计文档冲突以设计文档为准）；「开放问题」未关闭前不得据此定稿 |
+| 状态 | **已评审通过（2026-09-24，随 ADR-010 批次）**；v0.2 已回流 ADR-010（文件引用面板 / 思考深度 / 模型与供应商配置，M3-09/M3-10/M3-11）；**v0.3（2026-09-29）：按 ADR-011 决策 5 登记 M3-12 分组锚点契约并冻结（§7.3），依据基线同步计划 v1.18**；**v0.4（2026-09-30）：按 M3-11 DoD6 前置要求登记「模型选择器空态与手动输入共存口径」（ADR-010 §5-9；UI-05 回归防护；实施记录见 `docs/M3-11-证据.md`）**；本文件仍不构成冻结基线（与设计文档冲突以设计文档为准）；「开放问题」未关闭前不得据此定稿 |
 
 **阅读顺序**：§0 硬约束与参考采纳 → §1 界面清单 → §2 线框 → §3 状态图 → §4 组件矩阵 → §5 文案表 → §6 Token/可访问性 → §7 E2E 选择器 → §8 范围冻结 → §9 开放问题。
 
@@ -202,6 +202,12 @@
   - 运行中发送：第 1 条 → `queued=true` → 显示「已进入等待队列」（与「已受理」区分）；等待队列已满 → 服务端 `session_busy` → 草稿保留 + 提示，按钮禁用至当前 run 终态（D8 run 串行）；
   - 中断：仅当 `activeRunId != null` 或会话 `running` 时可用（M3-02 现状）；点击 → `session_interrupt` → 等待 `run.cancelled` 事件；按钮进入 pending 态（防重复点击）。
 - **模型展示**：会话级模型（`session_create.model`，UI-05）以只读 chip 显示；**运行期不支持切换**（无 update 命令）——见 §9。
+- **模型选择器与手动输入共存（M3-11 前置登记，2026-09-30；ADR-010 §5-9）**：
+  1. **输入区模型选择器**（`model-selector`）从**启用供应商的启用模型**派生（分组 + 搜索；M3-11 落地）；选择结果写入与 `session-model-input` **同一草稿字段**，经既有 `session.create.model` 透传（UI-05 路径不变）；
+  2. **手动输入保留**：新建会话表单的 `session-model-input`（自由文本）**不移除、不改名**（UI-05 验收锚点）；选择器与手动输入二者均作用于新建会话，手动输入为选择器的无配置兜底路径；
+  3. **空态**：选择器无可用模型（播种内置供应商默认 `enabled=0` 且无模型的新装态）时显示原型空态文案「没有可用的模型 / 请先在「设置 → 模型与供应商配置」中启用供应商和模型」，**不阻断**手动输入；
+  4. **失效回退**：已选模型随供应商/模型停用而从选择器消失时，回退到首个可用模型（无可用模型则清空）；此前未选择过则保持空选择（不自动为新建会话预选模型）；
+  5. **不匹配校验**：P0 无「供应商记录 → 适配器消费映射」（ADR-010 决策 3 边界/P1 另立 ADR），选择器**不按 runtime 过滤、不做模型与 runtime 的匹配校验**；模型串仅经既有 `session.create.model` 透传。
 - **思考深度（ADR-010）**：输入区 5 档滑块（关闭/低/高/极高/最大，默认「高」）；运行时未声明 `thinking_depth` 能力时置灰 + tooltip「当前运行时不支持思考深度」；值随 `session_create`（会话级）/ `session_send`（本次 run 覆盖）透传；运行期只读语义与模型一致（无 update 命令）；核心警告（`thinking_depth_unsupported`）为同步判定路径兜底（延迟判定以生效值回显为准）。
 - **禁用态矩阵**：
 
@@ -633,6 +639,10 @@ stateDiagram-v2
 | M3-11 | 供应商表单 | `provider-form` / `provider-name-input` / `provider-base-url-input` / `provider-api-key-input` / `provider-api-key-ref-readonly` / `provider-enabled-switch` / `provider-form-save` / `provider-form-back` | — |
 | M3-11 | 供应商模型 | `provider-model-item` / `provider-model-toggle` / `provider-model-add` | `data-model-id`、`data-enabled` |
 | M3-11 | 模型选择器 | `model-selector` / `model-selector-item` / `model-selector-empty` | `data-provider-id`、`data-model-id` |
+| M3-11 | 供应商页补充（实现登记，2026-09-30） | `providers-add`（添加供应商）/ `providers-add-custom`（添加自定义供应商）/ `provider-empty`（空态）/ `provider-error`（错误元素，补 `data-code`）/ `provider-test-notice`（「连通性测试将在 P1 开放」提示）/ `providers-notice`（操作回执）/ `provider-type-select`（官方类型选择，仅创建态） | `data-code`（错误元素） |
+| M3-11 | 供应商表单补充（实现登记，2026-09-30） | `provider-api-key-reveal`（显示/隐藏密钥）/ `provider-model-id-input` / `provider-model-name-input` / `provider-delete-cancel` / `provider-delete-confirm-button` | — |
+| M3-11 | 模型选择器补充（实现登记，2026-09-30） | `model-selector-toggle`（选择器触发按钮；`model-selector` 为容器） / `model-selector-list`（下拉容器）/ `model-selector-search`（搜索框） | — |
+| M3-11 | 设置页子导航（实现登记，2026-09-30） | `settings-tab-general` / `settings-tab-providers` | `data-active` |
 | M3-12 | 会话列表分组 | `session-group` / `session-group-title` | `data-group`（running/waiting_permission/failed/other；固定组序：运行中 → 等待审批 → 失败 → 其他；空组隐藏） |
 | M3-12 | 会话列表容器（结构变更） | `session-list` / `session-item` / `session-item-status`（既有锚点，不重命名；由扁平列表改为分组容器） | `data-session-id`、`data-active`（组内归属不变） |
 | 通用 | 覆盖层 | `overlay-<name>`（settings/backup/diagnostics/about）/ `overlay-back` | — |
@@ -689,7 +699,7 @@ stateDiagram-v2
 | # | 问题 | 建议默认 | 影响 |
 |---|---|---|---|
 | Q1 | 会话列表默认分组：按状态 / 按 `runtime_id` / 纯时间倒序 | 按状态分组（§2.2） | 左栏信息架构；若按 runtime 分组需评估多运行时下的组数 |
-| Q2 | 模型选择器位置：创建表单 / 输入区工具条 | 输入区选择器（ADR-010：作用于新建会话；会话内只读 chip）；运行期切换需 ADR | UI-05 交互与后续「运行期切换模型」需求（需 ADR） |
+| Q2 | 模型选择器位置：创建表单 / 输入区工具条 | **已裁定（M3-11 前置登记，2026-09-30）**：输入区选择器（ADR-010：作用于新建会话；会话内只读 chip）+ 保留新建表单手动输入（`session-model-input` 不移除/不改名）；空态/失效回退/不匹配校验口径见 §2.4 | UI-05 交互与后续「运行期切换模型」需求（需 ADR） |
 | Q3 | 权限审批形态：非模态卡片（本规格）vs 模态弹窗（D9 措辞「弹窗」） | 非模态卡片（保证输入可用；Proma 参考） | 需评审确认与 D9 口径一致性 |
 | Q4 | 右栏辅助面板是否 P0 必需；1280 宽下默认展开还是折叠 | 默认展开（≥1280），<1280 折叠为抽屉；右栏含文件引用面板（ADR-010，四分区） | 三栏在 1280×800 下的可用宽度 |
 | Q5 | `session_dispose`（关闭会话）是否在 P0 暴露 UI 入口 | 暂不暴露（M3-02 未要求） | 会话生命周期完整性；暴露需定义关闭语义与二次确认 |

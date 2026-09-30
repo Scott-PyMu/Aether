@@ -5,7 +5,12 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { DshAdapter, type DshAdapterOptions } from "./dsh-adapter";
+import {
+  DshAdapter,
+  dshReasoningValueForDepth,
+  dshReasoningValuesFrom,
+  type DshAdapterOptions,
+} from "./dsh-adapter";
 import { DEFAULT_DSH_VERSION_PIN } from "./dsh-plugin";
 
 const FAKE_ACP = fileURLToPath(
@@ -500,5 +505,98 @@ describe("DshAdapter 中断 / dispose / Mode R", () => {
     expect(await second.waitTerminal(String(recall.run_id))).toBe("run.completed");
     expect(second.completedText(String(recall.run_id))).toBe("AETHER-DSH-TOKEN");
     await second.shutdown();
+  });
+});
+
+describe("DshAdapter：思考深度（M3-10 / ADR-010，ACP reasoning_effort）", () => {
+  it("能力声明 + configOptions 提取/档位映射纯函数", async () => {
+    const { harness, initialized } = await initializedHarness();
+    expect(initialized.capabilities as string[]).toContain("thinking_depth");
+    const hello = harness.frames.find((frame) => frame.method === "hello");
+    const runtime = hello?.params?.["runtime"] as Record<string, unknown> | undefined;
+    expect(runtime?.["capabilities"]).toContain("thinking_depth");
+
+    const flat = [
+      {
+        id: "reasoning_effort",
+        options: [
+          { value: "", name: "Provider default" },
+          { value: "minimal", name: "minimal" },
+          { value: "low", name: "low" },
+          { value: "medium", name: "medium" },
+          { value: "high", name: "high" },
+        ],
+      },
+      { id: "model", options: [{ value: "fake-model" }] },
+    ];
+    expect(dshReasoningValuesFrom(flat)).toEqual(["minimal", "low", "medium", "high"]);
+    const grouped = [
+      {
+        id: "reasoning_effort",
+        options: [{ options: [{ value: "low" }, { value: "high" }] }],
+      },
+    ];
+    expect(dshReasoningValuesFrom(grouped)).toEqual(["low", "high"]);
+    expect(dshReasoningValuesFrom([])).toEqual([]);
+    expect(dshReasoningValuesFrom(null)).toEqual([]);
+
+    expect(dshReasoningValueForDepth(0, ["minimal", "low", "medium", "high"])).toBe("minimal");
+    expect(dshReasoningValueForDepth(2, ["minimal", "low", "medium", "high"])).toBe("medium");
+    expect(dshReasoningValueForDepth(4, ["minimal", "low", "medium", "high"])).toBe("high");
+    expect(dshReasoningValueForDepth(0, ["low", "high"])).toBe("low");
+    expect(dshReasoningValueForDepth(4, ["low", "high"])).toBe("high");
+    expect(dshReasoningValueForDepth(2, [])).toBeUndefined();
+    expect(dshReasoningValueForDepth("高", ["low"])).toBeUndefined();
+    await harness.shutdown();
+  });
+
+  it("会话级 4 → high；覆盖 0 → minimal（仅本次 run，下次回位）；未声明不设置", { timeout: 60_000 }, async () => {
+    const configFile = join(mkdtempSync(join(tmpdir(), "fake-dsh-cfg-")), "config.jsonl");
+    const previous = process.env.FAKE_DSH_CONFIG_FILE;
+    process.env.FAKE_DSH_CONFIG_FILE = configFile;
+    try {
+      const { harness } = await initializedHarness();
+      const created = await harness.requestResult("session.create", { thinking_depth: 4 });
+      const sessionId = String(created.session_id);
+      // 会话级在 create 阶段已设置（响应返回前完成）。
+      const first = await harness.send(sessionId, "chat-1", "m-dsh-think-1");
+      expect(await harness.waitTerminal(String(first.run_id))).toBe("run.completed");
+
+      const override = await harness.requestResult("session.send", {
+        session_id: sessionId,
+        client_msg_id: "m-dsh-think-2",
+        text: "chat-2",
+        thinking_depth: 0,
+      });
+      expect(await harness.waitTerminal(String(override["run_id"]))).toBe("run.completed");
+
+      // 覆盖仅本次 run：ACP `set_config_option` 为会话级有状态设置，下一次 run 必须回位到
+      // 会话级档位（4 → high），否则覆盖会泄漏到后续 run（与 runs.thinking_depth 记录不符）。
+      const restored = await harness.send(sessionId, "chat-3", "m-dsh-think-3");
+      expect(await harness.waitTerminal(String(restored.run_id))).toBe("run.completed");
+      // 回位后同值跳过：不再重复下发（幂等，不产生多余 ACP 调用）。
+      const again = await harness.send(sessionId, "chat-4", "m-dsh-think-4");
+      expect(await harness.waitTerminal(String(again.run_id))).toBe("run.completed");
+
+      const plain = await harness.createSession();
+      const third = await harness.send(String(plain.session_id), "chat-5", "m-dsh-think-5");
+      expect(await harness.waitTerminal(String(third.run_id))).toBe("run.completed");
+
+      const records = readFileSync(configFile, "utf8")
+        .trim()
+        .split(/\r?\n/)
+        .filter((line) => line.length > 0)
+        .map((line) => JSON.parse(line) as { configId: string; value: string });
+      expect(records.map((record) => record.configId)).toEqual([
+        "reasoning_effort",
+        "reasoning_effort",
+        "reasoning_effort",
+      ]);
+      expect(records.map((record) => record.value)).toEqual(["high", "minimal", "high"]);
+      await harness.shutdown();
+    } finally {
+      if (previous === undefined) delete process.env.FAKE_DSH_CONFIG_FILE;
+      else process.env.FAKE_DSH_CONFIG_FILE = previous;
+    }
   });
 });

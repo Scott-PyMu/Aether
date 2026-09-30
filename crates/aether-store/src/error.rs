@@ -65,6 +65,12 @@ pub enum StoreError {
     EmptyWriteBatch,
     /// 写队列配置非法（容量/批量/间隔/读连接数）。
     InvalidWriteQueueConfig { reason: String },
+    /// 供应商模型重复（M3-11 `provider_model_add`：`UNIQUE(provider_id, model_id)`
+    /// 命中；命令层映射 `invalid_value`，ADR-010 附录 B.1）。
+    DuplicateProviderModel {
+        provider_id: String,
+        model_id: String,
+    },
     /// WAL checkpoint 退避配置非法（尝试次数/退避时长；M2-06）。
     InvalidCheckpointConfig { reason: String },
     /// 关闭序列配置非法（drain/读连接关闭超时为 0；M2-06）。
@@ -124,6 +130,7 @@ impl StoreError {
             Self::WriteQueueClosed => "write_queue_closed",
             Self::EmptyWriteBatch => "empty_write_batch",
             Self::InvalidWriteQueueConfig { .. } => "invalid_write_queue_config",
+            Self::DuplicateProviderModel { .. } => "duplicate_provider_model",
             Self::InvalidCheckpointConfig { .. } => "invalid_checkpoint_config",
             Self::InvalidShutdownConfig { .. } => "invalid_shutdown_config",
             Self::InvalidStoredEvent { .. } => "invalid_stored_event",
@@ -206,6 +213,13 @@ impl fmt::Display for StoreError {
             Self::InvalidWriteQueueConfig { reason } => {
                 write!(f, "写队列配置非法: {reason}")
             }
+            Self::DuplicateProviderModel {
+                provider_id,
+                model_id,
+            } => write!(
+                f,
+                "供应商模型重复（provider_id={provider_id}, model_id={model_id}）：UNIQUE(provider_id, model_id) 约束"
+            ),
             Self::InvalidCheckpointConfig { reason } => {
                 write!(f, "checkpoint 配置非法: {reason}")
             }
@@ -361,6 +375,13 @@ mod tests {
                 "配置非法",
             ),
             (
+                StoreError::DuplicateProviderModel {
+                    provider_id: "01J00000000000000000000P01".to_owned(),
+                    model_id: "model-x".to_owned(),
+                },
+                "供应商模型重复",
+            ),
+            (
                 StoreError::InvalidCheckpointConfig {
                     reason: "max_attempts 必须 ≥1".to_owned(),
                 },
@@ -409,6 +430,7 @@ mod tests {
             "write_queue_closed",
             "empty_write_batch",
             "invalid_write_queue_config",
+            "duplicate_provider_model",
             "invalid_checkpoint_config",
             "invalid_shutdown_config",
             "invalid_stored_event",

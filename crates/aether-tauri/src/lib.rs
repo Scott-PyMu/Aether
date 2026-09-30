@@ -29,6 +29,7 @@ pub mod logging;
 pub mod nav;
 pub mod permission_loop;
 pub mod picker;
+pub mod provider_control;
 pub mod runtime_control;
 pub mod security_level;
 pub mod session_backend;
@@ -374,6 +375,12 @@ fn build_backend(
                 tracing::info!(background, "会话生命周期后台任务已启动（看门狗/事件监听）");
                 session_manager = Some(manager);
                 adapter_executor = executor;
+                // M3-12/ADR-011：等待态写入接线（两阶段装配）——权限服务在「同会话
+                // pending 票据计数 0↔1」时通知 `SessionManager`（观察者只上报；
+                // 状态行与 `session.status_changed` 的唯一写入者仍是 SessionManager）。
+                if let (Some(service), Some(manager)) = (&permission_service, &session_manager) {
+                    service.set_pending_observer(std::sync::Arc::new(manager.clone()));
+                }
                 // M3-05（D11/D13）：诊断后端依赖——真实健康提供者 + 日志汇聚端 + 任务 dump
                 // 源（M2-05 缓冲）+ 读/写句柄（库摘要/设置/提醒）。
                 diagnostics_deps = Some(diagnostics_control::DiagnosticsDeps {
@@ -508,7 +515,7 @@ fn build_backend(
         inner,
         session_manager,
         adapter_executor,
-        reads,
+        reads.clone(),
         supervisor,
         handle.clone(),
     );
@@ -517,8 +524,20 @@ fn build_backend(
     }
     // M3-08：工作区写路径接线（`workspace_set` 落库）与启动恢复（最近绑定工作区 →
     // 新会话记忆注入 + 权限基准同源；旧会话不迁移）。
-    if let Some(write) = write_slot {
+    if let Some(write) = write_slot.clone() {
         session_backend = session_backend.with_workspace_store(write);
+    }
+    // M3-11（ADR-010 决策 3/D10）：模型与供应商配置命令面接线。密钥存储启动选择：
+    // keyring 自检通过 → OS 凭据库；否则 A3 降级加密文件（口令环境钩子，测试/演练）；
+    // 两者皆不可用 → 密钥字段命令回诊断错误（不落明文）。
+    if let (Some(reads), Some(write)) = (reads, write_slot) {
+        let secrets = provider_control::boot_secret_store(&data_dir);
+        session_backend = session_backend.with_providers(provider_control::ProviderControl::new(
+            reads,
+            write,
+            secrets,
+            handle.clone(),
+        ));
     }
     match handle.block_on(session_backend.restore_workspace_binding()) {
         Ok(Some(binding)) => tracing::info!(

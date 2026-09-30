@@ -22,6 +22,15 @@ pub struct TokenUsage {
     pub total_tokens: u64,
 }
 
+/// 思考深度档位下界（ADR-010 决策 2）。
+pub const THINKING_DEPTH_MIN: u8 = 0;
+/// 思考深度档位上界（ADR-010 决策 2）。
+pub const THINKING_DEPTH_MAX: u8 = 4;
+/// 思考深度缺省档位（ADR-010 决策 2：缺省「高」= 2）。
+pub const THINKING_DEPTH_DEFAULT: u8 = 2;
+/// 思考深度适配器能力项（D6/ADR-010：`hello.runtime.capabilities` 字符串项，存在即支持）。
+pub const THINKING_DEPTH_CAPABILITY: &str = "thinking_depth";
+
 /// 会话状态（`sessions.status` CHECK 约束，D2/D8）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -310,6 +319,8 @@ pub struct Session {
     pub title: String,
     pub status: SessionStatus,
     pub model: Option<String>,
+    /// 会话级思考深度（0–4；缺省 [`THINKING_DEPTH_DEFAULT`]；ADR-010 决策 2）。
+    pub thinking_depth: u8,
     pub system_prompt: Option<String>,
     pub config: serde_json::Value,
     pub token_usage: TokenUsage,
@@ -344,6 +355,9 @@ pub struct Run {
     pub session_id: SessionId,
     pub status: RunStatus,
     pub input_message_id: Option<MessageId>,
+    /// 该 run 的生效思考深度（会话级值或本次覆盖；迁移前历史行为 `None`；ADR-010）。
+    #[serde(default)]
+    pub thinking_depth: Option<u8>,
     pub error: Option<String>,
     pub started_at: i64,
     pub finished_at: Option<i64>,

@@ -243,6 +243,7 @@ impl Harness {
                 title: "M3-08".to_owned(),
                 workspace_id,
                 model: None,
+                thinking_depth: None,
             })
             .expect("session_create");
         serde_json::from_value(value).expect("Session 反序列化")
@@ -255,6 +256,7 @@ impl Harness {
                 session_id: session_id.to_owned(),
                 text: text.to_owned(),
                 client_msg_id: client_msg_id.to_owned(),
+                thinking_depth: None,
             })
             .expect("session_send");
         ack["run_id"].as_str().expect("run_id").to_owned()
@@ -400,6 +402,7 @@ fn workspace_set_injects_memory_and_swaps_permission_root() {
             title: "未知工作区".to_owned(),
             workspace_id: Some("01J8ZQ5R0N7W9Y8X6V4T2S0K1Z".to_owned()),
             model: None,
+            thinking_depth: None,
         })
         .expect_err("未知 workspace_id 必须拒绝");
     assert_eq!(

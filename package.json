@@ -47,6 +47,9 @@
     "verify:m3-07": "node scripts/test/m3-07/verify-m3-07.mjs",
     "verify:m3-08": "node scripts/test/m3-08/verify-m3-08.mjs",
     "verify:m3-09": "node scripts/test/m3-09/verify-m3-09.mjs",
+    "verify:m3-10": "node scripts/test/m3-10/verify-m3-10.mjs",
+    "verify:m3-11": "node scripts/test/m3-11/verify-m3-11.mjs",
+    "verify:m3-12": "node scripts/test/m3-12/verify-m3-12.mjs",
     "smoke": "node scripts/test/smoke-desktop.mjs",
     "ci:local": "node scripts/test/ci-local.mjs"
   },

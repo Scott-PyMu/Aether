@@ -385,7 +385,7 @@ async fn parent_dispose_cascades_to_child_and_grandchild_sessions() {
 }
 
 /// DoD2 补充（D9 交叉）：`waiting_permission` 下的取消路径必须走合法转移
-/// （`waiting_permission → running → idle`；M2-10 接线审批等待状态后的前置保障）。
+/// （`waiting_permission → running → idle`；M3-12（ADR-011/v1.18）等待态写入后的前置保障）。
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn interrupt_from_waiting_permission_settles_via_running() {
     const WP_SESSION: &str = "01J00000000000000000000W1";
@@ -397,7 +397,7 @@ async fn interrupt_from_waiting_permission_settles_via_running() {
         executor.clone(),
         LifecycleConfig::default(),
     );
-    // P0 尚无写入 `waiting_permission` 的编排路径（归 M2-10/M3-03）；直接落库构造。
+    // P0 尚无写入 `waiting_permission` 的编排路径（归 M3-12（ADR-011/v1.18））；直接落库构造。
     let session = m2_support::insert_session_row_with_status(
         &core,
         WP_SESSION,

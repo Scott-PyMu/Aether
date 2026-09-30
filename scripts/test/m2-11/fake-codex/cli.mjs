@@ -78,6 +78,15 @@ async function main() {
     mkdirSync(dirname(PID_FILE), { recursive: true });
     appendFileSync(PID_FILE, `${process.pid}\n`);
   }
+  // M3-10：调用观测（仅当显式设置记录文件时；argv 含 `-c model_reasoning_effort=...`）。
+  const invocationFile = process.env.FAKE_CODEX_INVOCATION_FILE;
+  if (invocationFile) {
+    try {
+      appendFileSync(invocationFile, `${JSON.stringify({ argv })}\n`);
+    } catch {
+      /* 观测文件可选 */
+    }
+  }
   const { resume, threadRef } = parseInvocation(argv);
   const prompt = readFileSync(0, "utf8");
   const state = loadSessions();

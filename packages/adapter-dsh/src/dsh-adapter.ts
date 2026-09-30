@@ -37,7 +37,7 @@ export const RUNTIME_NAME = "deepseek-harness";
 /** 适配器版本（semver，hello 上报）。 */
 export const ADAPTER_VERSION = "0.1.0";
 
-/** 适配器能力清单（hello/initialize 上报）。 */
+/** 适配器能力清单（hello/initialize 上报；M3-10 增 `thinking_depth`）。 */
 export const RUNTIME_CAPABILITIES: readonly string[] = [
   "session.create",
   "session.send",
@@ -45,7 +45,72 @@ export const RUNTIME_CAPABILITIES: readonly string[] = [
   "session.dispose",
   "tools.list",
   "permission.resolve",
+  // M3-10/ADR-010：档位 0–4 → ACP `session/set_config_option`（`reasoning_effort`，
+  // category=thought_level；DSH 0.1.5-rc.2 默认支持，映射表见 M3-10 证据）。
+  "thinking_depth",
 ];
+
+/** DSH ACP 思考/推理配置项 id（`category=thought_level`；0.1.5-rc.2 实测）。 */
+export const DSH_REASONING_CONFIG_ID = "reasoning_effort";
+/** `session/set_config_option` 请求超时（适配器内部调用，非 D6 方法表）。 */
+export const REASONING_SET_TIMEOUT_MS = 5_000;
+
+/** M3-10：解析思考深度参数（整数 0–4；未知形态忽略，保持适配器宽容）。 */
+function parseThinkingDepth(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isInteger(value)) return undefined;
+  if (value < 0 || value > 4) return undefined;
+  return value;
+}
+
+/**
+ * 从 `session/new|resume` 响应的 `configOptions` 提取 `reasoning_effort` 可用值
+ * （具体 effort id；过滤 `""` = provider 默认项）。兼容标准 select 与分组形态。
+ */
+export function dshReasoningValuesFrom(configOptions: unknown): string[] {
+  if (!Array.isArray(configOptions)) return [];
+  const option = configOptions.find(
+    (item) =>
+      item !== null &&
+      typeof item === "object" &&
+      (item as Record<string, unknown>)["id"] === DSH_REASONING_CONFIG_ID,
+  ) as Record<string, unknown> | undefined;
+  const rawOptions = option?.["options"];
+  if (!Array.isArray(rawOptions)) return [];
+  const values: string[] = [];
+  const push = (value: unknown) => {
+    if (typeof value === "string" && value.length > 0) values.push(value);
+  };
+  for (const entry of rawOptions) {
+    if (entry === null || typeof entry !== "object") continue;
+    const record = entry as Record<string, unknown>;
+    if (Array.isArray(record["options"])) {
+      for (const nested of record["options"] as unknown[]) {
+        if (nested !== null && typeof nested === "object") {
+          push((nested as Record<string, unknown>)["value"]);
+        }
+      }
+    } else {
+      push(record["value"]);
+    }
+  }
+  return values;
+}
+
+/**
+ * 档位 0–4 → DSH `reasoning_effort` 值（按模型实际广告的具体 effort 列表定位映射：
+ * 0 → 最低档、4 → 最高档、中间按比例取整；越界/空列表 → `undefined` 不设值）。
+ */
+export function dshReasoningValueForDepth(
+  depth: unknown,
+  values: readonly string[],
+): string | undefined {
+  const concrete = values.filter((value) => value.length > 0);
+  if (concrete.length === 0) return undefined;
+  if (typeof depth !== "number" || !Number.isInteger(depth)) return undefined;
+  const clamped = Math.min(4, Math.max(0, depth));
+  const index = Math.round((clamped / 4) * (concrete.length - 1));
+  return concrete[index];
+}
 
 /** 默认 run 硬超时（常量级；核心 120s 断流看门狗优先）。 */
 export const DEFAULT_RUN_TIMEOUT_MS = 30 * 60 * 1000;
@@ -198,6 +263,12 @@ interface DshSession {
   nativeId: string;
   resumed: boolean;
   model?: string;
+  /** M3-10/ADR-010：会话级思考深度（0–4；override 优先，仅本次 run）。 */
+  thinkingDepth?: number;
+  /** `session/new|resume` 广告的 `reasoning_effort` 具体值（模型级；空 = 不支持）。 */
+  reasoningValues?: string[];
+  /** ACP 侧当前已生效的 `reasoning_effort`（同值跳过；未设置过为 undefined）。 */
+  appliedReasoningValue?: string;
   clientMsgIds: Map<string, string>;
   runs: Map<string, DshRunState>;
   observedTools: Set<string>;
@@ -462,35 +533,40 @@ export class DshAdapter {
       workspace?: unknown;
       model?: unknown;
       native_id?: unknown;
+      thinking_depth?: unknown;
     };
     const requested = input.native_id;
     if (requested !== undefined && (typeof requested !== "string" || requested.length === 0)) {
       throw new RpcError(ERROR_CODES.INVALID_PARAMS, "native_id 必须是非空字符串（ACP sessionId）");
     }
     const model = typeof input.model === "string" && input.model.length > 0 ? input.model : undefined;
+    const thinkingDepth = parseThinkingDepth(input.thinking_depth);
     const server = this.server;
     if (!server) throw new RpcError(ERROR_CODES.INTERNAL_ERROR, "DSH ACP 未连接");
     let sessionId: string;
     let resumed = false;
+    let configOptions: unknown;
     try {
       if (typeof requested === "string") {
         const result = (await this.requestWithProviderWait(
           "session/resume",
           { sessionId: requested, cwd: this.options.cli.workspace, mcpServers: [] },
           15_000,
-        )) as { sessionId?: string } | null;
+        )) as { sessionId?: string; configOptions?: unknown } | null;
         sessionId = result?.sessionId ?? requested;
+        configOptions = result?.configOptions;
         resumed = true;
       } else {
         const result = (await this.requestWithProviderWait(
           "session/new",
           { cwd: this.options.cli.workspace, mcpServers: [] },
           30_000,
-        )) as { sessionId?: string } | null;
+        )) as { sessionId?: string; configOptions?: unknown } | null;
         if (!result?.sessionId) {
           throw new RpcError(ERROR_CODES.INTERNAL_ERROR, "session/new 未返回 sessionId");
         }
         sessionId = result.sessionId;
+        configOptions = result.configOptions;
       }
     } catch (error) {
       if (error instanceof AcpError) {
@@ -502,16 +578,23 @@ export class DshAdapter {
       }
       throw error;
     }
+    const reasoningValues = dshReasoningValuesFrom(configOptions);
     const session: DshSession = {
       id: sessionId,
       nativeId: sessionId,
       resumed,
       ...(model !== undefined ? { model } : {}),
+      ...(thinkingDepth !== undefined ? { thinkingDepth } : {}),
+      ...(reasoningValues.length > 0 ? { reasoningValues } : {}),
       clientMsgIds: new Map(),
       runs: new Map(),
       observedTools: new Set(),
       disposed: false,
     };
+    // M3-10/ADR-010：`session/new|resume` 的 configOptions 广告 `reasoning_effort`
+    // （category=thought_level）。声明能力后按会话级档位设置；失败仅诊断不阻断
+    // （模型级不支持时保持 provider 默认）。
+    await this.applyReasoning(session, thinkingDepth, "session.create");
     this.sessions.set(sessionId, session);
     return {
       session_id: session.id,
@@ -520,6 +603,54 @@ export class DshAdapter {
       model: model ?? this.options.cli.model ?? null,
       created_at: Date.now(),
     };
+  }
+
+  /**
+   * 应用思考深度档位（M3-10/ADR-010；run 启动前判定）。
+   *
+   * ACP `session/set_config_option` 是**会话级有状态**设置（与 Claude Code 的 spawn env、
+   * Codex 的 `-c` 参数不同）：`session.send` 的覆盖若不回位，会泄漏到后续 run。故每次
+   * run 都按「覆盖 ?? 会话级」计算生效值并应用——同值跳过，覆盖 run 之后的下一次 run
+   * 自动回到会话级（自愈；不依赖运行结束时的回写）。
+   */
+  private async applyReasoning(
+    session: DshSession,
+    depth: number | undefined,
+    source: string,
+  ): Promise<void> {
+    if (depth === undefined) return;
+    const value = dshReasoningValueForDepth(depth, session.reasoningValues ?? []);
+    if (value === undefined || value === session.appliedReasoningValue) return;
+    if (await this.setReasoningEffort(session.id, value, source)) {
+      session.appliedReasoningValue = value;
+    }
+  }
+
+  /**
+   * `session/set_config_option`（M3-10/ADR-010：`reasoning_effort`）。
+   * 失败仅写 stderr 诊断，不阻断 run（能力门非阻断语义）。
+   */
+  private async setReasoningEffort(
+    sessionId: string,
+    value: string,
+    source: string,
+  ): Promise<boolean> {
+    const server = this.server;
+    if (!server || server.isClosed) return false;
+    try {
+      await server.request(
+        "session/set_config_option",
+        { sessionId, configId: DSH_REASONING_CONFIG_ID, value },
+        REASONING_SET_TIMEOUT_MS,
+      );
+      return true;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.options.stderr?.(
+        `[dsh-acp] ${source}: reasoning_effort=${value} 设置失败（继续，保持 provider 默认）：${detail}`,
+      );
+      return false;
+    }
   }
 
   /**
@@ -563,6 +694,7 @@ export class DshAdapter {
       client_msg_id?: unknown;
       text?: unknown;
       run_id?: unknown;
+      thinking_depth?: unknown;
     };
     const sessionId = typeof input.session_id === "string" ? input.session_id : "";
     const session = this.sessions.get(sessionId);
@@ -606,14 +738,26 @@ export class DshAdapter {
     void this.enqueue(run, async () => {
       await this.emit(run, "run.started", { run_id: runId });
     });
-    void this.drivePrompt(session, run, input.text);
+    void this.drivePrompt(session, run, input.text, parseThinkingDepth(input.thinking_depth));
     return { accepted: true, run_id: runId };
   }
 
-  private async drivePrompt(session: DshSession, run: DshRunState, text: string): Promise<void> {
+  private async drivePrompt(
+    session: DshSession,
+    run: DshRunState,
+    text: string,
+    thinkingOverride?: number,
+  ): Promise<void> {
     const server = this.server;
     if (!server) return;
     try {
+      // M3-10/ADR-010：覆盖仅本次 run（不回写会话级 `session.thinkingDepth`）；本次生效值
+      // = 覆盖 ?? 会话级——覆盖 run 之后的下一次 run 由同值跳过 + 重应用回位（见 applyReasoning）。
+      await this.applyReasoning(
+        session,
+        thinkingOverride ?? session.thinkingDepth,
+        `session.send(run=${run.runId})`,
+      );
       const result = (await server.request(
         "session/prompt",
         { sessionId: session.id, prompt: [{ type: "text", text }] },

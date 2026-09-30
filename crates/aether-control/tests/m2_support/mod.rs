@@ -351,6 +351,7 @@ pub async fn insert_session_row_with_status(
         title: format!("child-{session_id}"),
         status,
         model: None,
+        thinking_depth: aether_core::THINKING_DEPTH_DEFAULT,
         system_prompt: None,
         config: serde_json::json!({}),
         token_usage: TokenUsage::default(),

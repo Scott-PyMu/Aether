@@ -25,19 +25,33 @@ import { STORAGE_L2_THRESHOLD } from "./health";
 import { useStorageHealth } from "./healthBus";
 import { HistoryOverflowNotice } from "./HistoryOverflowNotice";
 import { Markdown } from "./markdown";
+import { ModelSelector } from "./ModelSelector";
 import { permissionIpc as productionPermissionIpc, type PermissionIpc } from "./permission";
 import { PermissionPanel } from "./PermissionPanel";
+import { providersIpc as productionProvidersIpc, type ProvidersIpc } from "./providers";
 import { RuntimePanel } from "./RuntimePanel";
 import {
   RUNTIME_STATUS_LABELS,
   SESSION_STATUS_LABELS,
   sessionIpc,
+  supportsThinkingDepth,
+  THINKING_DEPTH_DEFAULT,
+  THINKING_DEPTH_LABELS,
+  THINKING_DEPTH_MAX,
+  THINKING_DEPTH_MIN,
+  THINKING_DEPTH_UNSUPPORTED_CODE,
+  THINKING_DEPTH_UNSUPPORTED_HINT,
   type MessageRow,
   type RuntimeInfo,
   type SessionIpc,
   type SessionSummary,
+  type SessionWarning,
 } from "./session";
 import { projectSession } from "./sessionProjection";
+import {
+  groupSessions,
+  SESSION_GROUP_TITLES,
+} from "./sessionGroups";
 import { TopBar } from "./TopBar";
 import { generateUlid } from "./ulid";
 import { useSessionEvents } from "./useSessionEvents";
@@ -50,6 +64,23 @@ export const STREAM_ITEM_HEIGHT = 96;
 export const STREAM_VIEWPORT_HEIGHT = 480;
 /** 空会话占位 id（未选会话时 hook 仍需一个稳定键）。 */
 const NO_SESSION = "__none__";
+
+/** 思考深度档位 tick 顺序（关闭/低/高/极高/最大；ADR-010）。 */
+const THINKING_DEPTH_TICKS = [
+  THINKING_DEPTH_MIN,
+  1,
+  THINKING_DEPTH_DEFAULT,
+  3,
+  THINKING_DEPTH_MAX,
+];
+
+/** 从响应 `warnings` 提取思考深度非阻断提示（无则 `null`）。 */
+function thinkingWarningOf(warnings?: SessionWarning[]): string | null {
+  const warning = warnings?.find(
+    (item) => item.code === THINKING_DEPTH_UNSUPPORTED_CODE,
+  );
+  return warning?.message ?? null;
+}
 
 export interface SessionWorkbenchProps {
   store?: EventStore;
@@ -64,6 +95,8 @@ export interface SessionWorkbenchProps {
   diagnosticsIpc?: DiagnosticsIpc;
   /** M3-09：文件引用面板 IPC 注入（测试替身；缺省 = 生产 Tauri 实现）。 */
   artifactsIpc?: ArtifactsIpc;
+  /** M3-11：供应商配置 IPC 注入（模型选择器派生数据源；缺省 = 生产 Tauri 实现）。 */
+  providersIpc?: ProvidersIpc;
 }
 
 function mergeMessages(previous: MessageRow[], incoming: MessageRow[]): MessageRow[] {
@@ -87,6 +120,7 @@ export function SessionWorkbench({
   onOpenDiagnostics,
   diagnosticsIpc: diagnosticsIpcProp = productionDiagnosticsIpc,
   artifactsIpc: artifactsIpcProp = productionArtifactsIpc,
+  providersIpc: providersIpcProp = productionProvidersIpc,
 }: SessionWorkbenchProps) {
   const [runtimes, setRuntimes] = useState<RuntimeInfo[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
@@ -94,6 +128,8 @@ export function SessionWorkbench({
   const [messages, setMessages] = useState<MessageRow[]>([]);
   const [selectedRuntime, setSelectedRuntime] = useState<string>("");
   const [modelDraft, setModelDraft] = useState("");
+  /** M3-11：输入区模型选择（作用于新建会话；与手动输入共用 `modelDraft` 草稿字段）。 */
+  const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const [titleDraft, setTitleDraft] = useState("");
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
@@ -109,6 +145,11 @@ export function SessionWorkbench({
   const [rightOpen, setRightOpen] = useState(true);
   /** M3-03：待审批计数（全局面板数据源 → 顶栏徽标）。 */
   const [pendingPermissionCount, setPendingPermissionCount] = useState(0);
+  /** M3-10：思考深度档位（0–4；随会话生效值回显）与弹层开关（原型输入区滑块）。 */
+  const [thinkingDepth, setThinkingDepth] = useState<number>(THINKING_DEPTH_DEFAULT);
+  const [thinkingOpen, setThinkingOpen] = useState(false);
+  /** M3-10：同步能力门非阻断提示（`thinking_depth_unsupported`；无则 `null`）。 */
+  const [thinkingWarning, setThinkingWarning] = useState<string | null>(null);
   const sendInFlight = useRef(false);
 
   // M3-06：存储降级（只读）联动——发送入口禁用；修复 + 重启前不得恢复。
@@ -138,11 +179,24 @@ export function SessionWorkbench({
     () => sessions.find((session) => session.id === activeSessionId) ?? null,
     [sessions, activeSessionId],
   );
+  /** M3-10：所选运行时能力预判（滑块置灰依据；`runtimes_list` 快照）。 */
+  const selectedRuntimeInfo = useMemo(
+    () => runtimes.find((runtime) => runtime.id === selectedRuntime) ?? null,
+    [runtimes, selectedRuntime],
+  );
+  const thinkingSupported = supportsThinkingDepth(selectedRuntimeInfo);
   /** M3-06：run 视图索引（消息气泡 → 终态/取消原因 → 重试入口）。 */
   const runViews = useMemo(
     () => new Map(projection.runs.map((run) => [run.runId, run])),
     [projection.runs],
   );
+  /**
+   * M3-12/ADR-011：会话列表分组（固定组序 + 空组隐藏 + 组内 `updated_at` 倒序）。
+   *
+   * 直接计算（不 `useMemo`）：会话列表规模小；且对调用方原地更新列表数组（测试替身
+   * 或增量维护）保持视图一致，不引入引用不变导致的陈旧分组。
+   */
+  const sessionGroups = groupSessions(sessions);
 
   /** 结构化错误上报（展示文本 + `data-code`；UI-UX §7.3）。 */
   const reportError = useCallback((failure: unknown) => {
@@ -235,6 +289,29 @@ export function SessionWorkbench({
     void loadMessages(activeSessionId);
   }, [activeSessionId, loadMessages]);
 
+  // M3-10：会话切换/生效值变化时回显（延迟判定路径以 `SessionSummary.thinking_depth`
+  // 生效值为准，ADR-010 v0.4；会话列表刷新但生效值不变时不重置用户当前调整）。
+  const activeSessionDepth = activeSession?.thinking_depth ?? THINKING_DEPTH_DEFAULT;
+  useEffect(() => {
+    setThinkingDepth(activeSessionDepth);
+    setThinkingWarning(null);
+  }, [activeSessionId, activeSessionDepth]);
+
+  /**
+   * M3-11：模型选择器选择（作用于新建会话；M3-11 前置登记：与手动输入共存）。
+   * 选择结果写入 `modelDraft`（UI-05 既有透传路径），不引入运行期切换入口。
+   */
+  const onSelectModel = useCallback((modelId: string | null) => {
+    setSelectedModelId(modelId);
+    setModelDraft(modelId ?? "");
+  }, []);
+
+  /** M3-11：手动输入模型（保留 UI-05 路径）；与选择器选择不一致时清空选择态。 */
+  const onModelDraftChange = useCallback((value: string) => {
+    setModelDraft(value);
+    setSelectedModelId((current) => (current !== null && current !== value ? null : current));
+  }, []);
+
   const onCreateSession = useCallback(async () => {
     if (!selectedRuntime) {
       setErrorCode(null);
@@ -258,7 +335,11 @@ export function SessionWorkbench({
         runtime_id: selectedRuntime,
         title,
         ...(model ? { model } : {}),
+        // M3-10/ADR-010：会话级思考深度随 `session_create` 透传（缺省 2）。
+        thinking_depth: thinkingDepth,
       });
+      // M3-10：同步判定路径非阻断警告（delta 等；延迟判定路径无警告，以回显为准）。
+      setThinkingWarning(thinkingWarningOf(created.warnings));
       // T1 埋点（M4-04 验收读取）：会话创建 P50<500ms / P95<2s 的 UI 侧锚点。
       setCreateLatencyMs(Math.round(performance.now() - startedAt));
       setTitleDraft("");
@@ -273,7 +354,16 @@ export function SessionWorkbench({
     } catch (failure) {
       reportError(failure);
     }
-  }, [ipc, modelDraft, refreshSessions, reportError, runtimes, selectedRuntime, titleDraft]);
+  }, [
+    ipc,
+    modelDraft,
+    refreshSessions,
+    reportError,
+    runtimes,
+    selectedRuntime,
+    thinkingDepth,
+    titleDraft,
+  ]);
 
   const onSend = useCallback(async () => {
     const text = draft.trim();
@@ -288,7 +378,10 @@ export function SessionWorkbench({
         session_id: activeSessionId,
         text,
         client_msg_id: generateUlid(),
+        // M3-10/ADR-010：本次 run 覆盖（仅本次 run，不回写会话级值）。
+        thinking_depth: thinkingDepth,
       });
+      setThinkingWarning(thinkingWarningOf(ack.warnings));
       setDraft("");
       setLastAck({ runId: ack.run_id, duplicate: ack.duplicate });
       if (!ack.duplicate) {
@@ -312,7 +405,15 @@ export function SessionWorkbench({
       sendInFlight.current = false;
       setSending(false);
     }
-  }, [activeSessionId, clearError, draft, ipc, refreshSessions, reportError]);
+  }, [
+    activeSessionId,
+    clearError,
+    draft,
+    ipc,
+    refreshSessions,
+    reportError,
+    thinkingDepth,
+  ]);
 
   const onInterrupt = useCallback(async () => {
     if (!activeSessionId) {
@@ -376,26 +477,43 @@ export function SessionWorkbench({
         <aside className="workbench-sidebar">
           <h2 className="workbench-title">会话</h2>
           <ul className="session-list" data-testid="session-list">
-            {sessions.map((session) => (
-              <li key={session.id}>
-                <button
-                  type="button"
-                  data-testid="session-item"
-                  data-session-id={session.id}
-                  data-active={String(session.id === activeSessionId)}
-                  className={session.id === activeSessionId ? "session-item active" : "session-item"}
-                  onClick={() => setActiveSessionId(session.id)}
-                >
-                  <span className="session-item-title">{session.title}</span>
-                  <span className="session-item-status" data-testid="session-item-status">
-                    {SESSION_STATUS_LABELS[session.status]}
-                  </span>
-                  {session.model ? (
-                    <span className="session-item-model" data-testid="session-item-model">
-                      {session.model}
-                    </span>
-                  ) : null}
-                </button>
+            {sessionGroups.map(({ group, sessions: groupedSessions }) => (
+              <li
+                key={group}
+                className={`session-group session-group-${group}`}
+                data-testid="session-group"
+                data-group={group}
+              >
+                <span className="session-group-title" data-testid="session-group-title">
+                  {SESSION_GROUP_TITLES[group]}
+                </span>
+                <ul className="session-group-items">
+                  {groupedSessions.map((session) => (
+                    <li key={session.id}>
+                      <button
+                        type="button"
+                        data-testid="session-item"
+                        data-session-id={session.id}
+                        data-active={String(session.id === activeSessionId)}
+                        data-status={session.status}
+                        className={
+                          session.id === activeSessionId ? "session-item active" : "session-item"
+                        }
+                        onClick={() => setActiveSessionId(session.id)}
+                      >
+                        <span className="session-item-title">{session.title}</span>
+                        <span className="session-item-status" data-testid="session-item-status">
+                          {SESSION_STATUS_LABELS[session.status]}
+                        </span>
+                        {session.model ? (
+                          <span className="session-item-model" data-testid="session-item-model">
+                            {session.model}
+                          </span>
+                        ) : null}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
               </li>
             ))}
             {sessions.length === 0 ? (
@@ -464,7 +582,7 @@ export function SessionWorkbench({
               data-testid="session-model-input"
               placeholder="会话级模型（可选，覆盖全局默认）"
               value={modelDraft}
-              onChange={(event) => setModelDraft(event.target.value)}
+              onChange={(event) => onModelDraftChange(event.target.value)}
             />
             <button type="button" data-testid="session-create-submit" onClick={onCreateSession}>
               新建会话
@@ -601,6 +719,80 @@ export function SessionWorkbench({
           ) : null}
 
           <div className="composer" data-testid="composer">
+            {/* M3-10/ADR-010：思考深度 5 档滑块（关闭/低/高/极高/最大，默认高）；
+                运行时未声明 `thinking_depth` 能力时滑块置灰 + tooltip。 */}
+            <div className="thinking-control">
+              <button
+                type="button"
+                className="thinking-toggle"
+                data-testid="thinking-toggle"
+                data-value={thinkingDepth}
+                data-enabled={thinkingSupported}
+                title={thinkingSupported ? "思考深度" : THINKING_DEPTH_UNSUPPORTED_HINT}
+                aria-label="思考深度"
+                aria-expanded={thinkingOpen}
+                onClick={() => setThinkingOpen((open) => !open)}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M9.5 2A2.5 2.5 0 0112 4.5v15a2.5 2.5 0 01-4.96.44 2.5 2.5 0 01-2.96-3.08 3 3 0 01-.34-5.58 2.5 2.5 0 011.32-4.24 2.5 2.5 0 011.98-3A2.5 2.5 0 019.5 2z" />
+                  <path d="M14.5 2A2.5 2.5 0 0012 4.5v15a2.5 2.5 0 004.96.44 2.5 2.5 0 002.96-3.08 3 3 0 00.34-5.58 2.5 2.5 0 00-1.32-4.24 2.5 2.5 0 00-1.98-3A2.5 2.5 0 0014.5 2z" />
+                </svg>
+                <span data-testid="thinking-current">
+                  {THINKING_DEPTH_LABELS[thinkingDepth]}
+                </span>
+              </button>
+              {!thinkingSupported ? (
+                <p
+                  className="thinking-disabled-hint"
+                  data-testid="thinking-disabled-hint"
+                  data-enabled="false"
+                  role="note"
+                >
+                  {THINKING_DEPTH_UNSUPPORTED_HINT}
+                </p>
+              ) : null}
+              {thinkingOpen ? (
+                <div
+                  className="thinking-popover"
+                  data-testid="thinking-popover"
+                  data-enabled={thinkingSupported}
+                >
+                  <div className="thinking-head">
+                    <span>思考深度</span>
+                    <span className="thinking-value">
+                      {THINKING_DEPTH_LABELS[thinkingDepth]}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={THINKING_DEPTH_MIN}
+                    max={THINKING_DEPTH_MAX}
+                    step={1}
+                    value={thinkingDepth}
+                    data-testid="thinking-slider"
+                    data-value={thinkingDepth}
+                    data-enabled={thinkingSupported}
+                    disabled={!thinkingSupported}
+                    aria-label="思考深度"
+                    onChange={(event) => setThinkingDepth(Number(event.target.value))}
+                  />
+                  <div className="thinking-ticks">
+                    {THINKING_DEPTH_TICKS.map((value) => (
+                      <button
+                        key={value}
+                        type="button"
+                        data-value={value}
+                        data-active={value === thinkingDepth}
+                        disabled={!thinkingSupported}
+                        onClick={() => setThinkingDepth(value)}
+                      >
+                        {THINKING_DEPTH_LABELS[value]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
             <textarea
               data-testid="composer-input"
               placeholder="输入消息（Ctrl+Enter 发送）"
@@ -614,14 +806,33 @@ export function SessionWorkbench({
                 }
               }}
             />
-            <button
-              type="button"
-              data-testid="composer-send"
-              disabled={!activeSessionId || degraded || sending || draft.trim().length === 0}
-              onClick={() => void onSend()}
-            >
-              发送
-            </button>
+            <div className="composer-toolbar">
+              {/* M3-11：输入区模型选择器（仅启用供应商的启用模型；作用于新建会话）。 */}
+              <ModelSelector
+                ipc={providersIpcProp}
+                value={selectedModelId}
+                onChange={onSelectModel}
+                sessionModel={activeSession?.model ?? null}
+                disabled={degraded}
+              />
+              <button
+                type="button"
+                data-testid="composer-send"
+                disabled={!activeSessionId || degraded || sending || draft.trim().length === 0}
+                onClick={() => void onSend()}
+              >
+                发送
+              </button>
+            </div>
+            {thinkingWarning ? (
+              <p
+                className="thinking-warning"
+                data-testid="thinking-warning"
+                role="status"
+              >
+                {thinkingWarning}
+              </p>
+            ) : null}
             {degraded ? (
               // M3-06：降级（只读）期发送入口禁用；恢复走 app_restart（D4 无热恢复）。
               <p

@@ -18,6 +18,10 @@
  * 环境：`DSH_HOME`、`AETHER_DSH_DELTA_FILE`、`FAKE_DSH_PID_FILE`、
  * `FAKE_DSH_VERSION`（默认 0.1.5-rc.2）、`FAKE_DSH_NO_PLUGIN_HELLO=1`（门闩失败注入）、
  * `FAKE_DSH_TICK_MS`（默认 10）。
+ *
+ * M3-10/ADR-010：`session/new|resume` 返回 `configOptions`（`reasoning_effort`，
+ * category=thought_level；`""` = provider 默认），并处理 `session/set_config_option`
+ * （设置记录写入 `FAKE_DSH_CONFIG_FILE`，供思考深度档位映射断言）。
  */
 
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -28,6 +32,41 @@ const DELTA_FILE = process.env.AETHER_DSH_DELTA_FILE || "";
 const PID_FILE = process.env.FAKE_DSH_PID_FILE || "";
 const VERSION = process.env.FAKE_DSH_VERSION || "0.1.5-rc.2";
 const TICK_MS = Number(process.env.FAKE_DSH_TICK_MS ?? 10);
+// M3-10：`reasoning_effort` 广告值（provider 默认 `""` + 具体 effort；按需可用 env 覆盖）。
+const REASONING_VALUES = (
+  process.env.FAKE_DSH_REASONING_VALUES || ",minimal,low,medium,high"
+)
+  .split(",")
+  .map((value) => value.trim());
+const CONFIG_FILE = process.env.FAKE_DSH_CONFIG_FILE || "";
+/** 各会话当前 reasoning_effort（`""` = provider 默认）。 */
+const reasoningSelections = new Map();
+
+function reasoningConfigOptions(sessionId) {
+  const current = reasoningSelections.get(sessionId) ?? "";
+  return [
+    {
+      id: "reasoning_effort",
+      name: "Reasoning effort",
+      category: "thought_level",
+      type: "select",
+      currentValue: current,
+      options: REASONING_VALUES.map((value) => ({
+        value,
+        name: value === "" ? "Provider default" : value,
+      })),
+    },
+  ];
+}
+
+function recordConfigSet(entry) {
+  if (!CONFIG_FILE) return;
+  try {
+    appendFileSync(CONFIG_FILE, `${JSON.stringify(entry)}\n`);
+  } catch {
+    /* 忽略 */
+  }
+}
 
 const pendingRequests = new Map();
 const sessions = loadSessions();
@@ -304,7 +343,7 @@ function handleMessage(message) {
       const sessionId = `acp-${Math.random().toString(36).slice(2, 10)}`;
       sessions.sessions[sessionId] = { memory: null, created_at: Date.now() };
       saveSessions();
-      reply(message.id, { sessionId, configOptions: [] });
+      reply(message.id, { sessionId, configOptions: reasoningConfigOptions(sessionId) });
       return;
     }
     case "session/resume": {
@@ -313,11 +352,30 @@ function handleMessage(message) {
         replyError(message.id, -32002, `session not found: ${sessionId}`);
         return;
       }
-      reply(message.id, { sessionId, configOptions: [] });
+      reply(message.id, { sessionId, configOptions: reasoningConfigOptions(sessionId) });
+      return;
+    }
+    case "session/set_config_option": {
+      // M3-10：`reasoning_effort` 设置（值必须在广告列表内；`""` = provider 默认）。
+      const sessionId = message.params?.sessionId;
+      const configId = message.params?.configId;
+      const value = message.params?.value;
+      if (!sessions.sessions[sessionId]) {
+        replyError(message.id, -32002, `session not found: ${sessionId}`);
+        return;
+      }
+      if (configId !== "reasoning_effort" || typeof value !== "string" || !REASONING_VALUES.includes(value)) {
+        replyError(message.id, -32602, `unknown reasoning effort: ${String(value)}`);
+        return;
+      }
+      reasoningSelections.set(sessionId, value);
+      recordConfigSet({ sessionId, configId, value });
+      reply(message.id, { configOptions: reasoningConfigOptions(sessionId) });
       return;
     }
     case "session/close": {
       delete sessions.sessions[message.params?.sessionId];
+      reasoningSelections.delete(message.params?.sessionId);
       saveSessions();
       reply(message.id, { ok: true });
       return;

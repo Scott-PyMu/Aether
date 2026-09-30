@@ -65,6 +65,23 @@ export const commands = {
 	artifactAdd: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("artifact_add", { payload })),
 	/**  ADR-010/M3-09：删除会话引用（不存在 → 幂等 `{ removed: false }`）。 */
 	artifactRemove: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("artifact_remove", { payload })),
+	/**  ADR-010/M3-11：供应商与模型清单（无参数；非空成员一律拒绝）。 */
+	providersList: (payload: unknown | null) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("providers_list", { payload })),
+	/**  ADR-010/M3-11：新建供应商（`api_key` 明文仅传输 → 核心写 keyring → `api_key_ref`）。 */
+	providerCreate: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("provider_create", { payload })),
+	/**  ADR-010/M3-11：整体更新供应商（`type` 不可改；`api_key` 三态）。 */
+	providerUpdate: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("provider_update", { payload })),
+	/**  ADR-010/M3-11：删除供应商（内置硬拒绝 `builtin_provider_undeletable`）。 */
+	providerDelete: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("provider_delete", { payload })),
+	/**  ADR-010/M3-11：快速启用/停用供应商（内置可停用）。 */
+	providerToggle: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("provider_toggle", { payload })),
+	/**
+	 *  ADR-010/M3-11：新增供应商模型（默认启用；重复 `(provider_id, model_id)` →
+	 *  `invalid_value`）。
+	 */
+	providerModelAdd: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("provider_model_add", { payload })),
+	/**  ADR-010/M3-11：模型启用/停用（不存在 → `provider_model_not_found`）。 */
+	providerModelToggle: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("provider_model_toggle", { payload })),
 	exportDiagnostics: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("export_diagnostics", { payload })),
 	/**
 	 *  ADR-007 决策 1：核心健康查询（无参数；严格解析拒绝未知成员）。
@@ -240,7 +257,13 @@ export type IpcErrorCode =
  *  会话引用路径校验失败（ADR-010：canonicalize / 可访问性 / kind 探测失败；
  *  **不含同步盘语义**——2026-09-24 评审裁定 `artifact_add` 不复用 A4 检测）。
  */
-"artifact_path_rejected";
+"artifact_path_rejected" | 
+/**  内置供应商禁止删除（ADR-010 决策 3：`provider_delete`，`is_builtin=1`）。 */
+"builtin_provider_undeletable" | 
+/**  供应商不存在（ADR-010：供应商类命令按 id 查无）。 */
+"provider_not_found" | 
+/**  供应商模型不存在（ADR-010：`provider_model_toggle`）。 */
+"provider_model_not_found";
 
 /**  IPC 命令错误的线上形态：`{ "code": "...", "message": "...", "field": "..." }`。 */
 export type IpcError_Deserialize = {
@@ -273,6 +296,64 @@ export type PermissionResolveRequest = {
 export type PermissionsPendingRequest = {
 	session_id?: string | null,
 };
+
+/**  `provider_create`（ADR-010 决策 3）：`api_key` 明文仅传输（核心写 keyring）。 */
+export type ProviderCreateRequest = {
+	name: string,
+	type: ProviderType,
+	base_url?: string | null,
+	api_key?: string | null,
+	enabled: boolean,
+};
+
+/**  `provider_delete`（ADR-010 决策 3）：内置拒绝（`builtin_provider_undeletable`）。 */
+export type ProviderDeleteRequest = {
+	id: string,
+};
+
+/**
+ *  `provider_model_add`（ADR-010 决策 3）：新增模型（默认启用）；
+ *  重复 `(provider_id, model_id)` → `invalid_value`。
+ */
+export type ProviderModelAddRequest = {
+	provider_id: string,
+	model_id: string,
+	display_name: string,
+};
+
+/**
+ *  `provider_model_toggle`（ADR-010 决策 3）：模型启用/停用；不存在 →
+ *  `provider_model_not_found`。
+ */
+export type ProviderModelToggleRequest = {
+	provider_id: string,
+	model_id: string,
+	enabled: boolean,
+};
+
+/**  `provider_toggle`（ADR-010 决策 3）：快速启用/停用（内置可停用）。 */
+export type ProviderToggleRequest = {
+	id: string,
+	enabled: boolean,
+};
+
+/**  供应商类型（ADR-010 决策 3：应用层枚举校验，不加 CHECK；创建后不可改）。 */
+export type ProviderType = "anthropic" | "openai" | "deepseek" | "google" | "custom";
+
+/**
+ *  `provider_update`（ADR-010 决策 3）：整体更新；`type` 不可改；
+ *  `api_key` 三态（缺省=不变、空串=清除、非空=覆盖）；`base_url` 缺省=不变、空串=清除。
+ */
+export type ProviderUpdateRequest = {
+	id: string,
+	name: string,
+	base_url?: string | null,
+	api_key?: string | null,
+	enabled: boolean,
+};
+
+/**  `providers_list`（ADR-010）：无参数命令；`null`/缺省/空对象合法，任何成员拒绝。 */
+export type ProvidersListRequest = Record<string, never>;
 
 /**  `ref_pick`（ADR-010 决策 1）：引用选择器 kind（文件 / 目录）。 */
 export type RefPickKind = "file" | "directory";
@@ -314,6 +395,11 @@ export type SessionCreateRequest = {
 	title: string,
 	workspace_id?: string | null,
 	model?: string | null,
+	/**
+	 *  会话级思考深度（ADR-010 决策 2：0–4，缺省 2；越界 `out_of_range`、
+	 *  类型非法 `invalid_type`）。
+	 */
+	thinking_depth?: number | null,
 };
 
 export type SessionIdRequest = {
@@ -334,6 +420,11 @@ export type SessionSendRequest = {
 	 *  返回既有 message_id/run_id，核心重启后重放同样不重复。
 	 */
 	client_msg_id: string,
+	/**
+	 *  本次 run 的思考深度覆盖（ADR-010 决策 2：0–4；缺省 = 会话级值；
+	 *  仅本次 run，不回写会话级）。
+	 */
+	thinking_depth?: number | null,
 };
 
 /**  会话状态过滤（与附录 C `sessions.status` CHECK 枚举一一对应）。 */
@@ -344,7 +435,9 @@ export type SessionStatus = "creating" | "idle" | "running" | "paused" | "waitin
  * 
  *  字段与核心 `Session` 域实体一一对应；新增可选 `workspace_root`（由
  *  `sessions.workspace_id` → `workspaces.root_path` 解析，**未绑定工作区省略**；
- *  只出现在响应、不进事件 payload）。M3-10 将在此追加 `thinking_depth`。
+ *  只出现在响应、不进事件 payload）与可选 `thinking_depth`（会话级档位，M3-10）。
+ *  可选 `warnings` 为 `session_create` 同步能力门判定结果（ADR-010 决策 2：
+ *  尽力而为交付；`session_list` 不回填、无警告省略）。
  * 
  *  `config` / `token_usage` 用 [`JsonPayload`] 透传（与 `AetherEvent.payload` 同口径：
  *  specta rc.25 对 `serde_json::Value` 的内联递归定义会栈溢出）。
@@ -356,7 +449,9 @@ export type SessionSummary = SessionSummary_Serialize | SessionSummary_Deseriali
  * 
  *  字段与核心 `Session` 域实体一一对应；新增可选 `workspace_root`（由
  *  `sessions.workspace_id` → `workspaces.root_path` 解析，**未绑定工作区省略**；
- *  只出现在响应、不进事件 payload）。M3-10 将在此追加 `thinking_depth`。
+ *  只出现在响应、不进事件 payload）与可选 `thinking_depth`（会话级档位，M3-10）。
+ *  可选 `warnings` 为 `session_create` 同步能力门判定结果（ADR-010 决策 2：
+ *  尽力而为交付；`session_list` 不回填、无警告省略）。
  * 
  *  `config` / `token_usage` 用 [`JsonPayload`] 透传（与 `AetherEvent.payload` 同口径：
  *  specta rc.25 对 `serde_json::Value` 的内联递归定义会栈溢出）。
@@ -369,6 +464,7 @@ export type SessionSummary_Deserialize = {
 	title: string,
 	status: SessionStatus,
 	model: string | null,
+	thinking_depth: number | null,
 	system_prompt: string | null,
 	config: unknown,
 	token_usage: unknown,
@@ -376,6 +472,7 @@ export type SessionSummary_Deserialize = {
 	updated_at: number,
 	closed_at: number | null,
 	workspace_root: string | null,
+	warnings: SessionWarning[] | null,
 };
 
 /**
@@ -383,7 +480,9 @@ export type SessionSummary_Deserialize = {
  * 
  *  字段与核心 `Session` 域实体一一对应；新增可选 `workspace_root`（由
  *  `sessions.workspace_id` → `workspaces.root_path` 解析，**未绑定工作区省略**；
- *  只出现在响应、不进事件 payload）。M3-10 将在此追加 `thinking_depth`。
+ *  只出现在响应、不进事件 payload）与可选 `thinking_depth`（会话级档位，M3-10）。
+ *  可选 `warnings` 为 `session_create` 同步能力门判定结果（ADR-010 决策 2：
+ *  尽力而为交付；`session_list` 不回填、无警告省略）。
  * 
  *  `config` / `token_usage` 用 [`JsonPayload`] 透传（与 `AetherEvent.payload` 同口径：
  *  specta rc.25 对 `serde_json::Value` 的内联递归定义会栈溢出）。
@@ -396,6 +495,7 @@ export type SessionSummary_Serialize = {
 	title: string,
 	status: SessionStatus,
 	model: string | null,
+	thinking_depth?: number | null,
 	system_prompt: string | null,
 	config: unknown,
 	token_usage: unknown,
@@ -403,6 +503,23 @@ export type SessionSummary_Serialize = {
 	updated_at: number,
 	closed_at: number | null,
 	workspace_root?: string | null,
+	warnings?: SessionWarning[] | null,
+};
+
+/**
+ *  非阻断警告条目（ADR-010 决策 4：`warnings[].code` 为独立命名空间，非
+ *  `IpcErrorCode`；登记位 = ADR-006 附录 B「警告码」子表，首项
+ *  `thinking_depth_unsupported`）。
+ */
+export type SessionWarning = {
+	/**  警告码（稳定契约；当前唯一取值 `thinking_depth_unsupported`）。 */
+	code: string,
+	/**  关联请求字段。 */
+	field: string,
+	/**  关联运行时 id。 */
+	runtime_id: string,
+	/**  展示文案（不参与逻辑判断）。 */
+	message: string,
 };
 
 export type SettingsGetRequest = {

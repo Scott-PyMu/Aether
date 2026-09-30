@@ -83,6 +83,7 @@ fn session_record() -> Session {
         title: "M3-09 引用会话".to_owned(),
         status: SessionStatus::Idle,
         model: None,
+        thinking_depth: aether_core::THINKING_DEPTH_DEFAULT,
         system_prompt: None,
         config: serde_json::json!({}),
         token_usage: TokenUsage::default(),

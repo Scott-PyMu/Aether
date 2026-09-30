@@ -999,6 +999,176 @@ jobs:
             echo "::error title=m3-09-tail::$line"
           done
 
+  # M3-11：模型与供应商配置（P0 UI + 数据模型；设计 D3/D7/D10；ADR-010 决策 3/4）。
+  # 覆盖：迁移 0003 providers/provider_models 表/约束/内置播种 + 单写队列；
+  # 七命令矩阵与内置约束；密钥写入路径（keyring/A3）与三态/命名空间规则；
+  # IPC 响应与诊断包明文 0 命中；供应商页与模型选择器 E2E（含共存口径登记）；
+  # 会话透传与 T14 生成物幂等。
+  m3-11-providers:
+    name: Model & provider config (M3-11)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: 安装 Tauri Linux 系统依赖（webkit2gtk 等）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: 安装 Linux 系统依赖（keyring/secret-service 需要 libdbus）
+        run: sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: M3-11 验证（迁移/命令矩阵/密钥路径/前端 E2E/T14）
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/test/m3-11/verify-m3-11.mjs 2>&1 | tee m3-11-verify.log
+      - name: M3-11 失败诊断（公开 annotation，便于无凭据取证）
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "### M3-11 verify 失败输出（断言 + tail 30）"
+            echo '```text'
+            grep -E "panicked|assertion|left:|right:|FAIL |error\[|AssertionError" m3-11-verify.log 2>/dev/null | tail -12 || true
+            echo '--- tail 30 ---'
+            tail -30 m3-11-verify.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -A 20 "===== verify-m3-11 =====" m3-11-verify.log 2>/dev/null | tail -14 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m3-11-summary::$line"
+          done
+          grep -E "panicked|assertion|left:|right:" m3-11-verify.log 2>/dev/null | tail -4 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m3-11-assert::$line"
+          done
+          tail -4 m3-11-verify.log 2>/dev/null | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m3-11-tail::$line"
+          done
+
+  # M3-12：会话等待态写入与等待审批分组（设计 D9；ADR-011 / 计划 v1.18）。
+  # 覆盖：置位/回程守卫（19 边状态机、非适用态 no-op、单一写者）；回程合法性
+  # （allow/deny/超时/取消 + run 失败收口 + 并发幂等）；重启 no-op；多会话并发等待；
+  # 会话列表分组（固定组序/空组隐藏/锚点契约）；生产组合路径集成 E2E（工作区基准 +
+  # 执行器权限网关 + 真实 PermissionService + Mock 适配器进程）与回归（M2-05/M2-10/M3-03/M3-02）。
+  m3-12-waiting-state:
+    name: Waiting state + grouping (M3-12)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: 安装 Tauri Linux 系统依赖（webkit2gtk 等）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: 安装 Linux 系统依赖（keyring/secret-service 需要 libdbus）
+        run: sudo apt-get install -y libdbus-1-dev pkg-config
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+
+      - name: M3-12 验证（等待态写入/回程合法性/重启 no-op/并发等待/分组/生产组合路径/回归）
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/test/m3-12/verify-m3-12.mjs 2>&1 | tee m3-12-verify.log
+      - name: M3-12 失败诊断（公开 annotation，便于无凭据取证）
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "### M3-12 verify 失败输出（断言 + tail 30）"
+            echo '```text'
+            grep -E "panicked|assertion|left:|right:|FAIL |error\[|AssertionError" m3-12-verify.log 2>/dev/null | tail -12 || true
+            echo '--- tail 30 ---'
+            tail -30 m3-12-verify.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -A 20 "===== verify-m3-12 =====" m3-12-verify.log 2>/dev/null | tail -14 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m3-12-summary::$line"
+          done
+          grep -E "panicked|assertion|left:|right:" m3-12-verify.log 2>/dev/null | tail -4 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m3-12-assert::$line"
+          done
+          tail -4 m3-12-verify.log 2>/dev/null | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m3-12-tail::$line"
+          done
+
+  # M3-10：思考深度（会话级参数；设计 D4/D6/D7；ADR-010 决策 2/4）。
+  # 覆盖：迁移 0003 列/幂等/历史 NULL；透传（会话级/覆盖/缺省 → 适配器回显）；
+  # 能力门（同步警告 + 延迟判定 + 字段不透传 + UI 置灰/tooltip）；重放按会话级值
+  # 恢复并重新判定；校验矩阵；Mock 能力声明与观测；T14 生成物幂等。
+  m3-10-thinking:
+    name: Thinking depth (M3-10)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: 安装 Tauri Linux 系统依赖（webkit2gtk 等）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: 安装 Linux 系统依赖（keyring/secret-service 需要 libdbus）
+        run: sudo apt-get install -y libdbus-1-dev pkg-config
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+
+      - name: M3-10 验证（迁移/透传/能力门/重放/校验矩阵/前端/T14）
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/test/m3-10/verify-m3-10.mjs 2>&1 | tee m3-10-verify.log
+      - name: M3-10 失败诊断（公开 annotation，便于无凭据取证）
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "### M3-10 verify 失败输出（断言 + tail 30）"
+            echo '```text'
+            grep -E "panicked|assertion|left:|right:|FAIL |error\[|AssertionError" m3-10-verify.log 2>/dev/null | tail -12 || true
+            echo '--- tail 30 ---'
+            tail -30 m3-10-verify.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -A 20 "===== verify-m3-10 =====" m3-10-verify.log 2>/dev/null | tail -14 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m3-10-summary::$line"
+          done
+          grep -E "panicked|assertion|left:|right:" m3-10-verify.log 2>/dev/null | tail -4 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m3-10-assert::$line"
+          done
+          tail -4 m3-10-verify.log 2>/dev/null | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m3-10-tail::$line"
+          done
+
   # DoD3：覆盖率门禁（Rust cargo-llvm-cov + TS vitest --coverage，行覆盖 <70% 失败）
   coverage:
     name: Coverage gate (>=70% lines)

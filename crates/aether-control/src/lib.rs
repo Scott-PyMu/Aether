@@ -65,8 +65,8 @@ pub use memory::{
 };
 pub use normalizer::{Normalizer, PendingEvent};
 pub use permission::{
-    path_violation_code, PermissionConfig, PermissionError, PermissionRequest,
-    PermissionResolution, PermissionService,
+    path_violation_code, PendingTicketObserver, PermissionConfig, PermissionError,
+    PermissionRequest, PermissionResolution, PermissionService,
 };
 pub use pipeline::{
     EventPipeline, PipelineConfig, PipelineHealth, ReadbackFrame, ResourcePressure, RunInterrupt,

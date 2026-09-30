@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { ClaudeCodeAdapter, type ClaudeAdapterOptions } from "./claude-adapter";
-import type { ClaudeCliConfig } from "./claude-cli";
+import { thinkingBudgetForDepth, type ClaudeCliConfig } from "./claude-cli";
 
 const FAKE_CLI = fileURLToPath(
   new URL("../../../scripts/test/m2-02/fake-claude/cli.mjs", import.meta.url),
@@ -449,5 +449,66 @@ describe("ClaudeCodeAdapter：D6 方法（M2-02 DoD1/DoD2）", () => {
     await harness.requestResult("shutdown", {});
     await waitUntil(() => harness.exits.length > 0);
     expect(harness.exits).toContain(0);
+  });
+});
+
+describe("ClaudeCodeAdapter：思考深度（M3-10 / ADR-010）", () => {
+  it("能力声明 + 档位→预算映射（纯函数；越界不注入）", async () => {
+    const harness = new Harness();
+    await harness.start();
+    const hello = harness.frames.find((frame) => frame.method === "hello");
+    const runtime = hello?.params?.["runtime"] as Record<string, unknown> | undefined;
+    expect(runtime?.["capabilities"]).toContain("thinking_depth");
+    const initialized = await harness.requestResult("initialize", { config: {} });
+    expect(initialized["capabilities"] as string[]).toContain("thinking_depth");
+
+    expect(thinkingBudgetForDepth(0)).toBe(0);
+    expect(thinkingBudgetForDepth(2)).toBe(8192);
+    expect(thinkingBudgetForDepth(4)).toBe(32768);
+    expect(thinkingBudgetForDepth(5)).toBeUndefined();
+    expect(thinkingBudgetForDepth(-1)).toBeUndefined();
+    expect(thinkingBudgetForDepth(1.5)).toBeUndefined();
+    expect(thinkingBudgetForDepth("高")).toBeUndefined();
+  });
+
+  it("会话级 4 注入 32768；本次覆盖 0 注入 0；无声明不注入", { timeout: 40_000 }, async () => {
+    const invocationFile = join(mkdtempSync(join(tmpdir(), "fake-claude-think-")), "invocations.jsonl");
+    const previous = process.env.FAKE_CLAUDE_INVOCATION_FILE;
+    process.env.FAKE_CLAUDE_INVOCATION_FILE = invocationFile;
+    try {
+      const harness = new Harness();
+      await harness.start();
+      const created = await harness.createSession({ thinking_depth: 4 });
+      const sessionId = String(created["session_id"]);
+
+      // 会话级 4 → 首次 run 注入 32768。
+      const first = await harness.sendMessage(sessionId, "chat-1");
+      expect(await harness.waitTerminal(first)).toBe("run.completed");
+      // 本次覆盖 0 → 注入 0（会话级值不被回写）。
+      const second = await harness.requestResult("session.send", {
+        session_id: sessionId,
+        client_msg_id: "m3-10-override",
+        text: "chat-2",
+        thinking_depth: 0,
+      });
+      expect(await harness.waitTerminal(String(second["run_id"]))).toBe("run.completed");
+
+      // 另一会话未声明档位 → 不注入（null）。
+      const plain = await harness.createSession();
+      const third = await harness.sendMessage(String(plain["session_id"]), "chat-3");
+      expect(await harness.waitTerminal(third)).toBe("run.completed");
+
+      const records = readFileSync(invocationFile, "utf8")
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => JSON.parse(line) as { max_thinking_tokens: string | null });
+      expect(records).toHaveLength(3);
+      expect(records[0]?.max_thinking_tokens).toBe("32768");
+      expect(records[1]?.max_thinking_tokens).toBe("0");
+      expect(records[2]?.max_thinking_tokens).toBeNull();
+    } finally {
+      if (previous === undefined) delete process.env.FAKE_CLAUDE_INVOCATION_FILE;
+      else process.env.FAKE_CLAUDE_INVOCATION_FILE = previous;
+    }
   });
 });

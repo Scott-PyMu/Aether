@@ -40,6 +40,31 @@ export interface ClaudeRunSpec {
   prompt: string;
   /** 适配器侧硬超时（兜底；核心 120s 断流看门狗优先）。 */
   timeoutMs: number;
+  /**
+   * M3-10/ADR-010：思考深度生效值映射的 token 预算（`MAX_THINKING_TOKENS`）；
+   * `undefined` = 不注入（使用 CLI 默认）。
+   */
+  thinkingBudget?: number;
+}
+
+/**
+ * 思考深度档位 → `MAX_THINKING_TOKENS` 预算（M3-10/ADR-010 决策 2；档位映射表在
+ * `docs/M3-10-证据.md` 登记）。0 = 关闭（注入 0），其余按档递增；超出 0–4 返回
+ * `undefined`（不注入，适配器对未知档位保持宽容）。
+ */
+export const CLAUDE_THINKING_TOKEN_BUDGET: readonly number[] = [
+  0,
+  1024,
+  8192,
+  16384,
+  32768,
+];
+
+/** 档位 → token 预算（越界/非整数 → `undefined`）。 */
+export function thinkingBudgetForDepth(depth: unknown): number | undefined {
+  if (typeof depth !== "number" || !Number.isInteger(depth)) return undefined;
+  if (depth < 0 || depth >= CLAUDE_THINKING_TOKEN_BUDGET.length) return undefined;
+  return CLAUDE_THINKING_TOKEN_BUDGET[depth];
 }
 
 /** 依据接入笔记固定参数形状构造 CLI 参数。 */
@@ -91,7 +116,13 @@ export function normalizeCommand(
 export type SpawnFn = (
   command: string,
   args: string[],
-  options: { cwd: string; detached: boolean; windowsHide: boolean },
+  options: {
+    cwd: string;
+    detached: boolean;
+    windowsHide: boolean;
+    /** M3-10：思考预算注入（显式提供时整体替换子进程环境，由调用方合并 process.env）。 */
+    env?: NodeJS.ProcessEnv;
+  },
 ) => ChildProcessWithoutNullStreams;
 
 /** 进程树中断抽象（默认见 `interruptProcessTree`）。 */
@@ -103,6 +134,7 @@ export const defaultSpawn: SpawnFn = (command, args, options) =>
     cwd: options.cwd,
     detached: options.detached,
     windowsHide: options.windowsHide,
+    ...(options.env !== undefined ? { env: options.env } : {}),
     stdio: ["pipe", "pipe", "pipe"],
   });
 
@@ -208,12 +240,19 @@ export class ClaudeCliRun {
     const { config, spec } = this.options;
     const built = buildClaudeArgs(config, spec);
     const normalized = normalizeCommand(config.bin, built);
+    // M3-10/ADR-010：思考预算经 `MAX_THINKING_TOKENS` 环境变量注入（未给定时
+    // 不传 env，子进程继承当前环境）。
+    const env =
+      spec.thinkingBudget === undefined
+        ? undefined
+        : { ...process.env, MAX_THINKING_TOKENS: String(spec.thinkingBudget) };
     let child: ChildProcessWithoutNullStreams;
     try {
       child = this.spawnFn(normalized.command, normalized.args, {
         cwd: config.workspace,
         detached: process.platform !== "win32",
         windowsHide: true,
+        ...(env !== undefined ? { env } : {}),
       });
     } catch (error) {
       this.spawnError = error instanceof Error ? error.message : String(error);

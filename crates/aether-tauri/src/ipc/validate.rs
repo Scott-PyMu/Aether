@@ -151,6 +151,32 @@ pub fn validate_ascii_id(value: &str, field: &str) -> Result<(), IpcError> {
     Ok(())
 }
 
+/// 思考深度档位校验（ADR-010 决策 2：0–4；越界 → `out_of_range`）。
+pub fn validate_thinking_depth(value: i64, field: &str) -> Result<u8, IpcError> {
+    if !(i64::from(aether_core::THINKING_DEPTH_MIN)..=i64::from(aether_core::THINKING_DEPTH_MAX))
+        .contains(&value)
+    {
+        return Err(IpcError::out_of_range(
+            field,
+            format!(
+                "思考深度必须在 {THINKING_DEPTH_MIN}..={THINKING_DEPTH_MAX} 之间（ADR-010），传入 {value}",
+                THINKING_DEPTH_MIN = aether_core::THINKING_DEPTH_MIN,
+                THINKING_DEPTH_MAX = aether_core::THINKING_DEPTH_MAX,
+            ),
+        ));
+    }
+    u8::try_from(value).map_err(|_| {
+        IpcError::out_of_range(
+            field,
+            format!(
+                "思考深度必须在 {THINKING_DEPTH_MIN}..={THINKING_DEPTH_MAX} 之间（ADR-010），传入 {value}",
+                THINKING_DEPTH_MIN = aether_core::THINKING_DEPTH_MIN,
+                THINKING_DEPTH_MAX = aether_core::THINKING_DEPTH_MAX,
+            ),
+        )
+    })
+}
+
 /// 模型名校验（D6 `session.create` 透传字段）。
 pub fn validate_model(value: &str, field: &str) -> Result<(), IpcError> {
     if value.is_empty() || value.chars().count() > MAX_MODEL_CHARS {

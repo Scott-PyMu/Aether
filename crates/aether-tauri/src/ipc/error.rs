@@ -49,6 +49,12 @@ pub enum IpcErrorCode {
     /// 会话引用路径校验失败（ADR-010：canonicalize / 可访问性 / kind 探测失败；
     /// **不含同步盘语义**——2026-09-24 评审裁定 `artifact_add` 不复用 A4 检测）。
     ArtifactPathRejected,
+    /// 内置供应商禁止删除（ADR-010 决策 3：`provider_delete`，`is_builtin=1`）。
+    BuiltinProviderUndeletable,
+    /// 供应商不存在（ADR-010：供应商类命令按 id 查无）。
+    ProviderNotFound,
+    /// 供应商模型不存在（ADR-010：`provider_model_toggle`）。
+    ProviderModelNotFound,
 }
 
 impl IpcErrorCode {
@@ -71,6 +77,9 @@ impl IpcErrorCode {
             Self::NotImplemented => "not_implemented",
             Self::ReadbackGapTooLarge => "readback_gap_too_large",
             Self::ArtifactPathRejected => "artifact_path_rejected",
+            Self::BuiltinProviderUndeletable => "builtin_provider_undeletable",
+            Self::ProviderNotFound => "provider_not_found",
+            Self::ProviderModelNotFound => "provider_model_not_found",
         }
     }
 }
@@ -176,6 +185,31 @@ impl IpcError {
     /// 的边界见 ADR-010 B.3——后者面向数据目录/工作区/备份路径）。
     pub fn artifact_path_rejected(message: impl Into<String>) -> Self {
         Self::new(IpcErrorCode::ArtifactPathRejected, message)
+    }
+
+    /// ADR-010 决策 3：内置供应商禁止删除（硬约束；不得以 UI 隐藏代替）。
+    pub fn builtin_provider_undeletable(id: &str) -> Self {
+        Self::at_field(
+            IpcErrorCode::BuiltinProviderUndeletable,
+            "id",
+            format!("内置供应商不可删除（{id}）；可停用或编辑"),
+        )
+    }
+
+    /// ADR-010：供应商不存在（按 id 查无）。
+    pub fn provider_not_found(id: &str) -> Self {
+        Self::new(
+            IpcErrorCode::ProviderNotFound,
+            format!("供应商不存在（{id}）；已刷新供应商列表"),
+        )
+    }
+
+    /// ADR-010：供应商模型不存在（`provider_model_toggle`）。
+    pub fn provider_model_not_found(provider_id: &str, model_id: &str) -> Self {
+        Self::new(
+            IpcErrorCode::ProviderModelNotFound,
+            format!("模型不存在（provider_id={provider_id}, model_id={model_id}）；已刷新模型列表"),
+        )
     }
 
     pub fn not_implemented(command: &str) -> Self {

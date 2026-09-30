@@ -40,9 +40,40 @@ export interface RuntimeInfo {
   status_reason?: string | null;
 }
 
+/** 思考深度档位缺省值（ADR-010 决策 2：默认「高」= 2）。 */
+export const THINKING_DEPTH_DEFAULT = 2;
+/** 思考深度档位范围（0–4）。 */
+export const THINKING_DEPTH_MIN = 0;
+export const THINKING_DEPTH_MAX = 4;
+/** 思考深度能力项（D6/ADR-010：`runtime.capabilities` 字符串项，存在即支持）。 */
+export const THINKING_DEPTH_CAPABILITY = "thinking_depth";
+/** 档位显示文案（ADR-010 与原型一致：关闭/低/高/极高/最大）。 */
+export const THINKING_DEPTH_LABELS: Record<number, string> = {
+  0: "关闭",
+  1: "低",
+  2: "高",
+  3: "极高",
+  4: "最大",
+};
+/** 能力置灰 tooltip（UI-UX §2.4/§5 文案）。 */
+export const THINKING_DEPTH_UNSUPPORTED_HINT = "当前运行时不支持思考深度";
+/** 警告码：运行时未声明能力、按缺省 2 应用（ADR-006 附录 B「警告码」子表首项）。 */
+export const THINKING_DEPTH_UNSUPPORTED_CODE = "thinking_depth_unsupported";
+
+/**
+ * 非阻断警告条目（ADR-010 决策 4：`warnings[].code` 独立命名空间；
+ * 首项 `thinking_depth_unsupported`，同步判定路径随响应返回）。
+ */
+export interface SessionWarning {
+  code: string;
+  field: string;
+  runtime_id: string;
+  message: string;
+}
+
 /**
  * `session_list` / `session_create` 条目（ADR-010 附录 B.4 的 `SessionSummary` DTO；
- * M3-09 引入，含可选 `workspace_root`）。
+ * M3-09 引入，含可选 `workspace_root`；M3-10 追加 `thinking_depth` 与可选警告）。
  */
 export interface SessionSummary {
   id: string;
@@ -52,11 +83,20 @@ export interface SessionSummary {
   title: string;
   status: SessionStatus;
   model?: string | null;
+  /** M3-10：会话级思考深度（0–4；`session_create` 生效值回显）。 */
+  thinking_depth?: number | null;
   created_at: number;
   updated_at: number;
   closed_at?: number | null;
   /** M3-09：绑定工作区的 canonical 根路径（未绑定省略）；文件面板「项目文件」展示。 */
   workspace_root?: string | null;
+  /** M3-10：`session_create` 同步能力门警告（无警告省略；非阻断）。 */
+  warnings?: SessionWarning[];
+}
+
+/** 运行时是否声明思考深度能力（存在即支持；ADR-010）。 */
+export function supportsThinkingDepth(runtime: RuntimeInfo | null | undefined): boolean {
+  return runtime?.capabilities.includes(THINKING_DEPTH_CAPABILITY) ?? false;
 }
 
 /** `session_send` ack（快路径：消息与 run 行提交后返回，不等模型）。 */
@@ -66,6 +106,8 @@ export interface SessionSendResult {
   run_id: string;
   queued: boolean;
   duplicate: boolean;
+  /** M3-10：同步能力门警告（无警告省略；非阻断）。 */
+  warnings?: SessionWarning[];
 }
 
 /** `session_interrupt` 回执。 */
@@ -111,6 +153,8 @@ export interface SessionCreateInput {
   title: string;
   workspace_id?: string;
   model?: string;
+  /** M3-10/ADR-010：会话级思考深度（0–4；缺省 2）。 */
+  thinking_depth?: number;
 }
 
 export interface SessionListFilter {
@@ -139,6 +183,8 @@ export interface SessionIpc {
     session_id: string;
     text: string;
     client_msg_id: string;
+    /** M3-10/ADR-010：本次 run 思考深度覆盖（0–4；缺省 = 会话级值）。 */
+    thinking_depth?: number;
   }): Promise<SessionSendResult>;
   interruptSession(sessionId: string): Promise<SessionInterruptReport>;
   disposeSession(sessionId: string): Promise<{ session_id: string; status: SessionStatus }>;

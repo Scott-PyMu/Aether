@@ -182,6 +182,19 @@ fn forwardable(event_type: EventType) -> bool {
     )
 }
 
+/// 运行时是否声明 `thinking_depth` 能力（ADR-010：hello/initialize 字符串项，
+/// 存在即支持）。连接非 Ready/Degraded 视为未声明（能力门判定时机 = ready 后）。
+fn connection_supports_thinking_depth(client: &AdapterSessionClient) -> bool {
+    match client.connection().state() {
+        ConnectionState::Ready(hello) | ConnectionState::Degraded { hello, .. } => hello
+            .runtime
+            .capabilities
+            .iter()
+            .any(|item| item == aether_core::THINKING_DEPTH_CAPABILITY),
+        ConnectionState::Connecting | ConnectionState::Disconnected(_) => false,
+    }
+}
+
 /// 生产 run 执行器（克隆共享同一实例）。
 #[derive(Clone)]
 pub struct AdapterRunExecutor {
@@ -350,10 +363,14 @@ impl AdapterRunExecutor {
     }
 
     /// 确保核心会话在适配器侧存在（Mode R：携带 `native_id` 恢复）。
+    ///
+    /// `thinking_depth` 为已过能力门的会话级生效值（`None` = 运行时未声明该能力，
+    /// 不透传；ADR-010）。
     async fn ensure_adapter_session(
         &self,
         client: &AdapterSessionClient,
         session: &Session,
+        thinking_depth: Option<u8>,
     ) -> Result<String, ErrorInfo> {
         if let Some((_, adapter_session)) = lock(&self.adapter_sessions).get(&session.id).cloned() {
             return Ok(adapter_session);
@@ -365,12 +382,14 @@ impl AdapterRunExecutor {
             .map(str::to_owned);
         // M3-08/D14：工作区记忆注入随 `session.create` 下发（`sessions.system_prompt`
         // 由会话创建路径写入；旧适配器忽略未知字段，ADR-003 兼容）。
+        // M3-10/ADR-010：`thinking_depth` 仅在运行时声明能力时透传。
         let created = client
             .create_session_with_prompt(
                 Some(&session.title),
                 native_id.as_deref(),
                 session.model.as_deref(),
                 session.system_prompt.as_deref(),
+                thinking_depth,
             )
             .await
             .map_err(|error| error_info(ADAPTER_REQUEST_FAILED_CODE, error.to_string()))?;
@@ -422,14 +441,77 @@ impl AdapterRunExecutor {
                 )
             })?;
         let client = self.client_for(&request.runtime_id).await?;
-        let adapter_session = self.ensure_adapter_session(&client, &session).await?;
+        // M3-10/ADR-010 能力门（判定时机 = runtime ready 后）：运行时在
+        // `hello.runtime.capabilities` / `initialize` 响应中以字符串项
+        // `thinking_depth` 声明支持。未声明 → 会话级改写为缺省 2、run 落缺省 2、
+        // 字段不透传（非阻断；延迟判定路径不产生响应警告）。
+        let supported = connection_supports_thinking_depth(&client);
+        // 支持：会话级值透传 `session.create`；显式覆盖透传 `session.send`（仅本次 run）。
+        // 未支持：字段一律不透传（`sessions`/`runs` 已按缺省 2 落库/改写）。
+        let (session_depth, send_override) = if supported {
+            (
+                Some(session.thinking_depth),
+                if request.thinking_override {
+                    Some(request.thinking_depth)
+                } else {
+                    None
+                },
+            )
+        } else {
+            (None, None)
+        };
+        if !supported {
+            // 延迟能力门落库（ADR-010：sessions 改写缺省 2、runs 落缺省 2）；
+            // 落库失败仅诊断，不阻断 run（能力门非阻断语义）。
+            if session.thinking_depth != aether_core::THINKING_DEPTH_DEFAULT {
+                let outcome = self
+                    .write
+                    .execute(StoreCommand::UpdateSessionThinkingDepth {
+                        session_id: session.id.clone(),
+                        thinking_depth: aether_core::THINKING_DEPTH_DEFAULT,
+                        updated_at: now_ms(),
+                    })
+                    .await;
+                if let Err(error) = outcome {
+                    tracing::warn!(
+                        session_id = %session.id,
+                        error = %error,
+                        "思考深度能力门：sessions.thinking_depth 改写缺省 2 失败（仅诊断）"
+                    );
+                }
+            }
+            if request.thinking_depth != aether_core::THINKING_DEPTH_DEFAULT {
+                let outcome = self
+                    .write
+                    .execute(StoreCommand::UpdateRunThinkingDepth {
+                        run_id: request.run_id.clone(),
+                        thinking_depth: aether_core::THINKING_DEPTH_DEFAULT,
+                    })
+                    .await;
+                if let Err(error) = outcome {
+                    tracing::warn!(
+                        run_id = %request.run_id,
+                        error = %error,
+                        "思考深度能力门：runs.thinking_depth 改写缺省 2 失败（仅诊断）"
+                    );
+                }
+            }
+        }
+        let adapter_session = self
+            .ensure_adapter_session(&client, &session, session_depth)
+            .await?;
         // 适配器侧幂等键（ADR-005「适配器侧对 client_msg_id 同样去重」）取**核心 run id**：
         // 每次派发（含 M3-06 `run_retry` 重放）都是一个新 run，必须产生新的适配器 run；
         // 核心侧的重复 `session.send` 已由存储层 `UNIQUE(session_id, client_msg_id)`
         // 在到达适配器之前去重（ADR-005 持久化支撑），因此以 run id 为键不丢失去重语义，
         // 且避免重放复用输入消息 id 时被适配器幂等命中而返回旧 run。
         let ack = client
-            .send(&adapter_session, request.run_id.as_str(), &request.text)
+            .send_with_thinking_depth(
+                &adapter_session,
+                request.run_id.as_str(),
+                &request.text,
+                send_override,
+            )
             .await
             .map_err(|error| error_info(ADAPTER_REQUEST_FAILED_CODE, error.to_string()))?;
         let buffered = {

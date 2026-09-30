@@ -140,6 +140,14 @@ record(
   "verify-m3-09(????????:?? 0003 + ref_pick/artifacts_* 4 ?? + ???/??/???? + ??/???? + ????/??/T14)",
   run(node, [path.join(repoRoot, "scripts", "test", "m3-09", "verify-m3-09.mjs")]),
 );
+record(
+  "verify-m3-11（模型与供应商配置：迁移 0003 providers/播种 + 七命令矩阵/内置约束 + 密钥写入路径/三态/命名空间 + 明文 0 命中 + 供应商页/模型选择器 E2E/T14）",
+  run(node, [path.join(repoRoot, "scripts", "test", "m3-11", "verify-m3-11.mjs")]),
+);
+record(
+  "verify-m3-12（会话等待态写入与等待审批分组：置位/回程守卫 + 事件 from/to + deny/超时/取消/run 失败 + 重启 no-op + 多会话并发 + 分组锚点 + 生产组合路径集成 E2E + 回归；需 Bun）",
+  run(node, [path.join(repoRoot, "scripts", "test", "m3-12", "verify-m3-12.mjs")]),
+);
 
 if (!quick) {
   record("verify-coverage-gate", run(node, [path.join(repoRoot, "scripts", "test", "verify-coverage-gate.mjs")]));
