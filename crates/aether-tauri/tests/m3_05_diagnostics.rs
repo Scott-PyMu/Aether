@@ -52,6 +52,22 @@ fn new_runtime() -> tokio::runtime::Runtime {
         .expect("构建 tokio 运行时")
 }
 
+/// 长路径形式（模拟真实系统选择器返回的完整路径）。
+///
+/// CI 的 `%TEMP%` 形如 `C:\Users\RUNNER~1\...`，含 8.3 短名——短名是 D9/T7 的
+/// **拒绝样本**（形态检查先于 canonicalize），不能直接作为合法输入；夹具先
+/// canonicalize 并去掉 `\\?\` 前缀，与选择器返回完整路径的形态一致
+/// （同 `ipc_validation.rs` 的 `long_path` 口径）。
+fn long_path(path: &Path) -> String {
+    let canonical = std::fs::canonicalize(path).expect("canonicalize 夹具路径");
+    let text = canonical.to_string_lossy().to_string();
+    #[cfg(windows)]
+    if let Some(stripped) = text.strip_prefix(r"\\?\") {
+        return stripped.to_string();
+    }
+    text
+}
+
 /// 运行期生成的密钥形态样本（AGENTS §2.9：不把密钥字面量写进夹具）。
 fn random_token(length: usize) -> String {
     let seed = format!(
@@ -243,7 +259,8 @@ impl Fixture {
     fn target(&self) -> PathBuf {
         let dir = self.temp.path().join("export");
         std::fs::create_dir_all(&dir).expect("导出目录");
-        dir
+        // 模拟选择器返回的完整路径（Windows runner 的 %TEMP% 可能含 8.3 短名）。
+        PathBuf::from(long_path(&dir))
     }
 
     fn export(&self, target: &Path) -> Result<Value, aether_tauri::ipc::error::IpcError> {
@@ -742,6 +759,8 @@ fn command_fixture(label: &str) -> CommandFixture {
     let external = base.path().join("external");
     std::fs::create_dir_all(&external).expect("外部目录");
     std::fs::write(external.join("candidate.db"), b"x").expect("写入文件样本");
+    // 模拟选择器返回的完整路径（Windows runner 的 %TEMP% 可能含 8.3 短名）。
+    let external = PathBuf::from(long_path(&external));
     let backend = Arc::new(RecordingBackend {
         calls: std::sync::Mutex::new(Vec::new()),
     });
