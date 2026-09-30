@@ -11,7 +11,7 @@ use super::path;
 use super::validate::{
     self, ensure_max_bytes, ensure_max_chars, ensure_not_empty, ensure_value_size, is_ulid,
     reject_control_chars, CommandRequest, MAX_LABEL_CHARS, MAX_MESSAGE_BYTES, MAX_PAGE_LIMIT,
-    MAX_SETTING_VALUE_BYTES, MAX_TITLE_CHARS,
+    MAX_PATH_CHARS, MAX_SETTING_VALUE_BYTES, MAX_TITLE_CHARS,
 };
 
 /// 权限决议（D9：`once` / `session` 授权；`deny` 拒绝）。
@@ -161,6 +161,89 @@ impl CommandRequest for MessagesPageRequest {
             return Err(IpcError::invalid_format("session_id", "必须是 26 位 ULID"));
         }
         validate_page_limit(self.limit)
+    }
+}
+
+/// `ref_pick`（ADR-010 决策 1）：引用选择器 kind（文件 / 目录）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, serde::Serialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum RefPickKind {
+    File,
+    Directory,
+}
+
+/// `ref_pick`：`{ kind }` 严格解析（未知 kind → `invalid_enum`；未知成员拒绝）。
+///
+/// Rust 侧系统选择器（复用 `DirectoryPicker` 抽象并扩展文件选择；E2E 注入替身），
+/// **不新增 WebView capability 权限面**（与 `startup_pick_target` 先例一致）；
+/// 路径原样返回，不做 canonicalize（校验在 `artifact_add`，ADR-010 决策 1）。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct RefPickRequest {
+    pub kind: RefPickKind,
+}
+
+impl CommandRequest for RefPickRequest {}
+
+/// `artifacts_list`（ADR-010）：会话引用清单（按 `created_at` 升序）。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactsListRequest {
+    pub session_id: String,
+}
+
+impl CommandRequest for ArtifactsListRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.session_id) {
+            return Err(IpcError::invalid_format("session_id", "必须是 26 位 ULID"));
+        }
+        Ok(())
+    }
+}
+
+/// `artifact_add`（ADR-010）：canonicalize + 可访问性检查在
+/// [`path::validate_artifact_path`]（命令层执行；失败 `artifact_path_rejected`）。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactAddRequest {
+    pub session_id: String,
+    pub path: String,
+}
+
+impl ArtifactAddRequest {
+    /// 引用路径的规范化与 kind/大小探测结果（命令层在调用后端前完成，失败即拒绝）。
+    pub fn resolve_path(&self) -> Result<path::ArtifactPath, IpcError> {
+        path::validate_artifact_path(&self.path)
+    }
+}
+
+impl CommandRequest for ArtifactAddRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.session_id) {
+            return Err(IpcError::invalid_format("session_id", "必须是 26 位 ULID"));
+        }
+        ensure_not_empty(&self.path, "path")?;
+        ensure_max_chars(&self.path, "path", MAX_PATH_CHARS)
+    }
+}
+
+/// `artifact_remove`（ADR-010）：不存在 → 幂等 `{ removed: false }`（不新增错误码）。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactRemoveRequest {
+    pub session_id: String,
+    pub artifact_id: String,
+}
+
+impl CommandRequest for ArtifactRemoveRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.session_id) {
+            return Err(IpcError::invalid_format("session_id", "必须是 26 位 ULID"));
+        }
+        if !is_ulid(&self.artifact_id) {
+            return Err(IpcError::invalid_format("artifact_id", "必须是 26 位 ULID"));
+        }
+        Ok(())
     }
 }
 

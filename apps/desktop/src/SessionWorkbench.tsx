@@ -15,10 +15,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { appEventStore } from "./aetherStore";
+import { artifactsIpc as productionArtifactsIpc, type ArtifactsIpc } from "./artifacts";
 import { describeIpcError, ipcErrorCode } from "./startup";
 import { diagnosticsIpc as productionDiagnosticsIpc, type DiagnosticsIpc } from "./diagnostics";
 import { DiagnosticsEntry } from "./DiagnosticsEntry";
 import type { EventStore } from "./eventStore";
+import { FilePanel } from "./FilePanel";
 import { STORAGE_L2_THRESHOLD } from "./health";
 import { useStorageHealth } from "./healthBus";
 import { HistoryOverflowNotice } from "./HistoryOverflowNotice";
@@ -60,6 +62,8 @@ export interface SessionWorkbenchProps {
   onOpenDiagnostics?: () => void;
   /** M3-05：诊断 IPC 注入（测试替身；缺省 = 生产 Tauri 实现）。 */
   diagnosticsIpc?: DiagnosticsIpc;
+  /** M3-09：文件引用面板 IPC 注入（测试替身；缺省 = 生产 Tauri 实现）。 */
+  artifactsIpc?: ArtifactsIpc;
 }
 
 function mergeMessages(previous: MessageRow[], incoming: MessageRow[]): MessageRow[] {
@@ -82,6 +86,7 @@ export function SessionWorkbench({
   streamHeight = STREAM_VIEWPORT_HEIGHT,
   onOpenDiagnostics,
   diagnosticsIpc: diagnosticsIpcProp = productionDiagnosticsIpc,
+  artifactsIpc: artifactsIpcProp = productionArtifactsIpc,
 }: SessionWorkbenchProps) {
   const [runtimes, setRuntimes] = useState<RuntimeInfo[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
@@ -654,6 +659,12 @@ export function SessionWorkbench({
             sessionId={activeSessionId}
             events={eventsState.events}
             onPendingCount={setPendingPermissionCount}
+          />
+          {/* M3-09 S-11：文件引用面板（只读；会话文件/项目文件；ADR-010 决策 1）。 */}
+          <FilePanel
+            ipc={artifactsIpcProp}
+            sessionId={activeSessionId}
+            workspaceRoot={activeSession?.workspace_root ?? null}
           />
           {onOpenDiagnostics ? (
             <DiagnosticsEntry ipc={diagnosticsIpcProp} onOpen={onOpenDiagnostics} />

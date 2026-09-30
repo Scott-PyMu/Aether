@@ -944,6 +944,61 @@ jobs:
             echo "::error title=m3-08-tail::$line"
           done
 
+  # M3-09：文件引用面板（只读；设计 D3/D7/D9；ADR-010 决策 1/4）。
+  # 覆盖：迁移 0003 artifacts 表/约束 + 单写队列；artifact_add canonicalize/可访问性/
+  # kind 探测/幂等与路径拒绝；artifact_remove 幂等 + 列表排序 + 跨重启；ref_pick 严格
+  # 解析与取消；边界（无目录列举/文件读取、不触发 workspace_set、不产生事件）；
+  # 前端面板 E2E 锚点与 T14 生成物幂等。
+  m3-09-artifacts:
+    name: File reference panel (M3-09)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: 安装 Tauri Linux 系统依赖（webkit2gtk 等）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: 安装 Linux 系统依赖（keyring/secret-service 需要 libdbus）
+        run: sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: M3-09 验证（迁移/引用后端/选择器/前端面板/边界/T14）
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/test/m3-09/verify-m3-09.mjs 2>&1 | tee m3-09-verify.log
+      - name: M3-09 失败诊断（公开 annotation，便于无凭据取证）
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "### M3-09 verify 失败输出（断言 + tail 30）"
+            echo '```text'
+            grep -E "panicked|assertion|left:|right:|FAIL |error\[|AssertionError" m3-09-verify.log 2>/dev/null | tail -12 || true
+            echo '--- tail 30 ---'
+            tail -30 m3-09-verify.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -A 20 "===== verify-m3-09 =====" m3-09-verify.log 2>/dev/null | tail -14 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m3-09-summary::$line"
+          done
+          grep -E "panicked|assertion|left:|right:" m3-09-verify.log 2>/dev/null | tail -4 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m3-09-assert::$line"
+          done
+          tail -4 m3-09-verify.log 2>/dev/null | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m3-09-tail::$line"
+          done
+
   # DoD3：覆盖率门禁（Rust cargo-llvm-cov + TS vitest --coverage，行覆盖 <70% 失败）
   coverage:
     name: Coverage gate (>=70% lines)

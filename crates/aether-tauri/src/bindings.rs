@@ -3,8 +3,9 @@
 //! - 生成物 `packages/protocol/src/bindings.ts` 由 `tauri-specta` 生成，**禁止手改**
 //!   （AGENTS §2.8）；生成入口见 `tests/export_bindings.rs`（`--ignored`），
 //!   CI 以「重新生成 + `git diff --exit-code`」校验（T14）；
-//! - 命令覆盖 D7 P0 全集 25 个可调用命令（含 ADR-004 七命令、ADR-006 四命令与
-//!   ADR-007 `health`）；运行期注册仍走 [`crate::ipc::commands::handler`]，
+//! - 命令覆盖 D7 P0 全集 29 个可调用命令（含 ADR-004 七命令、ADR-006 四命令、
+//!   ADR-007 `health` 与 ADR-010 文件引用四命令；供应商七命令随 M3-11 落地）；
+//!   运行期注册仍走 [`crate::ipc::commands::handler`]，
 //!   本模块只服务于类型导出，不改变 M1-08 严格校验契约；
 //! - 事件通道（D7）：单通道 [`EVENT_CHANNEL`]，信封含 `session_id`，UI 侧过滤；
 //!   运行期转发见 [`crate::event_bridge`]。
@@ -14,9 +15,10 @@ use specta::Type;
 use tauri_specta::{collect_events, Builder};
 
 use crate::ipc::dto::{
-    AppExitRequest, AppRestartRequest, BackupCreateRequest, BackupListRequest,
-    BackupRestoreRequest, BackupSource, ExportDiagnosticsRequest, HealthRequest,
-    MessagesPageRequest, PermissionDecision, PermissionResolveRequest, PermissionsPendingRequest,
+    AppExitRequest, AppRestartRequest, ArtifactAddRequest, ArtifactRemoveRequest,
+    ArtifactsListRequest, BackupCreateRequest, BackupListRequest, BackupRestoreRequest,
+    BackupSource, ExportDiagnosticsRequest, HealthRequest, MessagesPageRequest, PermissionDecision,
+    PermissionResolveRequest, PermissionsPendingRequest, RefPickKind, RefPickRequest,
     RunRetryRequest, RuntimeEnableRequest, RuntimeRetryRequest, SessionCreateRequest,
     SessionIdRequest, SessionListRequest, SessionSendRequest, SessionStatus, SettingsGetRequest,
     SettingsSetRequest, StartupGetRequest, StartupMigrateRequest, StartupPickTargetRequest,
@@ -24,6 +26,7 @@ use crate::ipc::dto::{
 };
 use crate::ipc::error::IpcError;
 use crate::json_payload::JsonPayload;
+use crate::session_backend::SessionSummary;
 
 /// 事件通道（D7：单通道，UI 侧按 `session_id` 过滤）。
 pub const EVENT_CHANNEL: &str = "aether://event";
@@ -98,6 +101,12 @@ pub fn builder<R: tauri::Runtime>() -> Builder<R> {
         .typ::<RuntimeRetryRequest>()
         .typ::<RuntimeEnableRequest>()
         .typ::<WorkspaceSetRequest>()
+        .typ::<RefPickRequest>()
+        .typ::<RefPickKind>()
+        .typ::<ArtifactsListRequest>()
+        .typ::<ArtifactAddRequest>()
+        .typ::<ArtifactRemoveRequest>()
+        .typ::<SessionSummary>()
         .typ::<ExportDiagnosticsRequest>()
         .typ::<HealthRequest>()
         .typ::<StartupGetRequest>()

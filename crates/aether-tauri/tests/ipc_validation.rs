@@ -15,15 +15,15 @@ use std::sync::{Arc, Mutex};
 
 use aether_tauri::ipc::backend::IpcBackend;
 use aether_tauri::ipc::dto::{
-    AppRestartRequest, BackupCreateRequest, BackupRestoreRequest, ExportDiagnosticsRequest,
-    MessagesPageRequest, PermissionResolveRequest, PermissionsPendingRequest, RunRetryRequest,
-    RuntimeEnableRequest, RuntimeRetryRequest, SessionCreateRequest, SessionIdRequest,
-    SessionListRequest, SessionSendRequest, SettingsGetRequest, SettingsSetRequest,
-    WorkspaceSetRequest,
+    AppRestartRequest, ArtifactAddRequest, ArtifactRemoveRequest, ArtifactsListRequest,
+    BackupCreateRequest, BackupRestoreRequest, ExportDiagnosticsRequest, MessagesPageRequest,
+    PermissionResolveRequest, PermissionsPendingRequest, RunRetryRequest, RuntimeEnableRequest,
+    RuntimeRetryRequest, SessionCreateRequest, SessionIdRequest, SessionListRequest,
+    SessionSendRequest, SettingsGetRequest, SettingsSetRequest, WorkspaceSetRequest,
 };
 use aether_tauri::ipc::error::IpcError;
 use aether_tauri::ipc::path::{
-    is_within, validate_external_file, validate_user_path, validate_workspace_root,
+    is_within, validate_external_file, validate_user_path, validate_workspace_root, ArtifactPath,
 };
 use aether_tauri::ipc::validate::{
     parse_strict, CommandRequest, MAX_MESSAGE_BYTES, MAX_TITLE_CHARS,
@@ -152,6 +152,22 @@ impl IpcBackend for RecordingBackend {
         _canonical_root_path: Option<&Path>,
     ) -> Result<Value, IpcError> {
         self.record("workspace_set")
+    }
+
+    fn artifacts_list(&self, _request: &ArtifactsListRequest) -> Result<Value, IpcError> {
+        self.record("artifacts_list")
+    }
+
+    fn artifact_add(
+        &self,
+        _request: &ArtifactAddRequest,
+        _resolved: &ArtifactPath,
+    ) -> Result<Value, IpcError> {
+        self.record("artifact_add")
+    }
+
+    fn artifact_remove(&self, _request: &ArtifactRemoveRequest) -> Result<Value, IpcError> {
+        self.record("artifact_remove")
     }
 
     fn export_diagnostics(
@@ -552,6 +568,68 @@ fn malformed_samples_return_structured_errors_and_do_not_reach_backend() {
             "unknown_field",
             Some("unexpected"),
         ),
+        // ===== ADR-010/M3-09：文件引用四命令校验矩阵 =====
+        (
+            "ref_pick",
+            json!({ "kind": "binary" }),
+            "invalid_enum",
+            None,
+        ),
+        (
+            "ref_pick",
+            json!({ "kind": "file", "unexpected": 1 }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
+        ("ref_pick", json!({}), "missing_field", Some("kind")),
+        (
+            "artifacts_list",
+            json!({ "session_id": "not-a-ulid" }),
+            "invalid_format",
+            Some("session_id"),
+        ),
+        (
+            "artifacts_list",
+            json!({ "session_id": ULID, "unexpected": 1 }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
+        (
+            "artifact_add",
+            json!({ "session_id": ULID }),
+            "missing_field",
+            Some("path"),
+        ),
+        (
+            "artifact_add",
+            json!({ "session_id": ULID, "path": "" }),
+            "invalid_format",
+            Some("path"),
+        ),
+        (
+            "artifact_add",
+            json!({ "session_id": ULID, "path": "x".repeat(4097) }),
+            "too_large",
+            Some("path"),
+        ),
+        (
+            "artifact_add",
+            json!({ "session_id": ULID, "path": "relative/notes.md" }),
+            "artifact_path_rejected",
+            None,
+        ),
+        (
+            "artifact_remove",
+            json!({ "session_id": ULID, "artifact_id": "short" }),
+            "invalid_format",
+            Some("artifact_id"),
+        ),
+        (
+            "artifact_remove",
+            json!({ "session_id": ULID, "artifact_id": ULID, "unexpected": true }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
     ];
 
     for (command, payload, code, field) in samples {
@@ -572,6 +650,9 @@ fn valid_requests_reach_backend_exactly_once() {
     let external_db = fixture.outside.join("restore-candidate.db");
     std::fs::write(&external_db, b"candidate").expect("写入外部候选 .db");
     let external_db = long_path(&external_db);
+    let reference_file = fixture.root.join("reference.md");
+    std::fs::write(&reference_file, b"# ref").expect("写入引用文件");
+    let reference_file = long_path(&reference_file);
 
     let samples: Vec<(&str, Value, &str)> = vec![
         ("runtimes_list", Value::Null, "runtimes_list"),
@@ -646,6 +727,22 @@ fn valid_requests_reach_backend_exactly_once() {
             json!({ "root_path": inside }),
             "workspace_set",
         ),
+        // ADR-010/M3-09：文件引用四命令（ref_pick 由选择器夹具单测覆盖，不触后端）。
+        (
+            "artifacts_list",
+            json!({ "session_id": ULID }),
+            "artifacts_list",
+        ),
+        (
+            "artifact_add",
+            json!({ "session_id": ULID, "path": reference_file }),
+            "artifact_add",
+        ),
+        (
+            "artifact_remove",
+            json!({ "session_id": ULID, "artifact_id": ULID }),
+            "artifact_remove",
+        ),
         (
             "export_diagnostics",
             json!({ "target_dir": inside }),
@@ -718,6 +815,9 @@ fn valid_requests_reach_backend_exactly_once() {
         "runtime_enable",
         "workspace_set",
         "workspace_set",
+        "artifacts_list",
+        "artifact_add",
+        "artifact_remove",
         "export_diagnostics",
         "export_diagnostics",
         "settings_get",
@@ -778,6 +878,63 @@ fn app_restart_requires_confirm_true_before_reaching_command_body() {
         fixture.backend.calls().is_empty(),
         "app_restart 不经 IpcBackend 下游"
     );
+}
+
+/// ADR-010/M3-09：`ref_pick` 合法 `kind` 通过严格解析后进入命令体；
+/// 框架夹具无选择器 → `not_implemented`（证明校验已通过、未透传后端）。
+#[test]
+fn ref_pick_valid_kind_reaches_command_body_before_picker_check() {
+    let fixture = fixture("ref-pick-body");
+    for kind in ["file", "directory"] {
+        let result = invoke(&fixture.webview, "ref_pick", json!({ "kind": kind }));
+        match result {
+            Err(error) => {
+                assert_eq!(
+                    error.get("code").and_then(Value::as_str),
+                    Some("not_implemented"),
+                    "合法 kind={kind} 必须通过严格解析并到达命令体：{error}"
+                );
+            }
+            Ok(value) => panic!("夹具无选择器，不应成功：{value}"),
+        }
+    }
+    assert!(
+        fixture.backend.calls().is_empty(),
+        "ref_pick 不经 IpcBackend 下游"
+    );
+}
+
+/// M3-09：引用路径校验（canonicalize + 可访问性 + kind 探测）——合法不误拒、
+/// 失败统一 `artifact_path_rejected`（ADR-010；不含 A4 同步盘语义）。
+#[test]
+fn artifact_path_validator_accepts_usable_paths_and_rejects_others() {
+    let base = temp_dir("artifact-path");
+    let file = base.join("notes.md");
+    std::fs::write(&file, b"# notes").expect("写入文件");
+    let folder = base.join("docs");
+    std::fs::create_dir_all(&folder).expect("创建目录");
+
+    let resolved = aether_tauri::ipc::path::validate_artifact_path(&long_path(&file))
+        .expect("合法文件必须接受（不误拒）");
+    assert_eq!(resolved.kind, "file");
+    assert_eq!(resolved.size_bytes, Some(7));
+    let resolved = aether_tauri::ipc::path::validate_artifact_path(&long_path(&folder))
+        .expect("合法目录必须接受");
+    assert_eq!(resolved.kind, "directory");
+    assert_eq!(resolved.size_bytes, None);
+
+    let missing = base.join("missing.txt");
+    for (label, candidate) in [
+        ("不存在", missing.to_string_lossy().to_string()),
+        ("相对路径", "relative/notes.md".to_owned()),
+    ] {
+        let error = aether_tauri::ipc::path::validate_artifact_path(&candidate).expect_err(label);
+        assert_eq!(
+            error.code.as_str(),
+            "artifact_path_rejected",
+            "{label}：{error}"
+        );
+    }
 }
 
 #[cfg(windows)]

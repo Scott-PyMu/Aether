@@ -133,8 +133,12 @@ record(
   run(node, [path.join(repoRoot, "scripts", "test", "m3-07", "verify-m3-07.mjs")]),
 );
 record(
-  "verify-m3-08（工作区记忆：注入优先级/32KB 截断 + memory.read/append/write 回环 + D9 白名单/越权 deny + 原子写中断 + 跨会话 + memory_conflict + workspace_set 换根与执行器网关零直通；需 Bun）",
+  "verify-m3-08(?????:?????/32KB ?? + memory.read/append/write ?? + D9 ???/?? deny + ????? + ??? + memory_conflict + workspace_set ???????????;? Bun)",
   run(node, [path.join(repoRoot, "scripts", "test", "m3-08", "verify-m3-08.mjs")]),
+);
+record(
+  "verify-m3-09(????????:?? 0003 + ref_pick/artifacts_* 4 ?? + ???/??/???? + ??/???? + ????/??/T14)",
+  run(node, [path.join(repoRoot, "scripts", "test", "m3-09", "verify-m3-09.mjs")]),
 );
 
 if (!quick) {

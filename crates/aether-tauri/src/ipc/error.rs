@@ -46,6 +46,9 @@ pub enum IpcErrorCode {
     /// 补读缺口过大（D4：>10k 拒绝自动补发；与核心管线 `readback_gap_too_large`
     /// 同码透传，M3-02 属主承接项；ADR-009 决策 2 登记，实施计划 v1.16）。
     ReadbackGapTooLarge,
+    /// 会话引用路径校验失败（ADR-010：canonicalize / 可访问性 / kind 探测失败；
+    /// **不含同步盘语义**——2026-09-24 评审裁定 `artifact_add` 不复用 A4 检测）。
+    ArtifactPathRejected,
 }
 
 impl IpcErrorCode {
@@ -67,6 +70,7 @@ impl IpcErrorCode {
             Self::CoreNotReady => "core_not_ready",
             Self::NotImplemented => "not_implemented",
             Self::ReadbackGapTooLarge => "readback_gap_too_large",
+            Self::ArtifactPathRejected => "artifact_path_rejected",
         }
     }
 }
@@ -166,6 +170,12 @@ impl IpcError {
     /// 门命令（`startup_*`）不依赖后端，该窗口内仍可用。
     pub fn core_not_ready(message: impl Into<String>) -> Self {
         Self::new(IpcErrorCode::CoreNotReady, message)
+    }
+
+    /// ADR-010：会话引用路径校验失败（`artifact_add` 专属码；与 `path_rejected`
+    /// 的边界见 ADR-010 B.3——后者面向数据目录/工作区/备份路径）。
+    pub fn artifact_path_rejected(message: impl Into<String>) -> Self {
+        Self::new(IpcErrorCode::ArtifactPathRejected, message)
     }
 
     pub fn not_implemented(command: &str) -> Self {

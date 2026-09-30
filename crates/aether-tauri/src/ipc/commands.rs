@@ -7,9 +7,10 @@
 use serde_json::Value;
 
 use super::dto::{
-    AppExitRequest, AppRestartRequest, BackupCreateRequest, BackupListRequest,
-    BackupRestoreRequest, ExportDiagnosticsRequest, HealthRequest, MessagesPageRequest,
-    PermissionResolveRequest, PermissionsPendingRequest, RunRetryRequest, RuntimeEnableRequest,
+    AppExitRequest, AppRestartRequest, ArtifactAddRequest, ArtifactRemoveRequest,
+    ArtifactsListRequest, BackupCreateRequest, BackupListRequest, BackupRestoreRequest,
+    ExportDiagnosticsRequest, HealthRequest, MessagesPageRequest, PermissionResolveRequest,
+    PermissionsPendingRequest, RefPickKind, RefPickRequest, RunRetryRequest, RuntimeEnableRequest,
     RuntimeRetryRequest, SessionCreateRequest, SessionIdRequest, SessionListRequest,
     SessionSendRequest, SettingsGetRequest, SettingsSetRequest, StartupGetRequest,
     StartupMigrateRequest, StartupPickTargetRequest, WorkspaceSetRequest,
@@ -323,6 +324,80 @@ pub(crate) fn export_diagnostics(
         .map(JsonPayload)
 }
 
+/// ADR-010/M3-09：引用选择器（`{ kind: "file" | "directory" }`）。
+///
+/// Rust 侧系统选择器（复用 `DirectoryPicker` 抽象并扩展文件选择；E2E 注入替身），
+/// **不新增 WebView capability 权限面**（与 `startup_pick_target` 先例一致）；
+/// 路径原样返回、不做 canonicalize（校验在 `artifact_add`）；用户取消 → `{ path: null }`。
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn ref_pick(
+    state: tauri::State<'_, IpcState>,
+    payload: JsonPayload,
+) -> Result<JsonPayload, IpcError> {
+    let request: RefPickRequest = parse_strict(payload.into_value())?;
+    let picker = state.picker().ok_or_else(|| {
+        IpcError::new(
+            IpcErrorCode::NotImplemented,
+            "目录/文件选择器未接线（仅生产运行形态；测试需注入 DirectoryPicker）",
+        )
+    })?;
+    let kind = request.kind;
+    let picked = tauri::async_runtime::spawn_blocking(move || match kind {
+        RefPickKind::File => picker.pick_file(),
+        RefPickKind::Directory => picker.pick_directory(),
+    })
+    .await
+    .map_err(|error| IpcError::internal(format!("引用选择器调用失败：{error}")))?
+    .map_err(|error| IpcError::internal(format!("引用选择器错误：{error}")))?;
+    let path = picked.map(|path| path.to_string_lossy().to_string());
+    Ok(JsonPayload(serde_json::json!({ "path": path })))
+}
+
+/// ADR-010/M3-09：会话引用清单（只读；不触发 `workspace_set`、不产生事件）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn artifacts_list(
+    state: tauri::State<'_, IpcState>,
+    payload: JsonPayload,
+) -> Result<JsonPayload, IpcError> {
+    let request: ArtifactsListRequest = parse_strict(payload.into_value())?;
+    state
+        .backend_ready()?
+        .artifacts_list(&request)
+        .map(JsonPayload)
+}
+
+/// ADR-010/M3-09：登记会话引用（canonicalize + 可访问性检查在命令层；失败
+/// `artifact_path_rejected`；同会话同路径幂等）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn artifact_add(
+    state: tauri::State<'_, IpcState>,
+    payload: JsonPayload,
+) -> Result<JsonPayload, IpcError> {
+    let request: ArtifactAddRequest = parse_strict(payload.into_value())?;
+    let resolved = request.resolve_path()?;
+    state
+        .backend_ready()?
+        .artifact_add(&request, &resolved)
+        .map(JsonPayload)
+}
+
+/// ADR-010/M3-09：删除会话引用（不存在 → 幂等 `{ removed: false }`）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn artifact_remove(
+    state: tauri::State<'_, IpcState>,
+    payload: JsonPayload,
+) -> Result<JsonPayload, IpcError> {
+    let request: ArtifactRemoveRequest = parse_strict(payload.into_value())?;
+    state
+        .backend_ready()?
+        .artifact_remove(&request)
+        .map(JsonPayload)
+}
+
 /// M1-06：启动门快照（拒绝启动时仍可达；UI 据此渲染门界面）。
 /// ADR-006：无参数命令；缺省载荷等价空对象，任何成员都会被严格模式拒绝。
 #[tauri::command]
@@ -409,8 +484,9 @@ pub(crate) fn app_exit(
 
 /// 命令收集（M3-01/T14：`packages/protocol/src/bindings.ts` 生成用）。
 ///
-/// 与 [`handler`]（release 构建）注册的命令集合一一对应：D7 P0 全集 25 个可调用命令，
-/// 含 ADR-004 七命令、ADR-006 四命令与 ADR-007 `health`。debug 构建额外注册的 E2E
+/// 与 [`handler`]（release 构建）注册的命令集合一一对应：D7 P0 全集 29 个可调用命令
+/// （ADR-004 七命令、ADR-006 四命令、ADR-007 `health` + ADR-010 文件引用四命令；
+/// 供应商七命令随 M3-11 落地）。debug 构建额外注册的 E2E
 /// 探针命令不进入绑定，保证生成物与构建配置无关（生成/校验口径见 `docs/M3-01-证据.md`）。
 ///
 /// 运行期命令注册仍走 [`handler`]：本函数只服务于类型导出，不改变 M1-08 校验契约
@@ -437,6 +513,10 @@ pub fn collected<R: tauri::Runtime>() -> tauri_specta::Commands<R> {
         runtime_retry,
         runtime_enable,
         workspace_set,
+        ref_pick,
+        artifacts_list,
+        artifact_add,
+        artifact_remove,
         export_diagnostics,
         health,
         startup_get,
@@ -473,6 +553,10 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         runtime_retry,
         runtime_enable,
         workspace_set,
+        ref_pick,
+        artifacts_list,
+        artifact_add,
+        artifact_remove,
         export_diagnostics,
         health,
         startup_get,
@@ -509,6 +593,10 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         runtime_retry,
         runtime_enable,
         workspace_set,
+        ref_pick,
+        artifacts_list,
+        artifact_add,
+        artifact_remove,
         export_diagnostics,
         health,
         startup_get,

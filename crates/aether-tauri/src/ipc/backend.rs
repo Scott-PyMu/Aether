@@ -9,13 +9,14 @@ use std::path::Path;
 use serde_json::Value;
 
 use super::dto::{
-    AppRestartRequest, BackupCreateRequest, BackupRestoreRequest, ExportDiagnosticsRequest,
-    MessagesPageRequest, PermissionResolveRequest, PermissionsPendingRequest, RunRetryRequest,
-    RuntimeEnableRequest, RuntimeRetryRequest, SessionCreateRequest, SessionIdRequest,
-    SessionListRequest, SessionSendRequest, SettingsGetRequest, SettingsSetRequest,
-    WorkspaceSetRequest,
+    AppRestartRequest, ArtifactAddRequest, ArtifactRemoveRequest, ArtifactsListRequest,
+    BackupCreateRequest, BackupRestoreRequest, ExportDiagnosticsRequest, MessagesPageRequest,
+    PermissionResolveRequest, PermissionsPendingRequest, RunRetryRequest, RuntimeEnableRequest,
+    RuntimeRetryRequest, SessionCreateRequest, SessionIdRequest, SessionListRequest,
+    SessionSendRequest, SettingsGetRequest, SettingsSetRequest, WorkspaceSetRequest,
 };
 use super::error::IpcError;
+use super::path::ArtifactPath;
 
 /// 命令后端：默认实现全部返回 `not_implemented`（供未接线阶段使用）。
 pub trait IpcBackend: Send + Sync + 'static {
@@ -122,6 +123,26 @@ pub trait IpcBackend: Send + Sync + 'static {
         _canonical_root_path: Option<&Path>,
     ) -> Result<Value, IpcError> {
         Err(IpcError::not_implemented("workspace_set"))
+    }
+
+    /// ADR-010/M3-09：会话引用清单（按 `created_at` 升序；不存在会话 → `invalid_value`）。
+    fn artifacts_list(&self, _request: &ArtifactsListRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("artifacts_list"))
+    }
+
+    /// ADR-010/M3-09：登记会话引用；`resolved` 为命令层 canonicalize + 探测结果
+    /// （失败已在命令层以 `artifact_path_rejected` 拒绝）。
+    fn artifact_add(
+        &self,
+        _request: &ArtifactAddRequest,
+        _resolved: &ArtifactPath,
+    ) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("artifact_add"))
+    }
+
+    /// ADR-010/M3-09：删除会话引用（不存在 → 幂等 `{ removed: false }`）。
+    fn artifact_remove(&self, _request: &ArtifactRemoveRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("artifact_remove"))
     }
 
     fn export_diagnostics(

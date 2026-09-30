@@ -85,6 +85,74 @@ pub fn validate_workspace_root(raw: &str) -> Result<PathBuf, IpcError> {
     Ok(canonical)
 }
 
+/// 会话引用路径校验结果（M3-09 `artifact_add`；ADR-010 决策 1）。
+///
+/// `kind` 为 `file` / `directory`；`size_bytes` 仅文件有值（目录为 `None`，不递归）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactPath {
+    pub canonical: PathBuf,
+    pub kind: &'static str,
+    pub size_bytes: Option<i64>,
+}
+
+/// 校验会话引用路径（M3-09 `artifact_add`）：绝对路径、canonicalize（解析软链接 /
+/// Junction / 8.3 短名）、`stat` 可访问性与 kind 探测。
+///
+/// 2026-09-24 评审裁定（ADR-010 决策 1）：
+/// - **不复用 A4 同步盘检测**（引用仅存路径字符串、无落库数据体，不存在同步盘损坏风险）；
+/// - **不做工作区前缀比较**（引用不预授权，D9 权限门不变）；
+/// - 同样不套用启动迁移的 Windows 特殊形态拒绝清单——引用路径可指向任意本地文件，
+///   canonicalize 已解析软链接/短名，过宽拒绝会误杀合法路径（DoD2：合法路径不误拒）。
+///
+/// 失败一律 `artifact_path_rejected`（canonicalize 失败 / stat 探测失败 / 非文件目录）。
+pub fn validate_artifact_path(raw: &str) -> Result<ArtifactPath, IpcError> {
+    if raw.is_empty() {
+        return Err(IpcError::artifact_path_rejected("路径为空"));
+    }
+    if raw.chars().count() > MAX_PATH_CHARS {
+        return Err(IpcError::artifact_path_rejected(format!(
+            "路径字符数超过上限 {MAX_PATH_CHARS}"
+        )));
+    }
+    if raw.contains('\0') {
+        return Err(IpcError::artifact_path_rejected("路径包含 NUL 字符"));
+    }
+
+    let candidate = PathBuf::from(raw);
+    if !candidate.is_absolute() {
+        return Err(IpcError::artifact_path_rejected("必须是绝对路径"));
+    }
+
+    let canonical = std::fs::canonicalize(&candidate)
+        .map(crate::startup::detect::strip_verbatim)
+        .map_err(|error| {
+            IpcError::artifact_path_rejected(format!("路径不可解析（canonicalize 失败）：{error}"))
+        })?;
+    let metadata = std::fs::metadata(&canonical).map_err(|error| {
+        IpcError::artifact_path_rejected(format!("路径不可访问（stat 探测失败）：{error}"))
+    })?;
+    if metadata.is_file() {
+        let size_bytes = i64::try_from(metadata.len()).map_err(|_| {
+            IpcError::artifact_path_rejected("文件字节数超出可记录范围（SQLite INTEGER）")
+        })?;
+        return Ok(ArtifactPath {
+            canonical,
+            kind: "file",
+            size_bytes: Some(size_bytes),
+        });
+    }
+    if metadata.is_dir() {
+        return Ok(ArtifactPath {
+            canonical,
+            kind: "directory",
+            size_bytes: None,
+        });
+    }
+    Err(IpcError::artifact_path_rejected(
+        "路径既不是文件也不是目录（引用仅支持 file/directory）",
+    ))
+}
+
 /// 校验迁移目标目录（M1-06 `startup_migrate`）：绝对路径、存在且为目录。
 ///
 /// 同步盘 / 源目录关系校验在 [`crate::startup::StartupGate::migrate`] 内用同一

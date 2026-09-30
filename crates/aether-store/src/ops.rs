@@ -39,6 +39,20 @@ pub struct PermissionRecord {
     pub resolver: Option<String>,
 }
 
+/// 会话引用行（`artifacts` 表；ADR-010 决策 1：文件/目录引用持久化）。
+///
+/// `path` 为 `artifact_add` canonicalize 后的绝对路径；`kind` 为 `file` / `directory`
+/// （应用层校验，不递归）；`size_bytes` 仅文件有值。引用**不预授权**（D9 权限门不变）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactRecord {
+    pub id: String,
+    pub session_id: String,
+    pub path: String,
+    pub kind: String,
+    pub size_bytes: Option<i64>,
+    pub created_at: i64,
+}
+
 /// 审计行（`audit_log` 表；P0 最小集：会话生命周期 + 权限请求/决议 + 适配器状态变化）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditLogRecord {
@@ -127,6 +141,19 @@ pub enum StoreCommand {
     ///
     /// 单写者约束：工作区写路径同样经 [`crate::WriteQueue::execute`]（AGENTS §2.4）。
     UpsertWorkspace { workspace: Workspace },
+    /// 幂等登记会话引用（M3-09 `artifact_add`；ADR-010 决策 1）：单事务内
+    /// `INSERT … ON CONFLICT(session_id, path) DO NOTHING` + 回读，同会话同路径
+    /// 命中既有行时返回原引用（不重复插入、不改变原 `id`/`created_at`）。
+    ///
+    /// 单写者约束：引用写路径同样经 [`crate::WriteQueue::execute`]（AGENTS §2.4）。
+    InsertArtifact { artifact: ArtifactRecord },
+    /// 删除会话引用（M3-09 `artifact_remove`；不存在时影响 0 行——幂等语义）。
+    ///
+    /// 单写者约束：删除同样经 [`crate::WriteQueue::execute`]（AGENTS §2.4）。
+    RemoveArtifact {
+        session_id: SessionId,
+        artifact_id: String,
+    },
 }
 
 /// 写命令结果。
@@ -140,6 +167,12 @@ pub enum StoreOutcome {
         run_id: RunId,
         /// `true` = 幂等命中（返回既有行，不重复插入）。
         duplicate: bool,
+    },
+    /// [`StoreCommand::InsertArtifact`] 结果：新增或既有引用。
+    ArtifactRecorded {
+        artifact: ArtifactRecord,
+        /// `true` = 本次新建；`false` = 幂等命中既有行（UNIQUE 兜底）。
+        inserted: bool,
     },
 }
 
@@ -503,6 +536,53 @@ pub(crate) fn apply_command(
                         workspace.created_at,
                         workspace.updated_at,
                     ],
+                )
+                .map_err(txn_failed)?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::Applied { affected })
+        }
+        StoreCommand::InsertArtifact { artifact } => {
+            // 幂等（UNIQUE(session_id, path) 兜底）：先尝试插入，命中冲突回读既有行；
+            // 同一事务保证「查重 → 返回」原子，重复添加不产生重复行也不改写既有引用。
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            let inserted = transaction
+                .execute(
+                    "INSERT INTO artifacts (id, session_id, path, kind, size_bytes, created_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+                     ON CONFLICT(session_id, path) DO NOTHING",
+                    params![
+                        artifact.id,
+                        artifact.session_id,
+                        artifact.path,
+                        artifact.kind,
+                        artifact.size_bytes,
+                        artifact.created_at,
+                    ],
+                )
+                .map_err(txn_failed)?;
+            let record = transaction
+                .query_row(
+                    "SELECT id, session_id, path, kind, size_bytes, created_at FROM artifacts \
+                     WHERE session_id = ?1 AND path = ?2",
+                    params![artifact.session_id, artifact.path],
+                    read_artifact_row,
+                )
+                .map_err(txn_failed)?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::ArtifactRecorded {
+                artifact: record,
+                inserted: inserted > 0,
+            })
+        }
+        StoreCommand::RemoveArtifact {
+            session_id,
+            artifact_id,
+        } => {
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            let affected = transaction
+                .execute(
+                    "DELETE FROM artifacts WHERE id = ?1 AND session_id = ?2",
+                    params![artifact_id, session_id.as_str()],
                 )
                 .map_err(txn_failed)?;
             transaction.commit().map_err(txn_failed)?;
@@ -873,6 +953,28 @@ impl ReadPool {
         .await
     }
 
+    /// 会话引用清单（M3-09 `artifacts_list` 语义；按 `created_at` 升序、
+    /// `rowid` 兜底稳定顺序）。
+    pub async fn artifacts(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Vec<ArtifactRecord>, StoreError> {
+        let session = session_id.as_str().to_owned();
+        self.with_connection(move |connection| {
+            let mut statement = connection.prepare(
+                "SELECT id, session_id, path, kind, size_bytes, created_at FROM artifacts \
+                 WHERE session_id = ?1 ORDER BY created_at ASC, rowid ASC",
+            )?;
+            let rows = statement.query_map([session.as_str()], read_artifact_row)?;
+            let mut artifacts = Vec::new();
+            for row in rows {
+                artifacts.push(row?);
+            }
+            Ok(artifacts)
+        })
+        .await
+    }
+
     /// 审计查询（诊断/验收断言；按时间升序）。
     pub async fn audit_log(&self, limit: usize) -> Result<Vec<AuditLogRecord>, StoreError> {
         let limit = i64::try_from(limit.min(5_000)).map_err(|_| StoreError::Internal {
@@ -1233,6 +1335,17 @@ fn read_permission_row(row: &Row<'_>) -> rusqlite::Result<PermissionRecord> {
         requested_at: row.get(9)?,
         resolved_at: row.get(10)?,
         resolver: row.get(11)?,
+    })
+}
+
+fn read_artifact_row(row: &Row<'_>) -> rusqlite::Result<ArtifactRecord> {
+    Ok(ArtifactRecord {
+        id: row.get(0)?,
+        session_id: row.get(1)?,
+        path: row.get(2)?,
+        kind: row.get(3)?,
+        size_bytes: row.get(4)?,
+        created_at: row.get(5)?,
     })
 }
 
@@ -1693,7 +1806,11 @@ mod tests {
             "全量读按 key 升序"
         );
         let summary = reads.store_summary().await.unwrap();
-        assert_eq!(summary.schema_version, Some(2), "迁移到 0002");
+        assert_eq!(
+            summary.schema_version,
+            crate::EMBEDDED_MIGRATIONS.last().map(|item| item.version),
+            "迁移到最新（当前 0003）"
+        );
         assert_eq!(summary.tables.get("settings"), Some(&2), "settings 行数");
         assert_eq!(summary.tables.len(), SUMMARY_TABLES.len());
         let mut table_order: Vec<&str> = summary.tables.keys().map(String::as_str).collect();

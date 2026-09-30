@@ -10,9 +10,10 @@ mod common;
 use aether_store::StoreError;
 use rusqlite::Connection;
 
-/// 附录 C 全部表（含 schema_migrations，共 17 张）。
+/// 附录 C 全部表（设计文档 v1.10；含 schema_migrations 与 ADR-010 的 3 张表，共 20 张）。
 const APPENDIX_C_TABLES: &[&str] = &[
     "adapter_plugins",
+    "artifacts",
     "audit_log",
     "backups",
     "events",
@@ -20,6 +21,8 @@ const APPENDIX_C_TABLES: &[&str] = &[
     "messages",
     "node_runs",
     "permissions",
+    "provider_models",
+    "providers",
     "runs",
     "runtimes",
     "schema_migrations",
@@ -285,6 +288,7 @@ fn appendix_c_foreign_keys_exist() {
     let conn = store.connection();
 
     let expected: &[(&str, &str, &str, &str, &str)] = &[
+        ("artifacts", "session_id", "sessions", "id", "CASCADE"),
         (
             "messages",
             "parent_message_id",
@@ -302,6 +306,13 @@ fn appendix_c_foreign_keys_exist() {
             "CASCADE",
         ),
         ("permissions", "session_id", "sessions", "id", "CASCADE"),
+        (
+            "provider_models",
+            "provider_id",
+            "providers",
+            "id",
+            "CASCADE",
+        ),
         ("runs", "session_id", "sessions", "id", "CASCADE"),
         (
             "sessions",

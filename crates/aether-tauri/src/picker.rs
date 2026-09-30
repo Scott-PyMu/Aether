@@ -52,9 +52,21 @@ impl std::fmt::Display for PickError {
 
 impl std::error::Error for PickError {}
 
-/// 目录选择器：返回所选目录；`Ok(None)` 表示用户取消。
+/// 目录/文件选择器：返回所选路径；`Ok(None)` 表示用户取消。
+///
+/// M3-09（ADR-010 决策 1）在目录选择之上扩展文件选择（`ref_pick` 的 `kind=file`）：
+/// - `pick_file` 带默认实现（不可用），仅实现目录选择的旧替身无需改动；
+/// - 生产实现 [`TauriDialogPicker`] 两者皆备；E2E/测试替身 [`FixedDirectoryPicker`]
+///   分别为目录/文件注入脚本化响应。
 pub trait DirectoryPicker: Send + Sync + 'static {
     fn pick_directory(&self) -> Result<Option<PathBuf>, PickError>;
+
+    /// 文件选择（M3-09 `ref_pick({ kind: "file" })`）：默认不可用。
+    fn pick_file(&self) -> Result<Option<PathBuf>, PickError> {
+        Err(PickError::unavailable(
+            "文件选择器未接线（仅生产运行形态；测试需注入 DirectoryPicker 替身）",
+        ))
+    }
 }
 
 /// 生产实现：Tauri dialog（`blocking_pick_folder`）。
@@ -82,6 +94,19 @@ impl DirectoryPicker for TauriDialogPicker {
             .blocking_pick_folder();
         Ok(picked.and_then(|file| file.into_path().ok()))
     }
+
+    /// M3-09 `ref_pick({ kind: "file" })`：系统文件选择器；路径原样返回
+    /// （canonicalize 与可访问性检查在 `artifact_add`，ADR-010 决策 1）。
+    fn pick_file(&self) -> Result<Option<PathBuf>, PickError> {
+        use tauri_plugin_dialog::DialogExt;
+        let picked = self
+            .app
+            .dialog()
+            .file()
+            .set_title("选择要引用的文件（只读引用）")
+            .blocking_pick_file();
+        Ok(picked.and_then(|file| file.into_path().ok()))
+    }
 }
 
 /// 测试替身：脚本化返回。
@@ -92,6 +117,8 @@ impl DirectoryPicker for TauriDialogPicker {
 #[derive(Default)]
 pub struct FixedDirectoryPicker {
     responses: Mutex<VecDeque<Result<Option<PathBuf>, PickError>>>,
+    /// 文件选择响应队列（M3-09 `ref_pick`；与目录队列独立）。
+    file_responses: Mutex<VecDeque<Result<Option<PathBuf>, PickError>>>,
 }
 
 impl FixedDirectoryPicker {
@@ -129,28 +156,76 @@ impl FixedDirectoryPicker {
         self
     }
 
+    /// 固定返回所选文件（M3-09 文件选择队列）。
+    pub fn with_file_path(path: PathBuf) -> Self {
+        Self::new().then_file_path(path)
+    }
+
+    /// 固定返回文件选择取消。
+    pub fn with_file_cancel() -> Self {
+        Self::new().then_file_cancel()
+    }
+
+    /// 固定返回文件选择错误。
+    pub fn with_file_error(message: impl Into<String>) -> Self {
+        Self::new().then_file_error(message)
+    }
+
+    pub fn then_file_path(mut self, path: PathBuf) -> Self {
+        self.push_file(Ok(Some(path)));
+        self
+    }
+
+    pub fn then_file_cancel(mut self) -> Self {
+        self.push_file(Ok(None));
+        self
+    }
+
+    pub fn then_file_error(mut self, message: impl Into<String>) -> Self {
+        self.push_file(Err(PickError::failed(message)));
+        self
+    }
+
     fn push(&mut self, response: Result<Option<PathBuf>, PickError>) {
         match self.responses.get_mut() {
             Ok(queue) => queue.push_back(response),
             Err(poisoned) => poisoned.into_inner().push_back(response),
         }
     }
+
+    fn push_file(&mut self, response: Result<Option<PathBuf>, PickError>) {
+        match self.file_responses.get_mut() {
+            Ok(queue) => queue.push_back(response),
+            Err(poisoned) => poisoned.into_inner().push_back(response),
+        }
+    }
+}
+
+/// 消费脚本化队列：长度 >1 按 FIFO；长度 1 恒定返回；空等价取消。
+fn consume(
+    responses: &Mutex<VecDeque<Result<Option<PathBuf>, PickError>>>,
+) -> Result<Option<PathBuf>, PickError> {
+    let mut queue = match responses.lock() {
+        Ok(queue) => queue,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if queue.len() > 1 {
+        if let Some(response) = queue.pop_front() {
+            return response;
+        }
+    }
+    match queue.front() {
+        Some(response) => response.clone(),
+        None => Ok(None),
+    }
 }
 
 impl DirectoryPicker for FixedDirectoryPicker {
     fn pick_directory(&self) -> Result<Option<PathBuf>, PickError> {
-        let mut queue = match self.responses.lock() {
-            Ok(queue) => queue,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        if queue.len() > 1 {
-            if let Some(response) = queue.pop_front() {
-                return response;
-            }
-        }
-        match queue.front() {
-            Some(response) => response.clone(),
-            None => Ok(None),
-        }
+        consume(&self.responses)
+    }
+
+    fn pick_file(&self) -> Result<Option<PathBuf>, PickError> {
+        consume(&self.file_responses)
     }
 }

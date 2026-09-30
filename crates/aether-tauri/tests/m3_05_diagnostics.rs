@@ -404,7 +404,11 @@ fn export_bundle_redacts_secrets_and_includes_log_aggregation() {
 
     let bundle: Value = serde_json::from_str(&text).expect("诊断包为 JSON");
     assert_eq!(bundle["bundle_version"], json!(1));
-    assert_eq!(bundle["store"]["schema_version"], json!(2));
+    let schema_version = aether_store::EMBEDDED_MIGRATIONS
+        .last()
+        .map(|migration| migration.version)
+        .unwrap_or(0);
+    assert_eq!(bundle["store"]["schema_version"], json!(schema_version));
     assert_eq!(bundle["health"]["storage_state"], json!("normal"));
     assert!(bundle["config"]["settings"].is_object());
     assert!(bundle["host"]["data_dir"].is_string());

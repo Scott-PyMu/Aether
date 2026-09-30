@@ -1203,3 +1203,110 @@ body {
 .settings-placeholder { color: #9aa4af; }
 
 .settings-notice { color: var(--ae-success, #7fbf7f); margin: 0; }
+
+/* M3-09 S-11：文件引用面板（只读；ADR-010 决策 1） */
+.file-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  border: 1px solid #3a3f47;
+  border-radius: 6px;
+  background-color: #1d2026;
+  padding: 0.6rem 0.7rem;
+}
+
+.file-panel-hint { margin: 0; font-size: 0.72rem; color: #9aa4af; }
+
+.file-panel-subtabs {
+  display: flex;
+  gap: 0.25rem;
+  border-bottom: 1px solid #3a3f47;
+}
+
+.file-panel-subtab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #9aa4af;
+  cursor: pointer;
+  font-size: 0.78rem;
+  padding: 0.3rem 0.5rem;
+}
+
+.file-panel-subtab.on {
+  border-bottom-color: #d0d5db;
+  color: #e6e9ee;
+}
+
+.file-panel-workspace { margin: 0; font-size: 0.72rem; color: #9aa4af; word-break: break-all; }
+
+.file-panel-search {
+  background-color: #14161a;
+  border: 1px solid #3a3f47;
+  border-radius: 4px;
+  color: inherit;
+  font-size: 0.75rem;
+  padding: 0.3rem 0.45rem;
+}
+
+.file-panel-empty { margin: 0; font-size: 0.78rem; color: #9aa4af; padding: 0.4rem 0; }
+
+.file-panel-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  max-height: 14rem;
+  overflow-y: auto;
+}
+
+.ref-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid #3a3f47;
+  border-radius: 4px;
+  padding: 0.3rem 0.45rem;
+}
+
+.ref-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.72rem;
+}
+
+.ref-meta { font-size: 0.68rem; color: #9aa4af; flex-shrink: 0; }
+
+.ref-remove {
+  background: none;
+  border: none;
+  color: #9aa4af;
+  cursor: pointer;
+  font-size: 0.7rem;
+  padding: 0.1rem 0.25rem;
+  flex-shrink: 0;
+}
+
+.ref-remove:hover { color: #d66f6f; }
+
+.file-panel-actions { display: flex; gap: 0.5rem; }
+
+.file-panel-actions button {
+  flex: 1;
+  background-color: #2a2f37;
+  border: 1px solid #3a3f47;
+  border-radius: 4px;
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 0.3rem 0.4rem;
+}
+
+.file-panel-actions button:disabled { opacity: 0.5; cursor: default; }
+
+.file-panel-error { margin: 0; font-size: 0.75rem; color: var(--ae-danger, #d66f6f); word-break: break-all; }

@@ -40,7 +40,10 @@ export interface RuntimeInfo {
   status_reason?: string | null;
 }
 
-/** `session_list` / `session_create` 条目（核心 `Session` 实体投影）。 */
+/**
+ * `session_list` / `session_create` 条目（ADR-010 附录 B.4 的 `SessionSummary` DTO；
+ * M3-09 引入，含可选 `workspace_root`）。
+ */
 export interface SessionSummary {
   id: string;
   runtime_id: string;
@@ -52,6 +55,8 @@ export interface SessionSummary {
   created_at: number;
   updated_at: number;
   closed_at?: number | null;
+  /** M3-09：绑定工作区的 canonical 根路径（未绑定省略）；文件面板「项目文件」展示。 */
+  workspace_root?: string | null;
 }
 
 /** `session_send` ack（快路径：消息与 run 行提交后返回，不等模型）。 */

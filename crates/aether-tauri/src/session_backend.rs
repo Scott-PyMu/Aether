@@ -34,16 +34,21 @@ use aether_core::{
     EventEnvelope, Message, PermissionDecision, PermissionScope, Runtime, RuntimeId, RuntimeStatus,
     SessionId, SessionStatus, Workspace, WorkspaceId,
 };
-use aether_store::{ReadPool, SessionQuery, StoreCommand, StoreOutcome, WriteQueue};
+use aether_store::{
+    ArtifactRecord, ReadPool, SessionQuery, StoreCommand, StoreOutcome, WriteQueue,
+};
 use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::ipc::backend::IpcBackend;
 use crate::ipc::dto::{
-    MessagesPageRequest, PermissionResolveRequest, PermissionsPendingRequest, SessionCreateRequest,
-    SessionIdRequest, SessionListRequest, SessionSendRequest,
+    ArtifactAddRequest, ArtifactRemoveRequest, ArtifactsListRequest, MessagesPageRequest,
+    PermissionResolveRequest, PermissionsPendingRequest, SessionCreateRequest, SessionIdRequest,
+    SessionListRequest, SessionSendRequest,
 };
 use crate::ipc::error::{IpcError, IpcErrorCode};
+use crate::ipc::path::ArtifactPath;
+use crate::json_payload::JsonPayload;
 
 use crate::adapter_executor::AdapterRunExecutor;
 
@@ -75,6 +80,66 @@ pub struct MessagesPageResponse {
     pub messages: Option<Vec<Message>>,
     /// 本页是否已到最新（`false` = 可能仍有后续缺口，调用方续读）。
     pub complete: bool,
+}
+
+/// `session_list` / `session_create` 响应元素定型 DTO（ADR-010 附录 B.4）。
+///
+/// 字段与核心 `Session` 域实体一一对应；新增可选 `workspace_root`（由
+/// `sessions.workspace_id` → `workspaces.root_path` 解析，**未绑定工作区省略**；
+/// 只出现在响应、不进事件 payload）。M3-10 将在此追加 `thinking_depth`。
+///
+/// `config` / `token_usage` 用 [`JsonPayload`] 透传（与 `AetherEvent.payload` 同口径：
+/// specta rc.25 对 `serde_json::Value` 的内联递归定义会栈溢出）。
+#[derive(Debug, Clone, Serialize, specta::Type)]
+pub struct SessionSummary {
+    pub id: String,
+    pub runtime_id: String,
+    pub workspace_id: Option<String>,
+    pub parent_session_id: Option<String>,
+    pub title: String,
+    pub status: crate::ipc::dto::SessionStatus,
+    pub model: Option<String>,
+    pub system_prompt: Option<String>,
+    pub config: JsonPayload,
+    pub token_usage: JsonPayload,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub closed_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_root: Option<String>,
+}
+
+impl SessionSummary {
+    /// 由核心会话实体构造；`workspace_root` 为调用方解析的工作区根（无绑定/无行 = None）。
+    pub fn from_session(
+        session: &aether_core::Session,
+        workspace_root: Option<String>,
+    ) -> Result<Self, IpcError> {
+        let token_usage = serde_json::to_value(session.token_usage)
+            .map_err(|error| IpcError::internal(format!("token_usage 序列化失败：{error}")))?;
+        Ok(Self {
+            id: session.id.as_str().to_owned(),
+            runtime_id: session.runtime_id.as_str().to_owned(),
+            workspace_id: session
+                .workspace_id
+                .as_ref()
+                .map(|id| id.as_str().to_owned()),
+            parent_session_id: session
+                .parent_session_id
+                .as_ref()
+                .map(|id| id.as_str().to_owned()),
+            title: session.title.clone(),
+            status: session_status_to_dto(session.status),
+            model: session.model.clone(),
+            system_prompt: session.system_prompt.clone(),
+            config: JsonPayload(session.config.clone()),
+            token_usage: JsonPayload(token_usage),
+            created_at: session.created_at,
+            updated_at: session.updated_at,
+            closed_at: session.closed_at,
+            workspace_root,
+        })
+    }
 }
 
 /// 工作区绑定（M3-08；设计 D14/ADR-004 决策 3）。
@@ -158,11 +223,21 @@ impl SessionBackend {
         self
     }
 
-    /// 注入工作区写路径（M3-08；`workspace_set` 的 `workspaces` 落库与换绑）。
+    /// 注入存储写路径（M3-08 `workspace_set` 的 `workspaces` 落库与换绑；
+    /// M3-09 `artifact_add`/`artifact_remove` 的 `artifacts` 落库复用同一队列）。
     #[must_use]
     pub fn with_workspace_store(mut self, write: WriteQueue) -> Self {
         self.write = Some(write);
         self
+    }
+
+    /// 存储写路径（未接线 → 引用写命令回 `core_not_ready`）。
+    fn write_required(&self) -> Result<&WriteQueue, IpcError> {
+        self.write.as_ref().ok_or_else(|| {
+            IpcError::core_not_ready(
+                "存储写路径未接线：artifact_add / artifact_remove 不可用（启动序列未完成）",
+            )
+        })
     }
 
     /// 当前工作区绑定（诊断/测试；`None` = 未绑定）。
@@ -304,6 +379,8 @@ impl IpcBackend for SessionBackend {
         })
     }
 
+    /// ADR-010 附录 B.4：响应元素定型为 [`SessionSummary`]（新增可选 `workspace_root`，
+    /// 由 `sessions.workspace_id` → `workspaces.root_path` 解析；未绑定省略）。
     fn session_list(&self, request: &SessionListRequest) -> Result<Value, IpcError> {
         let reads = self.reads_required()?.clone();
         let query = SessionQuery {
@@ -317,7 +394,35 @@ impl IpcBackend for SessionBackend {
                 .sessions(query)
                 .await
                 .map_err(|error| IpcError::internal(format!("会话列表读取失败：{error}")))?;
-            serde_json::to_value(sessions)
+            // 工作区根解析：按 workspace_id 去重读取（会话数有界，含工作区行时一次读）。
+            let mut roots: std::collections::HashMap<String, Option<String>> =
+                std::collections::HashMap::new();
+            for session in &sessions {
+                let Some(workspace_id) = &session.workspace_id else {
+                    continue;
+                };
+                let key = workspace_id.as_str().to_owned();
+                if roots.contains_key(&key) {
+                    continue;
+                }
+                let root = reads
+                    .workspace(workspace_id)
+                    .await
+                    .map_err(|error| IpcError::internal(format!("工作区读取失败：{error}")))?
+                    .map(|workspace| workspace.root_path);
+                roots.insert(key, root);
+            }
+            let summaries = sessions
+                .iter()
+                .map(|session| {
+                    let root = session
+                        .workspace_id
+                        .as_ref()
+                        .and_then(|id| roots.get(id.as_str()).cloned().flatten());
+                    SessionSummary::from_session(session, root)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            serde_json::to_value(summaries)
                 .map_err(|error| IpcError::internal(format!("会话列表序列化失败：{error}")))
         })
     }
@@ -435,7 +540,13 @@ impl IpcBackend for SessionBackend {
                 .create_session(runtime, &title, workspace_id, model, system_prompt)
                 .await
                 .map_err(map_lifecycle_error)?;
-            serde_json::to_value(session)
+            // ADR-010 附录 B.4：响应定型为 `SessionSummary`（`workspace_root` 取自
+            // 本会话解析出的工作区；未绑定省略）。
+            let workspace_root = resolved_workspace
+                .as_ref()
+                .map(|workspace| workspace.root_path.clone());
+            let summary = SessionSummary::from_session(&session, workspace_root)?;
+            serde_json::to_value(summary)
                 .map_err(|error| IpcError::internal(format!("会话序列化失败：{error}")))
         })
     }
@@ -544,6 +655,98 @@ impl IpcBackend for SessionBackend {
             }
             *lock_workspace(&binding_slot) = Some(binding.clone());
             Ok(binding.to_json())
+        })
+    }
+
+    /// M3-09 `artifacts_list`（ADR-010 决策 1）：会话引用清单（按 `created_at` 升序）。
+    ///
+    /// 只读：不触发 `workspace_set`、不产生事件；不存在会话 → `invalid_value`。
+    fn artifacts_list(&self, request: &ArtifactsListRequest) -> Result<Value, IpcError> {
+        let reads = self.reads_required()?.clone();
+        let session_id = parse_session_id(&request.session_id)?;
+        self.call(async move {
+            let session = reads
+                .session(&session_id)
+                .await
+                .map_err(|error| IpcError::internal(format!("会话读取失败：{error}")))?;
+            if session.is_none() {
+                return Err(session_not_found(&session_id));
+            }
+            let artifacts = reads
+                .artifacts(&session_id)
+                .await
+                .map_err(|error| IpcError::internal(format!("引用清单读取失败：{error}")))?;
+            Ok(json!({
+                "artifacts": artifacts.iter().map(artifact_json).collect::<Vec<_>>(),
+            }))
+        })
+    }
+
+    /// M3-09 `artifact_add`（ADR-010 决策 1）：登记会话引用。
+    ///
+    /// `resolved` 为命令层 canonicalize + 可访问性检查结果（失败已在命令层以
+    /// `artifact_path_rejected` 拒绝）；写路径经单写队列（D3）；
+    /// 同会话同路径幂等（`UNIQUE(session_id, path)` 兜底）。
+    fn artifact_add(
+        &self,
+        request: &ArtifactAddRequest,
+        resolved: &ArtifactPath,
+    ) -> Result<Value, IpcError> {
+        let reads = self.reads_required()?.clone();
+        let write = self.write_required()?.clone();
+        let session_id = parse_session_id(&request.session_id)?;
+        let path = resolved.canonical.to_string_lossy().to_string();
+        let kind = resolved.kind.to_owned();
+        let size_bytes = resolved.size_bytes;
+        self.call(async move {
+            let session = reads
+                .session(&session_id)
+                .await
+                .map_err(|error| IpcError::internal(format!("会话读取失败：{error}")))?;
+            if session.is_none() {
+                return Err(session_not_found(&session_id));
+            }
+            let artifact = ArtifactRecord {
+                id: ulid::Ulid::new().to_string(),
+                session_id: session_id.as_str().to_owned(),
+                path,
+                kind,
+                size_bytes,
+                created_at: now_ms(),
+            };
+            let outcome = write
+                .execute(StoreCommand::InsertArtifact { artifact })
+                .await
+                .map_err(|error| IpcError::internal(format!("引用落库失败：{error}")))?;
+            match outcome {
+                StoreOutcome::ArtifactRecorded { artifact, .. } => Ok(artifact_json(&artifact)),
+                other => Err(IpcError::internal(format!(
+                    "引用落库返回了非预期结果：{other:?}"
+                ))),
+            }
+        })
+    }
+
+    /// M3-09 `artifact_remove`（ADR-010 决策 1）：删除会话引用；不存在 →
+    /// 幂等 `{ removed: false }`（不新增错误码）。
+    fn artifact_remove(&self, request: &ArtifactRemoveRequest) -> Result<Value, IpcError> {
+        let write = self.write_required()?.clone();
+        let session_id = parse_session_id(&request.session_id)?;
+        let artifact_id = request.artifact_id.clone();
+        self.call(async move {
+            let outcome = write
+                .execute(StoreCommand::RemoveArtifact {
+                    session_id,
+                    artifact_id,
+                })
+                .await
+                .map_err(|error| IpcError::internal(format!("引用删除失败：{error}")))?;
+            match outcome {
+                StoreOutcome::Applied { affected } => Ok(json!({ "removed": affected > 0 })),
+                other => Err(IpcError::internal(format!(
+                    "引用删除返回了非预期结果：{other:?}"
+                ))),
+            }
         })
     }
 
@@ -836,6 +1039,39 @@ fn lock_workspace(
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     }
+}
+
+/// 核心会话状态 → DTO（`SessionSummary` 响应字段；取值一一对应）。
+fn session_status_to_dto(status: SessionStatus) -> crate::ipc::dto::SessionStatus {
+    match status {
+        SessionStatus::Creating => crate::ipc::dto::SessionStatus::Creating,
+        SessionStatus::Idle => crate::ipc::dto::SessionStatus::Idle,
+        SessionStatus::Running => crate::ipc::dto::SessionStatus::Running,
+        SessionStatus::Paused => crate::ipc::dto::SessionStatus::Paused,
+        SessionStatus::WaitingPermission => crate::ipc::dto::SessionStatus::WaitingPermission,
+        SessionStatus::Completed => crate::ipc::dto::SessionStatus::Completed,
+        SessionStatus::Failed => crate::ipc::dto::SessionStatus::Failed,
+        SessionStatus::Cancelled => crate::ipc::dto::SessionStatus::Cancelled,
+    }
+}
+
+/// 会话不存在（引用命令面：`artifacts_list` / `artifact_add`）。
+fn session_not_found(session_id: &SessionId) -> IpcError {
+    IpcError::invalid_value(format!(
+        "session_id 不存在（{}）；引用操作仅对既有会话可用",
+        session_id.as_str()
+    ))
+}
+
+/// 引用条目响应形状（ADR-010 附录 B.1：`{ id, path, kind, size_bytes, created_at }`）。
+fn artifact_json(artifact: &ArtifactRecord) -> Value {
+    json!({
+        "id": artifact.id,
+        "path": artifact.path,
+        "kind": artifact.kind,
+        "size_bytes": artifact.size_bytes,
+        "created_at": artifact.created_at,
+    })
 }
 
 /// DTO 会话状态 → 核心状态（取值一一对应；DTO 校验已限定枚举）。

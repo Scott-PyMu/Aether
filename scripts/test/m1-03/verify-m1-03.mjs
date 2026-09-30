@@ -20,7 +20,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -28,10 +28,14 @@ import { bin, repoRoot, run, summarize } from "../lib/exec.mjs";
 
 const cargo = bin("cargo");
 const migrationsDir = path.join(repoRoot, "migrations");
-const migrationFiles = ["0001_init.sql", "0002_unique_keys.sql"].map((name) => {
-  const filePath = path.join(migrationsDir, name);
-  return { name, path: filePath, sql: readFileSync(filePath, "utf8") };
-});
+// 迁移集按文件名升序动态发现（0001 + 0002+；新迁移自动纳入有效 schema 比对）。
+const migrationFiles = readdirSync(migrationsDir)
+  .filter((name) => /^\d{4}_.+\.sql$/.test(name))
+  .sort()
+  .map((name) => {
+    const filePath = path.join(migrationsDir, name);
+    return { name, path: filePath, sql: readFileSync(filePath, "utf8") };
+  });
 const checks = [];
 const record = (name, exit, expect = 0) => checks.push({ name, exit, expect });
 
@@ -215,6 +219,8 @@ function applyDdl(model, sql, source) {
       });
       continue;
     }
+    // 迁移内的播种 DML（如 0003 内置供应商 INSERT）不影响 schema 模型，跳过。
+    if (/^INSERT\s+INTO\b/i.test(statement)) continue;
     throw new Error(`${source}: 出现未识别 DDL 语句：${statement}`);
   }
 }
@@ -403,7 +409,7 @@ function checkMigrationsMatchAppendix() {
 // ===== DoD5 静态：ADR-004 决策 6 / ADR-005 决策 2 =====
 
 function checkIncrementalMigrationPolicy() {
-  const [init, unique] = migrationFiles;
+  const [init, unique] = migrationFiles; // 0001 / 0002（升序发现后位置不变）
   if (/client_msg_id|UNIQUE\s*\(\s*session_id/i.test(init.sql)) {
     throw new Error("0001_init.sql 必须保持已发布内容（不得含 ADR-004/005 差异）");
   }

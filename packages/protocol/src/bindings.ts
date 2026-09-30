@@ -48,6 +48,23 @@ export const commands = {
 	runtimeEnable: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("runtime_enable", { payload })),
 	/**  ADR-004/D14：`workspace_id` 或 `root_path`（canonicalize + 同步盘拒绝）。 */
 	workspaceSet: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("workspace_set", { payload })),
+	/**
+	 *  ADR-010/M3-09：引用选择器（`{ kind: "file" | "directory" }`）。
+	 * 
+	 *  Rust 侧系统选择器（复用 `DirectoryPicker` 抽象并扩展文件选择；E2E 注入替身），
+	 *  **不新增 WebView capability 权限面**（与 `startup_pick_target` 先例一致）；
+	 *  路径原样返回、不做 canonicalize（校验在 `artifact_add`）；用户取消 → `{ path: null }`。
+	 */
+	refPick: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("ref_pick", { payload })),
+	/**  ADR-010/M3-09：会话引用清单（只读；不触发 `workspace_set`、不产生事件）。 */
+	artifactsList: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("artifacts_list", { payload })),
+	/**
+	 *  ADR-010/M3-09：登记会话引用（canonicalize + 可访问性检查在命令层；失败
+	 *  `artifact_path_rejected`；同会话同路径幂等）。
+	 */
+	artifactAdd: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("artifact_add", { payload })),
+	/**  ADR-010/M3-09：删除会话引用（不存在 → 幂等 `{ removed: false }`）。 */
+	artifactRemove: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("artifact_remove", { payload })),
 	exportDiagnostics: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("export_diagnostics", { payload })),
 	/**
 	 *  ADR-007 决策 1：核心健康查询（无参数；严格解析拒绝未知成员）。
@@ -115,6 +132,26 @@ export type AppExitRequest = {
 /**  `app_restart`（ADR-004）：显式 `confirm:true` 才允许复用关闭序列重启。 */
 export type AppRestartRequest = {
 	confirm: boolean,
+};
+
+/**
+ *  `artifact_add`（ADR-010）：canonicalize + 可访问性检查在
+ *  [`path::validate_artifact_path`]（命令层执行；失败 `artifact_path_rejected`）。
+ */
+export type ArtifactAddRequest = {
+	session_id: string,
+	path: string,
+};
+
+/**  `artifact_remove`（ADR-010）：不存在 → 幂等 `{ removed: false }`（不新增错误码）。 */
+export type ArtifactRemoveRequest = {
+	session_id: string,
+	artifact_id: string,
+};
+
+/**  `artifacts_list`（ADR-010）：会话引用清单（按 `created_at` 升序）。 */
+export type ArtifactsListRequest = {
+	session_id: string,
 };
 
 export type BackupCreateRequest = {
@@ -198,7 +235,12 @@ export type IpcErrorCode =
  *  补读缺口过大（D4：>10k 拒绝自动补发；与核心管线 `readback_gap_too_large`
  *  同码透传，M3-02 属主承接项；ADR-009 决策 2 登记，实施计划 v1.16）。
  */
-"readback_gap_too_large";
+"readback_gap_too_large" | 
+/**
+ *  会话引用路径校验失败（ADR-010：canonicalize / 可访问性 / kind 探测失败；
+ *  **不含同步盘语义**——2026-09-24 评审裁定 `artifact_add` 不复用 A4 检测）。
+ */
+"artifact_path_rejected";
 
 /**  IPC 命令错误的线上形态：`{ "code": "...", "message": "...", "field": "..." }`。 */
 export type IpcError_Deserialize = {
@@ -230,6 +272,20 @@ export type PermissionResolveRequest = {
 
 export type PermissionsPendingRequest = {
 	session_id?: string | null,
+};
+
+/**  `ref_pick`（ADR-010 决策 1）：引用选择器 kind（文件 / 目录）。 */
+export type RefPickKind = "file" | "directory";
+
+/**
+ *  `ref_pick`：`{ kind }` 严格解析（未知 kind → `invalid_enum`；未知成员拒绝）。
+ * 
+ *  Rust 侧系统选择器（复用 `DirectoryPicker` 抽象并扩展文件选择；E2E 注入替身），
+ *  **不新增 WebView capability 权限面**（与 `startup_pick_target` 先例一致）；
+ *  路径原样返回，不做 canonicalize（校验在 `artifact_add`，ADR-010 决策 1）。
+ */
+export type RefPickRequest = {
+	kind: RefPickKind,
 };
 
 /**  `run_retry`（ADR-004）：仅终态 run 可重试；格式层校验 ULID，终态由后端判定。 */
@@ -282,6 +338,72 @@ export type SessionSendRequest = {
 
 /**  会话状态过滤（与附录 C `sessions.status` CHECK 枚举一一对应）。 */
 export type SessionStatus = "creating" | "idle" | "running" | "paused" | "waiting_permission" | "completed" | "failed" | "cancelled";
+
+/**
+ *  `session_list` / `session_create` 响应元素定型 DTO（ADR-010 附录 B.4）。
+ * 
+ *  字段与核心 `Session` 域实体一一对应；新增可选 `workspace_root`（由
+ *  `sessions.workspace_id` → `workspaces.root_path` 解析，**未绑定工作区省略**；
+ *  只出现在响应、不进事件 payload）。M3-10 将在此追加 `thinking_depth`。
+ * 
+ *  `config` / `token_usage` 用 [`JsonPayload`] 透传（与 `AetherEvent.payload` 同口径：
+ *  specta rc.25 对 `serde_json::Value` 的内联递归定义会栈溢出）。
+ */
+export type SessionSummary = SessionSummary_Serialize | SessionSummary_Deserialize;
+
+/**
+ *  `session_list` / `session_create` 响应元素定型 DTO（ADR-010 附录 B.4）。
+ * 
+ *  字段与核心 `Session` 域实体一一对应；新增可选 `workspace_root`（由
+ *  `sessions.workspace_id` → `workspaces.root_path` 解析，**未绑定工作区省略**；
+ *  只出现在响应、不进事件 payload）。M3-10 将在此追加 `thinking_depth`。
+ * 
+ *  `config` / `token_usage` 用 [`JsonPayload`] 透传（与 `AetherEvent.payload` 同口径：
+ *  specta rc.25 对 `serde_json::Value` 的内联递归定义会栈溢出）。
+ */
+export type SessionSummary_Deserialize = {
+	id: string,
+	runtime_id: string,
+	workspace_id: string | null,
+	parent_session_id: string | null,
+	title: string,
+	status: SessionStatus,
+	model: string | null,
+	system_prompt: string | null,
+	config: unknown,
+	token_usage: unknown,
+	created_at: number,
+	updated_at: number,
+	closed_at: number | null,
+	workspace_root: string | null,
+};
+
+/**
+ *  `session_list` / `session_create` 响应元素定型 DTO（ADR-010 附录 B.4）。
+ * 
+ *  字段与核心 `Session` 域实体一一对应；新增可选 `workspace_root`（由
+ *  `sessions.workspace_id` → `workspaces.root_path` 解析，**未绑定工作区省略**；
+ *  只出现在响应、不进事件 payload）。M3-10 将在此追加 `thinking_depth`。
+ * 
+ *  `config` / `token_usage` 用 [`JsonPayload`] 透传（与 `AetherEvent.payload` 同口径：
+ *  specta rc.25 对 `serde_json::Value` 的内联递归定义会栈溢出）。
+ */
+export type SessionSummary_Serialize = {
+	id: string,
+	runtime_id: string,
+	workspace_id: string | null,
+	parent_session_id: string | null,
+	title: string,
+	status: SessionStatus,
+	model: string | null,
+	system_prompt: string | null,
+	config: unknown,
+	token_usage: unknown,
+	created_at: number,
+	updated_at: number,
+	closed_at: number | null,
+	workspace_root?: string | null,
+};
 
 export type SettingsGetRequest = {
 	key: string,

@@ -40,8 +40,11 @@ fn migration_zero_to_latest_is_idempotent() {
         );
         assert_eq!(
             applied.iter().map(|item| item.version).collect::<Vec<_>>(),
-            vec![1, 2],
-            "迁移必须按 0001 → 0002 顺序应用"
+            EMBEDDED_MIGRATIONS
+                .iter()
+                .map(|item| item.version)
+                .collect::<Vec<_>>(),
+            "迁移必须按内嵌清单版本升序应用（0001 → 0002 → 0003…）"
         );
         assert!(applied.iter().all(|item| item.applied_at > 0));
     }
@@ -78,12 +81,14 @@ fn existing_0001_only_database_is_upgraded_by_0002_increment() {
         assert_eq!(applied[0].version, 1);
     }
 
-    // 以当前程序打开：应增量应用 0002，且保留 0001 的记录（不得重跑/修改）。
+    // 以当前程序打开：应增量应用 0002+（当前含 ADR-010 的 0003），
+    // 且保留 0001 的记录（不得重跑/修改）。
     let store = Store::open(&path).unwrap();
     let applied = store.applied_migrations().unwrap();
-    assert_eq!(applied.len(), 2);
+    assert_eq!(applied.len(), EMBEDDED_MIGRATIONS.len());
     assert_eq!(applied[0].version, 1);
     assert_eq!(applied[1].version, 2);
+    assert_eq!(applied.last().map(|item| item.version), Some(3));
 
     let conn = store.connection();
     let has_column: i64 = conn
@@ -115,6 +120,27 @@ fn existing_0001_only_database_is_upgraded_by_0002_increment() {
         )
         .unwrap();
     assert_eq!(redundant, 0, "冗余的 idx_events_session_seq 必须删除");
+
+    // 0003（ADR-010）：artifacts 表 + sessions.thinking_depth 列补齐。
+    let artifacts: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'artifacts'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(artifacts, 1, "0003 必须创建 artifacts 表");
+    let thinking_depth: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'thinking_depth'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        thinking_depth, 1,
+        "0003 必须补齐 sessions.thinking_depth 列"
+    );
 }
 
 #[test]
@@ -258,11 +284,15 @@ fn database_newer_than_program_is_refused() {
             .unwrap();
     }
 
+    let program = EMBEDDED_MIGRATIONS
+        .last()
+        .map(|item| item.version)
+        .unwrap_or(0);
     match Store::open(&path) {
         Err(StoreError::SchemaNewerThanProgram {
             database: 99,
-            program: 2,
-        }) => {}
+            program: found,
+        }) => assert_eq!(found, program, "program 必须为内嵌清单最大版本"),
         Err(other) => panic!("应为 SchemaNewerThanProgram，实际: {other:?}"),
         Ok(_) => panic!("库版本高于程序时必须拒绝启动"),
     }
