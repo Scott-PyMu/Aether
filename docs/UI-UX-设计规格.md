@@ -1,13 +1,13 @@
-# Aether UI/UX 设计规格 v0.4（v0.2 已评审通过；v0.3 为 M3-12 锚点登记；v0.4 为 M3-11 前置登记）
+# Aether UI/UX 设计规格 v0.6（v0.2 已评审通过；v0.3 为 M3-12 锚点登记；v0.4 为 M3-11 前置登记；v0.5 为 ADR-014 P1 锚点与权限模式登记；v0.6 为 ADR-015 热插拔锚点/文案/配色分色/计数登记）
 
 | 项 | 内容 |
 |---|---|
-| 文档 | Aether UI/UX 设计规格 v0.4（v0.2 已评审通过；v0.3 为 M3-12 锚点登记；v0.4 为 M3-11 前置登记） |
-| 依据基线 | 《需求文档》v0.7、《设计文档》v1.10（冻结，含 ADR-001–010）、《实施计划与验收标准》v1.18（ADR-011）、`AGENTS.md`、ADR-010/ADR-011 |
+| 文档 | Aether UI/UX 设计规格 v0.6（v0.2 已评审通过；v0.3 为 M3-12 锚点登记；v0.4 为 M3-11 前置登记；v0.5 为 ADR-014 P1 锚点与权限模式登记；v0.6 为 ADR-015 热插拔锚点/文案/配色分色/计数登记） |
+| 依据基线 | 《需求文档》v0.12（ADR-014 新增 SE-06 会话级权限模式；ADR-015 CP-01 注册口径补注）、《设计文档》v1.15（冻结，含 ADR-001–015）、《实施计划与验收标准》v1.24、`docs/P1-实施计划与验收标准.md` v0.5、`AGENTS.md`、ADR-010/ADR-011/ADR-014/ADR-015 |
 | 参考对象 | Proma（proma-ai/Proma）信息组织范式；Hermes Studio / Ekko Studio（EKKOLearnAI/hermes-studio）界面范式（仅借鉴公开界面思路，不拷贝代码，A11/SE-05） |
 | 效力 | **本文件不构成冻结基线**。与设计文档冲突时以设计文档为准；本文件中的实现偏差须先提 ADR（AGENTS §3） |
-| 适用范围 | P0 前端（M3-01…M3-12）与 E2E；P1+ 仅作预留说明，不进入排期 |
-| 状态 | **已评审通过（2026-09-24，随 ADR-010 批次）**；v0.2 已回流 ADR-010（文件引用面板 / 思考深度 / 模型与供应商配置，M3-09/M3-10/M3-11）；**v0.3（2026-09-29）：按 ADR-011 决策 5 登记 M3-12 分组锚点契约并冻结（§7.3），依据基线同步计划 v1.18**；**v0.4（2026-09-30）：按 M3-11 DoD6 前置要求登记「模型选择器空态与手动输入共存口径」（ADR-010 §5-9；UI-05 回归防护；实施记录见 `docs/M3-11-证据.md`）**；本文件仍不构成冻结基线（与设计文档冲突以设计文档为准）；「开放问题」未关闭前不得据此定稿 |
+| 适用范围 | P0 前端（M3-01…M3-12）与 E2E；**P1 新增界面锚点按 ADR-014 / ADR-015 登记（P1 任务 M5–M8，§7.3）**；P1+ 其余仍仅作预留说明，不进入排期 |
+| 状态 | **已评审通过（2026-09-24，随 ADR-010 批次）**；v0.2 已回流 ADR-010（文件引用面板 / 思考深度 / 模型与供应商配置，M3-09/M3-10/M3-11）；**v0.3（2026-09-29）：按 ADR-011 决策 5 登记 M3-12 分组锚点契约并冻结（§7.3），依据基线同步计划 v1.18**；**v0.4（2026-09-30）：按 M3-11 DoD6 前置要求登记「模型选择器空态与手动输入共存口径」（ADR-010 §5-9；UI-05 回归防护；实施记录见 `docs/M3-11-证据.md`）**；**v0.5（2026-09-30，ADR-014 合入 / 拟合入）：① §7.3 P1 锚点增量 10 组（含 `permission-mode-boundary` 常驻文案，R14）；② §5 文案表 +2 错误码（`provider_unreachable` / `provider_auth_failed`，ADR-014 附录 C-5）；③ 废止 §5「连通性测试将在 P1 开放」行与 `provider-test-notice` 提示（语义相反，ADR-014 附录 F-2）；④ §2.4 增权限模式选择器（三档）与常驻边界声明（ADR-014 决策 3 / 附录 F-3）**；**v0.6（2026-10-08，ADR-015 合入 / 拟合入）：E-0 头部同步；E-1 §3.2 用户启停边与 `user_disabled` 呈现行；E-2 配色分色注（`user_disabled` 灰 / 故障类红，§4.4/§6.4 同步）；E-3/E-5 §5 文案表 +2（`user_disabled` / `runtime_busy`）；E-4 §7.3 锚点 +2（`runtime-toggle` / `runtime-disable-confirm`，注与计数十组 → 十二组）；E-6 §8#10 补注；E-7 §0.1 C10 计数 36 → 52**；本文件仍不构成冻结基线（与设计文档冲突以设计文档为准）；「开放问题」未关闭前不得据此定稿 |
 
 **阅读顺序**：§0 硬约束与参考采纳 → §1 界面清单 → §2 线框 → §3 状态图 → §4 组件矩阵 → §5 文案表 → §6 Token/可访问性 → §7 E2E 选择器 → §8 范围冻结 → §9 开放问题。
 
@@ -23,14 +23,14 @@
 |---|---|---|---|
 | C1 | 单窗口，无分屏/标签页/多窗口 | 设计 §2.3、§4#20；需求 UI-01 P0 口径「单窗口 + 会话切换」 | 一切界面均为「主工作台 + 覆盖层」；禁止出现 Tab 栏、窗口拆分、多窗口入口 |
 | C2 | 无 pause/resume，仅 interrupt | 设计 D8、§4#22；需求 CP-03 P0 口径 | 禁止「暂停/继续」按钮；`sessions.status=paused` 在 P0 不可达，仅保留文案映射 |
-| C3 | 无 exec/终端面板 | 设计 D9 策略矩阵（`exec: deny`）、§4#9 | 禁止终端入口、命令输入框、shell 快捷方式 |
+| C3 | 无 exec/终端面板 | 设计 D9 策略矩阵（**ADR-014 修订：低档 `exec: deny`，顶档 `danger_full_access` 仅门层 `allow`**）、§4#9 | 禁止终端入口、命令输入框、shell 快捷方式（**PF-05 面板维持 P3**；ADR-014 决策 3 开放的仅是门层判定，不新增任何终端 UI） |
 | C4 | 无工作流画布/编排 UI | 设计 §4#1（引擎 P2、画布 P4） | 禁止节点/连线/拖拽画布；`tasks/workflows` 表无 UI |
 | C5 | 无第三方适配器管理 UI | 设计 §2.1 安全边界、§4#28、D5 准入 | 禁止「安装适配器/插件市场/信任确认」入口；仅官方运行时列表（UI-02） |
 | C6 | 权限门边界不得被 UI 误述 | 设计 §2.1 第 4 条、D9 | 权限相关文案必须写明「仅约束经线协议上报的工具调用；适配器进程内行为不受此门约束」 |
 | C7 | P0 审计仅三类，无全量审计查询界面 | 设计 §2.1 第 5 条、SE-03、ADR-003/004 | 三类信息分别落在会话列表/权限卡/运行时徽标，不提供「审计查询/导出」页 |
 | C8 | `persist_degraded` 不可热恢复 | 设计 D4 状态机、ADR-004 | 只提供「修复外部条件 + 重启应用」引导；禁止「一键恢复」按钮 |
 | C9 | Tauri 安全基线：CSP 禁远程内容 | 设计 D7、评审 #7 | 不加载远程字体/脚本/图片；Markdown 禁原始 HTML；外链转交系统浏览器 |
-| C10 | 命令面冻结（36 个可调用命令，ADR-010 后） | 设计 D7、ADR-004/006/007/010 | UI 只能调用已登记命令；新增交互能力须先扩命令面（ADR） |
+| C10 | 命令面冻结（52 个可调用命令：ADR-010 后 36 → ADR-014 后 51 → **ADR-015 后 52**） | 设计 D7、ADR-004/006/007/010/014/015 | UI 只能调用已登记命令；新增交互能力须先扩命令面（ADR） |
 
 ### 0.2 参考设计采纳对照表
 
@@ -49,7 +49,7 @@
 | 会话创建/重命名/删除/切换 | Hermes | **部分采纳** | 创建/切换采纳；重命名/删除无命令面（D7），不设计入口（见 §9 开放问题） |
 | 按来源分组（Telegram/Discord…） | Hermes | **不采纳** | P0 无远程渠道；替代为按状态分组（备选按 `runtime_id`，见 §9） |
 | 工具调用卡片展开（参数/结果） | Hermes | **采纳** | 对应 `tool.call_started/completed/failed`（附录 B）；参数脱敏展示 |
-| 会话搜索 Ctrl+K | Hermes | **不采纳** | 无搜索命令面；不得绕过核心管线直读库；落回 P1+（需 ADR） |
+| 会话搜索 Ctrl+K | Hermes | **不采纳** | P0 无搜索命令面；不得绕过核心管线直读库；**已由 ADR-014 登记为 P1 直接实施项（M7-07，`session_search`）** |
 | 多页面导航（Chat/Dashboard/Files/Terminal/Jobs） | Hermes | **不采纳** | C1；替代为单窗口覆盖层管理视图（设置/备份/诊断/关于） |
 | 深墨 + 克制强调色 Token 方向 | Hermes | **采纳（自定义值）** | §6.1 定义 Aether 自有 Token，深浅主题跟随系统（§4#25：无切换 UI） |
 
@@ -209,6 +209,15 @@
   4. **失效回退**：已选模型随供应商/模型停用而从选择器消失时，回退到首个可用模型（无可用模型则清空）；此前未选择过则保持空选择（不自动为新建会话预选模型）；
   5. **不匹配校验**：P0 无「供应商记录 → 适配器消费映射」（ADR-010 决策 3 边界/P1 另立 ADR），选择器**不按 runtime 过滤、不做模型与 runtime 的匹配校验**；模型串仅经既有 `session.create.model` 透传。
 - **思考深度（ADR-010）**：输入区 5 档滑块（关闭/低/高/极高/最大，默认「高」）；运行时未声明 `thinking_depth` 能力时置灰 + tooltip「当前运行时不支持思考深度」；值随 `session_create`（会话级）/ `session_send`（本次 run 覆盖）透传；运行期只读语义与模型一致（无 update 命令）；核心警告（`thinking_depth_unsupported`）为同步判定路径兜底（延迟判定以生效值回显为准）。
+- **权限模式选择器（三档，ADR-014 决策 3 / M6-01 DoD8）**：
+  - **位置与锚点**：输入区工具条（与模型 chip / 思考深度滑块同排）常驻；容器锚点 `permission-mode-selector`（`data-mode`）、选项锚点 `permission-mode-item`（同属性 `data-mode`；三档取值登记见 §7.3）；
+  - **档位（与运行时同名同序）**：`read_only` = 仅查看 / `workspace_write` = 工作区内修改（**缺省**）/ `danger_full_access` = 完全权限；档位**约束「写的作用域」、不约束读**（区外 `fs.read` 三档均放行，ADR-014 附录 B）；
+  - **会话级参数**：随 `session_create`（可选 `permission_mode`）/ `session_permission_mode_set` 生效，`SessionSummary` 回显；档位变更入审计；
+  - **常驻边界声明**（锚点 `permission-mode-boundary`；R14：弹层内**常驻一行**、不随档位切换而消失；文案为 ADR-014 附录 F-3 定稿）：
+    > 「档位由核心权限门与本机运行时沙箱共同执行。权限门只约束经协议上报的工具调用；适配器进程内行为（含其自身执行的命令）不受本门约束（信任级，非沙箱）。『完全权限』= 运行时可读写任意路径、执行命令与联网；『仅查看／工作区内修改』档**本门**不开放命令与网络通道（适配器进程内行为不受本门约束）。」
+  - **投影与生效时机**：档位**投影为适配器启动参数**（映射见 ADR-014 附录 C-3；M7-06 DoD1 实测断言），**仅新会话生效**（**在途会话保持原沙箱参数**，R12）；
+  - **禁用态与升权**：无激活会话时选择器禁用 + 空态提示；`deny` 类决议**不呈现 allow 按钮**、不提供 UI 升权后门；降级（如顶档 → `read_only`）后既有 `session`/`always` 授权按新档位重新求值、`pending` 票据不被追溯改写（ADR-014 附录 B 不变量 5/9）；
+  - **文案纪律**（C6 延伸）：不得出现「完全权限仍无终端/网络通道」式表述（ADR-014 附录 B 不变量 12；信任级边界见设计 §2.1 第 4 条）。
 - **禁用态矩阵**：
 
 | 场景 | 输入框 | 发送 | 中断 | 提示位置 |
@@ -280,12 +289,15 @@ stateDiagram-v2
   starting --> disabled: start_failed / handshake_timeout
   starting --> disabled: version_mismatch（应用码 1003，ADR-002/008）
   cold --> disabled: untrusted（非官方清单，§2.1）
+  cold --> disabled: 用户禁用 runtime_disable（user_disabled）
+  ready --> disabled: 用户禁用 runtime_disable（先转移、后终止）
+  degraded --> disabled: 用户禁用 runtime_disable
   ready --> degraded: storage_backpressure 隔离（D8 熔断）
   degraded --> starting: 队列回落 ≤1024 且持续 30s（自动解除）
   starting --> ready: 重启成功
   ready --> starting: 心跳连续 3 次失败 / 崩溃自愈重启
   starting --> disabled: 60s 内 ≥5 次崩溃（crash_loop）
-  disabled --> cold: runtime_enable（人工；crash_loop / 修复后）
+  disabled --> cold: runtime_enable（人工；crash_loop / user_disabled / 修复后）
   disabled --> starting: runtime_retry（仅 disabled + start_failed）
   note right of disabled
     untrusted / version_mismatch
@@ -307,6 +319,9 @@ UI 呈现规则：
 | `disabled` + `crash_loop` | 红点 + 「已禁用·崩溃循环」 | 「60s 内 5 次崩溃」 | `重新启用`（runtime_enable） |
 | `disabled` + `version_mismatch` | 红点 + 「已禁用·版本不匹配」 | 版本对照 + 升级提示 | 禁用态说明，无启用按钮 |
 | `disabled` + `untrusted` | 红点 + 「已禁用·未受信任」 | 白名单说明（P3 前仅官方） | 无 |
+| `disabled` + `user_disabled` | 灰点 + 「已禁用·手动」 | 说明「已由用户禁用；会话与数据保留，重新启用后可继续或重放」 | `启用`（`runtime_enable`）；开关（`runtime-toggle`） |
+
+> **配色分色注（ADR-015，复审 N5）**：§4.4「`disabled` = 危险红」为故障类统一口径；ADR-015 引入 `user_disabled`（非故障）后按 reason 分色——`user_disabled` = 灰点（非危险色）/ 故障类（`start_failed` / `handshake_timeout` / `crash_loop` / `version_mismatch` / `untrusted`）= `--ae-danger` 红；§4.4 表与 §6.4 色 token 说明按此同步。
 
 ### 3.3 run 生命周期与会话状态（D8 + D9 + M2-01）
 
@@ -449,12 +464,16 @@ stateDiagram-v2
 | `crash_loop` | D5 熔断 | 「运行时 60 秒内崩溃 5 次，已熔断停止（防止崩溃循环）」 | `重新启用` 或修复后重启应用 | 阻断该 runtime 直至人工启用 |
 | `memory_conflict` | D14 | 「记忆文件已被外部修改，本次写入已中止（未覆盖原文件）」 | 重新读取记忆后重试 | 阻断该次写入；不阻断会话 |
 | `start_failed` / `handshake_timeout` | D5 | 「运行时启动失败（{reason}）」+ stderr 尾 50 行摘要 | `重试`；仍失败检查配置/版本 | 阻断该 runtime |
+| `user_disabled` | ADR-015 | 「运行时已由用户手动禁用（非故障）」 | `启用`（`runtime_enable`）或重新启用开关（`runtime-toggle`） | 阻断该 runtime（`disabled`）；会话与数据保留 |
+| `runtime_busy` | ADR-015（ADR-006 附录 B 登记行 10 → 11）、M7-01 | 「运行时有 {count} 个在途会话；禁用将终止在途任务（会话与数据保留）。确认继续？」 | 确认后重试（携 `confirm_terminate: true`）；取消保留现状 | 阻断该次禁用（不终止在途任务、不写偏好） |
 | `path_rejected` | D9/T7 | 「路径不在允许范围内，已拒绝」 | 无需操作（可展开查看原因） | 阻断该工具调用 |
 | `artifact_path_rejected` | ADR-010 | 「引用路径不可用：{message}」 | 重新选择路径 | 阻断该次添加 |
 | `builtin_provider_undeletable` | ADR-010 | 「内置供应商不可删除」 | 无（删除入口置灰） | 阻断该次删除 |
 | `provider_not_found` / `provider_model_not_found` | ADR-010 | 「供应商/模型不存在，已刷新列表」 | 刷新后重试 | 阻断该命令 |
+| `provider_unreachable` | ADR-014 附录 C-5（ADR-006 附录 B 登记行 8 → 10）、M7-06 | 「无法连接供应商（检查网络或 Base URL）」 | 检查网络或 Base URL 后重试；保留表单内容 | 非阻断（仅阻断该次连通性测试/模型获取） |
+| `provider_auth_failed` | ADR-014 附录 C-5（ADR-006 附录 B 登记行 8 → 10）、M7-06 | 「API Key 无效或被拒绝」 | 高亮 API Key 字段并跳转表单更正；**不自动清空**既有 `api_key_ref` | 非阻断（仅阻断该次连通性测试/模型获取） |
 | `thinking_depth_unsupported`（警告码，非阻断） | ADR-010 | 「当前运行时不支持思考深度，已按默认档位运行」 | 无（滑块置灰） | 非阻断 |
-| （UI）连通性测试 | ADR-010 | 「连通性测试将在 P1 开放」 | 无 | 非阻断 |
+| （UI）连通性测试（**ADR-014 废止原「P1 开放」占位口径**） | ADR-014 附录 F-2 / C-5（取代 ADR-010 占位行）、M7-06 | **P1 起为真实调用（`provider_test`），结果三态呈现（成功 / 不可达 / 凭据无效）** | 不可达 → 检查网络/Base URL；凭据无效 → 更正 API Key；保留表单内容可重试 | 非阻断 |
 | `invalid_json` / `unknown_field` / `missing_field` / `invalid_type` / `invalid_value` / `invalid_enum` / `too_large` / `out_of_range` / `invalid_format` | D7/M1-08 | 「输入不合法（{field}）：{message}」 | 修正输入 | 阻断该命令 |
 | `not_implemented` | D7 框架 | 「该功能尚未实现（{command}）」 | 无 | 阻断该命令（仅开发期出现） |
 | `internal` | ADR-006 | 「内部错误：{message}」 | 重试；持续出现导出诊断 | 阻断该命令 |
@@ -537,7 +556,7 @@ stateDiagram-v2
 | 工具卡片/审批卡 | `Enter/Space` | 展开/折叠；按钮逐个 Tab |
 | 覆盖层 | `Esc` | 返回工作台（恢复焦点） |
 | 权限卡 | `Esc` | **不作出决议**，焦点返回输入区（防止误拒/误许）；决议必须显式点击 |
-| 全局 | `Ctrl+K` | **P0 不绑定**（无搜索命令面）；见 §9 |
+| 全局 | `Ctrl+K` | **P0 不绑定**（无搜索命令面；P1 登记见 ADR-014 §附录 C-1 / M7-07）；见 §9 |
 | 全局 | `Ctrl+1/2/3` | P0 不绑定（避免与系统/浏览器冲突） |
 
 ### 6.6 屏幕阅读器标签
@@ -598,7 +617,7 @@ stateDiagram-v2
 | 历史缺口 | `history-overflow` / `history-reload` / `history-reload-error` | — |
 | 事件桥（迁往诊断页） | `event-bridge-status` | — |
 
-### 7.3 待实现锚点（M3-03…M3-12）
+### 7.3 待实现锚点（M3-03…M3-12；P1 增量 M5–M8 见 ADR-014）
 
 | 任务 | 界面 | data-testid | 关键状态属性 |
 |---|---|---|---|
@@ -639,7 +658,7 @@ stateDiagram-v2
 | M3-11 | 供应商表单 | `provider-form` / `provider-name-input` / `provider-base-url-input` / `provider-api-key-input` / `provider-api-key-ref-readonly` / `provider-enabled-switch` / `provider-form-save` / `provider-form-back` | — |
 | M3-11 | 供应商模型 | `provider-model-item` / `provider-model-toggle` / `provider-model-add` | `data-model-id`、`data-enabled` |
 | M3-11 | 模型选择器 | `model-selector` / `model-selector-item` / `model-selector-empty` | `data-provider-id`、`data-model-id` |
-| M3-11 | 供应商页补充（实现登记，2026-09-30） | `providers-add`（添加供应商）/ `providers-add-custom`（添加自定义供应商）/ `provider-empty`（空态）/ `provider-error`（错误元素，补 `data-code`）/ `provider-test-notice`（「连通性测试将在 P1 开放」提示）/ `providers-notice`（操作回执）/ `provider-type-select`（官方类型选择，仅创建态） | `data-code`（错误元素） |
+| M3-11 | 供应商页补充（实现登记，2026-09-30） | `providers-add`（添加供应商）/ `providers-add-custom`（添加自定义供应商）/ `provider-empty`（空态）/ `provider-error`（错误元素，补 `data-code`）/ `provider-test-notice`（**已废止（ADR-014）**，ADR-014 附录 F-2：原「连通性测试将在 P1 开放」提示语义相反；P1 起为真实调用，锚点由 `provider-test-result` 承接，M7-06）/ `providers-notice`（操作回执）/ `provider-type-select`（官方类型选择，仅创建态） | `data-code`（错误元素） |
 | M3-11 | 供应商表单补充（实现登记，2026-09-30） | `provider-api-key-reveal`（显示/隐藏密钥）/ `provider-model-id-input` / `provider-model-name-input` / `provider-delete-cancel` / `provider-delete-confirm-button` | — |
 | M3-11 | 模型选择器补充（实现登记，2026-09-30） | `model-selector-toggle`（选择器触发按钮；`model-selector` 为容器） / `model-selector-list`（下拉容器）/ `model-selector-search`（搜索框） | — |
 | M3-11 | 设置页子导航（实现登记，2026-09-30） | `settings-tab-general` / `settings-tab-providers` | `data-active` |
@@ -647,6 +666,20 @@ stateDiagram-v2
 | M3-12 | 会话列表容器（结构变更） | `session-list` / `session-item` / `session-item-status`（既有锚点，不重命名；由扁平列表改为分组容器） | `data-session-id`、`data-active`（组内归属不变） |
 | 通用 | 覆盖层 | `overlay-<name>`（settings/backup/diagnostics/about）/ `overlay-back` | — |
 | 通用 | 错误码 | 所有错误元素补 `data-code`（`workbench-error`、`startup-error`、`permission-*` 等） | `data-code` |
+| M6-01 | 权限模式 | `permission-mode-selector` / `permission-mode-item` | `data-mode`（三档） |
+| M6-01 | **权限边界声明（常驻一行，R14）** | **`permission-mode-boundary`** | — |
+| M7-06 | 供应商测试 | `provider-test-result` | `data-status`（ok / unreachable / auth_failed / timeout） |
+| M7-07 | 会话搜索 | `session-search` / `session-search-result` | — |
+| M7-07 | 会话管理 | `session-rename` / `session-delete` / `session-delete-confirm` | — |
+| M7-08 | 工作区 | `workspace-tree` / `workspace-item` / `workspace-create` | `data-workspace-id` |
+| M7-09 | 预设 | `presets-page` / `preset-item` / `preset-edit` | `data-preset-id` / `data-builtin` |
+| M6-03 | 审计 | `audit-page` / `audit-filter` / `audit-export` | — |
+| M6-01 | 规则 | `rules-page` / `rule-item` | `data-rule-id` / `data-enabled` |
+| M5-02 / M5-04 | 备份与保留设置 | `settings-backup-auto` / `settings-retention` | — |
+| M7-01 | 运行时启停开关（S-04） | `runtime-toggle` | `data-runtime-id` / `data-enabled` / `data-status` |
+| M7-01 | 禁用二次确认 | `runtime-disable-confirm` | `data-count`（在途会话数） |
+
+> **P1 锚点登记（2026-09-30 按 ADR-014 附录 F-1 登记，共 10 组；2026-10-08 按 ADR-015 附录 E-4 增 2 组，共 12 组）**：上表 M5–M8 十二组为 P1 登记项，实施时不得重命名（§7.1 规则 5；重命名视为破坏性变更）；`permission-mode-boundary` 为**常驻文案**锚点（R14，文案定稿见 ADR-014 附录 F-3，交互与档位语义见 §2.4），`permission-mode-selector` 的 `data-mode` 三档取值为 `read_only` / `workspace_write`（缺省）/ `danger_full_access`；`runtime-toggle` / `runtime-disable-confirm` 为 ADR-015（M7-01）登记项；`provider-test-notice`（M3-11 实现登记）已按 ADR-014 附录 F-2 废止，由 `provider-test-result` 承接（P1 = 真实调用）。
 
 > **M3-12 锚点契约（2026-09-29 按 ADR-011 决策 5 登记并冻结）**：`session-group` / `data-group` / `session-group-title` 及 `session-list` 结构变更自本版冻结，实施时不得重命名（§7.1 规则 5；重命名视为破坏性变更）；断言接口（`data-group` 序列 = 非空组固定组序子集、空组不渲染、等待组增删、`session-item` 不得跨组错位）见 `docs/M3-03-遗留项处置草案.md` §5.2 与 `docs/adr/ADR-011-m3-12-waiting-state-grouping.md` 决策 5。
 
@@ -666,17 +699,17 @@ stateDiagram-v2
 | # | 不做的界面能力 | 依据 | 落回阶段 |
 |---|---|---|---|
 | 1 | 分屏 / 标签页 / 多窗口 | §2.3、§4#20 | P1 |
-| 2 | 终端面板 / exec 入口 / 命令输入 | D9（`exec: deny`）、§4#9 | P3 |
+| 2 | 终端面板 / exec 入口 / 命令输入 | D9（**ADR-014 修订：低档 `exec: deny` / 顶档 `danger_full_access` 仅门层 `allow`**）、§4#9 | P3（**仅门层开放，不构成 P3 提前**，R13） |
 | 3 | 工作流画布 / 节点编排 / 模板库 | §4#1 | 引擎 P2 / 画布 P4 |
 | 4 | 第三方适配器安装 / 管理 / 信任确认 UI | §2.1、§4#28、D5 | P3 |
 | 5 | 全量审计查询 / 导出 / 哈希链界面 | §2.1 第 5 条、§4#15、SE-03 | P1（查询导出）/ P3（强化） |
 | 6 | pause / resume 按钮 | §4#22、D8 | P1 |
-| 7 | 自定义权限规则编辑器 / `always` 作用域 / 自动批准 | D9、§2.3、§4#16 | P1 |
+| 7 | 自定义权限规则编辑器 / `always` 作用域 / 自动批准 | D9（ADR-014 修订）、§2.3、§4#16；**权限档位（三档）见 §2.4 与 ADR-014**（档位 ≠ 自定义规则，档位缺省 `workspace_write`、顶档 `danger_full_access`） | P1 |
 | 8 | 主题切换 UI（P0 深浅色跟随系统即可） | §4#25 | P2 |
 | 9 | i18n / 语言切换 | §4#25 | P2 |
-| 10 | 官方适配器热插拔 / 启用禁用管理 UI（运行期） | §4#7、RA-05 | P1（运行时 `retry/enable` 仅故障恢复，不属热插拔） |
-| 11 | 会话搜索（Ctrl+K）/ 全文检索 | 无命令面（D7）；不得绕过核心管线 | P1+（需 ADR） |
-| 12 | 会话重命名 / 删除 | 无命令面（D7） | P1+（需 ADR） |
+| 10 | 官方适配器热插拔 / 启用禁用管理 UI（运行期） | §4#7、RA-05、**ADR-015** | P1（命令 `runtime_disable` + `runtime_enable` 扩展；`retry/enable` 故障恢复语义不变；不提供安装/卸载入口） |
+| 11 | 会话搜索（Ctrl+K）/ 全文检索 | **ADR-014 附录 C-1 登记**（`session_search`）；直接实施项 M7-07（不构成 P1 门禁） | **P1** |
+| 12 | 会话重命名 / 删除 | **ADR-014 附录 C-1 登记**（`session_rename` / `session_delete`）；直接实施项 M7-07 | **P1** |
 | 13 | 内嵌浏览器 / 文件浏览器 / 记忆浏览器 | §4#10、D14 | P4（ADR-010 只读引用面板 S-11 为登记例外） |
 | 14 | 多模态附件上传 UI | §4#19 | P2 |
 | 15 | 自动备份 / 加密备份 UI（P0 仅手动） | §4#13、D13 | P1 |
@@ -690,7 +723,9 @@ stateDiagram-v2
 | 23 | 账号 / 云同步 / 多设备 UI | §4#27 | P6（需 ADR） |
 | 24 | 导入 / 导出（JSON/JSONL）界面 | §4#17 | P2 |
 
-> **ADR-010（2026-09-24）登记例外**：S-11 文件引用面板（只读）、思考深度、模型与供应商配置三项 P0 能力为范围冻结的登记例外（豁免对价见 ADR-010 §7）；文件树浏览/改动视图/真实连通性测试/模型删除仍在 P1+/P4，不因本例外提前。
+> **ADR-010（2026-09-24）登记例外**：S-11 文件引用面板（只读）、思考深度、模型与供应商配置三项 P0 能力为范围冻结的登记例外（豁免对价见 ADR-010 §7）；文件树浏览/改动视图/模型删除仍在 P1+/P4，不因本例外提前。
+>
+> **ADR-014（2026-09-30）登记更新**：① **真实连通性测试已转正式 P1 任务**（`provider_test` / `provider_models_fetch`，M7-06；超时 10s/5s，错误码 `provider_unreachable` / `provider_auth_failed`）——原「真实连通性测试仍在 P1+」表述作废；② 文件引用**上下文注入**转 P1（并入 M7-06，`session.send.references`），**文件树浏览/内容预览维持 P4**；③ 会话检索与管理（`session_search`/`session_rename`/`session_delete`）登记为 **P1 直接实施项**（M7-07，不构成门禁）；④ 权限档位（三档）见 §2.4 与 ADR-014（档位 ≠ 自定义规则编辑器，后者仍 P1 见 §8#7）。
 
 ---
 
@@ -703,7 +738,7 @@ stateDiagram-v2
 | Q3 | 权限审批形态：非模态卡片（本规格）vs 模态弹窗（D9 措辞「弹窗」） | 非模态卡片（保证输入可用；Proma 参考） | 需评审确认与 D9 口径一致性 |
 | Q4 | 右栏辅助面板是否 P0 必需；1280 宽下默认展开还是折叠 | 默认展开（≥1280），<1280 折叠为抽屉；右栏含文件引用面板（ADR-010，四分区） | 三栏在 1280×800 下的可用宽度 |
 | Q5 | `session_dispose`（关闭会话）是否在 P0 暴露 UI 入口 | 暂不暴露（M3-02 未要求） | 会话生命周期完整性；暴露需定义关闭语义与二次确认 |
-| Q6 | 会话重命名 / 删除是否需要 ADR 扩命令面 | 不扩（P0 不做） | 与 Hermes 参考的差距；若需要走 ADR + `session_update`/`session_delete` 设计 |
+| Q6 | 会话重命名 / 删除是否需要 ADR 扩命令面 | 不扩（P0 不做） | 与 Hermes 参考的差距；**已由 ADR-014 登记（`session_rename` / `session_delete`；P1 直接实施项 M7-07，不构成门禁）** |
 | Q7 | `Ctrl+K` 是否保留为 P1 搜索预留（P0 不绑定） | P0 不绑定，文档标注预留 | 快捷键冲突与用户预期 |
 | Q8 | 顶栏状态条与 M3-02 已实现状态条如何合并（避免双状态条） | M3-03 将状态条并入顶栏，消息流上移 | 需在 M3-03 任务范围内登记 |
 | Q9 | 设置页 P0 范围：`settings` 键白名单当前为空（`SETTINGS_KEY_ALLOWLIST=[]`）；备份提醒开关（M3-05）与工作区绑定（M3-08）键名/语义需登记 | 仅登记「备份提醒开关」与「工作区绑定」两个键，其余只读展示 | 设置页能否落地；键名是稳定契约，需 ADR/任务证据登记 |
@@ -734,4 +769,4 @@ stateDiagram-v2
 
 ---
 
-*文档结束。本文件为 UI 设计输入，不构成冻结基线；任何与设计文档 v1.9 冲突之处以设计文档为准，实现偏差须先提 ADR。*
+*文档结束。本文件为 UI 设计输入，不构成冻结基线；任何与《设计文档》当前冻结版冲突之处以设计文档为准，实现偏差须先提 ADR。*
