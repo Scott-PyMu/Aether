@@ -74,12 +74,55 @@ export function createDrill(options) {
    * definition = {
    *   id, name, source,
    *   trigger: string, response: string, recovery: string,   // 三段说明
-   *   steps: [{ name, command, args, env?, cwd?, timeoutMs?,
-   *             markers?: [{ phase, prefix }] }],
+   *   steps: [{ name, command, args, env?, cwd?, timeoutMs?, retries?,
+   *             markers?: [{ phase, prefix, contains?, required?, assert? }] }],
+   *   // retries：步骤级重试次数（0 = 不重试；仅用于基础设施抖动兜底，断言不变）
    * }
    */
   function define(definition) {
     scenarios.push(definition);
+  }
+
+  /** 对单次执行输出做标记评估（证据行提取 + JSON 断言）。 */
+  function evaluateStep(step, out) {
+    const evidence = { trigger: [], response: [], recovery: [] };
+    const markers = [];
+    const missing = [];
+    for (const marker of step.markers ?? []) {
+      const lines = marker.contains
+        ? out
+            .split(/\r?\n/)
+            .map((line) => line.replace(/^\uFEFF/, "").trimEnd())
+            .filter((line) => line.includes(marker.prefix))
+        : findLines(out, marker.prefix);
+      for (const line of lines) {
+        evidence[marker.phase].push(line.trim());
+      }
+      let markerOk = lines.length > 0;
+      // 可选 JSON 字段断言：对以 prefix 起始的行解析 JSON 并断言（如 T11 单 JSON
+      // 承载「触发/应对/恢复」三阶段时，按字段分别提取证据）。
+      if (markerOk && marker.assert) {
+        markerOk = lines.some((line) => {
+          const index = line.indexOf(marker.prefix);
+          const payload = line.slice(index + marker.prefix.length).trim();
+          try {
+            return marker.assert(JSON.parse(payload));
+          } catch {
+            return false;
+          }
+        });
+      }
+      markers.push({
+        phase: marker.phase,
+        prefix: marker.prefix,
+        found: lines.length,
+        asserted: marker.assert ? markerOk : undefined,
+      });
+      if (!markerOk && marker.required !== false) {
+        missing.push(marker);
+      }
+    }
+    return { evidence, markers, missing, ok: missing.length === 0 };
   }
 
   function executeScenario(definition) {
@@ -90,67 +133,63 @@ export function createDrill(options) {
     let failureReason = "";
 
     for (const step of definition.steps) {
-      console.log(`\n$ ${step.command} ${step.args.join(" ")}   # ${definition.id} / ${step.name}`);
-      const result = capture(step.command, step.args, {
-        env: step.env,
-        cwd: step.cwd,
-        timeoutMs: step.timeoutMs,
-      });
-      process.stdout.write(result.out);
-      if (result.error) {
-        console.error(`[drill] 无法执行：${result.error.message}`);
-      }
-      console.log(`[drill] ${definition.id} / ${step.name} exit=${result.status} elapsed=${result.elapsedMs}ms`);
-
-      const markers = [];
-      for (const marker of step.markers ?? []) {
-        const lines = marker.contains
-          ? result.out
-              .split(/\r?\n/)
-              .map((line) => line.replace(/^\uFEFF/, "").trimEnd())
-              .filter((line) => line.includes(marker.prefix))
-          : findLines(result.out, marker.prefix);
-        for (const line of lines) {
-          phaseEvidence[marker.phase].push(line.trim());
-        }
-        let markerOk = lines.length > 0;
-        // 可选 JSON 字段断言：对以 prefix 起始的行解析 JSON 并断言（如 T11 单 JSON
-        // 承载「触发/应对/恢复」三阶段时，按字段分别提取证据）。
-        if (markerOk && marker.assert) {
-          markerOk = lines.some((line) => {
-            const index = line.indexOf(marker.prefix);
-            const payload = line.slice(index + marker.prefix.length).trim();
-            try {
-              return marker.assert(JSON.parse(payload));
-            } catch {
-              return false;
-            }
-          });
-        }
-        markers.push({
-          phase: marker.phase,
-          prefix: marker.prefix,
-          found: lines.length,
-          asserted: marker.assert ? markerOk : undefined,
+      const attempts = 1 + Math.max(0, step.retries ?? 0);
+      let result = null;
+      let evaluated = null;
+      let attemptUsed = 0;
+      for (let attempt = 1; attempt <= attempts; attempt += 1) {
+        attemptUsed = attempt;
+        const suffix = attempt > 1 ? `（重试 ${attempt - 1}/${attempts - 1}）` : "";
+        console.log(`\n$ ${step.command} ${step.args.join(" ")}   # ${definition.id} / ${step.name}${suffix}`);
+        result = capture(step.command, step.args, {
+          env: step.env,
+          cwd: step.cwd,
+          timeoutMs: step.timeoutMs,
         });
-        if (!markerOk && marker.required !== false) {
-          pass = false;
-          failureReason ||= `步骤「${step.name}」缺少 ${marker.phase} 证据行：${marker.prefix}`;
+        process.stdout.write(result.out);
+        if (result.error) {
+          console.error(`[drill] 无法执行：${result.error.message}`);
+        }
+        console.log(
+          `[drill] ${definition.id} / ${step.name} exit=${result.status} elapsed=${result.elapsedMs}ms（attempt ${attempt}/${attempts}）`,
+        );
+        evaluated = evaluateStep(step, result.out);
+        const stepOk = result.status === 0 && evaluated.ok;
+        logParts.push(
+          `===== ${step.name}${attempt > 1 ? `（attempt ${attempt}/${attempts}）` : ""} =====\n$ ${step.command} ${step.args.join(" ")}\n${result.out}`,
+        );
+        if (stepOk) {
+          break;
+        }
+        if (attempt < attempts) {
+          console.warn(
+            `[drill] 步骤「${step.name}」失败（exit=${result.status}${evaluated.ok ? "" : "，证据缺失"}），重试…`,
+          );
         }
       }
-      if (result.status !== 0) {
+
+      for (const phase of PHASES) {
+        phaseEvidence[phase].push(...evaluated.evidence[phase]);
+      }
+      const stepOk = result.status === 0 && evaluated.ok;
+      if (!stepOk) {
         pass = false;
-        failureReason ||= `步骤「${step.name}」退出码 ${result.status}`;
+        if (result.status !== 0) {
+          failureReason ||= `步骤「${step.name}」退出码 ${result.status}（${attemptUsed} 次尝试）`;
+        } else {
+          const marker = evaluated.missing[0];
+          failureReason ||= `步骤「${step.name}」缺少 ${marker.phase} 证据行：${marker.prefix}（${attemptUsed} 次尝试）`;
+        }
       }
 
       stepResults.push({
         name: step.name,
         command: `${step.command} ${step.args.join(" ")}`,
         exit: result.status,
+        attempts: attemptUsed,
         elapsed_ms: result.elapsedMs,
-        markers,
+        markers: evaluated.markers,
       });
-      logParts.push(`===== ${step.name} =====\n$ ${step.command} ${step.args.join(" ")}\n${result.out}`);
     }
 
     return {

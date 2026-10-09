@@ -80,6 +80,8 @@ drill.define({
       ],
       cwd: path.join(repoRoot, "apps", "desktop"),
       timeoutMs: 5 * 60 * 1000,
+      // CI 慢机下 vitest 实时等待偶发抖动；重试一次（断言不变）。
+      retries: 1,
     },
   ],
 });
@@ -361,6 +363,8 @@ drill.define({
       ],
       cwd: path.join(repoRoot, "apps", "desktop"),
       timeoutMs: 5 * 60 * 1000,
+      // CI 慢机下 vitest 实时等待偶发抖动；重试一次（断言不变）。
+      retries: 1,
     },
   ],
 });

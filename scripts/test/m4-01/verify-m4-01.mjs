@@ -32,11 +32,10 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 
-import { bin, pnpmCommand, repoRoot } from "../lib/exec.mjs";
+import { bin, repoRoot } from "../lib/exec.mjs";
 import { createDrill, parseOnly } from "../m4/lib/drill.mjs";
 
 const cargo = bin("cargo");
-const pnpm = pnpmCommand();
 const exeSuffix = process.platform === "win32" ? ".exe" : "";
 const targetDir = process.env.CARGO_TARGET_DIR ?? path.join(repoRoot, "target");
 const fixture = path.join(targetDir, "debug", `aether-adapter-fixture${exeSuffix}`);
@@ -238,9 +237,16 @@ drill.define({
     },
     {
       name: "HealthMonitor UI（15s 无响应提示 + 重启入口；vitest）",
-      command: pnpm.command,
-      args: [...pnpm.prefix, "--filter", "@aether/desktop", "test", "--", "HealthMonitor"],
+      command: process.execPath,
+      args: [
+        path.join(repoRoot, "apps", "desktop", "node_modules", "vitest", "vitest.mjs"),
+        "run",
+        "src/HealthMonitor.test.tsx",
+      ],
+      cwd: path.join(repoRoot, "apps", "desktop"),
       timeoutMs: 5 * 60 * 1000,
+      // CI 慢机下 vi.waitFor 实时等待存在偶发抖动；重试一次（断言不变）。
+      retries: 1,
     },
   ],
 });

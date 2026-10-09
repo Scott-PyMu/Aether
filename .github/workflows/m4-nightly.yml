@@ -57,11 +57,13 @@ jobs:
           set -o pipefail
           node scripts/test/m4-01/verify-m4-01.mjs 2>&1 | tee m4-01.log
       - name: M4-02 存储类失败场景演练（8 场景）
+        if: ${{ !cancelled() }}
         shell: bash
         run: |
           set -o pipefail
           node scripts/test/m4-02/verify-m4-02.mjs 2>&1 | tee m4-02.log
       - name: M4-03 协议与并发类失败场景演练（11 场景）
+        if: ${{ !cancelled() }}
         shell: bash
         run: |
           set -o pipefail
