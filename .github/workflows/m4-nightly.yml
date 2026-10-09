@@ -2,12 +2,24 @@ name: m4-nightly
 
 # M4 阶段夜跑（实施计划 §5 M4-01/02/03「夜跑通过在案」与 M4-04/05/06 验收）：
 # 30 个失败场景端到端脚本化 + 三段证据归档 + 验收清单/打包冒烟/文档收尾。
-# 触发：每日定时（UTC 18:00）与手动。
+# 触发：
+#   - 每日定时（UTC 18:00）；
+#   - 手动 workflow_dispatch；
+#   - main 上 M4 相关路径变更（演练脚本/打包脚本/本工作流）——保证 M4 变更即时回归归档。
 
 on:
   schedule:
     - cron: "0 18 * * *"
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/m4-nightly.yml"
+      - "scripts/test/m4/**"
+      - "scripts/test/m4-*/**"
+      - "scripts/ci/build-runtime-bundles.mjs"
+      - "scripts/ci/build-desktop-installer.mjs"
+      - "scripts/ci/hash-installers.mjs"
 
 concurrency:
   group: m4-nightly-${{ github.ref }}
