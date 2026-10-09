@@ -336,9 +336,16 @@ fn bump_usize(counter: &AtomicUsize, amount: usize) {
 }
 
 fn dec_usize(counter: &AtomicUsize, amount: usize) {
-    let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-        Some(current.saturating_sub(amount))
-    });
+    // 无锁饱和递减；用 CAS 循环而非 `fetch_update`（后者在 Rust 1.99 更名
+    // `try_update` 并弃用；CAS 保持 MSRV 1.80 兼容且语义等价：不欠减）。
+    let mut current = counter.load(Ordering::Relaxed);
+    loop {
+        let next = current.saturating_sub(amount);
+        match counter.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return,
+            Err(observed) => current = observed,
+        }
+    }
 }
 
 /// 有界 `evt.id` 去重集（D4：`evt.id` 全局去重；更早的重复由 DB 主键兜底）。
