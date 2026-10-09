@@ -6,9 +6,13 @@
 /// CSP 基线（设计 D7 / 评审 #7，逐字符冻结）。
 pub const EXPECTED_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src ipc: http://ipc.localhost; frame-src 'none'; object-src 'none'";
 
-/// capabilities 最小 allowlist（按窗口裁剪；当前 UI 不消费任何插件/核心命令，
-/// 因此为空）。新增权限必须同步修改本清单并更新本常量。
-pub const CAPABILITY_PERMISSION_ALLOWLIST: &[&str] = &[];
+/// capabilities 最小 allowlist（按窗口裁剪）。
+///
+/// M1-08 初始为空（当时 UI 不消费插件命令）；ADR-016（M4-05 真实 WebView 内联
+/// 回环 E2E 缺陷修复）增事件监听对，启用设计 D7 的 `aether://event` 单通道。
+/// 新增权限必须同步修改本清单并更新本常量（`tests/security_baseline.rs` 双向断言）。
+pub const CAPABILITY_PERMISSION_ALLOWLIST: &[&str] =
+    &["core:event:allow-listen", "core:event:allow-unlisten"];
 
 /// capabilities 允许出现的字段（防新增未评审字段，如 `remote` / `local`）。
 pub const CAPABILITY_ALLOWED_FIELDS: &[&str] = &[

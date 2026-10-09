@@ -1,0 +1,175 @@
+name: m4-nightly
+
+# M4 阶段夜跑（实施计划 §5 M4-01/02/03「夜跑通过在案」与 M4-04/05/06 验收）：
+# 30 个失败场景端到端脚本化 + 三段证据归档 + 验收清单/打包冒烟/文档收尾。
+# 触发：每日定时（UTC 18:00）与手动。
+
+on:
+  schedule:
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: m4-nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # M4-01/02/03：30 场景演练（Windows：Job Object/taskkill 与真实 WebView E2E 平台断言）。
+  m4-drills:
+    name: M4 drills (30 scenarios)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: M4-01 进程类失败场景演练（11 场景）
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/test/m4-01/verify-m4-01.mjs 2>&1 | tee m4-01.log
+      - name: M4-02 存储类失败场景演练（8 场景）
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/test/m4-02/verify-m4-02.mjs 2>&1 | tee m4-02.log
+      - name: M4-03 协议与并发类失败场景演练（11 场景）
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/test/m4-03/verify-m4-03.mjs 2>&1 | tee m4-03.log
+
+      - name: 失败诊断（公开 annotation）
+        if: failure()
+        shell: bash
+        run: |
+          for log in m4-01.log m4-02.log m4-03.log; do
+            [ -f "$log" ] || continue
+            grep -E "^FAIL|失败|failure_reason|panicked|assertion" "$log" 2>/dev/null | tail -8 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+              echo "::error title=$log::$line"
+            done
+          done
+
+      - name: 归档演练证据（三段证据日志 + 场景 JSON）
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: m4-drills-evidence
+          path: |
+            scripts/test/.tmp/m4-01/evidence-*/
+            scripts/test/.tmp/m4-02/evidence-*/
+            scripts/test/.tmp/m4-03/evidence-*/
+            m4-0*.log
+          if-no-files-found: warn
+          retention-days: 30
+
+  # M4-04/05：验收清单（T1–T15 + 命令面）与打包冒烟（MSI + 安装产物内联回环）。
+  m4-acceptance:
+    name: M4 acceptance + installer smoke
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: T8 前置（M4-02 disk-full 场景证据）
+        shell: bash
+        run: node scripts/test/m4-02/verify-m4-02.mjs --only disk-full
+      - name: M4-04 验收清单执行（T1–T15 运行器 + 命令面/错误码完整性）
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/test/m4-04/verify-m4-04.mjs --skip-coverage 2>&1 | tee m4-04.log
+      - name: M4-05 打包与发布（注册包 + 真实 WebView 内联回环 E2E + 安装产物冒烟）
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/test/m4-05/verify-m4-05.mjs --with-installer 2>&1 | tee m4-05.log
+
+      - name: 失败诊断（公开 annotation）
+        if: failure()
+        shell: bash
+        run: |
+          for log in m4-04.log m4-05.log; do
+            [ -f "$log" ] || continue
+            grep -E "^FAIL|失败|panicked|assertion|重跑" "$log" 2>/dev/null | tail -8 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+              echo "::error title=$log::$line"
+            done
+          done
+
+      - name: 归档验收证据（含安装器与哈希）
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: m4-acceptance-evidence
+          path: |
+            scripts/test/.tmp/m4-04/evidence-*/
+            scripts/test/.tmp/m4-05/evidence-*/
+            dist-out/
+            m4-04.log
+            m4-05.log
+          if-no-files-found: warn
+          retention-days: 30
+
+  # M4-06：文档与安全收尾（Windows 复用 keyring 无需 apt）。
+  m4-docs-security:
+    name: M4 docs & security wrap-up
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: M4-06 文档与安全收尾
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/test/m4-06/verify-m4-06.mjs 2>&1 | tee m4-06.log
+
+      - name: 归档收尾证据
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: m4-docs-evidence
+          path: |
+            scripts/test/.tmp/m4-06/evidence-*/
+            docs/evidence/m4-06/
+            m4-06.log
+          if-no-files-found: warn
+          retention-days: 30

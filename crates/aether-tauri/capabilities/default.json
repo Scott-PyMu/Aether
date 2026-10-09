@@ -1,7 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Aether 最小能力集（M1-08）：UI 尚未消费任何插件/核心命令，因此 permissions 为空；权限按窗口裁剪（仅 main），未使用权限一律关闭。新增权限须同步文档与评审。",
+  "description": "Aether 主窗口默认能力（M1-08 最小 allowlist；ADR-016 增事件监听对以启用 D7 aether://event 单通道）。仅 main 窗口；未使用插件权限一律关闭。",
   "windows": ["main"],
-  "permissions": []
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
 }

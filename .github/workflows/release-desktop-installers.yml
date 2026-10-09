@@ -42,6 +42,56 @@ jobs:
       - name: 构建安装器（MSI/DMG）
         run: node scripts/ci/build-desktop-installer.mjs
 
+      # M4-05 DoD3：签名步骤挂接流水线（MVP 允许空签但流程可执行）。
+      # 未配置证书 secrets 时步骤为 no-op 并输出说明；配置后自动对 MSI 签名。
+      - name: Windows 代码签名（signtool；无证书空签跳过）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not $env:WINDOWS_CERT_BASE64) {
+            Write-Host "未配置 WINDOWS_CERT_BASE64：MVP 空签流程通过（SmartScreen 绕过见 docs/打包与发布说明.md）"
+            exit 0
+          }
+          $pfx = Join-Path $env:RUNNER_TEMP "aether-sign.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERT_BASE64))
+          $msi = Get-ChildItem dist-out/*.msi | Select-Object -First 1
+          & signtool sign /f $pfx /p $env:WINDOWS_CERT_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $msi.FullName
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & signtool verify /pa $msi.FullName
+        env:
+          WINDOWS_CERT_BASE64: ${{ secrets.WINDOWS_CERT_BASE64 }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+
+      # M4-05 DoD3：签名后刷新哈希记录（签名改变产物字节）。
+      - name: 刷新产物哈希（签名后）
+        shell: bash
+        run: node scripts/ci/hash-installers.mjs
+
+      - name: macOS 公证（notarytool；无凭据空签跳过）
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          if [ -z "${MACOS_NOTARY_APPLE_ID:-}" ]; then
+            echo "未配置 MACOS_NOTARY_APPLE_ID：MVP 空签流程通过（Gatekeeper 绕过见 docs/打包与发布说明.md）"
+            exit 0
+          fi
+          xcrun notarytool submit dist-out/*.dmg \
+            --apple-id "$MACOS_NOTARY_APPLE_ID" \
+            --team-id "$MACOS_NOTARY_TEAM_ID" \
+            --password "$MACOS_NOTARY_PASSWORD" --wait
+        env:
+          MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+          MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+          MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-installers-${{ runner.os }}
+          path: |
+            dist-out/*
+            dist-out/SHA256SUMS.txt
+          retention-days: 30
+
       - name: 等待 cargo-dist 创建 Release
         shell: bash
         env:

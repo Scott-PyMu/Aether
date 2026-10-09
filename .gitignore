@@ -30,6 +30,9 @@ dsh_env.txt
 # 发布产物（安装器收集目录）
 dist-out/
 
+# M4-05 运行时包（构建期生成：官方适配器单文件 + 注册清单 + 摘要；随安装包分发）
+crates/aether-tauri/runtime-bundle/
+
 # 本地设计与流程文档（明确不上传）
 /设计文档.md
 /需求文档.md

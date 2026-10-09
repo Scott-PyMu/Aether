@@ -409,7 +409,10 @@ pub(crate) fn providers_list(
 ) -> Result<JsonPayload, IpcError> {
     let _request: ProvidersListRequest =
         parse_no_params(payload.map(JsonPayload::into_value).unwrap_or(Value::Null))?;
-    state.backend_ready()?.providers_list(&_request).map(JsonPayload)
+    state
+        .backend_ready()?
+        .providers_list(&_request)
+        .map(JsonPayload)
 }
 
 /// ADR-010/M3-11：新建供应商（`api_key` 明文仅传输 → 核心写 keyring → `api_key_ref`）。
@@ -680,6 +683,7 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         crate::startup_probe::e2e_startup_report,
         crate::health_probe::e2e_health_report,
         crate::m3_06_probe::e2e_m3_06_report,
+        crate::m4_05_probe::e2e_m4_05_report,
     ]
 }
 

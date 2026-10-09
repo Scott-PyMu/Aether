@@ -145,8 +145,35 @@ record(
   run(node, [path.join(repoRoot, "scripts", "test", "m3-11", "verify-m3-11.mjs")]),
 );
 record(
-  "verify-m3-12（会话等待态写入与等待审批分组：置位/回程守卫 + 事件 from/to + deny/超时/取消/run 失败 + 重启 no-op + 多会话并发 + 分组锚点 + 生产组合路径集成 E2E + 回归；需 Bun）",
+  "verify:m3-12（会话等待态写入与等待审批分组：置位/回程守卫 + 事件 from/to + deny/超时/取消/run 失败 + 重启 no-op + 多会话并发 + 分组锚点 + 生产组合路径集成 E2E + 回归；需 Bun）",
   run(node, [path.join(repoRoot, "scripts", "test", "m3-12", "verify-m3-12.mjs")]),
+);
+record(
+  "verify:m4-01（进程类失败场景演练 11 场景：三段证据归档；需 Bun + 真实 WebView 执行 T12）",
+  run(node, [path.join(repoRoot, "scripts", "test", "m4-01", "verify-m4-01.mjs")]),
+);
+record(
+  "verify:m4-02（存储类失败场景演练 8 场景：三段证据归档；Windows 执行 T12 E2E）",
+  run(node, [path.join(repoRoot, "scripts", "test", "m4-02", "verify-m4-02.mjs")]),
+);
+record(
+  "verify:m4-03（协议与并发类失败场景演练 11 场景：三段证据归档；需 Bun）",
+  run(node, [path.join(repoRoot, "scripts", "test", "m4-03", "verify-m4-03.mjs")]),
+);
+record(
+  "verify:m4-04（验收清单执行：T1–T15 运行器 + 命令面 36/错误码 20 完整性；覆盖率由本清单 coverage gate 承接）",
+  run(node, [
+    path.join(repoRoot, "scripts", "test", "m4-04", "verify-m4-04.mjs"),
+    "--skip-coverage",
+  ]),
+);
+record(
+  "verify:m4-05（打包与发布：注册包/内联回环 E2E/静态；安装产物冒烟见 pnpm verify:m4-05:installer）",
+  run(node, [path.join(repoRoot, "scripts", "test", "m4-05", "verify-m4-05.mjs")]),
+);
+record(
+  "verify:m4-06（文档与安全收尾：文档齐备/30 场景手册/新成员演练/SBOM 归档/36 命令复查清单/脱敏 0 命中）",
+  run(node, [path.join(repoRoot, "scripts", "test", "m4-06", "verify-m4-06.mjs")]),
 );
 
 if (!quick) {

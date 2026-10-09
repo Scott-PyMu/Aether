@@ -50,6 +50,13 @@
     "verify:m3-10": "node scripts/test/m3-10/verify-m3-10.mjs",
     "verify:m3-11": "node scripts/test/m3-11/verify-m3-11.mjs",
     "verify:m3-12": "node scripts/test/m3-12/verify-m3-12.mjs",
+    "verify:m4-01": "node scripts/test/m4-01/verify-m4-01.mjs",
+    "verify:m4-02": "node scripts/test/m4-02/verify-m4-02.mjs",
+    "verify:m4-03": "node scripts/test/m4-03/verify-m4-03.mjs",
+    "verify:m4-04": "node scripts/test/m4-04/verify-m4-04.mjs",
+    "verify:m4-05": "node scripts/test/m4-05/verify-m4-05.mjs",
+    "verify:m4-05:installer": "node scripts/test/m4-05/installer-smoke.mjs",
+    "verify:m4-06": "node scripts/test/m4-06/verify-m4-06.mjs",
     "smoke": "node scripts/test/smoke-desktop.mjs",
     "ci:local": "node scripts/test/ci-local.mjs"
   },

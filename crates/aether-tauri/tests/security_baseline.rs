@@ -1,7 +1,8 @@
 //! 安全基线配置断言（M1-08 DoD 2 / DoD 4）。
 //!
 //! 从磁盘读取真实签入文件（`tauri.conf.json`、`capabilities/`、`Cargo.toml`），
-//! 防止「源码改了、配置未改」。基线变更（CSP / capabilities / devtools）须走 ADR。
+//! 防止「源码改了、配置未改」。基线变更（CSP / capabilities / devtools）须走 ADR
+//! （ADR-016：事件监听最小能力补齐，启用 D7 `aether://event` 单通道）。
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -20,7 +21,9 @@ const CAPABILITY_ALLOWED_FIELDS: &[&str] = &[
     "windows",
     "permissions",
 ];
-const CAPABILITY_PERMISSION_ALLOWLIST: &[&str] = &[];
+/// ADR-016：仅事件监听对（不授予 `allow-emit` / `allow-emit-to`）。
+const CAPABILITY_PERMISSION_ALLOWLIST: &[&str] =
+    &["core:event:allow-listen", "core:event:allow-unlisten"];
 
 fn manifest_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

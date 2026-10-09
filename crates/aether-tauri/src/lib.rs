@@ -31,6 +31,7 @@ pub mod permission_loop;
 pub mod picker;
 pub mod provider_control;
 pub mod runtime_control;
+pub mod runtime_registry;
 pub mod security_level;
 pub mod session_backend;
 pub mod shutdown;
@@ -41,6 +42,8 @@ pub mod startup;
 mod health_probe;
 #[cfg(debug_assertions)]
 mod m3_06_probe;
+#[cfg(debug_assertions)]
+mod m4_05_probe;
 #[cfg(debug_assertions)]
 mod probe;
 #[cfg(debug_assertions)]
@@ -172,6 +175,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     app.handle().clone(),
                     std::path::PathBuf::from(&startup_for_boot.snapshot().data_dir),
                 );
+                // M4-05：真实 WebView 内联权限回环 E2E 探针（授权卡 → 允许 → 适配器回执）。
+                m4_05_probe::start(app.handle().clone());
             }
             #[cfg(not(debug_assertions))]
             {
@@ -230,9 +235,30 @@ fn build_backend(
     // `health.runtimes` 与监督器状态一一对应（字段映射冻结）。
     // M3-07（D9/SE-03）：审计出口经延迟观察者装配——监督器先于存储构造，
     // 存储就绪后注入 `StoreAuditObserver`（此前监督器无状态转移/审计活动）。
+    // M4-05：安装产物内置只读注册清单（`resource_dir()/runtime-bundle/runtimes.json`；
+    // ADR-015 §2.2 schema）→ 官方运行时注册；缺失/条目被拒不阻塞启动（空注册表告警）。
     let deferred_audit_observer = std::sync::Arc::new(audit_bridge::DeferredObserver::new());
+    let registry = runtime_registry::resolve_registry_dir(app)
+        .as_deref()
+        .map(runtime_registry::load_registry)
+        .unwrap_or_default();
+    for (runtime_id, reason) in &registry.rejected {
+        tracing::warn!(
+            runtime_id = %runtime_id,
+            reason = %reason,
+            "运行时注册清单条目被拒（不阻塞启动；修复后重启重扫）"
+        );
+    }
+    tracing::info!(
+        registry_dir = ?registry.dir,
+        registered = registry.specs.len(),
+        rejected = registry.rejected.len(),
+        manifest_present = registry.manifest_present,
+        "运行时注册清单加载完成"
+    );
     let supervisor: Option<std::sync::Arc<aether_adapters::supervisor::Supervisor>> =
-        match runtime_control::boot_empty_supervisor_with_observer(
+        match runtime_control::boot_supervisor_with_observer(
+            registry.specs,
             None,
             deferred_audit_observer.clone(),
         ) {
