@@ -253,10 +253,11 @@ fn write_evidence(name: &str, value: &Value) {
 fn create_internal_and_external_respects_space_guard() {
     let fixture = BackendFixture::open();
 
-    // 内部（默认 backups 目录）。
+    // 内部（默认 backups 目录）。M5-02/ADR-020 §2.1-1：手动产物 kind='manual'
+    // （位置语义由 path 判定；断言随设计变更更新，驱动来源 = ADR-020）。
     let internal = fixture.create(None).expect("内部备份成功");
     let internal_path = PathBuf::from(internal["backup"]["path"].as_str().expect("路径"));
-    assert_eq!(internal["backup"]["kind"], "internal");
+    assert_eq!(internal["backup"]["kind"], "manual");
     assert!(internal_path.starts_with(fixture.data_dir().join("backups")));
     assert!(internal_path.exists());
     assert!(internal["backup"]["size_bytes"].as_u64().unwrap_or(0) > 0);
@@ -265,7 +266,7 @@ fn create_internal_and_external_respects_space_guard() {
     let external_dir = fixture.data_dir().join("external-target");
     std::fs::create_dir_all(&external_dir).expect("外部目录");
     let external = fixture.create(Some(&external_dir)).expect("外部备份成功");
-    assert_eq!(external["backup"]["kind"], "external");
+    assert_eq!(external["backup"]["kind"], "manual");
     let external_path = PathBuf::from(external["backup"]["path"].as_str().expect("路径"));
     assert!(
         external_path.starts_with(PathBuf::from(long_path(&external_dir))),
@@ -481,10 +482,16 @@ fn restore_rejects_newer_corrupt_and_unknown_candidates() {
     );
 }
 
-// ===== 保留策略：超过 10 份删除最旧（D13） =====
+// ===== 保留策略（M5-02/ADR-020 §3.1 设计变更驱动）：手动产物不自动删除 =====
+//
+// P0 断言「超过 10 份删除最旧（含手动）」已由 ADR-020 §2.1-1 修订：滚动清理仅约束
+// `kind='auto'`（按 `backup.auto.retention`），手动产物不自动删除；本用例按新口径
+// 更新（断言更新驱动来源 = ADR-020 §3.1 + P1 计划 M5-02 DoD3——AGENTS §6：不得为
+// 过测试放宽；本变更为任务 DoD 已明示口径）。自动类滚动断言见
+// `tests/m5_02_auto_backup.rs`。
 
 #[test]
-fn retention_keeps_latest_ten_backups() {
+fn manual_backups_are_never_auto_pruned() {
     let fixture = BackendFixture::open();
     for index in 0..11 {
         fixture.create(None).expect("备份成功");
@@ -493,13 +500,20 @@ fn retention_keeps_latest_ten_backups() {
     }
     let list = fixture.backend.backup_list().expect("清单");
     let backups = list["backups"].as_array().expect("数组");
-    assert_eq!(backups.len(), 10, "保留最近 10 份（D13）");
+    assert_eq!(backups.len(), 11, "手动产物不自动删除（ADR-020 §2.1-1）");
+    assert!(
+        backups.iter().all(|item| item["kind"] == "manual"),
+        "手动产物 kind=manual"
+    );
     assert!(
         list["backups"][0]["created_at"].as_i64().unwrap_or(0)
-            >= list["backups"][9]["created_at"].as_i64().unwrap_or(0),
+            >= list["backups"][10]["created_at"].as_i64().unwrap_or(0),
         "清单按最新在前排序"
     );
-    write_evidence("retention", &json!({ "kept": backups.len() }));
+    write_evidence(
+        "retention",
+        &json!({ "kept": backups.len(), "kind": "manual", "auto_pruned": 0 }),
+    );
 }
 
 // ===== 命令层（tauri mock invoke）：严格解析 + canonicalize 拒绝 + 重启旗标 =====

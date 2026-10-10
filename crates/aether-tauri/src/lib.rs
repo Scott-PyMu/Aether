@@ -15,6 +15,7 @@
 
 pub mod adapter_executor;
 pub mod audit_bridge;
+pub mod backup_auto;
 pub mod backup_control;
 pub mod bindings;
 pub mod config;
@@ -519,14 +520,23 @@ fn build_backend(
     let inner: std::sync::Arc<dyn ipc::IpcBackend> =
         std::sync::Arc::new(runtime_control::RuntimeControlBackend::new(health, control));
     // M3-04（D13）：备份/恢复命令面装饰器（存储就绪时接线；降级启动时保留内层语义）。
+    // M5-02（D13/ADR-020）：自动备份调度器随备份后端接线（后台任务，不阻塞主流程）；
+    // 注册进退出编排，退出期间不再触发新备份。
     let inner: std::sync::Arc<dyn ipc::IpcBackend> = match backup_deps {
-        Some((reads, write)) => std::sync::Arc::new(backup_control::BackupControlBackend::new(
-            inner,
-            data_dir.clone(),
-            Some(reads),
-            Some(write),
-            handle.clone(),
-        )),
+        Some((reads, write)) => {
+            let backend = std::sync::Arc::new(backup_control::BackupControlBackend::new(
+                inner,
+                data_dir.clone(),
+                Some(reads),
+                Some(write),
+                handle.clone(),
+            ));
+            if let (Some(orchestrator), Some(task)) = (&orchestrator, backend.spawn_auto_backup(&handle))
+            {
+                orchestrator.install_monitor("backup_auto", task);
+            }
+            backend as std::sync::Arc<dyn ipc::IpcBackend>
+        }
         None => inner,
     };
     // M3-05（D11/D13）：诊断/容量装饰器——诊断包导出（脱敏 + 日志/健康/库摘要整合）、

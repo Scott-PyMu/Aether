@@ -1,9 +1,12 @@
 //! 备份与恢复（设计 D13 / 实施计划 M3-04）。
 //!
-//! 范围（P0 手动备份）：
-//! - 手动备份：`VACUUM INTO` 产物（已 checkpoint 的单文件，**不含 `-wal`/`-shm`**），
-//!   保留最近 [`BACKUP_RETENTION`] 份；经只读连接执行（D4：降级/安全模式下备份入口
-//!   保持可用）；
+//! 范围（P0 手动备份 + M5-02 自动备份共用执行路径）：
+//! - 备份：`VACUUM INTO` 产物（已 checkpoint 的单文件，**不含 `-wal`/`-shm`**）；
+//!   M5-02 起经 [`create_backup_file_verified`] 写出（临时文件 → `quick_check` +
+//!   schema 校验 → 原子 rename；ADR-020 §2.1 实现要点 1/2），失败不产生半成品；
+//!   产物来源经 [`BackupRecord::kind`] 区分（`manual`/`auto`），滚动清理仅约束
+//!   `auto`（[`prune_plan_for_kind`]；手动产物不自动删除，ADR-020 §2.1-1）；
+//!   经只读连接执行（D4：降级/安全模式下备份入口保持可用）；
 //! - 恢复七步（D13，步骤 1/7 由调用方承担——来源选择、核心重启与审计）：
 //!   2 校验候选（只读打开 + `quick_check` + `schema_migrations` 版本）→ 3 停写
 //!   （调用方回调；启动序列内执行时天然无写者）→ 4 现场保护（当前库改名
@@ -28,7 +31,8 @@ use crate::error::StoreError;
 use crate::migration::EMBEDDED_MIGRATIONS;
 use crate::store::{quick_check, Store};
 
-/// 备份保留份数（D13：手动备份保留最近 10 份）。
+/// 自动备份产物保留份数缺省值（D13/ADR-020：`backup.auto.retention` 缺省 10；
+/// 手动产物不自动删除）。
 pub const BACKUP_RETENTION: usize = 10;
 /// 备份/恢复空间系数分子（ADR-003 决策 19：可用空间 ≥ 当前 `db+wal` ×1.2）。
 pub const SPACE_MARGIN_NUMERATOR: u64 = 6;
@@ -40,15 +44,19 @@ pub const PRE_RESTORE_INFIX: &str = ".pre-restore-";
 pub const RESTORE_JOURNAL_SUFFIX: &str = ".restore-journal.json";
 /// 恢复临时文件标记（同目录内 `aether.db.restore-tmp-<ts>`）。
 pub const RESTORE_TEMP_INFIX: &str = ".restore-tmp-";
+/// 备份产物临时文件标记（M5-02：`<产物名>.backup-tmp-<ts>-<id尾>`，同目录原子 rename）。
+pub const BACKUP_TEMP_INFIX: &str = ".backup-tmp-";
 
-/// 备份台账记录（`backups` 表 + 文件元数据；`kind` = `internal`/`external`）。
+/// 备份台账记录（`backups` 表 + 文件元数据；`kind` = `manual`/`auto`）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BackupRecord {
     pub id: String,
     pub path: PathBuf,
     pub size_bytes: u64,
     pub encrypted: bool,
-    /// `internal`（应用 `backups` 目录）或 `external`（用户选择的外部目录，M3-04 登记）。
+    /// 产物来源（ADR-020 §2.1-1）：`manual`（手动备份，不自动删除）或 `auto`（自动
+    /// 备份，按 `backup.auto.retention` 滚动）。P0 的 `internal`/`external` 位置
+    /// 语义已按 ADR-020 修订（目录位置由 `path` 判定）。
     pub kind: String,
     pub created_at: i64,
 }
@@ -112,6 +120,21 @@ pub fn prune_plan(records: &[BackupRecord], retention: usize) -> Vec<BackupRecor
     ordered.into_iter().take(excess).cloned().collect()
 }
 
+/// 按来源滚动的保留策略（M5-02/ADR-020 §2.1-1）：仅统计 `kind` 匹配的记录，
+/// 超过 `retention` 份时返回最旧的待删除项（手动产物不自动删除）。
+pub fn prune_plan_for_kind(
+    records: &[BackupRecord],
+    kind: &str,
+    retention: usize,
+) -> Vec<BackupRecord> {
+    let filtered: Vec<BackupRecord> = records
+        .iter()
+        .filter(|record| record.kind == kind)
+        .cloned()
+        .collect();
+    prune_plan(&filtered, retention)
+}
+
 /// 通过已打开的连接执行 `VACUUM INTO`（只读连接可用；目标文件必须不存在）。
 ///
 /// 返回产物字节数。降级/安全模式（只读）下备份入口仍可用（D4）。
@@ -125,6 +148,103 @@ pub fn create_backup_file(conn: &Connection, dest: &Path) -> Result<u64, StoreEr
         path: dest.to_path_buf(),
     })?;
     conn.execute("VACUUM INTO ?1", [dest_str])?;
+    Ok(fs::metadata(dest)?.len())
+}
+
+/// 备份产物临时文件路径（`<dest>.backup-tmp-<ts>-<id尾>`；与产物同目录保证原子 rename）。
+pub fn backup_temp_path(dest: &Path, created_at_ms: i64, id: &str) -> PathBuf {
+    let name = dest
+        .file_name()
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_else(|| "aether.db".to_owned());
+    let tail: String = id.chars().rev().take(6).collect::<Vec<_>>().into_iter().rev().collect();
+    dest.with_file_name(format!("{name}{BACKUP_TEMP_INFIX}{created_at_ms}-{tail}"))
+}
+
+/// 清理目标目录内历史备份临时文件（崩溃/中断残留；返回删除数）。
+pub fn cleanup_backup_temps(dir: &Path) -> usize {
+    let Ok(listing) = fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut removed = 0usize;
+    for entry in listing.flatten() {
+        let file_name = entry.file_name();
+        let name = file_name.to_string_lossy();
+        if name.contains(BACKUP_TEMP_INFIX) && fs::remove_file(entry.path()).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+/// 写出并校验备份产物（M5-02/ADR-020 §2.1 实现要点 1/2）：
+/// `VACUUM INTO` 临时文件 → 只读打开 + `quick_check` + `schema_migrations` 非空校验
+/// → `sync_all` + 原子 rename。任一步失败清理临时文件，**不产生半成品**；
+/// 保留滚动前以本校验证明新产物可用，再删最旧（调用方）。
+pub fn create_backup_file_verified(
+    conn: &Connection,
+    dest: &Path,
+    created_at_ms: i64,
+    id: &str,
+) -> Result<u64, StoreError> {
+    if dest.exists() {
+        return Err(StoreError::BackupTargetExists {
+            path: dest.to_path_buf(),
+        });
+    }
+    let temp = backup_temp_path(dest, created_at_ms, id);
+    if temp.exists() {
+        let _ = fs::remove_file(&temp);
+    }
+    let outcome = write_and_verify(conn, &temp, dest);
+    if outcome.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    outcome
+}
+
+fn write_and_verify(conn: &Connection, temp: &Path, dest: &Path) -> Result<u64, StoreError> {
+    let temp_str = temp.to_str().ok_or_else(|| StoreError::NonUtf8Path {
+        path: temp.to_path_buf(),
+    })?;
+    conn.execute("VACUUM INTO ?1", [temp_str])?;
+
+    // 产物可用性校验（quick_check + 迁移记录非空）；失败即拒绝 rename。
+    let connection = Connection::open_with_flags(
+        temp,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|error| StoreError::Internal {
+        reason: format!("备份产物只读打开失败（{}）：{error}", temp.display()),
+    })?;
+    let check = quick_check(&connection);
+    if !check.ok {
+        return Err(StoreError::Internal {
+            reason: format!("备份产物 quick_check 失败：{}", check.summary()),
+        });
+    }
+    let version: i64 = match connection.query_row(
+        "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+        [],
+        |row| row.get(0),
+    ) {
+        Ok(version) => version,
+        Err(error) => {
+            return Err(StoreError::Internal {
+                reason: format!("备份产物迁移记录读取失败：{error}"),
+            });
+        }
+    };
+    drop(connection);
+    if version <= 0 {
+        return Err(StoreError::Internal {
+            reason: "备份产物无迁移记录（schema_migrations 为空，拒绝产物）".to_owned(),
+        });
+    }
+
+    // 耐久化 + 原子就位（FlushFileBuffers 需要写句柄，Windows 只读句柄会拒绝）。
+    fs::OpenOptions::new().write(true).open(temp)?.sync_all()?;
+    fs::rename(temp, dest)?;
     Ok(fs::metadata(dest)?.len())
 }
 
@@ -813,7 +933,7 @@ mod tests {
             path: PathBuf::from(format!("{id}.db")),
             size_bytes: 1,
             encrypted: false,
-            kind: "internal".to_owned(),
+            kind: "manual".to_owned(),
             created_at,
         }
     }
@@ -838,6 +958,83 @@ mod tests {
         assert_eq!(plan[0].created_at, 0);
         assert_eq!(plan[1].created_at, 1);
         assert!(prune_plan(&records[..10], 10).is_empty());
+    }
+
+    /// M5-02/ADR-020 §2.1-1：滚动清理仅约束 `auto`，手动产物不自动删除。
+    #[test]
+    fn prune_plan_for_kind_only_prunes_matching_kind() {
+        let mut records: Vec<BackupRecord> = (0..12)
+            .map(|index| {
+                let mut item = record(&format!("a{index:02}"), index);
+                item.kind = "auto".to_owned();
+                item
+            })
+            .collect();
+        let mut manual = record("m00", 0);
+        manual.kind = "manual".to_owned();
+        records.push(manual);
+
+        let plan = prune_plan_for_kind(&records, "auto", 10);
+        assert_eq!(plan.len(), 2, "仅自动类超量部分待清理");
+        assert!(plan.iter().all(|item| item.kind == "auto"));
+        assert!(
+            plan.iter().all(|item| item.id != "m00"),
+            "手动产物不得进入清理计划"
+        );
+        assert!(prune_plan_for_kind(&records, "manual", 10).is_empty());
+    }
+
+    /// M5-02/ADR-020 实现要点 1/2：临时文件 + 校验 + 原子 rename；失败无半成品。
+    #[test]
+    fn verified_backup_writes_atomically_and_rejects_invalid_source() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = dir.path().join("aether.db");
+        let store = Store::open(&db).unwrap();
+        let out = dir.path().join("out");
+        std::fs::create_dir_all(&out).unwrap();
+
+        let dest = out.join("aether-1.db");
+        let size =
+            create_backup_file_verified(store.connection(), &dest, 1, "01J0000000000000000000000AB")
+                .unwrap();
+        assert!(size > 0);
+        assert!(dest.exists());
+        assert_eq!(cleanup_backup_temps(&out), 0, "成功路径无临时残留");
+        let report = validate_candidate(&dest, program_schema_version()).unwrap();
+        assert_eq!(report.schema_version, program_schema_version());
+        assert_eq!(report.size_bytes, size);
+
+        // 失败注入：无迁移记录的空库 → 拒绝且不产生半成品/临时文件。
+        let empty = dir.path().join("empty.db");
+        let empty_connection = Connection::open(&empty).unwrap();
+        let bad_dest = out.join("bad.db");
+        let error =
+            create_backup_file_verified(&empty_connection, &bad_dest, 2, "01J0000000000000000000000CD")
+                .unwrap_err();
+        assert!(matches!(error, StoreError::Internal { .. }), "{error}");
+        assert!(!bad_dest.exists(), "校验失败不得就位产物");
+        assert_eq!(cleanup_backup_temps(&out), 0, "校验失败必须清理临时文件");
+
+        // 目标已存在 → 拒绝（不覆盖既有产物）。
+        let error =
+            create_backup_file_verified(store.connection(), &dest, 3, "01J0000000000000000000000EF")
+                .unwrap_err();
+        assert_eq!(error.code(), "backup_target_exists");
+    }
+
+    /// M5-02：临时文件命名含时间戳与 id 尾缀，可被清理例程识别。
+    #[test]
+    fn backup_temp_path_matches_cleanup_scan() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let dest = dir.path().join("aether-7.db");
+        let temp = backup_temp_path(&dest, 7, "01J00000000000000000000ABCD");
+        assert_eq!(
+            temp.file_name().unwrap().to_string_lossy(),
+            "aether-7.db.backup-tmp-7-00ABCD"
+        );
+        std::fs::write(&temp, b"partial").unwrap();
+        assert_eq!(cleanup_backup_temps(dir.path()), 1);
+        assert!(!temp.exists());
     }
 
     #[test]

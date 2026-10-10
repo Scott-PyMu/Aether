@@ -1,15 +1,19 @@
-//! 备份/恢复命令后端（M3-04；设计 D13、ADR-003 决策 19、ADR-004 命令面）。
+//! 备份/恢复命令后端（M3-04；M5-02 自动备份接线；设计 D13、ADR-003 决策 19、
+//! ADR-004 命令面、ADR-020）。
 //!
 //! 覆盖 D7 命令面中的备份族（薄适配，业务语义全部在 `aether-store` 的恢复引擎）：
-//! - `backup_create`：手动备份（`VACUUM INTO` 经**只读连接**，D4 降级期入口可用）；
-//!   目标目录缺省为数据目录 `backups/`，或用户选择的外部目录（D13）；写出前校验
-//!   目标可写 + 可用空间 ≥ 当前 `db+wal` ×1.2（ADR-003 决策 19，不足拒绝并提示）；
-//!   登记 `backups` 台账并执行保留策略（最近 [`aether_store::BACKUP_RETENTION`] 份）；
-//! - `backup_list`：内部备份清单（`backups` 表，最新在前）+ 容量状态（2GB/5GB，D13）；
+//! - `backup_create`：**手动备份**（`kind='manual'`，不自动删除；M5-02 起与自动备份
+//!   共用执行路径 [`crate::backup_auto::execute_backup`]：空间护栏 → `VACUUM INTO`
+//!   临时文件 + `quick_check` + 原子 rename → 台账登记）；
+//! - `backup_list`：备份清单（`backups` 表，最新在前）+ 容量状态（2GB/5GB，D13）
+//!   + `auto` 段（M5-02/ADR-018 附录 A-5：开关/频率/保留/最近结果/连续失败/下次排期）；
 //! - `backup_restore`：候选校验（内部 id / 外部 `.db`；只读打开 + `quick_check` +
 //!   迁移版本检查，高版本拒绝并提示升级）→ 登记恢复现场日志（D13 七步的 1–2 步）
 //!   → 命令层请求应用重启，第 3–6 步在下次启动序列（无写者窗口）执行；审计在
-//!   请求与启动结果两处写入（D13 第 7 步）。
+//!   请求与启动结果两处写入（D13 第 7 步）；
+//! - 自动备份调度器（[`crate::backup_auto::AutoBackup`]）由组合根经
+//!   [`BackupControlBackend::spawn_auto_backup`] 启动（不阻塞主流程）；本后端提供
+//!   `backup_list.auto` 与诊断包状态投影（`backup_auto_status`）。
 //!
 //! 桥接口径与 `session_backend` 一致：async 存储操作 spawn 到核心运行时 +
 //! `std::sync::mpsc` 同步等待（不阻塞运行时线程）。
@@ -19,16 +23,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use aether_store::backup::{
-    program_schema_version, prune_plan, request_restore, required_space_bytes, validate_candidate,
-    BackupRecord, BACKUP_RETENTION,
-};
+use aether_control::{SharedClock, SystemClock};
+use aether_store::backup::{program_schema_version, request_restore, validate_candidate};
 use aether_store::{
-    create_backup_file, recover_or_apply_pending_restore, AuditLogRecord, ReadPool,
-    RestoreStartupOutcome, StoreCommand, StoreError, WriteQueue,
+    recover_or_apply_pending_restore, AuditLogRecord, ReadPool, RestoreStartupOutcome, StoreCommand,
+    StoreError, WriteQueue,
 };
 use serde_json::{json, Value};
 
+use crate::backup_auto::{execute_backup, AutoBackup, AutoBackupDeps, BackupJob};
+pub use crate::backup_auto::{BACKUP_KIND_AUTO, BACKUP_KIND_MANUAL};
 use crate::ipc::backend::IpcBackend;
 use crate::ipc::dto::{
     AppRestartRequest, BackupCreateRequest, BackupRestoreRequest, BackupSource,
@@ -49,10 +53,6 @@ pub const CAPACITY_CRITICAL_BYTES: u64 = 5 * 1024 * 1024 * 1024;
 pub const CAPACITY_WARN_ENV: &str = "AETHER_CAPACITY_WARN_BYTES";
 /// 容量强提示阈值覆盖环境变量（M3-05 DoD2）。
 pub const CAPACITY_CRITICAL_ENV: &str = "AETHER_CAPACITY_CRITICAL_BYTES";
-/// 备份台账 `kind`：应用 `backups` 目录。
-pub const BACKUP_KIND_INTERNAL: &str = "internal";
-/// 备份台账 `kind`：用户选择的外部目录（M3-04 登记）。
-pub const BACKUP_KIND_EXTERNAL: &str = "external";
 /// 审计动作（D13 第 7 步）。
 pub const AUDIT_ACTION_RESTORE: &str = "backup.restore";
 
@@ -157,6 +157,10 @@ pub struct BackupControlBackend {
     timeout: Duration,
     space: Arc<dyn SpaceProbe>,
     capacity: CapacityConfig,
+    /// 自动/手动备份共享互斥锁（同一时刻最多 1 个备份任务；ADR-020 §2.1-5）。
+    run_lock: Arc<tokio::sync::Mutex<()>>,
+    /// 自动备份调度器（读写均就绪时接线；M5-02）。
+    auto: Option<Arc<AutoBackup>>,
 }
 
 impl BackupControlBackend {
@@ -167,6 +171,18 @@ impl BackupControlBackend {
         write: Option<WriteQueue>,
         handle: tokio::runtime::Handle,
     ) -> Self {
+        let run_lock = Arc::new(tokio::sync::Mutex::new(()));
+        let auto = match (reads.clone(), write.clone()) {
+            (Some(reads), Some(write)) => Some(Arc::new(AutoBackup::new(AutoBackupDeps {
+                data_dir: data_dir.clone(),
+                reads,
+                write,
+                space: Arc::new(NativeSpaceProbe),
+                clock: Arc::new(SystemClock),
+                run_lock: Arc::clone(&run_lock),
+            }))),
+            _ => None,
+        };
         Self {
             inner,
             data_dir,
@@ -176,13 +192,27 @@ impl BackupControlBackend {
             timeout: BACKUP_COMMAND_TIMEOUT,
             space: Arc::new(NativeSpaceProbe),
             capacity: CapacityConfig::from_env(),
+            run_lock,
+            auto,
         }
     }
 
-    /// 注入空间探针（测试/故障注入：覆盖「空间不足 / 不可写」分支）。
+    /// 注入空间探针（测试/故障注入：覆盖「空间不足 / 不可写」分支；转发调度器）。
     #[must_use]
     pub fn with_space_probe(mut self, space: Arc<dyn SpaceProbe>) -> Self {
+        if let Some(auto) = &self.auto {
+            auto.set_space_probe(Arc::clone(&space));
+        }
         self.space = space;
+        self
+    }
+
+    /// 注入时钟（测试：调度器排期/状态投影；M5-02 DoD1 时钟注入）。
+    #[must_use]
+    pub fn with_clock(mut self, clock: SharedClock) -> Self {
+        if let Some(auto) = &self.auto {
+            self.auto = Some(Arc::new(auto.as_ref().clone().with_clock(clock)));
+        }
         self
     }
 
@@ -196,6 +226,19 @@ impl BackupControlBackend {
     /// 当前容量阈值（诊断包与巡检复用同一注入实例）。
     pub fn capacity_config(&self) -> CapacityConfig {
         self.capacity
+    }
+
+    /// 自动备份调度器句柄（测试驱动 `tick`/`run_once`；生产由组合根启动）。
+    pub fn auto_backup(&self) -> Option<Arc<AutoBackup>> {
+        self.auto.clone()
+    }
+
+    /// 启动自动备份后台调度器（M5-02；不阻塞主流程；`None` = 未接线）。
+    pub fn spawn_auto_backup(
+        self: &Arc<Self>,
+        handle: &tokio::runtime::Handle,
+    ) -> Option<tokio::task::JoinHandle<()>> {
+        self.auto.as_ref().map(|auto| auto.spawn(handle))
     }
 
     /// 数据库路径（数据目录 `aether.db`，M1-06 约定）。
@@ -264,6 +307,11 @@ impl BackupControlBackend {
 }
 
 impl IpcBackend for BackupControlBackend {
+    /// M3-04/D13 + M5-02/ADR-020：**手动备份**（`kind='manual'`，不自动删除）。
+    ///
+    /// 目标目录缺省为数据目录 `backups/`，或用户选择的外部目录（D13）；空间护栏
+    /// 与原子写出（`VACUUM INTO` 临时文件 + `quick_check` + rename）与自动备份共用
+    /// [`execute_backup`]；与自动备份经同一互斥锁串行。
     fn backup_create(
         &self,
         _request: &BackupCreateRequest,
@@ -273,8 +321,8 @@ impl IpcBackend for BackupControlBackend {
         let write = self.write_required()?;
 
         // 目标目录：外部（系统选择器 canonicalize 结果）或默认 `backups/`。
-        let (target, kind) = match canonical_target_dir {
-            Some(dir) => (dir.to_path_buf(), BACKUP_KIND_EXTERNAL),
+        let target = match canonical_target_dir {
+            Some(dir) => dir.to_path_buf(),
             None => {
                 let dir = self.default_backup_dir();
                 std::fs::create_dir_all(&dir).map_err(|error| {
@@ -283,97 +331,29 @@ impl IpcBackend for BackupControlBackend {
                         dir.display()
                     ))
                 })?;
-                (dir, BACKUP_KIND_INTERNAL)
+                dir
             }
         };
-
-        // 空间护栏（ADR-003 决策 19）：可写 + 可用空间 ≥ 当前 db+wal ×1.2，不足拒绝并提示。
-        self.space.ensure_writable(&target).map_err(|message| {
-            IpcError::invalid_value(format!("{message}（backup_target_not_writable）"))
-        })?;
-        let db_bytes = file_len(&self.db_path());
-        let wal_bytes = file_len(&wal_path(&self.db_path()));
-        let required = required_space_bytes(db_bytes, wal_bytes);
-        let available = self.space.available_bytes(&target).map_err(|message| {
-            IpcError::invalid_value(format!(
-                "目标空间探测失败（backup_space_unknown）：{message}"
-            ))
-        })?;
-        if available < required {
-            return Err(IpcError::invalid_value(format!(
-                "目标可用空间不足（backup_space_insufficient）：可用 {available} 字节 < 需求 {required} 字节（当前 db+wal 的 1.2 倍）；请选择空间充足的目录"
-            )));
-        }
 
         let created_at = now_ms();
         let id = ulid::Ulid::new().to_string();
-        let file_name = aether_store::backup::backup_file_name_for(&target, created_at, &id);
-        let dest = target.join(&file_name);
-        let dest_for_task = dest.clone();
-        let reads_for_task = reads.clone();
-        let size_bytes = self.call(async move {
-            reads_for_task
-                .with_connection(move |connection| create_backup_file(connection, &dest_for_task))
-                .await
-                .map_err(|error| IpcError::internal(format!("备份写出失败：{error}")))
+        let db_path = self.db_path();
+        let space = Arc::clone(&self.space);
+        let lock = Arc::clone(&self.run_lock);
+        let outcome = self.call(async move {
+            let job = BackupJob {
+                target: &target,
+                kind: BACKUP_KIND_MANUAL,
+                auto_retention: None,
+                created_at,
+                id: &id,
+            };
+            execute_backup(&reads, &write, &db_path, &lock, space.as_ref(), &job).await
         })?;
-
-        let record = BackupRecord {
-            id: id.clone(),
-            path: dest,
-            size_bytes,
-            encrypted: false,
-            kind: kind.to_owned(),
-            created_at,
-        };
-
-        // 登记台账（经单写队列；AGENTS §2.4）。
-        let record_for_task = record.clone();
-        let write_for_task = write.clone();
-        self.call(async move {
-            write_for_task
-                .execute(StoreCommand::InsertBackup {
-                    record: record_for_task,
-                })
-                .await
-                .map(|_| ())
-                .map_err(|error| IpcError::internal(format!("备份台账登记失败：{error}")))
-        })?;
-
-        // 保留策略（D13：保留最近 10 份）：删除最旧的行与文件。
-        let reads_for_list = reads.clone();
-        let all = self.call(async move {
-            reads_for_list
-                .backups()
-                .await
-                .map_err(|error| IpcError::internal(format!("备份清单读取失败：{error}")))
-        })?;
-        let mut pruned: Vec<String> = Vec::new();
-        for old in prune_plan(&all, BACKUP_RETENTION) {
-            let write_for_delete = write.clone();
-            let old_id = old.id.clone();
-            self.call(async move {
-                write_for_delete
-                    .execute(StoreCommand::DeleteBackup { id: old_id })
-                    .await
-                    .map(|_| ())
-                    .map_err(|error| IpcError::internal(format!("备份台账清理失败：{error}")))
-            })?;
-            if old.path.exists() {
-                if let Err(error) = std::fs::remove_file(&old.path) {
-                    tracing::warn!(
-                        path = %old.path.display(),
-                        error = %error,
-                        "保留策略删除备份文件失败（台账已清理）"
-                    );
-                }
-            }
-            pruned.push(old.id);
-        }
 
         Ok(json!({
-            "backup": record,
-            "pruned": pruned,
+            "backup": outcome.record,
+            "pruned": outcome.pruned,
         }))
     }
 
@@ -389,10 +369,34 @@ impl IpcBackend for BackupControlBackend {
         let db_bytes = file_len(&self.db_path());
         let wal_bytes = file_len(&wal_path(&self.db_path()));
         let capacity = self.capacity.to_json(db_bytes, wal_bytes);
-        Ok(json!({
+        let auto = match &self.auto {
+            Some(auto) => {
+                let auto = Arc::clone(auto);
+                Some(self.call(async move { auto.auto_segment().await })?)
+            }
+            None => None,
+        };
+        let mut value = json!({
             "backups": all,
             "capacity": capacity,
-        }))
+        });
+        if let Some(auto) = auto {
+            if let Some(object) = value.as_object_mut() {
+                object.insert("auto".to_owned(), auto);
+            }
+        }
+        Ok(value)
+    }
+
+    /// M5-02（诊断包 `backup_auto` 段）：自动备份运行状态（内部接线，非 IPC 命令）。
+    fn backup_auto_status(&self) -> Result<Option<Value>, IpcError> {
+        match &self.auto {
+            Some(auto) => {
+                let auto = Arc::clone(auto);
+                self.call(async move { auto.status().await }).map(Some)
+            }
+            None => Ok(None),
+        }
     }
 
     /// D13/ADR-004：候选校验（第 1–2 步）→ 登记恢复现场日志 → 命令层请求重启；
@@ -623,7 +627,7 @@ pub fn write_boot_restore_audit(
     }
 }
 
-fn wal_path(db_path: &Path) -> PathBuf {
+pub(crate) fn wal_path(db_path: &Path) -> PathBuf {
     PathBuf::from(format!("{}-wal", db_path.display()))
 }
 

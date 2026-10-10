@@ -26,12 +26,13 @@ pub mod store;
 pub mod write_queue;
 
 pub use backup::{
-    backup_file_name, backup_file_name_for, create_backup_file, execute_restore, finalize_restore,
-    program_schema_version, prune_plan, read_restore_journal, recover_or_apply_pending_restore,
-    request_restore, required_space_bytes, restore_journal_path, rollback_scene,
-    validate_candidate, write_restore_journal, BackupRecord, CandidateReport, RestoreFault,
-    RestoreJournal, RestoreReport, RestoreRequest, RestoreStartupOutcome, RestoreStep,
-    RestoreStepRecord, SceneProtection, BACKUP_RETENTION, PRE_RESTORE_INFIX,
+    backup_file_name, backup_file_name_for, backup_temp_path, cleanup_backup_temps,
+    create_backup_file, create_backup_file_verified, execute_restore, finalize_restore,
+    program_schema_version, prune_plan, prune_plan_for_kind, read_restore_journal,
+    recover_or_apply_pending_restore, request_restore, required_space_bytes, restore_journal_path,
+    rollback_scene, validate_candidate, write_restore_journal, BackupRecord, CandidateReport,
+    RestoreFault, RestoreJournal, RestoreReport, RestoreRequest, RestoreStartupOutcome, RestoreStep,
+    RestoreStepRecord, SceneProtection, BACKUP_RETENTION, BACKUP_TEMP_INFIX, PRE_RESTORE_INFIX,
     RESTORE_JOURNAL_SUFFIX, RESTORE_TEMP_INFIX, SPACE_MARGIN_DENOMINATOR, SPACE_MARGIN_NUMERATOR,
 };
 

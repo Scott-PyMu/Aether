@@ -1,12 +1,13 @@
 /**
- * 备份与恢复页（M3-04；设计 D13，UI-UX S-06/§7.3）。
+ * 备份与恢复页（M3-04；M5-02 自动备份状态；设计 D13、ADR-020，UI-UX S-06/§7.3）。
  *
  * - 覆盖层管理视图（`overlay-backup` + `overlay-back`；由 App 视图状态机管理，不卸载
  *   工作台状态）；
  * - 手动备份：内部（默认 `backups/`）或外部目录（系统目录选择器 → `target_dir`）；
  *   空间不足由核心拒绝并在页面提示（ADR-003 决策 19）；
- * - 备份清单（`backup-item`：`data-backup-id`/`data-kind`）+ 容量状态
+ * - 备份清单（`backup-item`：`data-backup-id`/`data-kind` manual|auto）+ 容量状态
  *   （`capacity-status`：`data-level` ok/warn/critical，D13 2GB/5GB）；
+ * - 自动备份状态（`backup-auto-status`：开关/频率/保留/最近运行/下次排期；M5-02）；
  * - 恢复：内部条目或外部 `.db` 路径 → 二次确认（`backup-restore-confirm`）→
  *   核心登记恢复请求（`restart_required`）→ 应用重启后由启动序列执行七步 3–6。
  */
@@ -15,6 +16,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   backupIpc,
   formatBytes,
+  type BackupAutoSegment,
   type BackupCapacity,
   type BackupIpc,
   type BackupRecord,
@@ -41,6 +43,19 @@ type PendingRestore =
   | { source: "internal"; id: string }
   | { source: "external"; path: string };
 
+/** 时间展示（毫秒 epoch；`null` = 无）。 */
+function formatTimestamp(ms: number | null): string {
+  if (ms === null || !Number.isFinite(ms)) {
+    return "—";
+  }
+  return new Date(ms).toLocaleString();
+}
+
+/** 台账 kind 展示（ADR-020：manual=手动 / auto=自动）。 */
+function kindLabel(kind: string): string {
+  return kind === "auto" ? "自动" : "手动";
+}
+
 export function BackupPage({
   ipc = backupIpc,
   settings = productionSettingsIpc,
@@ -49,6 +64,7 @@ export function BackupPage({
   const [backups, setBackups] = useState<BackupRecord[]>([]);
   const [capacity, setCapacity] = useState<BackupCapacity | null>(null);
   const [reminder, setReminder] = useState<BackupReminder | null>(null);
+  const [auto, setAuto] = useState<BackupAutoSegment | null>(null);
   const [label, setLabel] = useState("");
   const [externalPath, setExternalPath] = useState("");
   const [pending, setPending] = useState<PendingRestore | null>(null);
@@ -66,6 +82,7 @@ export function BackupPage({
       setBackups(response.backups);
       setCapacity(response.capacity);
       setReminder(response.reminder ?? null);
+      setAuto(response.auto ?? null);
     } catch (failure) {
       setError(describeIpcError(failure));
       setErrorCode(ipcErrorCode(failure));
@@ -236,6 +253,33 @@ export function BackupPage({
           </div>
         ) : null}
 
+        {auto ? (
+          <section
+            className="backup-auto"
+            data-testid="backup-auto-status"
+            data-enabled={String(auto.enabled)}
+            data-last-result={auto.last_result ?? ""}
+            data-failures={auto.consecutive_failures}
+            role={auto.consecutive_failures > 0 ? "alert" : undefined}
+          >
+            <h3>自动备份（D13 / ADR-020）</h3>
+            <p>
+              {auto.enabled ? "已启用" : "已停用"}；频率：
+              {auto.frequency === "weekly" ? "每周" : "每天"}；自动产物保留 {auto.retention} 份
+              （手动产物不自动删除）
+            </p>
+            <p>
+              最近运行：{formatTimestamp(auto.last_run_at)}（
+              {auto.last_result === "success"
+                ? "成功"
+                : auto.last_result === "failed"
+                  ? `失败，连续 ${auto.consecutive_failures} 次`
+                  : "暂无"}
+              ）；下次排期：{formatTimestamp(auto.next_run_at)}
+            </p>
+          </section>
+        ) : null}
+
         <section className="backup-create">
           <h3>手动备份</h3>
           <label>
@@ -274,10 +318,12 @@ export function BackupPage({
         </section>
 
         <section className="backup-list-section">
-          <h3>备份清单（保留最近 10 份）</h3>
+          <h3>
+            备份清单（自动产物保留 {auto?.retention ?? 10} 份；手动产物不自动删除）
+          </h3>
           {backups.length === 0 ? (
             <p className="backup-empty" data-testid="backup-empty">
-              暂无备份（手动备份不会自动创建）
+              暂无备份（自动备份默认开启，手动备份随时可创建）
             </p>
           ) : (
             <ul className="backup-list" data-testid="backup-list">
@@ -293,7 +339,7 @@ export function BackupPage({
                     {backup.path}
                   </span>
                   <span className="backup-meta">
-                    {formatBytes(backup.size_bytes)} · {backup.kind === "external" ? "外部" : "内部"} ·{" "}
+                    {formatBytes(backup.size_bytes)} · {kindLabel(backup.kind)} ·{" "}
                     {new Date(backup.created_at).toLocaleString()}
                   </span>
                   <span className="backup-item-actions">

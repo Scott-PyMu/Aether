@@ -175,6 +175,10 @@ record(
   "verify:m4-06（文档与安全收尾：文档齐备/30 场景手册/新成员演练/SBOM 归档/36 命令复查清单/脱敏 0 命中）",
   run(node, [path.join(repoRoot, "scripts", "test", "m4-06", "verify-m4-06.mjs")]),
 );
+record(
+  "verify:m5-02（自动备份：排期时钟注入/运行中一致/仅自动滚动+台账磁盘一致/失败隔离/提醒联动/诊断段；含 release 写延迟基准）",
+  run(node, [path.join(repoRoot, "scripts", "test", "m5-02", "verify-m5-02.mjs")]),
+);
 
 if (!quick) {
   record("verify-coverage-gate", run(node, [path.join(repoRoot, "scripts", "test", "verify-coverage-gate.mjs")]));

@@ -105,6 +105,9 @@ record(
   const read = (relative) => readFileSync(path.join(repoRoot, relative), "utf8");
   const storeBackup = read("crates/aether-store/src/backup.rs");
   const backupControl = read("crates/aether-tauri/src/backup_control.rs");
+  // M5-02：手动/自动共用执行路径迁移至 `backup_auto.rs`（空间护栏/原子写出）；
+  // 行为断言（空间不足拒绝且不写出）仍由 `m3_04_backup_ipc` 集成用例承载。
+  const backupAuto = read("crates/aether-tauri/src/backup_auto.rs");
   const lib = read("crates/aether-tauri/src/lib.rs");
   const sessionBackend = read("crates/aether-tauri/src/session_backend.rs");
   const commands = read("crates/aether-tauri/src/ipc/commands.rs");
@@ -118,7 +121,7 @@ record(
     [storeBackup, "rollback_scene", "失败回滚现场"],
     [storeBackup, "recover_or_apply_pending_restore", "启动序列恢复/中断回滚入口"],
     [storeBackup, "SchemaNewerThanProgram", "高版本候选拒绝（提示升级）"],
-    [backupControl, "required_space_bytes", "空间护栏 db+wal×1.2"],
+    [backupAuto, "required_space_bytes", "空间护栏 db+wal×1.2（M5-02 共用执行路径落点）"],
     [backupControl, "backup_space_insufficient", "空间不足稳定业务码"],
     [backupControl, "backup_candidate_newer", "高版本候选稳定业务码"],
     [backupControl, "boot_apply_pending_restore", "启动序列执行七步 3–6"],

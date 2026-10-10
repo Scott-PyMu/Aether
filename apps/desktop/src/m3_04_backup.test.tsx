@@ -33,7 +33,8 @@ const listResponse: BackupListResponse = {
       path: "C:\\Local\\Aether\\backups\\aether-1.db",
       size_bytes: 2048,
       encrypted: false,
-      kind: "internal",
+      // M5-02/ADR-020：手动产物 kind='manual'（位置语义由 path 判定）。
+      kind: "manual",
       created_at: 1_700_000_000_000,
     },
     {
@@ -41,7 +42,7 @@ const listResponse: BackupListResponse = {
       path: "E:\\external\\aether-2.db",
       size_bytes: 4096,
       encrypted: false,
-      kind: "external",
+      kind: "manual",
       created_at: 1_700_000_001_000,
     },
   ],
@@ -85,7 +86,7 @@ afterEach(() => {
 });
 
 describe("BackupPage", () => {
-  it("渲染备份清单（data-kind）与容量状态（data-level）", async () => {
+  it("渲染备份清单（data-kind=manual）与容量状态（data-level）", async () => {
     const ipc = fakeIpc();
     render(<BackupPage ipc={ipc} onBack={() => {}} />);
 
@@ -93,8 +94,8 @@ describe("BackupPage", () => {
     expect(items).toHaveLength(2);
     const internal = items[0]!;
     const external = items[1]!;
-    expect(internal.getAttribute("data-kind")).toBe("internal");
-    expect(external.getAttribute("data-kind")).toBe("external");
+    expect(internal.getAttribute("data-kind")).toBe("manual");
+    expect(external.getAttribute("data-kind")).toBe("manual");
     expect(internal.getAttribute("data-backup-id")).toBe(
       listResponse.backups[0]!.id,
     );

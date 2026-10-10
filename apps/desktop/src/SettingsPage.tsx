@@ -1,5 +1,5 @@
 /**
- * 设置页（M3-05 + M3-08；设计 D10/D13/D14，UI-UX S-05/§7.3）。
+ * 设置页（M3-05 + M3-08；M5-02 自动备份；设计 D10/D13/D14，UI-UX S-05/§7.3）。
  *
  * M3-05 范围：
  * - 数据目录只读展示（`settings-data-dir`）；
@@ -13,12 +13,23 @@
  * - `workspace-pick`（复用 `startup_pick_target` 系统选择器）→ `workspace-root`
  *   输入展示/可编辑 → `workspace-apply`（`workspace_set`）→ `workspace-result`；
  * - P0 仅对新会话生效（记忆注入 + 权限基准目录）；已有会话不迁移。
+ *
+ * M5-02 范围（自动备份设置，D13/ADR-020）：
+ * - `settings-backup-auto`（开关 / 频率 / 保留份数，经 `settings_set` 持久化；
+ *   调度器每周期读取设置生效，无需重启）。
  */
 import { useCallback, useEffect, useState } from "react";
 
 import { ProvidersPage } from "./ProvidersPage";
 import { providersIpc as productionProvidersIpc, type ProvidersIpc } from "./providers";
-import { BACKUP_REMINDER_KEY, settingsIpc, type SettingsIpc } from "./settings";
+import {
+  BACKUP_AUTO_ENABLED_KEY,
+  BACKUP_AUTO_FREQUENCY_KEY,
+  BACKUP_AUTO_RETENTION_KEY,
+  BACKUP_REMINDER_KEY,
+  settingsIpc,
+  type SettingsIpc,
+} from "./settings";
 import { describeIpcError, ipcErrorCode } from "./startup";
 import { workspaceIpc, type WorkspaceIpc } from "./workspace";
 
@@ -60,6 +71,11 @@ export function SettingsPage({
 }: SettingsPageProps) {
   const [tab, setTab] = useState<SettingsTab>("general");
   const [reminderEnabled, setReminderEnabled] = useState<boolean | null>(null);
+  // M5-02：自动备份设置（开关/频率/保留；缺省与核心登记一致）。
+  const [autoEnabled, setAutoEnabled] = useState(true);
+  const [autoFrequency, setAutoFrequency] = useState<"daily" | "weekly">("daily");
+  const [autoRetention, setAutoRetention] = useState("10");
+  const [autoLoaded, setAutoLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
@@ -92,6 +108,37 @@ export function SettingsPage({
     };
   }, [ipc]);
 
+  // M5-02：读取自动备份设置（缺省语义与核心一致：开启 / daily / 10）。
+  useEffect(() => {
+    let active = true;
+    Promise.all([
+      ipc.get(BACKUP_AUTO_ENABLED_KEY),
+      ipc.get(BACKUP_AUTO_FREQUENCY_KEY),
+      ipc.get(BACKUP_AUTO_RETENTION_KEY),
+    ])
+      .then(([enabled, frequency, retention]) => {
+        if (!active) {
+          return;
+        }
+        setAutoEnabled(enabled.value !== false);
+        setAutoFrequency(frequency.value === "weekly" ? "weekly" : "daily");
+        setAutoRetention(
+          typeof retention.value === "number" ? String(retention.value) : "10",
+        );
+        setAutoLoaded(true);
+      })
+      .catch((failure: unknown) => {
+        if (active) {
+          setError(describeIpcError(failure));
+          setErrorCode(ipcErrorCode(failure));
+          setAutoLoaded(true);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [ipc]);
+
   const toggleReminder = useCallback(
     async (next: boolean) => {
       setBusy(true);
@@ -111,6 +158,32 @@ export function SettingsPage({
     },
     [ipc],
   );
+
+  // M5-02：保存自动备份设置（校验后经 `settings_set` 持久化；调度器下周期生效）。
+  const saveAutoBackup = useCallback(async () => {
+    const retention = Number(autoRetention);
+    if (!Number.isInteger(retention) || retention < 1 || retention > 100) {
+      setError("保留份数必须是 1–100 的整数");
+      setErrorCode("out_of_range");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setErrorCode(null);
+    setNotice(null);
+    try {
+      await ipc.set(BACKUP_AUTO_ENABLED_KEY, autoEnabled);
+      await ipc.set(BACKUP_AUTO_FREQUENCY_KEY, autoFrequency);
+      await ipc.set(BACKUP_AUTO_RETENTION_KEY, retention);
+      setAutoRetention(String(retention));
+      setNotice("自动备份设置已保存（调度器下一周期生效）");
+    } catch (failure) {
+      setError(describeIpcError(failure));
+      setErrorCode(ipcErrorCode(failure));
+    } finally {
+      setBusy(false);
+    }
+  }, [autoEnabled, autoFrequency, autoRetention, ipc]);
 
   const pickWorkspace = useCallback(async () => {
     setError(null);
@@ -234,6 +307,60 @@ export function SettingsPage({
               {notice}
             </p>
           ) : null}
+        </section>
+
+        <section className="settings-section" data-testid="settings-backup-auto">
+          <h3>自动备份（D13 / ADR-020）</h3>
+          <label className="settings-toggle">
+            <input
+              type="checkbox"
+              data-testid="settings-backup-auto-enabled"
+              checked={autoEnabled}
+              disabled={busy || !autoLoaded}
+              onChange={(event) => setAutoEnabled(event.target.checked)}
+            />
+            启用自动备份（缺省开启；错过排期 → 启动后 2 分钟内补备一次）
+          </label>
+          <label className="settings-auto-row">
+            频率
+            <select
+              data-testid="settings-backup-auto-frequency"
+              value={autoFrequency}
+              disabled={busy || !autoLoaded}
+              onChange={(event) =>
+                setAutoFrequency(event.target.value === "weekly" ? "weekly" : "daily")
+              }
+            >
+              <option value="daily">每天（daily）</option>
+              <option value="weekly">每周（weekly）</option>
+            </select>
+          </label>
+          <label className="settings-auto-row">
+            自动产物保留份数（1–100）
+            <input
+              type="number"
+              min={1}
+              max={100}
+              data-testid="settings-backup-auto-retention"
+              value={autoRetention}
+              disabled={busy || !autoLoaded}
+              onChange={(event) => setAutoRetention(event.target.value)}
+            />
+          </label>
+          <div className="settings-actions">
+            <button
+              type="button"
+              data-testid="settings-backup-auto-save"
+              disabled={busy || !autoLoaded}
+              onClick={() => void saveAutoBackup()}
+            >
+              保存自动备份设置
+            </button>
+          </div>
+          <p className="settings-note">
+            自动产物按保留份数滚动；手动产物不自动删除（ADR-020）。失败不产生半成品，
+            冷却后自动重试并记录审计。
+          </p>
         </section>
 
         <section className="settings-section">

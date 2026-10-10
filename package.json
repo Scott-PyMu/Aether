@@ -58,6 +58,7 @@
     "verify:m4-05:installer": "node scripts/test/m4-05/installer-smoke.mjs",
     "verify:m4-06": "node scripts/test/m4-06/verify-m4-06.mjs",
     "verify:m5-01": "node scripts/test/m5-01/verify-m5-01.mjs",
+    "verify:m5-02": "node scripts/test/m5-02/verify-m5-02.mjs",
     "smoke": "node scripts/test/smoke-desktop.mjs",
     "ci:local": "node scripts/test/ci-local.mjs"
   },

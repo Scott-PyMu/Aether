@@ -233,6 +233,17 @@ impl AppShutdown {
         *slot = Some(service);
     }
 
+    /// 追加监控任务（M5-02：自动备份调度器随退出序列停止，退出期间不再触达写队列）。
+    ///
+    /// 与 `new` 传入的 monitors 同域（`run` 首段统一 `abort`）；可在构造后任意时刻接入。
+    pub fn install_monitor(&self, name: impl Into<String>, handle: JoinHandle<()>) {
+        let mut monitors = match self.monitors.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        monitors.push((name.into(), handle));
+    }
+
     /// 退出预算（测试可观测）。
     pub fn budget(&self) -> Duration {
         self.budget

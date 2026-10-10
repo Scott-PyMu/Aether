@@ -6,7 +6,9 @@
 //!   任务 dump（M2-05 缓冲））；整包经 [`aether_security::Redactor`] 递归脱敏，
 //!   写出前后各校验一次「密钥模式 0 命中」（D10；`sk-`/`eyJ`/PEM 家族）；
 //! - `backup_list` 增强：附加 `reminder` 段（D13「7 天未备份提醒（可关闭）」，
-//!   时钟可注入；开关持久化于 `settings` 表）；
+//!   时钟可注入；开关持久化于 `settings` 表）与 M5-02 的 `auto` 段（内层备份后端）；
+//! - 诊断包（M5-02/ADR-020 A-3）：附加 `backup_auto` 段（自动备份最近结果/连续失败数/
+//!   下次排期/补备标记/耗时与体积指标）；
 //! - `settings_get`/`settings_set`：已登记设置键（当前：`backup.reminder`）经
 //!   单写队列持久化（AGENTS §2.4）。
 //!
@@ -385,6 +387,20 @@ impl DiagnosticsControlBackend {
             }
         };
 
+        // M5-02/ADR-020 A-3：自动备份运行状态（最近结果/连续失败数/下次排期/补备标记/
+        // 耗时与体积指标），经内层备份后端的内部状态投影。
+        let backup_auto = match self.inner.backup_auto_status() {
+            Ok(Some(status)) => status,
+            Ok(None) => {
+                notes.push("自动备份调度器未接线：backup_auto 段省略".to_owned());
+                Value::Null
+            }
+            Err(error) => {
+                notes.push(format!("自动备份状态不可用：{error}"));
+                Value::Null
+            }
+        };
+
         let security = self.security.status();
         let bundle = json!({
             "bundle_version": DIAGNOSTICS_BUNDLE_VERSION,
@@ -407,6 +423,7 @@ impl DiagnosticsControlBackend {
             },
             "capacity": self.capacity.to_json(db_bytes, wal_bytes),
             "store": store,
+            "backup_auto": backup_auto,
             "config": { "settings": settings },
             "logs": logs,
             "task_dumps": task_dumps,
@@ -428,7 +445,10 @@ impl DiagnosticsControlBackend {
     }
 }
 
-fn default_setting_value(key: &str) -> Value {
+/// 设置键缺省值（登记口径见 ADR-018 附录 A-6；M5-01 落点）。
+///
+/// `pub(crate)`：自动备份调度器（M5-02）与设置命令共用同一缺省语义。
+pub(crate) fn default_setting_value(key: &str) -> Value {
     match key {
         BACKUP_REMINDER_KEY | BACKUP_AUTO_ENABLED_KEY | BACKUP_ENCRYPTION_ENABLED_KEY => {
             Value::Bool(true)
@@ -519,6 +539,7 @@ impl IpcBackend for DiagnosticsControlBackend {
             "security",
             "capacity",
             "store",
+            "backup_auto",
             "config",
             "logs",
             "task_dumps",

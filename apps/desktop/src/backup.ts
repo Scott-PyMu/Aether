@@ -2,8 +2,10 @@
  * 备份与恢复 IPC 契约（M3-04；设计 D13、ADR-003/ADR-004，UI-UX S-06）。
  *
  * 与 Rust 侧 `backup_control.rs` 的 JSON 形状一致（snake_case）：
- * - `backup_list` → 内部备份清单（`backups` 表，最新在前）+ 容量状态（2GB/5GB）；
- * - `backup_create` → 手动备份（缺省 `backups/`；`target_dir` = 外部目录，D13）；
+ * - `backup_list` → 备份清单（`backups` 表，最新在前）+ 容量状态（2GB/5GB）
+ *   + `reminder`（7 天提醒）+ `auto`（自动备份状态，M5-02/ADR-020）；
+ * - `backup_create` → 手动备份（缺省 `backups/`；`target_dir` = 外部目录，D13；
+ *   `kind='manual'`，不自动删除）；
  * - `backup_restore` → 候选校验并登记恢复请求（`restart_required`：应用重启后由启动
  *   序列在无写者窗口执行 D13 七步 3–6；恢复成功则应用重启）。
  * - 外部目录选择复用 `startup_pick_target`（M1-06 系统目录选择器抽象；不新增命令）。
@@ -18,9 +20,20 @@ export interface BackupRecord {
   path: string;
   size_bytes: number;
   encrypted: boolean;
-  /** `internal`（应用备份目录）/ `external`（用户选择的外部目录）。 */
+  /** 产物来源（ADR-020）：`manual`（手动，不自动删除）/ `auto`（自动，按保留份数滚动）。 */
   kind: string;
   created_at: number;
+}
+
+/** 自动备份状态（M5-02；`backup_list.auto`，ADR-018 附录 A-5 冻结 7 字段）。 */
+export interface BackupAutoSegment {
+  enabled: boolean;
+  frequency: "daily" | "weekly";
+  retention: number;
+  last_run_at: number | null;
+  last_result: "success" | "failed" | null;
+  consecutive_failures: number;
+  next_run_at: number | null;
 }
 
 /** 容量状态（D13：2GB 警告 / 5GB 强烈提示）。 */
@@ -39,11 +52,13 @@ export interface BackupListResponse {
   capacity: BackupCapacity;
   /** M3-05：7 天未备份提醒（核心时钟计算；`enabled` = 设置开关，`due` = 是否到期）。 */
   reminder?: import("./settings").BackupReminder;
+  /** M5-02：自动备份状态（D13/ADR-020；未接线时缺省）。 */
+  auto?: BackupAutoSegment;
 }
 
 export interface BackupCreateResult {
   backup: BackupRecord;
-  /** 保留策略实际清理的备份 id（D13：保留最近 10 份）。 */
+  /** 滚动策略实际清理的自动产物 id（仅 `kind='auto'`；手动产物不自动删除）。 */
   pruned: string[];
 }
 

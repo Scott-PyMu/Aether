@@ -85,9 +85,17 @@ pub trait IpcBackend: Send + Sync + 'static {
         Err(IpcError::not_implemented("backup_create"))
     }
 
-    /// ADR-004：无参数；返回内部备份清单（M3-04 落地）。
+    /// ADR-004：无参数；返回内部备份清单（M3-04 落地；M5-02 增 `auto` 段）。
     fn backup_list(&self) -> Result<Value, IpcError> {
         Err(IpcError::not_implemented("backup_list"))
+    }
+
+    /// M5-02（内部接线，非 IPC 命令）：自动备份运行状态（诊断包 `backup_auto` 段）。
+    ///
+    /// 默认 `None` = 未接线（降级启动/无调度器）；`Some(status)` 由
+    /// `BackupControlBackend` 提供（`backup_list.auto` 的超集：含补备标记与耗时/体积）。
+    fn backup_auto_status(&self) -> Result<Option<Value>, IpcError> {
+        Ok(None)
     }
 
     /// ADR-004/D13：恢复七步；`canonical_external_path` 为外部候选的 canonicalize 结果。
