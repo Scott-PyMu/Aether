@@ -2,10 +2,10 @@
 
 | 项 | 内容 |
 |---|---|
-| 状态 | **已批准**（2026-09-18 复评通过，签署见 §7；实现对齐状态见 §3.3；v0.3（2026-09-23）关闭全部对齐项；v0.4（2026-09-23）附录 B 增行（ADR-009）；v0.5（2026-09-24）附录 B 增行 4 错误码并新增「警告码」子表（ADR-010），不改决策；v0.6（2026-09-30）随 ADR-014 附录 C-5 增行 2 错误码（全集 20 → 22；本附录 B 登记行 8 → 10），不改决策；v0.7（2026-10-08）随 ADR-015 附录 C-5 增行 1 错误码（全集 22 → 23；本附录 B 登记行 10 → 11），不改决策） |
+| 状态 | **已批准**（2026-09-18 复评通过，签署见 §7；实现对齐状态见 §3.3；v0.3（2026-09-23）关闭全部对齐项；v0.4（2026-09-23）附录 B 增行（ADR-009）；v0.5（2026-09-24）附录 B 增行 4 错误码并新增「警告码」子表（ADR-010），不改决策；v0.6（2026-09-30）随 ADR-014 附录 C-5 增行 2 错误码（全集 20 → 22；本附录 B 登记行 8 → 10），不改决策；v0.7（2026-10-08）随 ADR-015 附录 C-5 增行 1 错误码（全集 22 → 23；本附录 B 登记行 10 → 11），不改决策；**v0.8（2026-10-09）随 M5-01 批次（ADR-017–ADR-026）增行 9 错误码（全集 23 → 32；本附录 B 登记行 11 → 20），不改决策**） |
 | 决策日期 | 2026-09-17 |
-| 决策载体 | 已合入：《设计文档》v1.5 → v1.6（随 ADR-007 增量续升 v1.7）；《实施计划与验收标准》v1.11 → v1.12（随升 v1.13；v0.3 随 M3-01 范围修订续升 v1.15）；2026-09-18 随 v1.7/v1.13 冻结；v0.4 随 ADR-009 附录 B 增行（设计文档 v1.9 / 计划 v1.16）；v0.5 随 ADR-010 附录 B 增行（错误码 +4 / 警告码子表；设计文档 v1.10 / 计划 v1.17）；v0.6 随 ADR-014 附录 C-5 附录 B 增行（错误码 +2；全集 16 → 20（ADR-010）→ 22；本附录 B 登记行 8 → 10；设计文档 v1.13 → v1.14 已随 ADR-014 合入；实现随 P1 任务 M7-06）；v0.7 随 ADR-015 附录 C-5 附录 B 增行（错误码 +1；全集 22 → 23；登记行 10 → 11；设计文档 v1.14 → v1.15 已随 ADR-015 合入；实现随 P1 任务 M7-01） |
-| 关联 | 设计文档 D1/D7、A4、评审 #9、附录 B/E；实施计划 M1-06、M1-08 DoD3、M3-01、M4-04、Gate 1、§7 映射；**ADR-014（附录 C-5 增行 2 错误码；实现随 P1 任务 M7-06）**；**ADR-015（附录 C-5 增行 1 错误码；实现随 P1 任务 M7-01）** |
+| 决策载体 | 已合入：《设计文档》v1.5 → v1.6（随 ADR-007 增量续升 v1.7）；《实施计划与验收标准》v1.11 → v1.12（随升 v1.13；v0.3 随 M3-01 范围修订续升 v1.15）；2026-09-18 随 v1.7/v1.13 冻结；v0.4 随 ADR-009 附录 B 增行（设计文档 v1.9 / 计划 v1.16）；v0.5 随 ADR-010 附录 B 增行（错误码 +4 / 警告码子表；设计文档 v1.10 / 计划 v1.17）；v0.6 随 ADR-014 附录 C-5 附录 B 增行（错误码 +2；全集 16 → 20（ADR-010）→ 22；本附录 B 登记行 8 → 10；设计文档 v1.13 → v1.14 已随 ADR-014 合入；实现随 P1 任务 M7-06）；v0.7 随 ADR-015 附录 C-5 附录 B 增行（错误码 +1；全集 22 → 23；登记行 10 → 11；设计文档 v1.14 → v1.15 已随 ADR-015 合入；实现随 P1 任务 M7-01）；**v0.8 随 M5-01 批次（ADR-017–ADR-026）附录 B 增行（错误码 +9；全集 23 → 32；登记行 11 → 20；设计文档 v1.15 → v1.16 已随该批次合入；实现随 P1 任务 M5-05/M6-01/M6-03/M7-02/M7-03/M7-06/M7-07/M7-08/M7-09）** |
+| 关联 | 设计文档 D1/D7、A4、评审 #9、附录 B/E；实施计划 M1-06、M1-08 DoD3、M3-01、M4-04、Gate 1、§7 映射；**ADR-014（附录 C-5 增行 2 错误码；实现随 P1 任务 M7-06）**；**ADR-015（附录 C-5 增行 1 错误码；实现随 P1 任务 M7-01）**；**ADR-017–ADR-026（M5-01 批次附录 B 增行 9 错误码；逐行文本见各 ADR 附录；实现随 M5-05/M6-01/M6-03/M7-02/M7-03/M7-06/M7-07/M7-08/M7-09）** |
 | 取代 | 无（对 D7 命令面的**增量登记**，不修改既有命令语义；v0.3 仅更新状态/挂载，不改决策） |
 | 被取代 | 无 |
 | 回退条件 | 见 §6 |
@@ -113,6 +113,7 @@
 | v0.5 | 2026-09-24 | 附录 B 增行 4 错误码（`builtin_provider_undeletable` / `artifact_path_rejected` / `provider_not_found` / `provider_model_not_found`；全集 16 → 20）并新增「警告码」子表（首项 `thinking_depth_unsupported`）；详 `docs/adr/ADR-010-p0-ui-capability-registration.md`（**补录**：原变更记录缺 v0.5 行，2026-09-30 随 ADR-014 合入一并补齐） | （文档维护，评审裁定） |
 | v0.6 | 2026-09-30 | 附录 B 增 2 行（`provider_unreachable` / `provider_auth_failed`，全集 20 → 22；登记行 8 → 10）；来源 ADR-014 附录 C-5；实现随 P1 任务 M7-06（登记先行，代码未改） | （文档维护，评审放行） |
 | v0.7 | 2026-10-08 | 附录 B 增 1 行（`runtime_busy`，全集 22 → 23；登记行 10 → 11）；来源 ADR-015 附录 C-5；实现随 P1 任务 M7-01（登记先行，代码未改） | （文档维护，评审放行） |
+| v0.8 | 2026-10-09 | 附录 B 增 9 行（`pause_unsupported` / `rule_not_found` / `no_candidate_runtime` / `provider_error` / `session_not_found` / `workspace_not_found` / `workspace_in_use` / `preset_not_found` / `builtin_preset_undeletable`，全集 23 → 32；登记行 11 → 20）；来源 M5-01 批次 ADR-017–ADR-026；警告码子表不新增；实现随 P1 任务（登记先行，代码未改） | （文档维护，批次评审通过） |
 
 ---
 
@@ -181,7 +182,7 @@
 - 取消返回 `{ "target_dir": null }`（不是错误）；选择器不可用/失败返回 `internal`。
 - 不新增 WebView capability 权限面（对话框在 Rust 侧调用）。
 
-## 附录 B：错误码登记表（全集 23；本表登记行 11）
+## 附录 B：错误码登记表（全集 32；本表登记行 20）
 
 | code | 语义 | 触发点 | 前端行为 |
 |---|---|---|---|
@@ -196,10 +197,19 @@
 | `provider_unreachable` | 供应商端点不可达 / 连通性测试超时（10s；连接 5s） | `provider_test`、`provider_models_fetch` | 提示「无法连接供应商（检查网络或 Base URL）」；保留表单内容，可重试 |
 | `provider_auth_failed` | 凭据无效或被拒（401/403 类响应） | `provider_test`、`provider_models_fetch` | 提示「API Key 无效或被拒绝」；高亮 API Key 字段并跳转表单；不自动清空既有 `api_key_ref` |
 | `runtime_busy` | 运行时有在途会话（`creating`/`running`/`paused`/`waiting_permission`），需显式确认终止后禁用 | `runtime_disable`（未带 `confirm_terminate: true`） | 弹二次确认（列出在途会话数）：确认后携 `confirm_terminate: true` 重试；取消保留现状（不禁用、不终止） |
+| `pause_unsupported` | 运行时未声明 `pause_resume` 能力或连接未就绪，拒绝暂停（不产生假暂停） | `session_pause`（能力检查失败） | 暂停按钮置灰 + 提示「当前运行时不支持暂停」；不改变会话状态 |
+| `rule_not_found` | 权限规则不存在 | `rule_update` / `rule_delete` / `rule_toggle`（按 id 查无） | 刷新规则列表 + 提示 |
+| `no_candidate_runtime` | 自动路由无可用候选（全部禁用/无匹配模型/无 ready 候选） | `session_create`（缺省路由路径） | 提示原因与可用运行时清单一旁展示；提供「手动选择」入口；不自动重试 |
+| `provider_error` | 供应商返回非授权类错误（其余 4xx/5xx；message 含供应商状态码） | `provider_test` / `provider_models_fetch` | 提示「供应商返回错误（{status}）」；展开可看详情；可重试；不自动重试 |
+| `session_not_found` | 会话不存在 | `session_search` 引用层 / `session_rename` / `session_delete` / `messages_page`（按 id 查无）；`session_pause`/`session_resume` | 刷新会话列表 + 提示；若来自补读页则回退最近页 |
+| `workspace_not_found` | 工作区 id 不存在 | `workspace_update` / `workspace_delete` / `session_workspace_assign` | 刷新左栏树 + 提示 |
+| `workspace_in_use` | 删除工作区时存在会话引用（不级联、不改派） | `workspace_delete` | 提示「仍有 N 个会话引用」；提供「查看会话」/「先改派」入口 |
+| `preset_not_found` | 预设 id 不存在 | `preset_update` / `preset_delete` / `session_create`（`preset_id` 查无） | 刷新预设列表 + 提示 |
+| `builtin_preset_undeletable` | 内置预设禁止删除 | `preset_delete`（`is_builtin=1`） | 提示「内置预设不可删除」（删除入口置灰） |
 
 说明：错误码为稳定契约（`snake_case` 序列化），新增取值须走 ADR；迁移的**参数类**失败沿用既有码，避免语义重复。
 
-**计数双记号（ADR-014 复审问题 15；口径同 ADR-010「错误码计数」）**：**全集** = `IpcErrorCode` 枚举取值口径（含未在本表逐行登记的既有码）**16 → 20（ADR-010）→ 22 → 23（ADR-015）**；**本附录 B 登记行** = 本表行数 **8 → 10 → 11**（本轮 +1 = `runtime_busy`，来源 ADR-015 附录 C-5）。两记号不得混用。
+**计数双记号（ADR-014 复审问题 15；口径同 ADR-010「错误码计数」）**：**全集** = `IpcErrorCode` 枚举取值口径（含未在本表逐行登记的既有码）**16 → 20（ADR-010）→ 22 → 23（ADR-015）→ 32（M5-01 批次 ADR-017–ADR-026 +9）**；**本附录 B 登记行** = 本表行数 **8 → 10 → 11 → 20**（本轮 +9 = `pause_unsupported` / `rule_not_found` / `no_candidate_runtime` / `provider_error` / `session_not_found` / `workspace_not_found` / `workspace_in_use` / `preset_not_found` / `builtin_preset_undeletable`）。两记号不得混用；稳定业务码（`session_busy`/`session_paused` 等）不入本表、不计入（口径见 ADR-018 附录 A-7）。
 
 ### 附录 B.1：警告码子表（ADR-010 新增登记位，2026-09-24）
 
@@ -216,6 +226,8 @@
 > **ADR-014（2026-09-30）增行**：错误码 2 条已登记（`provider_unreachable` / `provider_auth_failed`；全集 20 → 22，本表登记行 8 → 10）；**警告码子表不新增**；决策与契约详见 `docs/adr/ADR-014-p1-plan-structure-and-permission-modes.md` 附录 C-5（超时值见其附录 C-4）；实现随 P1 任务 M7-06（登记先行，代码未改）。本增行不改 ADR-006 既有决策。
 >
 > **ADR-015（2026-10-08）增行**：错误码 1 条已登记（`runtime_busy`；全集 22 → 23，本表登记行 10 → 11）；**警告码子表不新增**；决策与契约详见 `docs/adr/ADR-015-hotplug-state-machine-and-registry-manifest.md` 附录 C-5；实现随 P1 任务 M7-01（登记先行，代码未改）。本增行不改 ADR-006 既有决策。
+>
+> **ADR-017–ADR-026（2026-10-09，M5-01 批次）增行**：错误码 9 条已登记（全集 23 → 32，本表登记行 11 → 20）；**警告码子表不新增**；决策与契约详见各 ADR 附录（ADR-017 A-2 / ADR-018 A-2 与 A-3 / ADR-022 A-2 / ADR-024 A-2 / ADR-025 A-2 / ADR-026 A-2）；实现随 P1 任务 M5-05/M6-01/M6-03/M7-02/M7-03/M7-06/M7-07/M7-08/M7-09（登记先行，代码未改）。本增行不改 ADR-006 既有决策。
 
 ## 附录 C：拟议《设计文档》v1.6 合入文本
 

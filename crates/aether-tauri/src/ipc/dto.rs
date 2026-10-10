@@ -42,8 +42,22 @@ pub enum SessionStatus {
 /// M1-08 尚无已批准设置项；后续里程碑在实现设置能力时，先在此登记键名并同步
 /// `settings` 表语义，再放开对应命令。未登记键一律 `invalid_enum`。
 /// M3-05 登记：`backup.reminder`（D13「7 天未备份提醒可开关」；布尔，缺省 `true`；
-/// UI-UX Q9/Q10 裁定为全局开关）。工作区绑定键（M3-08）尚未登记。
-pub const SETTINGS_KEY_ALLOWLIST: &[&str] = &["backup.reminder"];
+/// UI-UX Q9/Q10 裁定为全局开关）。
+/// M5-01/P1 批次登记（ADR-018 附录 A-6；登记先行，功能随各 P1 任务落地）：
+/// `backup.auto.enabled` / `backup.auto.frequency` / `backup.auto.retention` /
+/// `backup.encryption.enabled`（ADR-020 / M5-02、M5-03）、`events.retention.enabled` /
+/// `events.retention.days`（ADR-021 / M5-04）、`ui.layout`（M7-04 布局持久化落点；
+/// 键名/类型/缺省值/语义/迁移影响见 ADR-018 附录 A-6）。
+pub const SETTINGS_KEY_ALLOWLIST: &[&str] = &[
+    "backup.reminder",
+    "backup.auto.enabled",
+    "backup.auto.frequency",
+    "backup.auto.retention",
+    "backup.encryption.enabled",
+    "events.retention.enabled",
+    "events.retention.days",
+    "ui.layout",
+];
 
 #[derive(Debug, Deserialize, specta::Type)]
 #[serde(deny_unknown_fields)]

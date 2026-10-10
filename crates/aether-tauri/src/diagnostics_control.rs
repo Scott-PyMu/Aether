@@ -39,6 +39,22 @@ use crate::logging::LogSink;
 
 /// 设置键：备份提醒开关（M3-05 登记；UI-UX Q9/Q10：全局开关，缺省开启）。
 pub const BACKUP_REMINDER_KEY: &str = "backup.reminder";
+/// 设置键：自动备份总开关（M5-01 批次登记；ADR-020 / M5-02；布尔，缺省开启）。
+pub const BACKUP_AUTO_ENABLED_KEY: &str = "backup.auto.enabled";
+/// 设置键：自动备份频率（M5-01 批次登记；ADR-020 / M5-02；`daily`/`weekly`，缺省 `daily`）。
+pub const BACKUP_AUTO_FREQUENCY_KEY: &str = "backup.auto.frequency";
+/// 设置键：自动备份保留份数（M5-01 批次登记；ADR-020 / M5-02；1–100，缺省 10）。
+pub const BACKUP_AUTO_RETENTION_KEY: &str = "backup.auto.retention";
+/// 设置键：加密备份开关（M5-01 批次登记；ADR-020 / M5-03；布尔，缺省开启）。
+pub const BACKUP_ENCRYPTION_ENABLED_KEY: &str = "backup.encryption.enabled";
+/// 设置键：事件保留策略开关（M5-01 批次登记；ADR-021 / M5-04；布尔，缺省关闭）。
+pub const EVENTS_RETENTION_ENABLED_KEY: &str = "events.retention.enabled";
+/// 设置键：事件保留窗口（M5-01 批次登记；ADR-021 / M5-04；7–365 天，缺省 30）。
+pub const EVENTS_RETENTION_DAYS_KEY: &str = "events.retention.days";
+/// 设置键：工作台布局持久化（M5-01 批次登记；M7-04 DoD3 落点；JSON 对象字符串，缺省 `{}`）。
+pub const UI_LAYOUT_KEY: &str = "ui.layout";
+/// `ui.layout` 的最大字节数（登记口径 ≤64KiB）。
+pub const UI_LAYOUT_MAX_BYTES: usize = 64 * 1024;
 /// 未备份提醒阈值（D13：7 天）。
 pub const BACKUP_REMINDER_THRESHOLD_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 /// 诊断包文件名前缀（`aether-diagnostics-<ts>.json`）。
@@ -185,13 +201,50 @@ impl DiagnosticsControlBackend {
         ))
     }
 
-    /// 键值语义校验（当前仅 `backup.reminder`：必须为 bool）。
+    /// 键值语义校验（M5-01/ADR-018 附录 A-6：按登记类型校验；失败返回既有结构化码）。
     fn validate_setting_value(key: &str, value: &Value) -> Result<(), IpcError> {
-        if key == BACKUP_REMINDER_KEY && !value.is_boolean() {
-            return Err(IpcError::new(
-                IpcErrorCode::InvalidType,
-                format!("设置键 {key} 的值必须为布尔（true/false）"),
-            ));
+        match key {
+            BACKUP_REMINDER_KEY
+            | BACKUP_AUTO_ENABLED_KEY
+            | BACKUP_ENCRYPTION_ENABLED_KEY
+            | EVENTS_RETENTION_ENABLED_KEY => {
+                if !value.is_boolean() {
+                    return Err(IpcError::new(
+                        IpcErrorCode::InvalidType,
+                        format!("设置键 {key} 的值必须为布尔（true/false）"),
+                    ));
+                }
+            }
+            BACKUP_AUTO_FREQUENCY_KEY => {
+                let valid = value
+                    .as_str()
+                    .is_some_and(|frequency| matches!(frequency, "daily" | "weekly"));
+                if !valid {
+                    return Err(IpcError::at_field(
+                        IpcErrorCode::InvalidEnum,
+                        "value",
+                        format!("设置键 {key} 的值必须是 \"daily\" 或 \"weekly\""),
+                    ));
+                }
+            }
+            BACKUP_AUTO_RETENTION_KEY => validate_setting_int_range(key, value, 1, 100)?,
+            EVENTS_RETENTION_DAYS_KEY => validate_setting_int_range(key, value, 7, 365)?,
+            UI_LAYOUT_KEY => {
+                let valid = value.as_str().is_some_and(|layout| {
+                    layout.len() <= UI_LAYOUT_MAX_BYTES
+                        && serde_json::from_str::<Value>(layout).is_ok_and(|parsed| parsed.is_object())
+                });
+                if !valid {
+                    return Err(IpcError::at_field(
+                        IpcErrorCode::InvalidValue,
+                        "value",
+                        format!(
+                            "设置键 {key} 的值必须是 ≤{UI_LAYOUT_MAX_BYTES} 字节的 JSON 对象字符串"
+                        ),
+                    ));
+                }
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -377,9 +430,34 @@ impl DiagnosticsControlBackend {
 
 fn default_setting_value(key: &str) -> Value {
     match key {
-        BACKUP_REMINDER_KEY => Value::Bool(true),
+        BACKUP_REMINDER_KEY | BACKUP_AUTO_ENABLED_KEY | BACKUP_ENCRYPTION_ENABLED_KEY => {
+            Value::Bool(true)
+        }
+        EVENTS_RETENTION_ENABLED_KEY => Value::Bool(false),
+        BACKUP_AUTO_FREQUENCY_KEY => Value::String("daily".to_owned()),
+        BACKUP_AUTO_RETENTION_KEY => Value::from(10),
+        EVENTS_RETENTION_DAYS_KEY => Value::from(30),
+        UI_LAYOUT_KEY => Value::String("{}".to_owned()),
         _ => Value::Null,
     }
+}
+
+/// 整数区间校验（M5-01/ADR-018 附录 A-6：类型错 → `invalid_type`；越界 → `out_of_range`）。
+fn validate_setting_int_range(key: &str, value: &Value, min: i64, max: i64) -> Result<(), IpcError> {
+    let Some(number) = value.as_i64() else {
+        return Err(IpcError::new(
+            IpcErrorCode::InvalidType,
+            format!("设置键 {key} 的值必须为整数"),
+        ));
+    };
+    if number < min || number > max {
+        return Err(IpcError::at_field(
+            IpcErrorCode::OutOfRange,
+            "value",
+            format!("设置键 {key} 的值必须在 {min}–{max} 之间"),
+        ));
+    }
+    Ok(())
 }
 
 impl IpcBackend for DiagnosticsControlBackend {
@@ -588,5 +666,60 @@ impl IpcBackend for DiagnosticsControlBackend {
         canonical_root_path: Option<&Path>,
     ) -> Result<Value, IpcError> {
         self.inner.workspace_set(request, canonical_root_path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn validate(key: &str, value: &Value) -> Result<(), IpcError> {
+        DiagnosticsControlBackend::validate_setting_value(key, value)
+    }
+
+    #[test]
+    fn p1_settings_keys_are_registered_with_defaults() {
+        // ADR-018 附录 A-6：8 个登记键均有非 Null 缺省值，且类型与登记一致。
+        for key in crate::ipc::dto::SETTINGS_KEY_ALLOWLIST {
+            let default = default_setting_value(key);
+            assert!(!default.is_null(), "登记键 {key} 缺少缺省值");
+            assert!(
+                validate(key, &default).is_ok(),
+                "登记键 {key} 的缺省值必须通过类型校验"
+            );
+        }
+        assert_eq!(
+            crate::ipc::dto::SETTINGS_KEY_ALLOWLIST.len(),
+            8,
+            "M5-01 批次后设置键共 8 个（ADR-018 附录 A-6）"
+        );
+    }
+
+    #[test]
+    fn p1_settings_value_types_are_enforced() {
+        // 布尔键：非布尔 → invalid_type。
+        let error = validate(BACKUP_AUTO_ENABLED_KEY, &json!("true")).expect_err("字符串不是布尔");
+        assert_eq!(error.code, IpcErrorCode::InvalidType);
+
+        // 频率枚举：非法值 → invalid_enum。
+        let error = validate(BACKUP_AUTO_FREQUENCY_KEY, &json!("monthly")).expect_err("非法频率");
+        assert_eq!(error.code, IpcErrorCode::InvalidEnum);
+        assert!(validate(BACKUP_AUTO_FREQUENCY_KEY, &json!("weekly")).is_ok());
+
+        // 整数区间：越界 → out_of_range；浮点 → invalid_type。
+        let error = validate(BACKUP_AUTO_RETENTION_KEY, &json!(0)).expect_err("保留份数下限 1");
+        assert_eq!(error.code, IpcErrorCode::OutOfRange);
+        let error = validate(EVENTS_RETENTION_DAYS_KEY, &json!(400)).expect_err("保留窗口上限 365");
+        assert_eq!(error.code, IpcErrorCode::OutOfRange);
+        let error = validate(EVENTS_RETENTION_DAYS_KEY, &json!(30.5)).expect_err("非整数");
+        assert_eq!(error.code, IpcErrorCode::InvalidType);
+
+        // 布局 JSON：非对象/非法 JSON → invalid_value。
+        assert!(validate(UI_LAYOUT_KEY, &json!("{}")).is_ok());
+        assert!(validate(UI_LAYOUT_KEY, &json!(r#"{"left":240}"#)).is_ok());
+        let error = validate(UI_LAYOUT_KEY, &json!("[]")).expect_err("必须为对象");
+        assert_eq!(error.code, IpcErrorCode::InvalidValue);
+        let error = validate(UI_LAYOUT_KEY, &json!("{")).expect_err("非法 JSON");
+        assert_eq!(error.code, IpcErrorCode::InvalidValue);
     }
 }
