@@ -132,6 +132,22 @@ fn disk_file_names(dir: &Path) -> Vec<String> {
     names
 }
 
+/// 长路径形式（模拟真实系统选择器返回的完整路径）。
+///
+/// CI 的 `%TEMP%` 形如 `C:\Users\RUNNER~1\...`，含 8.3 短名——短名是 D9/T7 的
+/// **拒绝样本**（`reject_windows_special_forms` 在 canonicalize 之前做形态拒绝），
+/// 不能直接作为合法输入；夹具先 canonicalize 并去掉 `\\?\` 前缀，与选择器返回
+/// 完整路径的形态一致（同 `m3_04_backup_ipc.rs` 的 `long_path` 口径）。
+fn long_path(path: &Path) -> String {
+    let canonical = std::fs::canonicalize(path).expect("canonicalize 夹具路径");
+    let text = canonical.to_string_lossy().to_string();
+    #[cfg(windows)]
+    if let Some(stripped) = text.strip_prefix(r"\\?\") {
+        return stripped.to_string();
+    }
+    text
+}
+
 fn write_evidence(name: &str, value: &Value) {
     println!("[m5-02] 证据 {name} = {value}");
     let Some(dir) = std::env::var_os("AETHER_M5_02_EVIDENCE_DIR") else {
@@ -722,7 +738,7 @@ fn reminder_linkage_and_diagnostics_section() {
     let target = fixture.temp.path().join("export");
     std::fs::create_dir_all(&target).expect("导出目录");
     let request = ExportDiagnosticsRequest {
-        target_dir: target.to_string_lossy().to_string(),
+        target_dir: long_path(&target),
     };
     let canonical = request.canonical_target_dir().expect("目标校验");
     let response = fixture

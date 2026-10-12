@@ -121,6 +121,22 @@ fn file_bytes(path: &Path) -> Vec<u8> {
     std::fs::read(path).expect("读取文件")
 }
 
+/// 长路径形式（模拟真实系统选择器返回的完整路径）。
+///
+/// CI 的 `%TEMP%` 形如 `C:\Users\RUNNER~1\...`，含 8.3 短名——短名是 D9/T7 的
+/// **拒绝样本**（`reject_windows_special_forms` 在 canonicalize 之前做形态拒绝），
+/// 不能直接作为合法输入；夹具先 canonicalize 并去掉 `\\?\` 前缀（同
+/// `m3_04_backup_ipc.rs` 的 `long_path` 口径）。
+fn long_path(path: &Path) -> String {
+    let canonical = std::fs::canonicalize(path).expect("canonicalize 夹具路径");
+    let text = canonical.to_string_lossy().to_string();
+    #[cfg(windows)]
+    if let Some(stripped) = text.strip_prefix(r"\\?\") {
+        return stripped.to_string();
+    }
+    text
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
@@ -1109,7 +1125,7 @@ fn dod5_diagnostics_audit_and_response_do_not_contain_secret_material() {
     let target = fixture.temp.path().join("export");
     std::fs::create_dir_all(&target).expect("导出目录");
     let request = ExportDiagnosticsRequest {
-        target_dir: target.to_string_lossy().to_string(),
+        target_dir: long_path(&target),
     };
     let canonical = request.canonical_target_dir().expect("目标校验");
     let response = fixture
