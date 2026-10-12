@@ -178,6 +178,8 @@ export type BackupCreateRequest = {
 	 *  命令层 canonicalize（绝对路径 + 存在目录）后传入后端；空间校验在后端执行。
 	 */
 	target_dir?: string | null,
+	/**  M5-03/ADR-020：口令加密模式（显式可选；仅传输，不落盘、不入日志/诊断/导出）。 */
+	passphrase?: string | null,
 };
 
 /**  `backup_list`（ADR-004）：无参数命令；非空成员一律拒绝。 */
@@ -185,6 +187,8 @@ export type BackupListRequest = Record<string, never>;
 
 export type BackupRestoreRequest = {
 	source: BackupSource,
+	/**  M5-03/ADR-020：口令模式产物的恢复口令（显式可选；仅传输，不落盘、不入日志）。 */
+	passphrase?: string | null,
 };
 
 /**  备份来源（ADR-004 `backup_restore`）：内部备份 id 枚举 或 外部 `.db` 路径。 */

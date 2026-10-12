@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use aether_store::backup::{program_schema_version, read_restore_journal, validate_candidate};
-use aether_store::{Store, StoreRuntime, WriteQueueConfig};
+use aether_store::{Store, StoreCommand, StoreRuntime, WriteQueueConfig};
 use aether_tauri::backup_control::{
     boot_apply_pending_restore, write_boot_restore_audit, BackupControlBackend, SpaceProbe,
 };
@@ -142,12 +142,23 @@ impl BackendFixture {
             &handle,
         )
         .expect("打开存储运行时");
+        // M5-03 设计变更驱动（ADR-020 §2.1-3）：加密缺省开启。本套件聚焦 P0/T9
+        // 明文产物与恢复七步语义，显式关闭加密（加密路径专项断言见
+        // `m5_03_encrypted_backup.rs`；非放宽既有断言）。
+        runtime
+            .block_on(storage.queue().execute(StoreCommand::UpsertSetting {
+                key: "backup.encryption.enabled".to_owned(),
+                value: "false".to_owned(),
+                updated_at: 1,
+            }))
+            .expect("关闭加密（M3-04 套件夹具）");
         let backend = Arc::new(BackupControlBackend::new(
             Arc::new(NotImplementedBackend),
             temp.path().to_path_buf(),
             Some(storage.reads().clone()),
             Some(storage.queue().clone()),
             handle,
+            None,
         ));
         Self {
             temp,
@@ -172,6 +183,7 @@ impl BackendFixture {
             self.storage.as_ref().map(|storage| storage.reads().clone()),
             self.storage.as_ref().map(|storage| storage.queue().clone()),
             self.runtime.handle().clone(),
+            None,
         )
         .with_space_probe(probe);
         self.backend = Arc::new(backend);
@@ -189,6 +201,7 @@ impl BackendFixture {
         let request = BackupCreateRequest {
             label: Some("测试备份".to_owned()),
             target_dir: target.map(long_path),
+            passphrase: None,
         };
         let canonical = request.canonical_target_dir().expect("目标目录校验");
         self.backend.backup_create(&request, canonical.as_deref())
@@ -197,6 +210,7 @@ impl BackendFixture {
     fn restore_internal(&self, id: &str) -> Result<Value, aether_tauri::ipc::error::IpcError> {
         let request = BackupRestoreRequest {
             source: BackupSource::Internal { id: id.to_owned() },
+            passphrase: None,
         };
         self.backend.backup_restore(&request, None)
     }
@@ -206,6 +220,7 @@ impl BackendFixture {
             source: BackupSource::External {
                 path: long_path(path),
             },
+            passphrase: None,
         };
         let canonical = request.canonical_external_path().expect("外部候选校验");
         self.backend.backup_restore(&request, canonical.as_deref())
@@ -717,6 +732,7 @@ fn production_chain_delegates_backup_commands() {
             &BackupCreateRequest {
                 label: None,
                 target_dir: None,
+                passphrase: None,
             },
             None,
         )

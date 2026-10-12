@@ -20,9 +20,9 @@
 | 9 | `permission_resolve` | `request_id`/decision 枚举；审计与落盘 | `ipc_validation.rs`；`m2_10_permission_loop.rs` | ✅ |
 | 10 | `settings_get` | 键白名单 | `ipc_validation.rs` | ✅ |
 | 11 | `settings_set` | 键白名单 + 值类型/上限 | `ipc_validation.rs` | ✅ |
-| 12 | `backup_create` | `target_dir` canonicalize + 可写 + 空间护栏；缺省内部目录 | `ipc_validation.rs`；`m3_04_backup_ipc.rs` | ✅ |
+| 12 | `backup_create` | `target_dir` canonicalize + 可写 + 空间护栏；缺省内部目录；可选 `passphrase`（M5-03/ADR-018 A-5：非空/≤1024 字符/无控制字符；仅传输） | `ipc_validation.rs`；`m3_04_backup_ipc.rs`；`m5_03_encrypted_backup.rs` | ✅ |
 | 13 | `backup_list` | 无参数（任何成员拒绝） | `ipc_validation.rs` | ✅ |
-| 14 | `backup_restore` | 来源枚举或外部路径（存在 + `.db`）；内部 id 白名单 | `ipc_validation.rs`；`m3_04_backup_ipc.rs` | ✅ |
+| 14 | `backup_restore` | 来源枚举或外部路径（存在 + `.db`/`.aebk`；M5-03/ADR-020）；内部 id 白名单；可选 `passphrase`（同 `backup_create` 校验） | `ipc_validation.rs`；`m3_04_backup_ipc.rs`；`m5_03_encrypted_backup.rs` | ✅ |
 | 15 | `app_restart` | `confirm:true` 显式确认 | `ipc_validation.rs`；`m3-06/e2e-degraded-recovery.mjs` | ✅ |
 | 16 | `run_retry` | `run_id` ULID + 仅终态 | `ipc_validation.rs`；`m3_06_run_retry.rs` | ✅ |
 | 17 | `runtime_retry` | 白名单 + 仅 `disabled+start_failed` | `ipc_validation.rs`；`m1_10_supervisor.rs` | ✅ |

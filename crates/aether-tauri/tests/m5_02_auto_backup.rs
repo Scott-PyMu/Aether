@@ -39,9 +39,7 @@ use aether_tauri::diagnostics_control::{
     BACKUP_AUTO_RETENTION_KEY, BACKUP_REMINDER_KEY,
 };
 use aether_tauri::ipc::backend::{IpcBackend, NotImplementedBackend};
-use aether_tauri::ipc::dto::{
-    BackupCreateRequest, ExportDiagnosticsRequest, SettingsSetRequest,
-};
+use aether_tauri::ipc::dto::{BackupCreateRequest, ExportDiagnosticsRequest, SettingsSetRequest};
 use aether_tauri::json_payload::JsonPayload;
 use aether_tauri::security_level::{SecurityLevelView, SecurityProbe, SECURITY_LEVEL_OS};
 use serde_json::{json, Value};
@@ -120,7 +118,12 @@ fn disk_file_names(dir: &Path) -> Vec<String> {
         .map(|listing| {
             listing
                 .flatten()
-                .filter(|entry| entry.file_type().map(|kind| kind.is_file()).unwrap_or(false))
+                .filter(|entry| {
+                    entry
+                        .file_type()
+                        .map(|kind| kind.is_file())
+                        .unwrap_or(false)
+                })
                 .map(|entry| entry.file_name().to_string_lossy().to_string())
                 .collect()
         })
@@ -223,6 +226,16 @@ impl Fixture {
             Arc::new(StaticRuntimeSummaries::unwired()),
         )
         .expect("启动核心（存储 + 管线）");
+        // M5-03 设计变更驱动（ADR-020 §2.1-3）：加密缺省开启。本套件聚焦 M5-02
+        // 排期/滚动/失败隔离/提醒语义，显式关闭加密以保持产物为 P0 `.db` 形态
+        // （加密路径的专项断言见 `m5_03_encrypted_backup.rs`；非放宽既有断言）。
+        runtime
+            .block_on(boot.write.execute(StoreCommand::UpsertSetting {
+                key: "backup.encryption.enabled".to_owned(),
+                value: "false".to_owned(),
+                updated_at: 1,
+            }))
+            .expect("关闭加密（M5-02 套件夹具）");
         let clock = Arc::new(ManualClock::new(1_800_000_000_000));
         let clock_shared: SharedClock = clock.clone();
         let mut backup_backend = BackupControlBackend::new(
@@ -231,6 +244,7 @@ impl Fixture {
             Some(boot.reads.clone()),
             Some(boot.write.clone()),
             handle.clone(),
+            None,
         )
         .with_clock(clock_shared.clone());
         if let Some(probe) = probe {
@@ -288,6 +302,7 @@ impl Fixture {
                 &BackupCreateRequest {
                     label: None,
                     target_dir: None,
+                    passphrase: None,
                 },
                 None,
             )
@@ -436,7 +451,11 @@ fn backup_during_writes_is_verified_and_consistent() {
         before,
         "产物与备份前库一致（行数+哈希）"
     );
-    assert_eq!(cleanup_backup_temps(&fixture.backups_dir()), 0, "无临时残留");
+    assert_eq!(
+        cleanup_backup_temps(&fixture.backups_dir()),
+        0,
+        "无临时残留"
+    );
 
     write_evidence(
         "dod2_backup_during_writes",
@@ -466,7 +485,9 @@ fn retention_rolls_auto_only_and_table_matches_disk() {
     // 4 次自动运行（时钟推进保证时间戳可区分）→ 按 retention=2 滚动。
     let auto = fixture.auto();
     for _ in 0..4 {
-        let report = fixture.runtime.block_on(auto.run_once(AutoTrigger::Scheduled));
+        let report = fixture
+            .runtime
+            .block_on(auto.run_once(AutoTrigger::Scheduled));
         assert_eq!(report.result, "success");
         fixture.clock.advance(1_000);
     }
@@ -483,7 +504,11 @@ fn retention_rolls_auto_only_and_table_matches_disk() {
     assert_eq!(auto_kept, 2, "自动产物按 backup.auto.retention 滚动");
     assert_eq!(manual_kept, 2, "手动产物不自动删除（ADR-020 §2.1-1）");
     for record in &backups {
-        assert!(record.path.exists(), "台账行必须有磁盘产物：{:?}", record.path);
+        assert!(
+            record.path.exists(),
+            "台账行必须有磁盘产物：{:?}",
+            record.path
+        );
     }
 
     // `backups` 表与磁盘清单一致（证据 JSON 由 verify-m5-02 脚本再校验）。
@@ -500,7 +525,11 @@ fn retention_rolls_auto_only_and_table_matches_disk() {
         .collect();
     table.sort();
     assert_eq!(table, disk, "backups 表与磁盘清单一致");
-    assert_eq!(cleanup_backup_temps(&fixture.backups_dir()), 0, "无临时残留");
+    assert_eq!(
+        cleanup_backup_temps(&fixture.backups_dir()),
+        0,
+        "无临时残留"
+    );
 
     write_evidence(
         "dod3_retention_consistency",
@@ -523,7 +552,9 @@ fn failures_are_isolated_recorded_and_retried() {
     let auto = fixture.auto();
 
     // 先成功一份（既有备份与产物基线）。
-    let initial = fixture.runtime.block_on(auto.run_once(AutoTrigger::Initial));
+    let initial = fixture
+        .runtime
+        .block_on(auto.run_once(AutoTrigger::Initial));
     assert_eq!(initial.result, "success");
     assert_eq!(fixture.backups().len(), 1);
     let files_before = disk_file_names(&fixture.backups_dir());
@@ -679,7 +710,10 @@ fn reminder_linkage_and_diagnostics_section() {
     assert_eq!(report.result, "success");
     let after = fixture.diagnostics.backup_list().expect("清单");
     assert_eq!(after["reminder"]["enabled"], true, "提醒开关本身不被改写");
-    assert_eq!(after["reminder"]["due"], false, "自动成功刷新提醒（不重复告警）");
+    assert_eq!(
+        after["reminder"]["due"], false,
+        "自动成功刷新提醒（不重复告警）"
+    );
     assert_eq!(after["reminder"]["reason"], Value::Null);
     assert_eq!(after["reminder"]["last_backup_at"], fixture.clock.now_ms());
     assert_eq!(after["auto"]["last_result"], "success");

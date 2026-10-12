@@ -44,8 +44,13 @@ pub const PRE_RESTORE_INFIX: &str = ".pre-restore-";
 pub const RESTORE_JOURNAL_SUFFIX: &str = ".restore-journal.json";
 /// 恢复临时文件标记（同目录内 `aether.db.restore-tmp-<ts>`）。
 pub const RESTORE_TEMP_INFIX: &str = ".restore-tmp-";
+/// 恢复候选临时文件标记（M5-03：加密产物解密出的明文候选，
+/// `aether.db.restore-cand-<ts>`；重启后由启动序列消费，随恢复收尾清理）。
+pub const RESTORE_CANDIDATE_INFIX: &str = ".restore-cand-";
 /// 备份产物临时文件标记（M5-02：`<产物名>.backup-tmp-<ts>-<id尾>`，同目录原子 rename）。
 pub const BACKUP_TEMP_INFIX: &str = ".backup-tmp-";
+/// 加密备份产物扩展名（M5-03/ADR-020 附录 A-2：`AEBK1` 形态；未加密保持 `.db`）。
+pub const ENCRYPTED_BACKUP_EXTENSION: &str = "aebk";
 
 /// 备份台账记录（`backups` 表 + 文件元数据；`kind` = `manual`/`auto`）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -80,9 +85,24 @@ pub fn backup_file_name(created_at_ms: i64) -> String {
     format!("aether-{created_at_ms}.db")
 }
 
+/// 备份产物文件名（指定扩展名；M5-03：加密产物用 [`ENCRYPTED_BACKUP_EXTENSION`]）。
+pub fn backup_file_name_with_extension(created_at_ms: i64, extension: &str) -> String {
+    format!("aether-{created_at_ms}.{extension}")
+}
+
 /// 在同毫秒冲突时追加备份 id 尾缀（保证不覆盖既有产物）。
 pub fn backup_file_name_for(dest_dir: &Path, created_at_ms: i64, id: &str) -> String {
-    let primary = backup_file_name(created_at_ms);
+    backup_file_name_for_with_extension(dest_dir, created_at_ms, id, "db")
+}
+
+/// 同上，指定扩展名（加密/未加密产物共用冲突消解口径）。
+pub fn backup_file_name_for_with_extension(
+    dest_dir: &Path,
+    created_at_ms: i64,
+    id: &str,
+    extension: &str,
+) -> String {
+    let primary = backup_file_name_with_extension(created_at_ms, extension);
     if !dest_dir.join(&primary).exists() {
         return primary;
     }
@@ -94,7 +114,7 @@ pub fn backup_file_name_for(dest_dir: &Path, created_at_ms: i64, id: &str) -> St
         .into_iter()
         .rev()
         .collect();
-    format!("aether-{created_at_ms}-{tail}.db")
+    format!("aether-{created_at_ms}-{tail}.{extension}")
 }
 
 /// 备份所需空间：`(db_bytes + wal_bytes) × 1.2`（向上取整）。
@@ -157,7 +177,14 @@ pub fn backup_temp_path(dest: &Path, created_at_ms: i64, id: &str) -> PathBuf {
         .file_name()
         .map(|value| value.to_string_lossy().to_string())
         .unwrap_or_else(|| "aether.db".to_owned());
-    let tail: String = id.chars().rev().take(6).collect::<Vec<_>>().into_iter().rev().collect();
+    let tail: String = id
+        .chars()
+        .rev()
+        .take(6)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
     dest.with_file_name(format!("{name}{BACKUP_TEMP_INFIX}{created_at_ms}-{tail}"))
 }
 
@@ -196,31 +223,44 @@ pub fn create_backup_file_verified(
     if temp.exists() {
         let _ = fs::remove_file(&temp);
     }
-    let outcome = write_and_verify(conn, &temp, dest);
+    let outcome = create_backup_staging(conn, &temp).and_then(|size| {
+        fs::rename(&temp, dest)?;
+        Ok(size)
+    });
     if outcome.is_err() {
         let _ = fs::remove_file(&temp);
     }
     outcome
 }
 
-fn write_and_verify(conn: &Connection, temp: &Path, dest: &Path) -> Result<u64, StoreError> {
-    let temp_str = temp.to_str().ok_or_else(|| StoreError::NonUtf8Path {
-        path: temp.to_path_buf(),
+/// 写出并校验备份**暂存文件**（M5-03 加密路径复用）：`VACUUM INTO` → 只读打开 +
+/// `quick_check` + `schema_migrations` 非空校验 → `sync_all`（不 rename）。
+///
+/// 暂存路径由调用方提供（`*.backup-tmp-*` 形态，崩溃残留由
+/// [`cleanup_backup_temps`] 清理）；失败返回错误，调用方负责删除暂存文件。
+pub fn create_backup_staging(conn: &Connection, staging: &Path) -> Result<u64, StoreError> {
+    if staging.exists() {
+        return Err(StoreError::BackupTargetExists {
+            path: staging.to_path_buf(),
+        });
+    }
+    let staging_str = staging.to_str().ok_or_else(|| StoreError::NonUtf8Path {
+        path: staging.to_path_buf(),
     })?;
-    conn.execute("VACUUM INTO ?1", [temp_str])?;
+    conn.execute("VACUUM INTO ?1", [staging_str])?;
 
-    // 产物可用性校验（quick_check + 迁移记录非空）；失败即拒绝 rename。
+    // 产物可用性校验（quick_check + 迁移记录非空）；失败即拒绝就位。
     let connection = Connection::open_with_flags(
-        temp,
+        staging,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .map_err(|error| StoreError::Internal {
-        reason: format!("备份产物只读打开失败（{}）：{error}", temp.display()),
+        reason: format!("备份暂存文件只读打开失败（{}）：{error}", staging.display()),
     })?;
     let check = quick_check(&connection);
     if !check.ok {
         return Err(StoreError::Internal {
-            reason: format!("备份产物 quick_check 失败：{}", check.summary()),
+            reason: format!("备份暂存文件 quick_check 失败：{}", check.summary()),
         });
     }
     let version: i64 = match connection.query_row(
@@ -231,21 +271,23 @@ fn write_and_verify(conn: &Connection, temp: &Path, dest: &Path) -> Result<u64, 
         Ok(version) => version,
         Err(error) => {
             return Err(StoreError::Internal {
-                reason: format!("备份产物迁移记录读取失败：{error}"),
+                reason: format!("备份暂存文件迁移记录读取失败：{error}"),
             });
         }
     };
     drop(connection);
     if version <= 0 {
         return Err(StoreError::Internal {
-            reason: "备份产物无迁移记录（schema_migrations 为空，拒绝产物）".to_owned(),
+            reason: "备份暂存文件无迁移记录（schema_migrations 为空，拒绝产物）".to_owned(),
         });
     }
 
-    // 耐久化 + 原子就位（FlushFileBuffers 需要写句柄，Windows 只读句柄会拒绝）。
-    fs::OpenOptions::new().write(true).open(temp)?.sync_all()?;
-    fs::rename(temp, dest)?;
-    Ok(fs::metadata(dest)?.len())
+    // 耐久化（FlushFileBuffers 需要写句柄，Windows 只读句柄会拒绝）。
+    fs::OpenOptions::new()
+        .write(true)
+        .open(staging)?
+        .sync_all()?;
+    Ok(fs::metadata(staging)?.len())
 }
 
 /// 校验恢复候选（D13 七步第 2 步）：
@@ -859,6 +901,50 @@ pub fn cleanup_restore_temps(db_path: &Path) -> Result<(), StoreError> {
     Ok(())
 }
 
+/// 清理恢复候选临时文件（M5-03：`<db>.restore-cand-*`，加密产物解密出的明文候选）。
+///
+/// `keep` = 待处理恢复现场日志引用的候选（启动序列消费中，不得删除）；
+/// 其余视为崩溃/历史残留删除。返回删除数。
+pub fn cleanup_restore_candidates(
+    db_path: &Path,
+    keep: Option<&Path>,
+) -> Result<usize, StoreError> {
+    let Some(dir) = db_path.parent() else {
+        return Ok(0);
+    };
+    let name = db_path
+        .file_name()
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let prefix = format!("{name}{RESTORE_CANDIDATE_INFIX}");
+    let listing = match fs::read_dir(dir) {
+        Ok(listing) => listing,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(StoreError::Io(error)),
+    };
+    let mut removed = 0usize;
+    for item in listing {
+        let item = item?;
+        let path = item.path();
+        if !item.file_name().to_string_lossy().starts_with(&prefix) {
+            continue;
+        }
+        if keep.is_some_and(|keep| same_file_path(keep, &path)) {
+            continue;
+        }
+        fs::remove_file(&path)?;
+        removed += 1;
+    }
+    Ok(removed)
+}
+
+/// 路径等价比较（Windows 大小写不敏感；仅用于同目录内候选文件判定）。
+fn same_file_path(left: &Path, right: &Path) -> bool {
+    let left = left.to_string_lossy().to_lowercase();
+    let right = right.to_string_lossy().to_lowercase();
+    left == right
+}
+
 fn maybe_fault(fault: &RestoreFault, step: RestoreStep) -> Result<(), StoreError> {
     match fault {
         RestoreFault::None => Ok(()),
@@ -994,9 +1080,13 @@ mod tests {
         std::fs::create_dir_all(&out).unwrap();
 
         let dest = out.join("aether-1.db");
-        let size =
-            create_backup_file_verified(store.connection(), &dest, 1, "01J0000000000000000000000AB")
-                .unwrap();
+        let size = create_backup_file_verified(
+            store.connection(),
+            &dest,
+            1,
+            "01J0000000000000000000000AB",
+        )
+        .unwrap();
         assert!(size > 0);
         assert!(dest.exists());
         assert_eq!(cleanup_backup_temps(&out), 0, "成功路径无临时残留");
@@ -1008,17 +1098,25 @@ mod tests {
         let empty = dir.path().join("empty.db");
         let empty_connection = Connection::open(&empty).unwrap();
         let bad_dest = out.join("bad.db");
-        let error =
-            create_backup_file_verified(&empty_connection, &bad_dest, 2, "01J0000000000000000000000CD")
-                .unwrap_err();
+        let error = create_backup_file_verified(
+            &empty_connection,
+            &bad_dest,
+            2,
+            "01J0000000000000000000000CD",
+        )
+        .unwrap_err();
         assert!(matches!(error, StoreError::Internal { .. }), "{error}");
         assert!(!bad_dest.exists(), "校验失败不得就位产物");
         assert_eq!(cleanup_backup_temps(&out), 0, "校验失败必须清理临时文件");
 
         // 目标已存在 → 拒绝（不覆盖既有产物）。
-        let error =
-            create_backup_file_verified(store.connection(), &dest, 3, "01J0000000000000000000000EF")
-                .unwrap_err();
+        let error = create_backup_file_verified(
+            store.connection(),
+            &dest,
+            3,
+            "01J0000000000000000000000EF",
+        )
+        .unwrap_err();
         assert_eq!(error.code(), "backup_target_exists");
     }
 
@@ -1049,6 +1147,58 @@ mod tests {
         std::fs::write(dir.path().join("aether-42.db"), b"x").unwrap();
         let name = backup_file_name_for(dir.path(), 42, "01J00000000000000000000ABCD");
         assert_eq!(name, "aether-42-00ABCD.db");
+    }
+
+    /// M5-03：加密产物扩展名与冲突消解（`.aebk`；来源 id 尾缀）。
+    #[test]
+    fn encrypted_backup_file_name_uses_aebk_extension() {
+        let dir = tempfile::TempDir::new().unwrap();
+        assert_eq!(
+            backup_file_name_with_extension(1_700_000_000_000, ENCRYPTED_BACKUP_EXTENSION),
+            "aether-1700000000000.aebk"
+        );
+        let name = backup_file_name_for_with_extension(
+            dir.path(),
+            42,
+            "01J00000000000000000000ABCD",
+            ENCRYPTED_BACKUP_EXTENSION,
+        );
+        assert_eq!(name, "aether-42.aebk");
+        std::fs::write(dir.path().join("aether-42.aebk"), b"x").unwrap();
+        let name = backup_file_name_for_with_extension(
+            dir.path(),
+            42,
+            "01J00000000000000000000ABCD",
+            ENCRYPTED_BACKUP_EXTENSION,
+        );
+        assert_eq!(name, "aether-42-00ABCD.aebk");
+    }
+
+    /// M5-03：恢复候选清理保留待处理日志引用项，删除其余残留。
+    #[test]
+    fn restore_candidate_cleanup_keeps_referenced_candidate() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = dir.path().join("aether.db");
+        std::fs::write(&db, b"db").unwrap();
+        let keep = dir.path().join("aether.db.restore-cand-100");
+        let stale_a = dir.path().join("aether.db.restore-cand-200");
+        let stale_b = dir.path().join("aether.db.restore-cand-300");
+        std::fs::write(&keep, b"candidate").unwrap();
+        std::fs::write(&stale_a, b"stale").unwrap();
+        std::fs::write(&stale_b, b"stale").unwrap();
+        // 无关文件不受影响。
+        let unrelated = dir.path().join("other.db.restore-cand-1");
+        std::fs::write(&unrelated, b"other").unwrap();
+
+        let removed = cleanup_restore_candidates(&db, Some(&keep)).unwrap();
+        assert_eq!(removed, 2);
+        assert!(keep.exists(), "待处理候选不得删除");
+        assert!(!stale_a.exists() && !stale_b.exists());
+        assert!(unrelated.exists());
+
+        let removed = cleanup_restore_candidates(&db, None).unwrap();
+        assert_eq!(removed, 1, "无待处理日志时全部清理");
+        assert!(!keep.exists());
     }
 
     #[test]

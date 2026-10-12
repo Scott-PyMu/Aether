@@ -179,6 +179,10 @@ record(
   "verify:m5-02（自动备份：排期时钟注入/运行中一致/仅自动滚动+台账磁盘一致/失败隔离/提醒联动/诊断段；含 release 写延迟基准）",
   run(node, [path.join(repoRoot, "scripts", "test", "m5-02", "verify-m5-02.mjs")]),
 );
+record(
+  "verify:m5-03（加密备份与恢复演练：AEBK1 格式/密钥扫描/两模式演练/异常路径/A3 降级/七步回滚/诊断脱敏；含 2 轮 drill）",
+  run(node, [path.join(repoRoot, "scripts", "test", "m5-03", "verify-m5-03.mjs")]),
+);
 
 if (!quick) {
   record("verify-coverage-gate", run(node, [path.join(repoRoot, "scripts", "test", "verify-coverage-gate.mjs")]));

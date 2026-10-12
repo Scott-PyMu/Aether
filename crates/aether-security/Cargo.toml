@@ -12,8 +12,13 @@ authors.workspace = true
 aether-core.workspace = true
 argon2 = "0.5.3"
 base64 = "0.22.1"
+# M5-03/ADR-020 附录 A-2：备份产物流式 AEAD（单一 tag 的 XChaCha20-Poly1305；
+# 与 chacha20poly1305 0.10.1 同一实现基线——后两者为其传递依赖，版本已固定于
+# Cargo.lock，不引入新 crate；逐字节一致性由 backup_crypto 单测对拍断言）。
+chacha20 = "0.9.1"
 chacha20poly1305 = "0.10.1"
 getrandom = "0.2.17"
+poly1305 = "0.8.0"
 regex = "1.13.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
@@ -30,6 +35,10 @@ keyring = { version = "3.6.3", default-features = false, features = ["apple-nati
 # Linux 默认 Secret Service（纯 Rust zbus 实现）；不可用时由 A3 降级路径接管。
 [target.'cfg(not(any(target_os = "windows", target_os = "macos")))'.dependencies]
 keyring = { version = "3.6.3", default-features = false, features = ["sync-secret-service", "crypto-rust"] }
+
+[dev-dependencies]
+# M5-03 加密产物单测临时目录（已在 Cargo.lock，MIT/Apache-2.0）。
+tempfile = "3"
 
 [lints]
 workspace = true

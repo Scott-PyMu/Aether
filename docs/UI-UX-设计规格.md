@@ -689,6 +689,7 @@ stateDiagram-v2
 | M6-01 | 规则 | `rules-page` / `rule-item` | `data-rule-id` / `data-enabled` |
 | M5-02 / M5-04 | 备份与保留设置 | `settings-backup-auto` / `settings-retention` | — |
 | M5-02 | 自动备份设置与状态（实现登记，2026-10-10） | `settings-backup-auto-enabled`（开关）/ `settings-backup-auto-frequency`（频率）/ `settings-backup-auto-retention`（保留份数）/ `settings-backup-auto-save`（保存）；`backup-auto-status`（备份页状态） | `data-enabled`（true/false）、`data-last-result`（success/failed/空）、`data-failures`（连续失败数） |
+| M5-03 | 加密备份开关（实现登记，2026-10-10） | `settings-backup-encryption`（缺省开启；关闭 → P0 明文 `.db` 形态） | `data-encryption`（on/off） |
 | M7-01 | 运行时启停开关（S-04） | `runtime-toggle` | `data-runtime-id` / `data-enabled` / `data-status` |
 | M7-01 | 禁用二次确认 | `runtime-disable-confirm` | `data-count`（在途会话数） |
 | M7-03 | 会话暂停/恢复 | `session-pause-toggle` | `data-session-id` / `data-status`（running/paused/idle）/ `data-disabled`（能力未声明或连接未就绪时置灰） |

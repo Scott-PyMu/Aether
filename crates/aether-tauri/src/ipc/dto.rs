@@ -11,7 +11,7 @@ use super::path;
 use super::validate::{
     self, ensure_max_bytes, ensure_max_chars, ensure_not_empty, ensure_value_size, is_ulid,
     reject_control_chars, CommandRequest, MAX_LABEL_CHARS, MAX_MESSAGE_BYTES, MAX_PAGE_LIMIT,
-    MAX_PATH_CHARS, MAX_SETTING_VALUE_BYTES, MAX_TITLE_CHARS,
+    MAX_PASSPHRASE_CHARS, MAX_PATH_CHARS, MAX_SETTING_VALUE_BYTES, MAX_TITLE_CHARS,
 };
 
 /// 权限决议（D9：`once` / `session` 授权；`deny` 拒绝）。
@@ -348,7 +348,10 @@ impl CommandRequest for ProviderCreateRequest {
             }
         }
         if self.provider_type == ProviderType::Custom
-            && !self.base_url.as_deref().is_some_and(|value| !value.is_empty())
+            && !self
+                .base_url
+                .as_deref()
+                .is_some_and(|value| !value.is_empty())
         {
             return Err(IpcError::missing_field("base_url"));
         }
@@ -561,6 +564,9 @@ pub struct BackupCreateRequest {
     /// 命令层 canonicalize（绝对路径 + 存在目录）后传入后端；空间校验在后端执行。
     #[serde(default)]
     pub target_dir: Option<String>,
+    /// M5-03/ADR-020：口令加密模式（显式可选；仅传输，不落盘、不入日志/诊断/导出）。
+    #[serde(default)]
+    pub passphrase: Option<String>,
 }
 
 impl BackupCreateRequest {
@@ -570,6 +576,14 @@ impl BackupCreateRequest {
             Some(target_dir) => path::validate_backup_target_dir(target_dir).map(Some),
             None => Ok(None),
         }
+    }
+
+    /// 口令（已校验）包装（M5-03；`None` = 缺省主密钥模式/未加密）。
+    pub fn passphrase_value(&self) -> Option<aether_security::SecretValue> {
+        self.passphrase
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .map(aether_security::SecretValue::new)
     }
 }
 
@@ -582,6 +596,11 @@ impl CommandRequest for BackupCreateRequest {
         }
         if let Some(target_dir) = &self.target_dir {
             ensure_not_empty(target_dir, "target_dir")?;
+        }
+        if let Some(passphrase) = &self.passphrase {
+            ensure_not_empty(passphrase, "passphrase")?;
+            ensure_max_chars(passphrase, "passphrase", MAX_PASSPHRASE_CHARS)?;
+            reject_control_chars(passphrase, "passphrase", false)?;
         }
         Ok(())
     }
@@ -618,15 +637,30 @@ pub enum BackupSource {
 #[serde(deny_unknown_fields)]
 pub struct BackupRestoreRequest {
     pub source: BackupSource,
+    /// M5-03/ADR-020：口令模式产物的恢复口令（显式可选；仅传输，不落盘、不入日志）。
+    #[serde(default)]
+    pub passphrase: Option<String>,
 }
 
 impl BackupRestoreRequest {
     /// 外部候选路径的规范化结果（内部来源为 `None`）。
+    ///
+    /// M5-03：候选后缀接受 `.db`（P0 明文产物）或 `.aebk`（`AEBK1` 加密产物）。
     pub fn canonical_external_path(&self) -> Result<Option<std::path::PathBuf>, IpcError> {
         match &self.source {
             BackupSource::Internal { .. } => Ok(None),
-            BackupSource::External { path } => path::validate_external_file(path, "db").map(Some),
+            BackupSource::External { path } => {
+                path::validate_external_backup_candidate(path).map(Some)
+            }
         }
+    }
+
+    /// 口令（已校验）包装（M5-03；`None` = 未提供）。
+    pub fn passphrase_value(&self) -> Option<aether_security::SecretValue> {
+        self.passphrase
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .map(aether_security::SecretValue::new)
     }
 }
 
@@ -640,10 +674,17 @@ impl CommandRequest for BackupRestoreRequest {
                         "必须是 26 位 ULID（内部备份 id）",
                     ));
                 }
-                Ok(())
             }
-            BackupSource::External { path } => path::validate_external_file(path, "db").map(|_| ()),
+            BackupSource::External { path } => {
+                path::validate_external_backup_candidate(path).map(|_| ())?;
+            }
         }
+        if let Some(passphrase) = &self.passphrase {
+            ensure_not_empty(passphrase, "passphrase")?;
+            ensure_max_chars(passphrase, "passphrase", MAX_PASSPHRASE_CHARS)?;
+            reject_control_chars(passphrase, "passphrase", false)?;
+        }
+        Ok(())
     }
 }
 

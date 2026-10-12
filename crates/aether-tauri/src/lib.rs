@@ -522,6 +522,14 @@ fn build_backend(
     // M3-04（D13）：备份/恢复命令面装饰器（存储就绪时接线；降级启动时保留内层语义）。
     // M5-02（D13/ADR-020）：自动备份调度器随备份后端接线（后台任务，不阻塞主流程）；
     // 注册进退出编排，退出期间不再触发新备份。
+    // M5-03（D13/D10/ADR-020）：主密钥存储（Keychain；A3 降级加密文件）在备份与
+    // 供应商之间共享同一实例（keyring 自检一次）；加密缺省开启，密钥不可用时
+    // 备份暂停并告警（不产出明文，ADR-020 缓解措施）。降级启动（无存储）不探测。
+    let boot_secrets = if backup_deps.is_some() {
+        provider_control::boot_secret_store(&data_dir)
+    } else {
+        None
+    };
     let inner: std::sync::Arc<dyn ipc::IpcBackend> = match backup_deps {
         Some((reads, write)) => {
             let backend = std::sync::Arc::new(backup_control::BackupControlBackend::new(
@@ -530,8 +538,10 @@ fn build_backend(
                 Some(reads),
                 Some(write),
                 handle.clone(),
+                boot_secrets.clone(),
             ));
-            if let (Some(orchestrator), Some(task)) = (&orchestrator, backend.spawn_auto_backup(&handle))
+            if let (Some(orchestrator), Some(task)) =
+                (&orchestrator, backend.spawn_auto_backup(&handle))
             {
                 orchestrator.install_monitor("backup_auto", task);
             }
@@ -565,13 +575,12 @@ fn build_backend(
     }
     // M3-11（ADR-010 决策 3/D10）：模型与供应商配置命令面接线。密钥存储启动选择：
     // keyring 自检通过 → OS 凭据库；否则 A3 降级加密文件（口令环境钩子，测试/演练）；
-    // 两者皆不可用 → 密钥字段命令回诊断错误（不落明文）。
+    // 两者皆不可用 → 密钥字段命令回诊断错误（不落明文）。M5-03：与备份共用同一实例。
     if let (Some(reads), Some(write)) = (reads, write_slot) {
-        let secrets = provider_control::boot_secret_store(&data_dir);
         session_backend = session_backend.with_providers(provider_control::ProviderControl::new(
             reads,
             write,
-            secrets,
+            boot_secrets,
             handle.clone(),
         ));
     }

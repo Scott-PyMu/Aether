@@ -11,6 +11,7 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+mod backup_crypto;
 mod encrypted_file;
 mod error;
 mod keyring_store;
@@ -20,6 +21,14 @@ mod redact;
 mod reference;
 mod store;
 
+pub use backup_crypto::{
+    backup_master_key_ref, backup_master_key_uri, decrypt_backup_file, derive_passphrase_key,
+    derive_passphrase_key_with_salt, encrypt_backup_file, inspect_backup_artifact,
+    is_encrypted_backup_artifact, load_or_create_master_key, master_key_available,
+    BackupArtifactInfo, BackupArtifactKey, BackupArtifactMode, BackupCryptoParams, ARTIFACT_MAGIC,
+    ARTIFACT_VERSION, BACKUP_MASTER_KEY_NAME, BACKUP_MASTER_KEY_SERVICE, FLAG_KEYCHAIN_MODE,
+    FLAG_PASSPHRASE_MODE, KEY_LEN, NONCE_LEN, SALT_LEN, TAG_LEN,
+};
 pub use encrypted_file::{
     EncryptedFileStore, FileCryptoParams, A3_M_COST_KIB, A3_P_COST, A3_T_COST,
 };

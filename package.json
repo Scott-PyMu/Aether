@@ -59,6 +59,8 @@
     "verify:m4-06": "node scripts/test/m4-06/verify-m4-06.mjs",
     "verify:m5-01": "node scripts/test/m5-01/verify-m5-01.mjs",
     "verify:m5-02": "node scripts/test/m5-02/verify-m5-02.mjs",
+    "verify:m5-03": "node scripts/test/m5-03/verify-m5-03.mjs",
+    "verify:m5-03:drill": "node scripts/test/m5-03/restore-drill.mjs",
     "smoke": "node scripts/test/smoke-desktop.mjs",
     "ci:local": "node scripts/test/ci-local.mjs"
   },

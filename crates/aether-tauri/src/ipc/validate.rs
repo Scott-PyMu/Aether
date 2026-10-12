@@ -24,6 +24,9 @@ pub const MAX_PAGE_LIMIT: u32 = 500;
 pub const MAX_MODEL_CHARS: usize = 128;
 /// 备份标签上限（M3-04 使用）。
 pub const MAX_LABEL_CHARS: usize = 128;
+
+/// 口令字符数上限（M5-03/ADR-020：备份加密口令；仅传输、不落盘）。
+pub const MAX_PASSPHRASE_CHARS: usize = 1024;
 /// 路径字符串上限（Windows 长路径 32767，这里收紧到 4096）。
 pub const MAX_PATH_CHARS: usize = 4096;
 /// 设置值 JSON 序列化后的上限。

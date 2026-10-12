@@ -240,6 +240,7 @@ impl Fixture {
             reads.clone(),
             write.clone(),
             runtime.handle().clone(),
+            None,
         ));
         let deps = DiagnosticsDeps {
             data_dir: temp.path().to_path_buf(),
@@ -511,6 +512,7 @@ fn capacity_thresholds_are_parameterized() {
             fixture.storage.as_ref().map(|s| s.reads().clone()),
             fixture.storage.as_ref().map(|s| s.queue().clone()),
             fixture.runtime.handle().clone(),
+            None,
         ));
         let deps = DiagnosticsDeps {
             data_dir: fixture.temp.path().to_path_buf(),

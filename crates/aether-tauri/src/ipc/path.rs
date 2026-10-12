@@ -59,6 +59,29 @@ pub fn validate_external_file(raw: &str, extension: &str) -> Result<PathBuf, Ipc
     Ok(canonical)
 }
 
+/// 校验外部恢复候选（M5-03：`backup_restore`）：接受 `.db`（P0 明文产物）或
+/// `.aebk`（`AEBK1` 加密产物，ADR-020 附录 A-2）后缀；内容形态由后端按 magic 判定。
+pub fn validate_external_backup_candidate(raw: &str) -> Result<PathBuf, IpcError> {
+    let canonical = canonicalize_checked(raw)?;
+    let metadata = std::fs::metadata(&canonical)
+        .map_err(|error| IpcError::path_rejected(format!("路径不可读：{error}")))?;
+    if !metadata.is_file() {
+        return Err(IpcError::path_rejected("候选必须是文件（不能是目录）"));
+    }
+    let suffix_ok = canonical
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| {
+            value.eq_ignore_ascii_case("db") || value.eq_ignore_ascii_case("aebk")
+        });
+    if !suffix_ok {
+        return Err(IpcError::path_rejected(
+            "候选文件必须以 .db（明文）或 .aebk（加密）结尾",
+        ));
+    }
+    Ok(canonical)
+}
+
 /// 校验备份/导出外部目标目录（D13 `backup_create.target_dir`）：绝对路径、存在且为目录。
 ///
 /// 与迁移目标不同，备份产物可位于同步盘（备份到云端目录是合理用法）；本校验只做

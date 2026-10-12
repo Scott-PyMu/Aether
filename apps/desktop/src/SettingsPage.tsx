@@ -17,6 +17,10 @@
  * M5-02 范围（自动备份设置，D13/ADR-020）：
  * - `settings-backup-auto`（开关 / 频率 / 保留份数，经 `settings_set` 持久化；
  *   调度器每周期读取设置生效，无需重启）。
+ *
+ * M5-03 范围（加密备份开关，D13/ADR-020）：
+ * - `settings-backup-encryption`（`backup.encryption.enabled`，缺省 `true`）；
+ *   关闭后手动/自动备份产出 P0 `.db` 形态；开启且主密钥不可用时备份暂停并告警。
  */
 import { useCallback, useEffect, useState } from "react";
 
@@ -26,6 +30,7 @@ import {
   BACKUP_AUTO_ENABLED_KEY,
   BACKUP_AUTO_FREQUENCY_KEY,
   BACKUP_AUTO_RETENTION_KEY,
+  BACKUP_ENCRYPTION_ENABLED_KEY,
   BACKUP_REMINDER_KEY,
   settingsIpc,
   type SettingsIpc,
@@ -75,6 +80,8 @@ export function SettingsPage({
   const [autoEnabled, setAutoEnabled] = useState(true);
   const [autoFrequency, setAutoFrequency] = useState<"daily" | "weekly">("daily");
   const [autoRetention, setAutoRetention] = useState("10");
+  // M5-03：加密备份开关（缺省开启；主密钥不可用时备份暂停并告警）。
+  const [encryptionEnabled, setEncryptionEnabled] = useState(true);
   const [autoLoaded, setAutoLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -108,15 +115,16 @@ export function SettingsPage({
     };
   }, [ipc]);
 
-  // M5-02：读取自动备份设置（缺省语义与核心一致：开启 / daily / 10）。
+  // M5-02/M5-03：读取自动备份与加密设置（缺省语义与核心一致：开启 / daily / 10 / 加密开启）。
   useEffect(() => {
     let active = true;
     Promise.all([
       ipc.get(BACKUP_AUTO_ENABLED_KEY),
       ipc.get(BACKUP_AUTO_FREQUENCY_KEY),
       ipc.get(BACKUP_AUTO_RETENTION_KEY),
+      ipc.get(BACKUP_ENCRYPTION_ENABLED_KEY),
     ])
-      .then(([enabled, frequency, retention]) => {
+      .then(([enabled, frequency, retention, encryption]) => {
         if (!active) {
           return;
         }
@@ -125,6 +133,7 @@ export function SettingsPage({
         setAutoRetention(
           typeof retention.value === "number" ? String(retention.value) : "10",
         );
+        setEncryptionEnabled(encryption.value !== false);
         setAutoLoaded(true);
       })
       .catch((failure: unknown) => {
@@ -184,6 +193,31 @@ export function SettingsPage({
       setBusy(false);
     }
   }, [autoEnabled, autoFrequency, autoRetention, ipc]);
+
+  // M5-03：加密备份开关（即时持久化；缺省开启）。
+  const toggleEncryption = useCallback(
+    async (next: boolean) => {
+      setBusy(true);
+      setError(null);
+      setErrorCode(null);
+      setNotice(null);
+      try {
+        const result = await ipc.set(BACKUP_ENCRYPTION_ENABLED_KEY, next);
+        setEncryptionEnabled(result.value !== false);
+        setNotice(
+          next
+            ? "已开启加密备份（XChaCha20-Poly1305；主密钥存 OS 凭据库）"
+            : "已关闭加密备份（产物为 P0 明文 .db 形态；请自行评估风险）",
+        );
+      } catch (failure) {
+        setError(describeIpcError(failure));
+        setErrorCode(ipcErrorCode(failure));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [ipc],
+  );
 
   const pickWorkspace = useCallback(async () => {
     setError(null);
@@ -357,9 +391,20 @@ export function SettingsPage({
               保存自动备份设置
             </button>
           </div>
+          <label className="settings-toggle">
+            <input
+              type="checkbox"
+              data-testid="settings-backup-encryption"
+              data-encryption={encryptionEnabled ? "on" : "off"}
+              checked={encryptionEnabled}
+              disabled={busy || !autoLoaded}
+              onChange={(event) => void toggleEncryption(event.target.checked)}
+            />
+            加密备份（XChaCha20-Poly1305；缺省开启；主密钥不可用时备份暂停并告警，不产出明文）
+          </label>
           <p className="settings-note">
             自动产物按保留份数滚动；手动产物不自动删除（ADR-020）。失败不产生半成品，
-            冷却后自动重试并记录审计。
+            冷却后自动重试并记录审计。加密关闭后产物为 P0 明文 `.db` 形态。
           </p>
         </section>
 

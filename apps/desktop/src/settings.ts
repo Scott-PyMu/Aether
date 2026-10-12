@@ -1,11 +1,14 @@
 /**
- * 设置项 IPC 契约与语义（M3-05；设计 D13、UI-UX S-05/Q9/Q10；M5-02 自动备份键）。
+ * 设置项 IPC 契约与语义（M3-05；设计 D13、UI-UX S-05/Q9/Q10；M5-02 自动备份键；
+ * M5-03 加密备份键）。
  *
  * 当前登记键（核心白名单 `SETTINGS_KEY_ALLOWLIST`）：
  * - `backup.reminder`：7 天未备份提醒开关（布尔；缺省 `true`，全局粒度）；
  * - `backup.auto.enabled` / `backup.auto.frequency` / `backup.auto.retention`：
  *   自动备份总开关 / 频率（daily|weekly）/ 自动产物保留份数（1–100，缺省 10；
- *   手动产物不自动删除）——M5-02/ADR-020。
+ *   手动产物不自动删除）——M5-02/ADR-020；
+ * - `backup.encryption.enabled`：加密备份开关（布尔；缺省 `true`；`true` 且主密钥
+ *   不可用 → 备份暂停并告警，禁止静默降级为明文）——M5-03/ADR-020。
  *
  * 未登记键由核心返回 `invalid_enum`（默认拒绝）。工作区绑定键归 M3-08。
  */
@@ -19,6 +22,8 @@ export const BACKUP_AUTO_ENABLED_KEY = "backup.auto.enabled";
 export const BACKUP_AUTO_FREQUENCY_KEY = "backup.auto.frequency";
 /** 自动备份保留份数设置键（M5-02/ADR-020；1–100，缺省 10）。 */
 export const BACKUP_AUTO_RETENTION_KEY = "backup.auto.retention";
+/** 加密备份开关设置键（M5-03/ADR-020；缺省 `true`）。 */
+export const BACKUP_ENCRYPTION_ENABLED_KEY = "backup.encryption.enabled";
 
 /** 未备份提醒状态（`backup_list.reminder` 投影；核心时钟计算，可注入）。 */
 export interface BackupReminder {

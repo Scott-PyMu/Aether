@@ -23,9 +23,13 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use aether_control::SharedClock;
+use aether_security::{
+    derive_passphrase_key, encrypt_backup_file, load_or_create_master_key, master_key_available,
+    BackupArtifactKey, BackupCryptoParams, SecretStore, SecretValue,
+};
 use aether_store::backup::{
-    backup_file_name_for, cleanup_backup_temps, create_backup_file_verified, prune_plan_for_kind,
-    required_space_bytes, BackupRecord,
+    backup_file_name_for_with_extension, cleanup_backup_temps, create_backup_staging,
+    prune_plan_for_kind, required_space_bytes, BackupRecord, ENCRYPTED_BACKUP_EXTENSION,
 };
 use aether_store::{AuditLogRecord, ReadPool, StoreCommand, WriteQueue};
 use serde_json::{json, Value};
@@ -33,7 +37,7 @@ use serde_json::{json, Value};
 use crate::backup_control::{file_len, wal_path, SpaceProbe};
 use crate::diagnostics_control::{
     default_setting_value, BACKUP_AUTO_ENABLED_KEY, BACKUP_AUTO_FREQUENCY_KEY,
-    BACKUP_AUTO_RETENTION_KEY,
+    BACKUP_AUTO_RETENTION_KEY, BACKUP_ENCRYPTION_ENABLED_KEY,
 };
 use crate::ipc::error::IpcError;
 
@@ -94,6 +98,9 @@ pub struct AutoBackupSettings {
     pub enabled: bool,
     pub frequency: AutoFrequency,
     pub retention: usize,
+    /// M5-03/ADR-020：`backup.encryption.enabled`（缺省 `true`；`true` 且密钥不可用
+    /// → 备份暂停并告警，禁止静默降级为明文）。
+    pub encryption_enabled: bool,
 }
 
 impl Default for AutoBackupSettings {
@@ -102,6 +109,7 @@ impl Default for AutoBackupSettings {
             enabled: true,
             frequency: AutoFrequency::Daily,
             retention: aether_store::BACKUP_RETENTION,
+            encryption_enabled: true,
         }
     }
 }
@@ -240,6 +248,11 @@ pub struct AutoBackupDeps {
     pub clock: SharedClock,
     /// 自动/手动备份共享互斥锁（同一时刻最多 1 个备份任务）。
     pub run_lock: Arc<tokio::sync::Mutex<()>>,
+    /// M5-03/ADR-020：主密钥存储（Keychain；A3 降级为加密文件）。
+    /// `None` = 安全存储不可用（加密开启时自动备份暂停并告警）。
+    pub secrets: Option<Arc<dyn SecretStore>>,
+    /// 口令模式 KDF 参数（生产固定 A3 冻结值；测试/演练注入弱参数）。
+    pub crypto_params: BackupCryptoParams,
 }
 
 /// 自动备份调度器（后台任务 + 状态投影；`Clone` 共享状态）。
@@ -251,6 +264,8 @@ pub struct AutoBackup {
     space: Arc<Mutex<Arc<dyn SpaceProbe>>>,
     clock: SharedClock,
     run_lock: Arc<tokio::sync::Mutex<()>>,
+    secrets: Option<Arc<dyn SecretStore>>,
+    crypto_params: BackupCryptoParams,
     state: Arc<Mutex<AutoBackupState>>,
 }
 
@@ -263,6 +278,8 @@ impl AutoBackup {
             space: Arc::new(Mutex::new(deps.space)),
             clock: deps.clock,
             run_lock: deps.run_lock,
+            secrets: deps.secrets,
+            crypto_params: deps.crypto_params,
             state: Arc::new(Mutex::new(AutoBackupState::default())),
         }
     }
@@ -271,6 +288,18 @@ impl AutoBackup {
     pub fn set_space_probe(&self, space: Arc<dyn SpaceProbe>) {
         let mut slot = self.lock_space();
         *slot = space;
+    }
+
+    /// 替换主密钥存储（M5-03；测试/演练注入）。
+    pub fn set_secrets(&mut self, secrets: Option<Arc<dyn SecretStore>>) {
+        self.secrets = secrets;
+    }
+
+    /// 以新口令模式 KDF 参数构造克隆（测试/演练；状态共享）。
+    #[must_use]
+    pub fn with_crypto_params(mut self, params: BackupCryptoParams) -> Self {
+        self.crypto_params = params;
+        self
     }
 
     /// 以新时钟构造克隆（测试注入 `ManualClock`；状态共享）。
@@ -329,7 +358,8 @@ impl AutoBackup {
                 true
             }
         };
-        let frequency = AutoFrequency::from_value(&self.setting_value(BACKUP_AUTO_FREQUENCY_KEY).await?);
+        let frequency =
+            AutoFrequency::from_value(&self.setting_value(BACKUP_AUTO_FREQUENCY_KEY).await?);
         let retention = match self.setting_value(BACKUP_AUTO_RETENTION_KEY).await? {
             Value::Number(ref number) => match number.as_i64() {
                 Some(value) => usize::try_from(value.clamp(1, 100)).unwrap_or(10),
@@ -337,10 +367,18 @@ impl AutoBackup {
             },
             _ => aether_store::BACKUP_RETENTION,
         };
+        let encryption_enabled = match self.setting_value(BACKUP_ENCRYPTION_ENABLED_KEY).await? {
+            Value::Bool(value) => value,
+            other => {
+                tracing::warn!(value = %other, "设置 {} 非布尔：按缺省（加密开启）处理", BACKUP_ENCRYPTION_ENABLED_KEY);
+                true
+            }
+        };
         Ok(AutoBackupSettings {
             enabled,
             frequency,
             retention,
+            encryption_enabled,
         })
     }
 
@@ -450,6 +488,14 @@ impl AutoBackup {
             auto_retention: Some(settings.retention),
             created_at: now,
             id: &id,
+            // M5-03/ADR-020：加密缺省开启；密钥不可用 → 失败并告警（不产出明文）。
+            encryption: if settings.encryption_enabled {
+                BackupEncryption::Keychain
+            } else {
+                BackupEncryption::None
+            },
+            secrets: self.secrets.as_deref(),
+            crypto_params: self.crypto_params,
         };
         let outcome = execute_backup(
             &self.reads,
@@ -463,7 +509,8 @@ impl AutoBackup {
         let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         match outcome {
             Ok(outcome) => {
-                self.record_success(trigger, now, &outcome, duration_ms).await;
+                self.record_success(trigger, now, &outcome, duration_ms)
+                    .await;
                 AutoRunReport {
                     trigger,
                     result: "success",
@@ -602,7 +649,16 @@ impl AutoBackup {
             "last_duration_ms": snapshot.last_duration_ms,
             "last_size_bytes": snapshot.last_size_bytes,
             "last_error": snapshot.last_error,
+            "encryption_enabled": settings.encryption_enabled,
+            "encryption_key_available": self.encryption_key_available(),
         }))
+    }
+
+    /// 主密钥可用性（M5-03：加密开启且安全存储可用；诊断/状态投影，不创建密钥）。
+    fn encryption_key_available(&self) -> bool {
+        self.secrets
+            .as_ref()
+            .is_some_and(|store| master_key_available(store.as_ref()))
     }
 
     /// `backup_list.auto` 段（ADR-018 附录 A-5：7 字段冻结）。
@@ -620,6 +676,16 @@ impl AutoBackup {
     }
 }
 
+/// 备份加密选择（M5-03/ADR-020）。
+pub enum BackupEncryption<'a> {
+    /// 不加密（`backup.encryption.enabled=false`；产物保持 P0 `.db` 形态）。
+    None,
+    /// Keychain 主密钥模式（缺省；密钥不可用 → 失败，不产出明文）。
+    Keychain,
+    /// 口令模式（显式提供口令；Argon2id 派生）。
+    Passphrase(&'a SecretValue),
+}
+
 /// 备份写出任务（手动/自动共用；ADR-020 实现要点 1）。
 pub struct BackupJob<'a> {
     pub target: &'a Path,
@@ -629,6 +695,12 @@ pub struct BackupJob<'a> {
     pub auto_retention: Option<usize>,
     pub created_at: i64,
     pub id: &'a str,
+    /// M5-03：加密选择。
+    pub encryption: BackupEncryption<'a>,
+    /// M5-03：主密钥存储（Keychain/A3；口令模式不使用）。
+    pub secrets: Option<&'a dyn SecretStore>,
+    /// M5-03：口令模式 KDF 参数。
+    pub crypto_params: BackupCryptoParams,
 }
 
 /// 备份执行结果。
@@ -641,10 +713,13 @@ pub struct BackupOutcome {
 
 /// 备份写出（手动/自动共用执行路径；ADR-020 §2.1）：
 /// 互斥锁串行 → 空间护栏（可写 + 可用 ≥ `db+wal` ×1.2）→ 清理历史临时残留 →
-/// `VACUUM INTO` 临时文件 + `quick_check` 校验 + 原子 rename（[`create_backup_file_verified`]）
-/// → 台账登记（失败删除产物，保持台账/磁盘一致）→ 自动类滚动（新产物已校验再删最旧）。
+/// `VACUUM INTO` 暂存文件 + `quick_check` 校验（[`create_backup_staging`]）→
+/// （M5-03）加密开启时流式加密（`AEBK1`，单一 AEAD tag）→ 原子 rename →
+/// 台账登记（失败删除产物，保持台账/磁盘一致）→ 自动类滚动（新产物已校验再删最旧）。
 ///
-/// 失败路径不产生半成品、不删除既有备份；不触碰存储状态机（D4 边界）。
+/// 加密边界（ADR-020）：加密开启且密钥不可用（Keychain 失败且未提供口令）→
+/// **失败并告警，禁止静默降级为明文**；`backup.encryption.enabled=false` 才允许
+/// 不加密产物。失败路径不产生半成品、不删除既有备份；不触碰存储状态机（D4 边界）。
 pub async fn execute_backup(
     reads: &ReadPool,
     write: &WriteQueue,
@@ -662,7 +737,9 @@ pub async fn execute_backup(
     })?;
     let required = required_space_bytes(file_len(db_path), file_len(&wal_path(db_path)));
     let available = space.available_bytes(job.target).map_err(|message| {
-        IpcError::invalid_value(format!("目标空间探测失败（backup_space_unknown）：{message}"))
+        IpcError::invalid_value(format!(
+            "目标空间探测失败（backup_space_unknown）：{message}"
+        ))
     })?;
     if available < required {
         return Err(IpcError::invalid_value(format!(
@@ -676,24 +753,55 @@ pub async fn execute_backup(
         tracing::warn!(cleaned, "清理历史备份临时文件（崩溃/中断残留）");
     }
 
-    let file_name = backup_file_name_for(job.target, job.created_at, job.id);
+    let encrypted = !matches!(job.encryption, BackupEncryption::None);
+    let extension = if encrypted {
+        ENCRYPTED_BACKUP_EXTENSION
+    } else {
+        "db"
+    };
+    let file_name =
+        backup_file_name_for_with_extension(job.target, job.created_at, job.id, extension);
     let dest = job.target.join(&file_name);
-    let dest_for_task = dest.clone();
-    let id_for_task = job.id.to_owned();
-    let created_at = job.created_at;
-    let reads_for_task = reads.clone();
-    let size_bytes = reads_for_task
-        .with_connection(move |connection| {
-            create_backup_file_verified(connection, &dest_for_task, created_at, &id_for_task)
-        })
-        .await
-        .map_err(|error| IpcError::internal(format!("备份写出失败：{error}")))?;
+    let staging = aether_store::backup::backup_temp_path(&dest, job.created_at, job.id);
+
+    // 暂存写出（VACUUM INTO + quick_check + schema 校验 + fsync；不 rename）。
+    {
+        let staging_for_task = staging.clone();
+        let reads_for_task = reads.clone();
+        let outcome = reads_for_task
+            .with_connection(move |connection| create_backup_staging(connection, &staging_for_task))
+            .await;
+        if let Err(error) = outcome {
+            let _ = std::fs::remove_file(&staging);
+            return Err(IpcError::internal(format!("备份写出失败：{error}")));
+        }
+    }
+
+    let size_bytes = if encrypted {
+        match encrypt_staged_backup(job, &staging, &dest).await {
+            Ok(size) => size,
+            Err(error) => {
+                // 加密任一步失败：明文暂存必须清除（不产出明文/半成品）。
+                let _ = std::fs::remove_file(&staging);
+                return Err(error);
+            }
+        }
+    } else {
+        let outcome = std::fs::rename(&staging, &dest);
+        if let Err(error) = outcome {
+            let _ = std::fs::remove_file(&staging);
+            return Err(IpcError::internal(format!("备份就位失败：{error}")));
+        }
+        file_len(&dest)
+    };
+    // 暂存文件（明文）在成功路径删除；失败路径由加密分支清理。
+    let _ = std::fs::remove_file(&staging);
 
     let record = BackupRecord {
         id: job.id.to_owned(),
         path: dest,
         size_bytes,
-        encrypted: false,
+        encrypted,
         kind: job.kind.to_owned(),
         created_at: job.created_at,
     };
@@ -756,6 +864,77 @@ pub async fn execute_backup(
     })
 }
 
+/// 加密暂存文件 → 产物（M5-03；失败清理暂存/密文临时文件，不产生半成品）。
+async fn encrypt_staged_backup(
+    job: &BackupJob<'_>,
+    staging: &Path,
+    dest: &Path,
+) -> Result<u64, IpcError> {
+    let key = match &job.encryption {
+        BackupEncryption::None => {
+            return Err(IpcError::internal("加密路径选择不一致（不变量破坏）"))
+        }
+        BackupEncryption::Keychain => {
+            let store = job.secrets.ok_or_else(|| {
+                IpcError::invalid_value(
+                    "备份加密不可用（backup_key_unavailable）：OS 凭据库不可用且未提供口令；已按 ADR-020 暂停加密备份（不产出不加密产物；可在设置中显式关闭加密）",
+                )
+            })?;
+            let master = load_or_create_master_key(store).map_err(|error| {
+                IpcError::invalid_value(format!(
+                    "备份加密不可用（backup_key_unavailable）：主密钥读取失败：{error}"
+                ))
+            })?;
+            BackupArtifactKey::Keychain(master)
+        }
+        BackupEncryption::Passphrase(passphrase) => {
+            let (key, salt) = derive_passphrase_key(job.crypto_params, passphrase)
+                .map_err(|error| IpcError::internal(format!("备份口令派生失败：{error}")))?;
+            BackupArtifactKey::Passphrase { key, salt }
+        }
+    };
+
+    let cipher_temp = append_suffix(staging, ".cipher");
+    let _ = std::fs::remove_file(&cipher_temp);
+    let staging_for_task = staging.to_path_buf();
+    let cipher_for_task = cipher_temp.clone();
+    let source_id = job.id.to_owned();
+    let created_at = job.created_at;
+    let outcome = tokio::task::spawn_blocking(move || {
+        encrypt_backup_file(
+            &staging_for_task,
+            &cipher_for_task,
+            &source_id,
+            created_at,
+            &key,
+        )
+    })
+    .await
+    .map_err(|error| IpcError::internal(format!("备份加密任务失败：{error}")))?;
+
+    let size = match outcome {
+        Ok(size) => size,
+        Err(error) => {
+            let _ = std::fs::remove_file(&cipher_temp);
+            return Err(IpcError::internal(format!(
+                "备份加密失败（backup_encrypt_failed）：{error}"
+            )));
+        }
+    };
+    if let Err(error) = std::fs::rename(&cipher_temp, dest) {
+        let _ = std::fs::remove_file(&cipher_temp);
+        return Err(IpcError::internal(format!("加密产物就位失败：{error}")));
+    }
+    Ok(size)
+}
+
+/// 追加路径后缀（`OsString` 级拼接，避免 lossy 转换）。
+fn append_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(suffix);
+    PathBuf::from(name)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -767,6 +946,7 @@ mod tests {
             enabled,
             frequency,
             retention: 10,
+            encryption_enabled: true,
         }
     }
 
@@ -825,7 +1005,10 @@ mod tests {
     #[test]
     fn disabled_switch_never_triggers() {
         let settings = settings(false, AutoFrequency::Daily);
-        assert_eq!(decide(i64::MAX, &settings, None, 0, None), AutoDecision::Wait);
+        assert_eq!(
+            decide(i64::MAX, &settings, None, 0, None),
+            AutoDecision::Wait
+        );
         assert_eq!(
             compute_next_run_at(i64::MAX, &settings, None, 0, None),
             None
@@ -860,13 +1043,22 @@ mod tests {
     fn next_run_at_tracks_schedule_retry_and_disable() {
         let settings = settings(true, AutoFrequency::Daily);
         let now = 100 * FREQUENCY_DAILY_MS;
-        assert_eq!(compute_next_run_at(now, &settings, None, 0, None), Some(now));
+        assert_eq!(
+            compute_next_run_at(now, &settings, None, 0, None),
+            Some(now)
+        );
         assert_eq!(
             compute_next_run_at(now, &settings, Some(now - 1_000), 0, None),
             Some(now - 1_000 + FREQUENCY_DAILY_MS)
         );
         assert_eq!(
-            compute_next_run_at(now, &settings, Some(now - FREQUENCY_DAILY_MS - 5_000), 0, None),
+            compute_next_run_at(
+                now,
+                &settings,
+                Some(now - FREQUENCY_DAILY_MS - 5_000),
+                0,
+                None
+            ),
             Some(now),
             "已过期 → 下次调度检查即触发"
         );
