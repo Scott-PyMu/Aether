@@ -864,6 +864,67 @@ impl CommandRequest for ExportDiagnosticsRequest {
     }
 }
 
+/// `session_export`（M5-05/ADR-018 附录 A-1；ADR-021 §2.1-8）：单会话 JSONL 导出。
+///
+/// `target_dir` 缺省 = 应用 `archives/` 目录；提供时经系统选择器 canonicalize
+/// （存在目录）后进入后端执行空间护栏（M3-04 同口径）。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct SessionExportRequest {
+    pub session_id: String,
+    #[serde(default)]
+    pub target_dir: Option<String>,
+}
+
+impl SessionExportRequest {
+    /// 外部目标目录的规范化结果（缺省来源为 `None`）。
+    pub fn canonical_target_dir(&self) -> Result<Option<std::path::PathBuf>, IpcError> {
+        match &self.target_dir {
+            Some(target_dir) => path::validate_backup_target_dir(target_dir).map(Some),
+            None => Ok(None),
+        }
+    }
+}
+
+impl CommandRequest for SessionExportRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.session_id) {
+            return Err(IpcError::invalid_format("session_id", "必须是 26 位 ULID"));
+        }
+        if let Some(target_dir) = &self.target_dir {
+            ensure_not_empty(target_dir, "target_dir")?;
+        }
+        Ok(())
+    }
+}
+
+/// `archive_export`（M5-05/ADR-018 附录 A-1）：全库归档导出（容量「一键归档」）。
+#[derive(Debug, Default, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct ArchiveExportRequest {
+    #[serde(default)]
+    pub target_dir: Option<String>,
+}
+
+impl ArchiveExportRequest {
+    /// 外部目标目录的规范化结果（缺省来源为 `None`）。
+    pub fn canonical_target_dir(&self) -> Result<Option<std::path::PathBuf>, IpcError> {
+        match &self.target_dir {
+            Some(target_dir) => path::validate_backup_target_dir(target_dir).map(Some),
+            None => Ok(None),
+        }
+    }
+}
+
+impl CommandRequest for ArchiveExportRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if let Some(target_dir) = &self.target_dir {
+            ensure_not_empty(target_dir, "target_dir")?;
+        }
+        Ok(())
+    }
+}
+
 fn validate_page_limit(limit: Option<u32>) -> Result<(), IpcError> {
     match limit {
         Some(0) => Err(IpcError::out_of_range(

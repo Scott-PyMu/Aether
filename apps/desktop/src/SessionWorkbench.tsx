@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { appEventStore } from "./aetherStore";
+import { archiveIpc as productionArchiveIpc, type ArchiveIpc } from "./archive";
 import { artifactsIpc as productionArtifactsIpc, type ArtifactsIpc } from "./artifacts";
 import { describeIpcError, ipcErrorCode } from "./startup";
 import { diagnosticsIpc as productionDiagnosticsIpc, type DiagnosticsIpc } from "./diagnostics";
@@ -97,6 +98,8 @@ export interface SessionWorkbenchProps {
   artifactsIpc?: ArtifactsIpc;
   /** M3-11：供应商配置 IPC 注入（模型选择器派生数据源；缺省 = 生产 Tauri 实现）。 */
   providersIpc?: ProvidersIpc;
+  /** M5-05：归档导出 IPC 注入（单会话导出；缺省 = 生产 Tauri 实现）。 */
+  archiveIpc?: ArchiveIpc;
 }
 
 function mergeMessages(previous: MessageRow[], incoming: MessageRow[]): MessageRow[] {
@@ -121,6 +124,7 @@ export function SessionWorkbench({
   diagnosticsIpc: diagnosticsIpcProp = productionDiagnosticsIpc,
   artifactsIpc: artifactsIpcProp = productionArtifactsIpc,
   providersIpc: providersIpcProp = productionProvidersIpc,
+  archiveIpc: archiveIpcProp = productionArchiveIpc,
 }: SessionWorkbenchProps) {
   const [runtimes, setRuntimes] = useState<RuntimeInfo[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
@@ -150,6 +154,12 @@ export function SessionWorkbench({
   const [thinkingOpen, setThinkingOpen] = useState(false);
   /** M3-10：同步能力门非阻断提示（`thinking_depth_unsupported`；无则 `null`）。 */
   const [thinkingWarning, setThinkingWarning] = useState<string | null>(null);
+  /** M5-05：单会话导出进行中（顶栏按钮去抖）与结果回执（`session-export-result`）。 */
+  const [exportBusy, setExportBusy] = useState(false);
+  const [exportResult, setExportResult] = useState<{
+    result: "ok" | "failed";
+    message: string;
+  } | null>(null);
   const sendInFlight = useRef(false);
 
   // M3-06：存储降级（只读）联动——发送入口禁用；修复 + 重启前不得恢复。
@@ -427,6 +437,26 @@ export function SessionWorkbench({
     }
   }, [activeSessionId, ipc, refreshSessions, reportError]);
 
+  /** M5-05：单会话导出（缺省写入数据目录 `archives/`；锚点 `session-export`）。 */
+  const onExportSession = useCallback(async () => {
+    if (!activeSessionId || exportBusy) {
+      return;
+    }
+    setExportBusy(true);
+    setExportResult(null);
+    try {
+      const response = await archiveIpcProp.exportSession(activeSessionId);
+      setExportResult({
+        result: "ok",
+        message: `已导出：${response.export.path}（${response.export.rows} 行，sha256 ${response.export.sha256.slice(0, 12)}…）`,
+      });
+    } catch (failure) {
+      setExportResult({ result: "failed", message: describeIpcError(failure) });
+    } finally {
+      setExportBusy(false);
+    }
+  }, [activeSessionId, archiveIpcProp, exportBusy]);
+
   /** M3-06：一键重放（`run_retry`；仅终态 run 由后端判定；新 run 事件流驱动渲染）。 */
   const onRetryRun = useCallback(
     async (runId: string) => {
@@ -472,6 +502,9 @@ export function SessionWorkbench({
         pendingCount={pendingPermissionCount}
         rightOpen={rightOpen}
         onToggleRight={() => setRightOpen((open) => !open)}
+        onExportSession={activeSession ? () => void onExportSession() : undefined}
+        exportBusy={exportBusy}
+        exportResult={exportResult?.result ?? null}
       />
       <div className="workbench-columns">
         <aside className="workbench-sidebar">
@@ -715,6 +748,17 @@ export function SessionWorkbench({
               {backpressureScope === "run"
                 ? "存储写队列高水位（L2）：新任务暂被拒绝，队列回落至 ≤1024 后自动恢复。"
                 : `适配器 ${isolatedRuntime?.id ?? ""} 背压隔离中（storage_backpressure）：重启后自动解除。`}
+            </p>
+          ) : null}
+
+          {exportResult ? (
+            <p
+              className="session-export-result"
+              data-testid="session-export-result"
+              data-result={exportResult.result}
+              role={exportResult.result === "failed" ? "alert" : "status"}
+            >
+              {exportResult.message}
             </p>
           ) : null}
 

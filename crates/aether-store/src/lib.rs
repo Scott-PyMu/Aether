@@ -16,6 +16,7 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+pub mod archive;
 pub mod backup;
 pub mod checkpoint;
 pub mod error;
@@ -24,6 +25,17 @@ pub mod ops;
 pub mod pragma;
 pub mod store;
 pub mod write_queue;
+
+pub use archive::{
+    archive_line_whitelist, archive_retention_batch, cleanup_archive_temps, compact_date_utc,
+    export_full_archive, export_session_archive, full_archive_file_name,
+    retention_archive_file_name, select_retention_batch, session_archive_file_name,
+    unique_archive_path, verify_archive_file, ArchiveCounts, ArchiveManifest, ArchiveReport,
+    ArchiveSanitizer, ArchiveVerification, RetentionEventRow, ARCHIVE_BUFFER_BYTES,
+    ARCHIVE_FORMAT_VERSION, ARCHIVE_MANIFEST_KIND, ARCHIVE_PARTIAL_INFIX,
+    ARCHIVE_SOURCE_ARCHIVE_EXPORT, ARCHIVE_SOURCE_AUTO_RETENTION, ARCHIVE_SOURCE_SESSION_EXPORT,
+    ARCHIVE_TEMP_INFIX, RETENTION_BATCH_MAX, RETENTION_EVENT_TYPES,
+};
 
 pub use backup::{
     backup_file_name, backup_file_name_for, backup_file_name_for_with_extension,

@@ -9,14 +9,14 @@ use std::path::Path;
 use serde_json::Value;
 
 use super::dto::{
-    AppRestartRequest, ArtifactAddRequest, ArtifactRemoveRequest, ArtifactsListRequest,
-    BackupCreateRequest, BackupRestoreRequest, ExportDiagnosticsRequest, MessagesPageRequest,
-    PermissionResolveRequest, PermissionsPendingRequest, ProviderCreateRequest,
-    ProviderDeleteRequest, ProviderModelAddRequest, ProviderModelToggleRequest,
-    ProviderToggleRequest, ProviderUpdateRequest, ProvidersListRequest, RunRetryRequest,
-    RuntimeEnableRequest, RuntimeRetryRequest, SessionCreateRequest, SessionIdRequest,
-    SessionListRequest, SessionSendRequest, SettingsGetRequest, SettingsSetRequest,
-    WorkspaceSetRequest,
+    AppRestartRequest, ArchiveExportRequest, ArtifactAddRequest, ArtifactRemoveRequest,
+    ArtifactsListRequest, BackupCreateRequest, BackupRestoreRequest, ExportDiagnosticsRequest,
+    MessagesPageRequest, PermissionResolveRequest, PermissionsPendingRequest,
+    ProviderCreateRequest, ProviderDeleteRequest, ProviderModelAddRequest,
+    ProviderModelToggleRequest, ProviderToggleRequest, ProviderUpdateRequest, ProvidersListRequest,
+    RunRetryRequest, RuntimeEnableRequest, RuntimeRetryRequest, SessionCreateRequest,
+    SessionExportRequest, SessionIdRequest, SessionListRequest, SessionSendRequest,
+    SettingsGetRequest, SettingsSetRequest, WorkspaceSetRequest,
 };
 use super::error::IpcError;
 use super::path::ArtifactPath;
@@ -202,6 +202,37 @@ pub trait IpcBackend: Send + Sync + 'static {
         _canonical_target_dir: &Path,
     ) -> Result<Value, IpcError> {
         Err(IpcError::not_implemented("export_diagnostics"))
+    }
+
+    /// M5-05/ADR-018：单会话 JSONL 归档导出；`canonical_target_dir` 为外部目标目录的
+    /// canonicalize 结果（`None` = 默认 `archives/` 目录）。
+    fn session_export(
+        &self,
+        _request: &SessionExportRequest,
+        _canonical_target_dir: Option<&Path>,
+    ) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("session_export"))
+    }
+
+    /// M5-05/ADR-018：全库归档导出（容量「一键归档」）；路径口径同 `session_export`。
+    fn archive_export(
+        &self,
+        _request: &ArchiveExportRequest,
+        _canonical_target_dir: Option<&Path>,
+    ) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("archive_export"))
+    }
+
+    /// M5-04（内部接线，非 IPC 命令）：保留策略运行状态（诊断包 `retention` 段与
+    /// `backup_list.retention` 段）。
+    fn retention_status(&self) -> Result<Option<Value>, IpcError> {
+        Ok(None)
+    }
+
+    /// M5-05（内部接线，非 IPC 命令）：最近一次导出指标（诊断包 `export` 段；
+    /// ADR-021 附录 A-3）。
+    fn export_metrics_status(&self) -> Result<Option<Value>, IpcError> {
+        Ok(None)
     }
 }
 

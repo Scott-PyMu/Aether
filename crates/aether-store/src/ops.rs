@@ -21,6 +21,9 @@ use crate::backup::BackupRecord;
 use crate::error::StoreError;
 use crate::write_queue::ReadPool;
 
+/// `DeleteEventsByIds` 单条 `DELETE ... IN (...)` 的参数个数上限（语句变量有界）。
+const DELETE_EVENTS_CHUNK: usize = 1_000;
+
 /// 权限行（`permissions` 表；ID 为 ULID 文本，本层不做 ULID 形状校验）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PermissionRecord {
@@ -129,10 +132,7 @@ pub enum StoreCommand {
     /// 插入 run 行。
     InsertRun { run: Run },
     /// 改写 run 生效思考深度（ADR-010 能力门：runtime 未声明能力 → 落缺省 2；M3-10）。
-    UpdateRunThinkingDepth {
-        run_id: RunId,
-        thinking_depth: u8,
-    },
+    UpdateRunThinkingDepth { run_id: RunId, thinking_depth: u8 },
     /// 启动排队中的 run（`queued → running`，记录 `started_at`）。
     StartRun { run_id: RunId, started_at: i64 },
     /// 更新 run 终态（`status` / `error` / `finished_at`）。
@@ -222,6 +222,17 @@ pub enum StoreCommand {
         provider_id: String,
         model_id: String,
         enabled: bool,
+    },
+    /// 删除指定 `rowid` 的事件行（M5-04 保留清理的删除半步；先归档后删除）。
+    ///
+    /// 调用方（保留任务）先经 [`crate::archive`] 归档精确行集合并校验通过，再提交本
+    /// 命令按 `rowid`（删除精确定位）物理删除；批 ≤ [`crate::archive::RETENTION_BATCH_MAX`]
+    /// （5000 行/命令，单事务 <500ms，ADR-021 §2.1-5）。
+    ///
+    /// 单写者约束：删除同样经 [`crate::WriteQueue::execute`]（AGENTS §2.4）。
+    DeleteEventsByIds {
+        /// 待删事件行 `rowid` 列表（空列表为 no-op）。
+        rowids: Vec<i64>,
     },
 }
 
@@ -799,6 +810,32 @@ pub(crate) fn apply_command(
                     params![provider_id, model_id, i64::from(*enabled)],
                 )
                 .map_err(txn_failed)?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::Applied { affected })
+        }
+        StoreCommand::DeleteEventsByIds { rowids } => {
+            if rowids.is_empty() {
+                return Ok(StoreOutcome::Applied { affected: 0 });
+            }
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            // 参数化 `IN` 分批（语句变量数有界）；`rowid` 为删除精确定位（调用方已归档）。
+            let mut affected = 0usize;
+            for chunk in rowids.chunks(DELETE_EVENTS_CHUNK) {
+                let placeholders = std::iter::repeat("?")
+                    .take(chunk.len())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let sql = format!("DELETE FROM events WHERE rowid IN ({placeholders})");
+                let values: Vec<&dyn rusqlite::ToSql> = chunk
+                    .iter()
+                    .map(|rowid| rowid as &dyn rusqlite::ToSql)
+                    .collect();
+                affected = affected.saturating_add(
+                    transaction
+                        .execute(&sql, values.as_slice())
+                        .map_err(txn_failed)?,
+                );
+            }
             transaction.commit().map_err(txn_failed)?;
             Ok(StoreOutcome::Applied { affected })
         }
@@ -1568,9 +1605,7 @@ fn read_run_row(row: &Row<'_>) -> rusqlite::Result<Run> {
             .transpose()?,
         thinking_depth: row
             .get::<_, Option<i64>>(4)?
-            .map(|value| {
-                u8::try_from(value).map_err(|_| parse_column_error(4, "thinking_depth"))
-            })
+            .map(|value| u8::try_from(value).map_err(|_| parse_column_error(4, "thinking_depth")))
             .transpose()?,
         error: row.get(5)?,
         started_at: row.get(6)?,

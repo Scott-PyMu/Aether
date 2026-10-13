@@ -32,6 +32,8 @@ import {
   BACKUP_AUTO_RETENTION_KEY,
   BACKUP_ENCRYPTION_ENABLED_KEY,
   BACKUP_REMINDER_KEY,
+  EVENTS_RETENTION_DAYS_KEY,
+  EVENTS_RETENTION_ENABLED_KEY,
   settingsIpc,
   type SettingsIpc,
 } from "./settings";
@@ -82,6 +84,10 @@ export function SettingsPage({
   const [autoRetention, setAutoRetention] = useState("10");
   // M5-03：加密备份开关（缺省开启；主密钥不可用时备份暂停并告警）。
   const [encryptionEnabled, setEncryptionEnabled] = useState(true);
+  // M5-04：事件保留策略（开关 + 窗口 7–365 天；缺省关闭 / 30 天）。
+  const [retentionEnabled, setRetentionEnabled] = useState(false);
+  const [retentionDays, setRetentionDays] = useState("30");
+  const [retentionLoaded, setRetentionLoaded] = useState(false);
   const [autoLoaded, setAutoLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -115,7 +121,8 @@ export function SettingsPage({
     };
   }, [ipc]);
 
-  // M5-02/M5-03：读取自动备份与加密设置（缺省语义与核心一致：开启 / daily / 10 / 加密开启）。
+  // M5-02/M5-03/M5-04：读取自动备份/加密/保留设置（缺省语义与核心一致：
+  // 开启 / daily / 10 / 加密开启 / 保留关闭 / 30 天）。
   useEffect(() => {
     let active = true;
     Promise.all([
@@ -123,8 +130,10 @@ export function SettingsPage({
       ipc.get(BACKUP_AUTO_FREQUENCY_KEY),
       ipc.get(BACKUP_AUTO_RETENTION_KEY),
       ipc.get(BACKUP_ENCRYPTION_ENABLED_KEY),
+      ipc.get(EVENTS_RETENTION_ENABLED_KEY),
+      ipc.get(EVENTS_RETENTION_DAYS_KEY),
     ])
-      .then(([enabled, frequency, retention, encryption]) => {
+      .then(([enabled, frequency, retention, encryption, retentionOn, retentionDaysValue]) => {
         if (!active) {
           return;
         }
@@ -134,13 +143,21 @@ export function SettingsPage({
           typeof retention.value === "number" ? String(retention.value) : "10",
         );
         setEncryptionEnabled(encryption.value !== false);
+        setRetentionEnabled(retentionOn.value === true);
+        setRetentionDays(
+          typeof retentionDaysValue.value === "number"
+            ? String(retentionDaysValue.value)
+            : "30",
+        );
         setAutoLoaded(true);
+        setRetentionLoaded(true);
       })
       .catch((failure: unknown) => {
         if (active) {
           setError(describeIpcError(failure));
           setErrorCode(ipcErrorCode(failure));
           setAutoLoaded(true);
+          setRetentionLoaded(true);
         }
       });
     return () => {
@@ -218,6 +235,35 @@ export function SettingsPage({
     },
     [ipc],
   );
+
+  // M5-04：保存事件保留设置（开关 + 窗口 7–365 天；核心校验失败回结构化错误）。
+  const saveRetention = useCallback(async () => {
+    const days = Number(retentionDays);
+    if (!Number.isInteger(days) || days < 7 || days > 365) {
+      setError("保留窗口必须是 7–365 天的整数");
+      setErrorCode("out_of_range");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setErrorCode(null);
+    setNotice(null);
+    try {
+      await ipc.set(EVENTS_RETENTION_ENABLED_KEY, retentionEnabled);
+      await ipc.set(EVENTS_RETENTION_DAYS_KEY, days);
+      setRetentionDays(String(days));
+      setNotice(
+        retentionEnabled
+          ? "已保存：启用事件保留（仅超窗 message.delta/usage/log 先归档后清理）"
+          : "已保存：关闭事件保留（事件全量保留）",
+      );
+    } catch (failure) {
+      setError(describeIpcError(failure));
+      setErrorCode(ipcErrorCode(failure));
+    } finally {
+      setBusy(false);
+    }
+  }, [ipc, retentionDays, retentionEnabled]);
 
   const pickWorkspace = useCallback(async () => {
     setError(null);
@@ -405,6 +451,49 @@ export function SettingsPage({
           <p className="settings-note">
             自动产物按保留份数滚动；手动产物不自动删除（ADR-020）。失败不产生半成品，
             冷却后自动重试并记录审计。加密关闭后产物为 P0 明文 `.db` 形态。
+          </p>
+        </section>
+
+        <section className="settings-section" data-testid="settings-retention">
+          <h3>事件保留与归档（D13 / ADR-021）</h3>
+          <label className="settings-toggle">
+            <input
+              type="checkbox"
+              data-testid="settings-retention-enabled"
+              data-enabled={retentionEnabled ? "true" : "false"}
+              checked={retentionEnabled}
+              disabled={busy || !retentionLoaded}
+              onChange={(event) => setRetentionEnabled(event.target.checked)}
+            />
+            启用事件保留（缺省关闭；仅超窗 message.delta/usage/log 先归档后清理，
+            控制事件与审计不清理）
+          </label>
+          <label className="settings-auto-row">
+            保留窗口（7–365 天）
+            <input
+              type="number"
+              min={7}
+              max={365}
+              data-testid="settings-retention-days"
+              value={retentionDays}
+              disabled={busy || !retentionLoaded}
+              onChange={(event) => setRetentionDays(event.target.value)}
+            />
+          </label>
+          <div className="settings-actions">
+            <button
+              type="button"
+              data-testid="settings-retention-save"
+              disabled={busy || !retentionLoaded}
+              onClick={() => void saveRetention()}
+            >
+              保存保留设置
+            </button>
+          </div>
+          <p className="settings-note">
+            容量 ≥2GB 时提示开启；事件增长 &gt;500MB/月或库 ≥5GB 时自动开启
+            （审计 `retention.auto_armed`）。清理前先归档（归档失败跳过该批），
+            归档产物不自动删除；「一键归档」入口在备份与恢复页。
           </p>
         </section>
 

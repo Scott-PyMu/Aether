@@ -690,6 +690,8 @@ stateDiagram-v2
 | M5-02 / M5-04 | 备份与保留设置 | `settings-backup-auto` / `settings-retention` | — |
 | M5-02 | 自动备份设置与状态（实现登记，2026-10-10） | `settings-backup-auto-enabled`（开关）/ `settings-backup-auto-frequency`（频率）/ `settings-backup-auto-retention`（保留份数）/ `settings-backup-auto-save`（保存）；`backup-auto-status`（备份页状态） | `data-enabled`（true/false）、`data-last-result`（success/failed/空）、`data-failures`（连续失败数） |
 | M5-03 | 加密备份开关（实现登记，2026-10-10） | `settings-backup-encryption`（缺省开启；关闭 → P0 明文 `.db` 形态） | `data-encryption`（on/off） |
+| M5-04 | 留存设置（实现登记，2026-10-12） | `settings-retention-enabled`（开关，缺省关闭）/ `settings-retention-days`（窗口 7–365）/ `settings-retention-save`；备份页 `retention-status` | `data-enabled` / `data-level`（ok/warn/critical）/ `data-auto-armed` |
+| M5-05 | 归档导出（实现登记，2026-10-12） | `archive`（一键归档，缺省 `archives/`；上文 P1 登记项）/ `archive-external`（外部目录）/ `archive-export-result`；工作台 `session-export`（单会话导出）/ `session-export-result` | `data-result`（ok/failed）/ `data-level`（容量三档联动） |
 | M7-01 | 运行时启停开关（S-04） | `runtime-toggle` | `data-runtime-id` / `data-enabled` / `data-status` |
 | M7-01 | 禁用二次确认 | `runtime-disable-confirm` | `data-count`（在途会话数） |
 | M7-03 | 会话暂停/恢复 | `session-pause-toggle` | `data-session-id` / `data-status`（running/paused/idle）/ `data-disabled`（能力未声明或连接未就绪时置灰） |

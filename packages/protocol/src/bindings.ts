@@ -84,6 +84,17 @@ export const commands = {
 	providerModelToggle: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("provider_model_toggle", { payload })),
 	exportDiagnostics: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("export_diagnostics", { payload })),
 	/**
+	 *  M5-05/ADR-018：单会话 JSONL 导出（缺省 = 应用 `archives/` 目录；
+	 *  `target_dir` = 系统选择器选中的外部目录，canonicalize 后进入后端空间护栏）。
+	 */
+	sessionExport: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("session_export", { payload })),
+	/**
+	 *  M5-05/ADR-018：全库归档导出（容量「一键归档」；锚点 `archive`）。
+	 * 
+	 *  无参数调用（缺省载荷 / `{}`）合法；`target_dir` 可选（系统选择器选中的外部目录）。
+	 */
+	archiveExport: (payload: unknown | null) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("archive_export", { payload })),
+	/**
 	 *  ADR-007 决策 1：核心健康查询（无参数；严格解析拒绝未知成员）。
 	 * 
 	 *  返回 `HealthReport`（`storage_state` / `write_queue_depth` / `runtimes` 摘要 / `ts`）；

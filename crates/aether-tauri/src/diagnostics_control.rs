@@ -30,11 +30,11 @@ use crate::backup_control::{file_len, CapacityConfig, SpaceProbe, BACKUP_COMMAND
 use crate::core_health::HealthProvider;
 use crate::ipc::backend::IpcBackend;
 use crate::ipc::dto::{
-    AppRestartRequest, BackupCreateRequest, BackupRestoreRequest, ExportDiagnosticsRequest,
-    MessagesPageRequest, PermissionResolveRequest, PermissionsPendingRequest, RunRetryRequest,
-    RuntimeEnableRequest, RuntimeRetryRequest, SessionCreateRequest, SessionIdRequest,
-    SessionListRequest, SessionSendRequest, SettingsGetRequest, SettingsSetRequest,
-    WorkspaceSetRequest,
+    AppRestartRequest, ArchiveExportRequest, BackupCreateRequest, BackupRestoreRequest,
+    ExportDiagnosticsRequest, MessagesPageRequest, PermissionResolveRequest,
+    PermissionsPendingRequest, RunRetryRequest, RuntimeEnableRequest, RuntimeRetryRequest,
+    SessionCreateRequest, SessionExportRequest, SessionIdRequest, SessionListRequest,
+    SessionSendRequest, SettingsGetRequest, SettingsSetRequest, WorkspaceSetRequest,
 };
 use crate::ipc::error::{IpcError, IpcErrorCode};
 use crate::logging::LogSink;
@@ -234,7 +234,8 @@ impl DiagnosticsControlBackend {
             UI_LAYOUT_KEY => {
                 let valid = value.as_str().is_some_and(|layout| {
                     layout.len() <= UI_LAYOUT_MAX_BYTES
-                        && serde_json::from_str::<Value>(layout).is_ok_and(|parsed| parsed.is_object())
+                        && serde_json::from_str::<Value>(layout)
+                            .is_ok_and(|parsed| parsed.is_object())
                 });
                 if !valid {
                     return Err(IpcError::at_field(
@@ -401,6 +402,32 @@ impl DiagnosticsControlBackend {
             }
         };
 
+        // M5-04/ADR-021 A-3：保留策略状态（清理条数/释放空间/归档失败计数/自动启停）。
+        let retention = match self.inner.retention_status() {
+            Ok(Some(status)) => status,
+            Ok(None) => {
+                notes.push("保留策略任务未接线：retention 段省略".to_owned());
+                Value::Null
+            }
+            Err(error) => {
+                notes.push(format!("保留策略状态不可用：{error}"));
+                Value::Null
+            }
+        };
+
+        // M5-05/ADR-021 A-3：最近一次导出指标（rows/bytes/sha256_ok）。
+        let export = match self.inner.export_metrics_status() {
+            Ok(Some(status)) => status,
+            Ok(None) => {
+                notes.push("尚无导出记录：export 段为空".to_owned());
+                Value::Null
+            }
+            Err(error) => {
+                notes.push(format!("导出指标不可用：{error}"));
+                Value::Null
+            }
+        };
+
         let security = self.security.status();
         let bundle = json!({
             "bundle_version": DIAGNOSTICS_BUNDLE_VERSION,
@@ -424,6 +451,8 @@ impl DiagnosticsControlBackend {
             "capacity": self.capacity.to_json(db_bytes, wal_bytes),
             "store": store,
             "backup_auto": backup_auto,
+            "retention": retention,
+            "export": export,
             "config": { "settings": settings },
             "logs": logs,
             "task_dumps": task_dumps,
@@ -463,7 +492,12 @@ pub(crate) fn default_setting_value(key: &str) -> Value {
 }
 
 /// 整数区间校验（M5-01/ADR-018 附录 A-6：类型错 → `invalid_type`；越界 → `out_of_range`）。
-fn validate_setting_int_range(key: &str, value: &Value, min: i64, max: i64) -> Result<(), IpcError> {
+fn validate_setting_int_range(
+    key: &str,
+    value: &Value,
+    min: i64,
+    max: i64,
+) -> Result<(), IpcError> {
     let Some(number) = value.as_i64() else {
         return Err(IpcError::new(
             IpcErrorCode::InvalidType,
@@ -540,6 +574,8 @@ impl IpcBackend for DiagnosticsControlBackend {
             "capacity",
             "store",
             "backup_auto",
+            "retention",
+            "export",
             "config",
             "logs",
             "task_dumps",
@@ -687,6 +723,24 @@ impl IpcBackend for DiagnosticsControlBackend {
         canonical_root_path: Option<&Path>,
     ) -> Result<Value, IpcError> {
         self.inner.workspace_set(request, canonical_root_path)
+    }
+
+    /// M5-05：单会话导出（透传内层归档后端）。
+    fn session_export(
+        &self,
+        request: &SessionExportRequest,
+        canonical_target_dir: Option<&Path>,
+    ) -> Result<Value, IpcError> {
+        self.inner.session_export(request, canonical_target_dir)
+    }
+
+    /// M5-05：全库归档导出（透传内层归档后端）。
+    fn archive_export(
+        &self,
+        request: &ArchiveExportRequest,
+        canonical_target_dir: Option<&Path>,
+    ) -> Result<Value, IpcError> {
+        self.inner.archive_export(request, canonical_target_dir)
     }
 }
 

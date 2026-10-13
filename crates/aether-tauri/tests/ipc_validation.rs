@@ -15,14 +15,14 @@ use std::sync::{Arc, Mutex};
 
 use aether_tauri::ipc::backend::IpcBackend;
 use aether_tauri::ipc::dto::{
-    AppRestartRequest, ArtifactAddRequest, ArtifactRemoveRequest, ArtifactsListRequest,
-    BackupCreateRequest, BackupRestoreRequest, ExportDiagnosticsRequest, MessagesPageRequest,
-    PermissionResolveRequest, PermissionsPendingRequest, ProviderCreateRequest,
-    ProviderDeleteRequest, ProviderModelAddRequest, ProviderModelToggleRequest,
-    ProviderToggleRequest, ProviderUpdateRequest, ProvidersListRequest, RunRetryRequest,
-    RuntimeEnableRequest, RuntimeRetryRequest, SessionCreateRequest, SessionIdRequest,
-    SessionListRequest, SessionSendRequest, SettingsGetRequest, SettingsSetRequest,
-    WorkspaceSetRequest,
+    AppRestartRequest, ArchiveExportRequest, ArtifactAddRequest, ArtifactRemoveRequest,
+    ArtifactsListRequest, BackupCreateRequest, BackupRestoreRequest, ExportDiagnosticsRequest,
+    MessagesPageRequest, PermissionResolveRequest, PermissionsPendingRequest,
+    ProviderCreateRequest, ProviderDeleteRequest, ProviderModelAddRequest,
+    ProviderModelToggleRequest, ProviderToggleRequest, ProviderUpdateRequest, ProvidersListRequest,
+    RunRetryRequest, RuntimeEnableRequest, RuntimeRetryRequest, SessionCreateRequest,
+    SessionExportRequest, SessionIdRequest, SessionListRequest, SessionSendRequest,
+    SettingsGetRequest, SettingsSetRequest, WorkspaceSetRequest,
 };
 use aether_tauri::ipc::error::IpcError;
 use aether_tauri::ipc::path::{
@@ -210,6 +210,22 @@ impl IpcBackend for RecordingBackend {
         _canonical_target_dir: &Path,
     ) -> Result<Value, IpcError> {
         self.record("export_diagnostics")
+    }
+
+    fn session_export(
+        &self,
+        _request: &SessionExportRequest,
+        _canonical_target_dir: Option<&Path>,
+    ) -> Result<Value, IpcError> {
+        self.record("session_export")
+    }
+
+    fn archive_export(
+        &self,
+        _request: &ArchiveExportRequest,
+        _canonical_target_dir: Option<&Path>,
+    ) -> Result<Value, IpcError> {
+        self.record("archive_export")
     }
 }
 
@@ -749,6 +765,49 @@ fn malformed_samples_return_structured_errors_and_do_not_reach_backend() {
             "invalid_format",
             Some("provider_id"),
         ),
+        // ===== ADR-018/M5-05：归档导出两命令校验矩阵 =====
+        (
+            "session_export",
+            json!({ "session_id": "short" }),
+            "invalid_format",
+            Some("session_id"),
+        ),
+        (
+            "session_export",
+            json!({ "session_id": ULID, "unexpected": 1 }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
+        (
+            "session_export",
+            json!({ "session_id": ULID, "target_dir": "relative/path" }),
+            "path_rejected",
+            None,
+        ),
+        (
+            "session_export",
+            json!({ "session_id": ULID, "target_dir": "" }),
+            "invalid_format",
+            Some("target_dir"),
+        ),
+        (
+            "archive_export",
+            json!({ "unexpected": 1 }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
+        (
+            "archive_export",
+            json!({ "target_dir": "relative/path" }),
+            "path_rejected",
+            None,
+        ),
+        (
+            "archive_export",
+            json!({ "target_dir": 42 }),
+            "invalid_type",
+            None,
+        ),
     ];
 
     for (command, payload, code, field) in samples {
@@ -929,6 +988,24 @@ fn valid_requests_reach_backend_exactly_once() {
         // ADR-007 决策 1：health 无参数（缺省载荷与空对象两种合法调用方式）。
         ("health", Value::Null, "health"),
         ("health", json!({}), "health"),
+        // ADR-018/M5-05：归档导出两命令（无参/缺省 target_dir 两种合法调用方式）。
+        ("archive_export", Value::Null, "archive_export"),
+        ("archive_export", json!({}), "archive_export"),
+        (
+            "archive_export",
+            json!({ "target_dir": inside }),
+            "archive_export",
+        ),
+        (
+            "session_export",
+            json!({ "session_id": ULID }),
+            "session_export",
+        ),
+        (
+            "session_export",
+            json!({ "session_id": ULID, "target_dir": inside }),
+            "session_export",
+        ),
     ];
 
     for (command, payload, expected) in samples {
@@ -995,6 +1072,11 @@ fn valid_requests_reach_backend_exactly_once() {
         "settings_set",
         "health",
         "health",
+        "archive_export",
+        "archive_export",
+        "archive_export",
+        "session_export",
+        "session_export",
     ]
     .into_iter()
     .map(str::to_string)

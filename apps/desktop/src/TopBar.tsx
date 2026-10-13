@@ -27,6 +27,10 @@ export interface TopBarProps {
   pendingCount: number;
   rightOpen: boolean;
   onToggleRight: () => void;
+  /** M5-05：单会话导出入口（提供时渲染；锚点 `session-export`）。 */
+  onExportSession?: () => void;
+  exportBusy?: boolean;
+  exportResult?: "ok" | "failed" | null;
 }
 
 /** 顶栏存储指示（消费共享健康总线；`persist_degraded` 与横幅同一事实源）。 */
@@ -69,6 +73,9 @@ export function TopBar({
   pendingCount,
   rightOpen,
   onToggleRight,
+  onExportSession,
+  exportBusy = false,
+  exportResult = null,
 }: TopBarProps) {
   return (
     <header className="workbench-topbar" data-testid="topbar">
@@ -104,6 +111,18 @@ export function TopBar({
             >
               中断
             </button>
+            {onExportSession ? (
+              <button
+                type="button"
+                data-testid="session-export"
+                data-result={exportResult ?? ""}
+                disabled={exportBusy}
+                title="导出该会话为 JSONL 归档（缺省写入数据目录 archives/）"
+                onClick={onExportSession}
+              >
+                导出会话
+              </button>
+            ) : null}
             {lastAck ? (
               <span className="last-ack" data-testid="last-ack" data-run-id={lastAck.runId}>
                 {lastAck.duplicate ? "幂等命中" : "已受理"} {lastAck.runId.slice(-6)}

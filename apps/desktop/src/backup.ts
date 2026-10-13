@@ -47,6 +47,32 @@ export interface BackupCapacity {
   level: "ok" | "warn" | "critical";
 }
 
+/** 保留策略状态（M5-04；`backup_list.retention` 段，ADR-021 附录 A-3）。 */
+export interface BackupRetentionSegment {
+  enabled: boolean;
+  days: number;
+  cutoff_ts: number | null;
+  capacity: {
+    level: "ok" | "warn" | "critical";
+    total_bytes: number;
+    warn_bytes: number;
+    critical_bytes: number;
+  };
+  growth: {
+    bytes_per_month: number | null;
+    threshold_bytes: number;
+    samples: number;
+  };
+  auto_arm: { armed: boolean; at: number | null; reason: string | null };
+  last_run_at: number | null;
+  last_result: "success" | "failed" | null;
+  last_cleaned_rows: number;
+  last_freed_bytes: number;
+  last_archive_failures: number;
+  archive_failures_total: number;
+  last_error: string | null;
+}
+
 export interface BackupListResponse {
   backups: BackupRecord[];
   capacity: BackupCapacity;
@@ -54,6 +80,8 @@ export interface BackupListResponse {
   reminder?: import("./settings").BackupReminder;
   /** M5-02：自动备份状态（D13/ADR-020；未接线时缺省）。 */
   auto?: BackupAutoSegment;
+  /** M5-04：保留策略状态（D13/ADR-021；未接线时缺省）。 */
+  retention?: BackupRetentionSegment;
 }
 
 export interface BackupCreateResult {

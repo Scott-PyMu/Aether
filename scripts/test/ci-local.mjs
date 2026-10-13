@@ -183,6 +183,14 @@ record(
   "verify:m5-03（加密备份与恢复演练：AEBK1 格式/密钥扫描/两模式演练/异常路径/A3 降级/七步回滚/诊断脱敏；含 2 轮 drill）",
   run(node, [path.join(repoRoot, "scripts", "test", "m5-03", "verify-m5-03.mjs")]),
 );
+record(
+  "verify:m5-05（归档导出与会话 JSONL：字段映射/≥1GB 抽样/脱敏/外部路径与空间护栏/kill 中断/性能与内存/UI；含 release 基准）",
+  run(node, [path.join(repoRoot, "scripts", "test", "m5-05", "verify-m5-05.mjs")]),
+);
+record(
+  "verify:m5-04（事件保留与滚动策略：白名单/审计保留/补读边界/归档先行/阈值联动/空间证据/诊断段）",
+  run(node, [path.join(repoRoot, "scripts", "test", "m5-04", "verify-m5-04.mjs")]),
+);
 
 if (!quick) {
   record("verify-coverage-gate", run(node, [path.join(repoRoot, "scripts", "test", "verify-coverage-gate.mjs")]));

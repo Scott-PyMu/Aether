@@ -14,6 +14,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 pub mod adapter_executor;
+pub mod archive_control;
 pub mod audit_bridge;
 pub mod backup_auto;
 pub mod backup_control;
@@ -31,6 +32,7 @@ pub mod nav;
 pub mod permission_loop;
 pub mod picker;
 pub mod provider_control;
+pub mod retention;
 pub mod runtime_control;
 pub mod runtime_registry;
 pub mod security_level;
@@ -551,6 +553,29 @@ fn build_backend(
     };
     // M3-05（D11/D13）：诊断/容量装饰器——诊断包导出（脱敏 + 日志/健康/库摘要整合）、
     // `backup_list.reminder`（7 天未备份提醒）、已登记设置键读写。
+    // M5-04/M5-05（D13/D4；ADR-021）：归档/保留装饰器——`session_export`/
+    // `archive_export` 命令 + 保留清理任务（先归档后删除；后台调度器随核心接线，
+    // 退出序列停止；`backup_list.retention` 与诊断包 `retention`/`export` 段）。
+    let (reads_for_diagnostics, write_for_diagnostics) = match &diagnostics_deps {
+        Some(deps) => (deps.reads.clone(), deps.write.clone()),
+        None => (None, None),
+    };
+    let archive: std::sync::Arc<dyn ipc::IpcBackend> = {
+        let backend = std::sync::Arc::new(archive_control::ArchiveControlBackend::new(
+            inner,
+            data_dir.clone(),
+            reads_for_diagnostics,
+            write_for_diagnostics,
+            handle.clone(),
+            std::sync::Arc::new(aether_control::SystemClock),
+        ));
+        if let (Some(orchestrator), Some(task)) = (&orchestrator, backend.spawn_retention(&handle))
+        {
+            orchestrator.install_monitor("retention", task);
+        }
+        backend as std::sync::Arc<dyn ipc::IpcBackend>
+    };
+    let inner = archive;
     let inner: std::sync::Arc<dyn ipc::IpcBackend> = match diagnostics_deps {
         Some(deps) => std::sync::Arc::new(diagnostics_control::DiagnosticsControlBackend::new(
             inner, deps,

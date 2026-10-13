@@ -183,7 +183,11 @@ pub fn thinking_depth_warning(
     capabilities: &[String],
     runtime_id: &str,
 ) -> Option<Vec<SessionWarning>> {
-    if runtime_ready && !capabilities.iter().any(|item| item == THINKING_DEPTH_CAPABILITY) {
+    if runtime_ready
+        && !capabilities
+            .iter()
+            .any(|item| item == THINKING_DEPTH_CAPABILITY)
+    {
         return Some(vec![SessionWarning {
             code: "thinking_depth_unsupported".to_owned(),
             field: "thinking_depth".to_owned(),
@@ -928,12 +932,7 @@ impl IpcBackend for SessionBackend {
                 _ => None,
             };
             let ack = manager
-                .send_with_thinking_depth(
-                    &session_id,
-                    &text,
-                    &client_msg_id,
-                    thinking_override,
-                )
+                .send_with_thinking_depth(&session_id, &text, &client_msg_id, thinking_override)
                 .await
                 .map_err(map_lifecycle_error)?;
             let mut response = json!({
@@ -1204,6 +1203,22 @@ impl IpcBackend for SessionBackend {
         canonical_external_path: Option<&std::path::Path>,
     ) -> Result<Value, IpcError> {
         self.inner.backup_restore(request, canonical_external_path)
+    }
+
+    fn session_export(
+        &self,
+        request: &crate::ipc::dto::SessionExportRequest,
+        canonical_target_dir: Option<&std::path::Path>,
+    ) -> Result<Value, IpcError> {
+        self.inner.session_export(request, canonical_target_dir)
+    }
+
+    fn archive_export(
+        &self,
+        request: &crate::ipc::dto::ArchiveExportRequest,
+        canonical_target_dir: Option<&std::path::Path>,
+    ) -> Result<Value, IpcError> {
+        self.inner.archive_export(request, canonical_target_dir)
     }
 }
 

@@ -1,5 +1,6 @@
 /**
- * 备份与恢复页（M3-04；M5-02 自动备份状态；设计 D13、ADR-020，UI-UX S-06/§7.3）。
+ * 备份与恢复页（M3-04；M5-02 自动备份状态；M5-04 保留策略状态；M5-05 一键归档；
+ * 设计 D13、ADR-020/ADR-021，UI-UX S-06/§7.3）。
  *
  * - 覆盖层管理视图（`overlay-backup` + `overlay-back`；由 App 视图状态机管理，不卸载
  *   工作台状态）；
@@ -8,11 +9,18 @@
  * - 备份清单（`backup-item`：`data-backup-id`/`data-kind` manual|auto）+ 容量状态
  *   （`capacity-status`：`data-level` ok/warn/critical，D13 2GB/5GB）；
  * - 自动备份状态（`backup-auto-status`：开关/频率/保留/最近运行/下次排期；M5-02）；
+ * - 保留策略状态（`retention-status`：开关/窗口/最近清理/归档失败；M5-04）；
+ * - 一键归档（`archive`：`data-result`/`data-level`；缺省写入数据目录 `archives/`；
+ *   `archive-external` 走系统目录选择器；M5-05）；
  * - 恢复：内部条目或外部 `.db` 路径 → 二次确认（`backup-restore-confirm`）→
  *   核心登记恢复请求（`restart_required`）→ 应用重启后由启动序列执行七步 3–6。
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import {
+  archiveIpc as productionArchiveIpc,
+  type ArchiveIpc,
+} from "./archive";
 import {
   backupIpc,
   formatBytes,
@@ -21,6 +29,7 @@ import {
   type BackupIpc,
   type BackupRecord,
   type BackupRestoreSource,
+  type BackupRetentionSegment,
 } from "./backup";
 import {
   BACKUP_REMINDER_KEY,
@@ -35,6 +44,8 @@ export interface BackupPageProps {
   ipc?: BackupIpc;
   /** 设置 IPC（M3-05：备份提醒开关；缺省 = 生产实现）。 */
   settings?: SettingsIpc;
+  /** 归档 IPC（M5-05：一键归档/会话导出；缺省 = 生产实现）。 */
+  archive?: ArchiveIpc;
   /** 返回工作台（`overlay-back`）。 */
   onBack: () => void;
 }
@@ -59,12 +70,14 @@ function kindLabel(kind: string): string {
 export function BackupPage({
   ipc = backupIpc,
   settings = productionSettingsIpc,
+  archive = productionArchiveIpc,
   onBack,
 }: BackupPageProps) {
   const [backups, setBackups] = useState<BackupRecord[]>([]);
   const [capacity, setCapacity] = useState<BackupCapacity | null>(null);
   const [reminder, setReminder] = useState<BackupReminder | null>(null);
   const [auto, setAuto] = useState<BackupAutoSegment | null>(null);
+  const [retention, setRetention] = useState<BackupRetentionSegment | null>(null);
   const [label, setLabel] = useState("");
   const [externalPath, setExternalPath] = useState("");
   const [pending, setPending] = useState<PendingRestore | null>(null);
@@ -75,6 +88,12 @@ export function BackupPage({
   const [restoreResult, setRestoreResult] = useState<
     { result: "requested" | "failed"; source: "internal" | "external"; message: string } | null
   >(null);
+  /** M5-05：一键归档（`archive`；`data-result` ok/failed）与外部目录归档状态。 */
+  const [archiveBusy, setArchiveBusy] = useState(false);
+  const [archiveResult, setArchiveResult] = useState<{
+    result: "ok" | "failed";
+    message: string;
+  } | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -83,6 +102,7 @@ export function BackupPage({
       setCapacity(response.capacity);
       setReminder(response.reminder ?? null);
       setAuto(response.auto ?? null);
+      setRetention(response.retention ?? null);
     } catch (failure) {
       setError(describeIpcError(failure));
       setErrorCode(ipcErrorCode(failure));
@@ -148,6 +168,44 @@ export function BackupPage({
       setBusy(false);
     }
   }, [create, ipc, resetMessages]);
+
+  /** M5-05：一键归档（`archive_export`；缺省数据目录 `archives/`）。 */
+  const archiveAll = useCallback(
+    async (targetDir: string | null) => {
+      setArchiveBusy(true);
+      setArchiveResult(null);
+      try {
+        const response =
+          targetDir === null
+            ? await archive.exportAll()
+            : await archive.exportAll(targetDir);
+        setArchiveResult({
+          result: "ok",
+          message: `归档完成：${response.export.path}（${response.export.rows} 行，${formatBytes(response.export.bytes)}）`,
+        });
+      } catch (failure) {
+        setArchiveResult({ result: "failed", message: describeIpcError(failure) });
+      } finally {
+        setArchiveBusy(false);
+      }
+    },
+    [archive],
+  );
+
+  /** M5-05：归档到外部目录（系统选择器 → `archive_export.target_dir`）。 */
+  const archiveExternal = useCallback(async () => {
+    setArchiveResult(null);
+    try {
+      const picked = await archive.pickTargetDir();
+      if (picked === null) {
+        setArchiveResult({ result: "failed", message: "已取消外部目录选择" });
+        return;
+      }
+      await archiveAll(picked);
+    } catch (failure) {
+      setArchiveResult({ result: "failed", message: describeIpcError(failure) });
+    }
+  }, [archive, archiveAll]);
 
   const requestRestore = useCallback((source: PendingRestore) => {
     setPending(source);
@@ -251,6 +309,84 @@ export function BackupPage({
               </button>
             </span>
           </div>
+        ) : null}
+
+        {/* M5-05：容量一键归档（锚点 `archive`；`data-result` = ok/failed；`data-level`
+            与 2GB/5GB 三档联动——警告/强提示档附上下文文案，归档目录缺省 `archives/`）。 */}
+        <section className="archive-section">
+          <div className="archive-actions">
+            <button
+              type="button"
+              data-testid="archive"
+              data-result={archiveResult?.result ?? ""}
+              data-level={capacityLevel}
+              disabled={archiveBusy}
+              title="归档全部数据为 JSONL（含 manifest；缺省写入数据目录 archives/）"
+              onClick={() => void archiveAll(null)}
+            >
+              {capacityLevel === "critical"
+                ? "一键归档（容量紧张，强烈建议）"
+                : capacityLevel === "warn"
+                  ? "一键归档（容量警告）"
+                  : "一键归档"}
+            </button>
+            <button
+              type="button"
+              data-testid="archive-external"
+              disabled={archiveBusy}
+              onClick={() => void archiveExternal()}
+            >
+              归档到外部目录…
+            </button>
+          </div>
+          {archiveResult ? (
+            <p
+              className={
+                archiveResult.result === "ok" ? "backup-notice" : "backup-error"
+              }
+              data-testid="archive-export-result"
+              data-result={archiveResult.result}
+              role={archiveResult.result === "failed" ? "alert" : "status"}
+            >
+              {archiveResult.message}
+            </p>
+          ) : null}
+        </section>
+
+        {retention ? (
+          <section
+            className="backup-retention"
+            data-testid="retention-status"
+            data-enabled={String(retention.enabled)}
+            data-level={retention.capacity.level}
+            data-auto-armed={String(retention.auto_arm.armed)}
+          >
+            <h3>事件保留与归档（D13 / ADR-021）</h3>
+            <p>
+              {retention.enabled
+                ? `已启用：保留窗口 ${retention.days} 天（超窗 message.delta/usage/log 先归档后清理）`
+                : "未启用：事件全量保留；容量 ≥2GB 时建议在设置中开启"}
+            </p>
+            <p>
+              最近清理：
+              {retention.last_run_at === null
+                ? "暂无"
+                : `${retention.last_cleaned_rows} 条 / 释放 ${formatBytes(retention.last_freed_bytes)}`}
+              ；归档失败累计 {retention.archive_failures_total} 次
+              {retention.growth.bytes_per_month !== null
+                ? `；月增长约 ${formatBytes(Math.max(0, retention.growth.bytes_per_month))}`
+                : ""}
+            </p>
+            {retention.auto_arm.armed ? (
+              <p role="status">
+                已由阈值自动启用（
+                {retention.auto_arm.reason === "size"
+                  ? "库 ≥5GB 强提示档"
+                  : "事件增长 >500MB/月"}
+                ）
+              </p>
+            ) : null}
+          </section>
         ) : null}
 
         {auto ? (

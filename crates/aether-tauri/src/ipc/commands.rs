@@ -7,15 +7,16 @@
 use serde_json::Value;
 
 use super::dto::{
-    AppExitRequest, AppRestartRequest, ArtifactAddRequest, ArtifactRemoveRequest,
-    ArtifactsListRequest, BackupCreateRequest, BackupListRequest, BackupRestoreRequest,
-    ExportDiagnosticsRequest, HealthRequest, MessagesPageRequest, PermissionResolveRequest,
-    PermissionsPendingRequest, ProviderCreateRequest, ProviderDeleteRequest,
-    ProviderModelAddRequest, ProviderModelToggleRequest, ProviderToggleRequest,
-    ProviderUpdateRequest, ProvidersListRequest, RefPickKind, RefPickRequest, RunRetryRequest,
-    RuntimeEnableRequest, RuntimeRetryRequest, SessionCreateRequest, SessionIdRequest,
-    SessionListRequest, SessionSendRequest, SettingsGetRequest, SettingsSetRequest,
-    StartupGetRequest, StartupMigrateRequest, StartupPickTargetRequest, WorkspaceSetRequest,
+    AppExitRequest, AppRestartRequest, ArchiveExportRequest, ArtifactAddRequest,
+    ArtifactRemoveRequest, ArtifactsListRequest, BackupCreateRequest, BackupListRequest,
+    BackupRestoreRequest, ExportDiagnosticsRequest, HealthRequest, MessagesPageRequest,
+    PermissionResolveRequest, PermissionsPendingRequest, ProviderCreateRequest,
+    ProviderDeleteRequest, ProviderModelAddRequest, ProviderModelToggleRequest,
+    ProviderToggleRequest, ProviderUpdateRequest, ProvidersListRequest, RefPickKind,
+    RefPickRequest, RunRetryRequest, RuntimeEnableRequest, RuntimeRetryRequest,
+    SessionCreateRequest, SessionExportRequest, SessionIdRequest, SessionListRequest,
+    SessionSendRequest, SettingsGetRequest, SettingsSetRequest, StartupGetRequest,
+    StartupMigrateRequest, StartupPickTargetRequest, WorkspaceSetRequest,
 };
 use super::error::{IpcError, IpcErrorCode};
 use super::validate::{parse_no_params, parse_strict};
@@ -326,6 +327,40 @@ pub(crate) fn export_diagnostics(
         .map(JsonPayload)
 }
 
+/// M5-05/ADR-018：单会话 JSONL 导出（缺省 = 应用 `archives/` 目录；
+/// `target_dir` = 系统选择器选中的外部目录，canonicalize 后进入后端空间护栏）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn session_export(
+    state: tauri::State<'_, IpcState>,
+    payload: JsonPayload,
+) -> Result<JsonPayload, IpcError> {
+    let request: SessionExportRequest = parse_strict(payload.into_value())?;
+    let canonical = request.canonical_target_dir()?;
+    state
+        .backend_ready()?
+        .session_export(&request, canonical.as_deref())
+        .map(JsonPayload)
+}
+
+/// M5-05/ADR-018：全库归档导出（容量「一键归档」；锚点 `archive`）。
+///
+/// 无参数调用（缺省载荷 / `{}`）合法；`target_dir` 可选（系统选择器选中的外部目录）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn archive_export(
+    state: tauri::State<'_, IpcState>,
+    payload: Option<JsonPayload>,
+) -> Result<JsonPayload, IpcError> {
+    let request: ArchiveExportRequest =
+        parse_no_params(payload.map(JsonPayload::into_value).unwrap_or(Value::Null))?;
+    let canonical = request.canonical_target_dir()?;
+    state
+        .backend_ready()?
+        .archive_export(&request, canonical.as_deref())
+        .map(JsonPayload)
+}
+
 /// ADR-010/M3-09：引用选择器（`{ kind: "file" | "directory" }`）。
 ///
 /// Rust 侧系统选择器（复用 `DirectoryPicker` 抽象并扩展文件选择；E2E 注入替身），
@@ -627,6 +662,8 @@ pub fn collected<R: tauri::Runtime>() -> tauri_specta::Commands<R> {
         provider_model_add,
         provider_model_toggle,
         export_diagnostics,
+        session_export,
+        archive_export,
         health,
         startup_get,
         startup_pick_target,
@@ -674,6 +711,8 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         provider_model_add,
         provider_model_toggle,
         export_diagnostics,
+        session_export,
+        archive_export,
         health,
         startup_get,
         startup_pick_target,
@@ -722,6 +761,8 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         provider_model_add,
         provider_model_toggle,
         export_diagnostics,
+        session_export,
+        archive_export,
         health,
         startup_get,
         startup_pick_target,
