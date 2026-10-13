@@ -28,15 +28,17 @@ use aether_adapters::connection::ConnectionState;
 use aether_adapters::supervisor::Supervisor;
 use aether_control::{
     compose_memory_injection, LifecycleError, MemoryInjection, PermissionError, PermissionService,
-    SessionManager, READBACK_MAX_GAP,
+    SessionCreateOptions, SessionManager, READBACK_MAX_GAP,
 };
 use aether_core::{
     EventEnvelope, Message, PermissionDecision, PermissionScope, Runtime, RuntimeId, RuntimeStatus,
     SessionId, SessionStatus, Workspace, WorkspaceId, THINKING_DEPTH_CAPABILITY,
     THINKING_DEPTH_DEFAULT,
 };
+use aether_security::{normalize_rule_target, PermissionResource, RuleError, RuleTargetKind};
 use aether_store::{
-    ArtifactRecord, ReadPool, SessionQuery, StoreCommand, StoreOutcome, WriteQueue,
+    ArtifactRecord, AuditLogRecord, PermissionRuleRecord, ReadPool, SessionQuery, StoreCommand,
+    StoreOutcome, WriteQueue,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -46,8 +48,9 @@ use crate::ipc::dto::{
     ArtifactAddRequest, ArtifactRemoveRequest, ArtifactsListRequest, MessagesPageRequest,
     PermissionResolveRequest, PermissionsPendingRequest, ProviderCreateRequest,
     ProviderDeleteRequest, ProviderModelAddRequest, ProviderModelToggleRequest,
-    ProviderToggleRequest, ProviderUpdateRequest, ProvidersListRequest, SessionCreateRequest,
-    SessionIdRequest, SessionListRequest, SessionSendRequest,
+    ProviderToggleRequest, ProviderUpdateRequest, ProvidersListRequest, RuleAddRequest,
+    RuleDeleteRequest, RuleToggleRequest, RuleUpdateRequest, SessionCreateRequest,
+    SessionIdRequest, SessionListRequest, SessionPermissionModeSetRequest, SessionSendRequest,
 };
 use crate::ipc::error::{IpcError, IpcErrorCode};
 use crate::ipc::path::ArtifactPath;
@@ -122,6 +125,9 @@ pub struct SessionSummary {
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking_depth: Option<u8>,
+    /// 会话级权限模式（M6-01/ADR-014 决策 3；`SessionSummary` 回显档位）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<String>,
     pub system_prompt: Option<String>,
     pub config: JsonPayload,
     pub token_usage: JsonPayload,
@@ -157,6 +163,7 @@ impl SessionSummary {
             status: session_status_to_dto(session.status),
             model: session.model.clone(),
             thinking_depth: Some(session.thinking_depth),
+            permission_mode: Some(session.permission_mode.as_str().to_owned()),
             system_prompt: session.system_prompt.clone(),
             config: JsonPayload(session.config.clone()),
             token_usage: JsonPayload(token_usage),
@@ -512,6 +519,7 @@ impl IpcBackend for SessionBackend {
         let workspace_id = request.workspace_id.clone();
         let model = request.model.clone();
         let thinking_depth_request = request.thinking_depth_value()?;
+        let permission_mode = request.permission_mode_value()?.unwrap_or_default();
         self.call(async move {
             let runtime = {
                 let supervisor = supervisor.ok_or_else(|| {
@@ -633,13 +641,16 @@ impl IpcBackend for SessionBackend {
                 thinking_depth_request.unwrap_or(THINKING_DEPTH_DEFAULT)
             };
             let session = manager
-                .create_session_with_depth(
+                .create_session_with_options(
                     runtime,
                     &title,
-                    workspace_id,
-                    model,
-                    system_prompt,
-                    effective_depth,
+                    SessionCreateOptions {
+                        workspace_id,
+                        model,
+                        system_prompt,
+                        thinking_depth: effective_depth,
+                        permission_mode,
+                    },
                 )
                 .await
                 .map_err(map_lifecycle_error)?;
@@ -1114,9 +1125,11 @@ impl IpcBackend for SessionBackend {
         Ok(Value::Array(items))
     }
 
-    /// M3-03 `permission_resolve`：用户决议（D9：`once` / `session` 授权；`deny` 拒绝）。
+    /// M3-03 `permission_resolve`：用户决议（D9；M6-01/ADR-019 启用 `always` 持久授权）。
     ///
-    /// DTO 决策 → 控制层（`once` → allow+once；`session` → allow+session；`deny` → deny）。
+    /// DTO 决策 → 控制层（`once` → allow+once；`session` → allow+session；
+    /// `always` → allow+always（「记住」；绑定 canonical target，重启重建））；
+    /// `deny` → deny。
     /// 非待审批（已决议/已超时/不存在）→ `invalid_value` + 稳定业务码
     /// `permission_not_pending`（不新增 IPC 错误码枚举，口径同 `session_busy`）。
     fn permission_resolve(&self, request: &PermissionResolveRequest) -> Result<Value, IpcError> {
@@ -1128,6 +1141,9 @@ impl IpcBackend for SessionBackend {
             }
             crate::ipc::dto::PermissionDecision::Session => {
                 (PermissionDecision::Allow, Some(PermissionScope::Session))
+            }
+            crate::ipc::dto::PermissionDecision::Always => {
+                (PermissionDecision::Allow, Some(PermissionScope::Always))
             }
             crate::ipc::dto::PermissionDecision::Deny => (PermissionDecision::Deny, None),
         };
@@ -1142,6 +1158,319 @@ impl IpcBackend for SessionBackend {
                 "scope": scope.map(|scope| scope.as_str()),
                 "ticket_id": ticket.id,
             }))
+        })
+    }
+
+    /// M6-01 DoD8：`session_permission_mode_set`——会话级权限模式设置。
+    ///
+    /// 语义（ADR-014 决策 3）：档位为判定权威入参，仅影响后续工具调用决策；
+    /// 在途会话沙箱参数不变（投影由 M7-06 承接）；档位变更入审计
+    /// （`session.permission_mode_changed`，actor=user，resource=session）。
+    fn session_permission_mode_set(
+        &self,
+        request: &SessionPermissionModeSetRequest,
+    ) -> Result<Value, IpcError> {
+        let session_id = parse_session_id(&request.session_id)?;
+        let mode = request.permission_mode_value()?;
+        let reads = self.reads_required()?.clone();
+        let write = self.write_required()?.clone();
+        self.call(async move {
+            let session = reads
+                .session(&session_id)
+                .await
+                .map_err(|error| IpcError::internal(format!("会话读取失败：{error}")))?
+                .ok_or_else(|| session_not_found(&session_id))?;
+            let previous = session.permission_mode;
+            let now = now_ms();
+            let outcome = write
+                .execute(StoreCommand::UpdateSessionPermissionMode {
+                    session_id: session_id.clone(),
+                    permission_mode: mode,
+                    updated_at: now,
+                })
+                .await
+                .map_err(|error| IpcError::internal(format!("会话档位落库失败：{error}")))?;
+            if let StoreOutcome::Applied { affected } = outcome {
+                if affected == 0 {
+                    return Err(session_not_found(&session_id));
+                }
+            }
+            write
+                .execute(StoreCommand::InsertAudit {
+                    record: AuditLogRecord {
+                        id: new_audit_id(),
+                        session_id: Some(session_id.as_str().to_owned()),
+                        runtime_id: None,
+                        actor: "user".to_owned(),
+                        action: "session.permission_mode_changed".to_owned(),
+                        resource: Some("session".to_owned()),
+                        detail: Some(
+                            json!({
+                                "from": previous.as_str(),
+                                "to": mode.as_str(),
+                            })
+                            .to_string(),
+                        ),
+                        result: Some("updated".to_owned()),
+                        ts: now,
+                    },
+                })
+                .await
+                .map_err(|error| IpcError::internal(format!("审计落库失败：{error}")))?;
+            Ok(json!({
+                "session_id": session_id.as_str(),
+                "permission_mode": mode.as_str(),
+                "previous_permission_mode": previous.as_str(),
+            }))
+        })
+    }
+
+    /// M6-01 DoD4：`rules_list`——用户自定义权限规则清单（按创建时间升序）。
+    fn rules_list(&self) -> Result<Value, IpcError> {
+        let reads = self.reads_required()?.clone();
+        self.call(async move {
+            let rules = reads
+                .permission_rules()
+                .await
+                .map_err(|error| IpcError::internal(format!("规则清单读取失败：{error}")))?;
+            Ok(Value::Array(rules.iter().map(rule_record_json).collect()))
+        })
+    }
+
+    /// M6-01 DoD4：`rule_add`——新增规则（形态校验 + `path` canonicalize；
+    /// 非法规则拒绝且不落库；`priority` 缺省 0）。
+    fn rule_add(&self, request: &RuleAddRequest) -> Result<Value, IpcError> {
+        let write = self.write_required()?.clone();
+        let service = self.permissions_required()?.clone();
+        let name = request.name.clone();
+        let resource_code = request.resource.clone();
+        let action = request.action.clone();
+        let target_kind_code = request.target_kind.clone();
+        let target = request.target.clone();
+        let decision = request.decision.clone();
+        let priority = request.priority_value()?;
+        self.call(async move {
+            let resource = PermissionResource::from_code(&resource_code)
+                .ok_or_else(|| IpcError::invalid_enum("resource", "资源枚举非法"))?;
+            let target_kind = RuleTargetKind::from_code(&target_kind_code)
+                .ok_or_else(|| IpcError::invalid_enum("target_kind", "目标类型枚举非法"))?;
+            ensure_rule_resource_action(resource, &action)?;
+            let normalized = normalize_rule_target(resource, target_kind, target.as_deref())
+                .map_err(map_rule_error)?;
+            let now = now_ms();
+            let record = PermissionRuleRecord {
+                id: new_rule_id(),
+                name: name.clone(),
+                resource: resource_code.clone(),
+                action: action.clone(),
+                target_kind: target_kind_code.clone(),
+                target: normalized,
+                decision: decision.clone(),
+                priority,
+                enabled: true,
+                created_at: now,
+                updated_at: now,
+            };
+            let outcome = write
+                .execute(StoreCommand::InsertPermissionRule {
+                    rule: record.clone(),
+                })
+                .await
+                .map_err(|error| IpcError::internal(format!("规则落库失败：{error}")))?;
+            ensure_rule_applied(outcome)?;
+            insert_rule_audit(
+                &write,
+                "rule.created",
+                &record.id,
+                "created",
+                json!({
+                    "name": record.name,
+                    "resource": record.resource,
+                    "action": record.action,
+                    "target_kind": record.target_kind,
+                    "target": record.target,
+                    "decision": record.decision,
+                    "priority": record.priority,
+                }),
+            )
+            .await?;
+            service
+                .restore_rules()
+                .await
+                .map_err(map_permission_error)?;
+            Ok(rule_record_json(&record))
+        })
+    }
+
+    /// M6-01 DoD4：`rule_update`——更新规则（`rule_id` 不存在 → `rule_not_found`；
+    /// `resource` 变更须同时提供匹配的 `action`）。
+    fn rule_update(&self, request: &RuleUpdateRequest) -> Result<Value, IpcError> {
+        let reads = self.reads_required()?.clone();
+        let write = self.write_required()?.clone();
+        let service = self.permissions_required()?.clone();
+        let rule_id = request.rule_id.clone();
+        let patch = RuleUpdatePatch {
+            name: request.name.clone(),
+            resource: request.resource.clone(),
+            action: request.action.clone(),
+            target_kind: request.target_kind.clone(),
+            target: request.target.clone(),
+            decision: request.decision.clone(),
+            priority: request.priority,
+        };
+        self.call(async move {
+            let existing = reads
+                .permission_rules()
+                .await
+                .map_err(|error| IpcError::internal(format!("规则清单读取失败：{error}")))?
+                .into_iter()
+                .find(|rule| rule.id == rule_id)
+                .ok_or_else(|| IpcError::rule_not_found(&rule_id))?;
+            if patch.resource.is_some() && patch.action.is_none() {
+                return Err(IpcError::invalid_value(
+                    "resource 变更须同时提供匹配的 action（ADR-018 附录 A-1）",
+                ));
+            }
+            let resource_code = patch
+                .resource
+                .clone()
+                .unwrap_or_else(|| existing.resource.clone());
+            let action = patch
+                .action
+                .clone()
+                .unwrap_or_else(|| existing.action.clone());
+            let target_kind_code = patch
+                .target_kind
+                .clone()
+                .unwrap_or_else(|| existing.target_kind.clone());
+            let resource = PermissionResource::from_code(&resource_code)
+                .ok_or_else(|| IpcError::invalid_enum("resource", "资源枚举非法"))?;
+            let target_kind = RuleTargetKind::from_code(&target_kind_code)
+                .ok_or_else(|| IpcError::invalid_enum("target_kind", "目标类型枚举非法"))?;
+            ensure_rule_resource_action(resource, &action)?;
+            let target = match target_kind {
+                RuleTargetKind::Any => None,
+                _ => patch.target.clone().or_else(|| existing.target.clone()),
+            };
+            let normalized = normalize_rule_target(resource, target_kind, target.as_deref())
+                .map_err(map_rule_error)?;
+            let record = PermissionRuleRecord {
+                id: existing.id.clone(),
+                name: patch.name.clone().unwrap_or_else(|| existing.name.clone()),
+                resource: resource_code,
+                action,
+                target_kind: target_kind_code,
+                target: normalized,
+                decision: patch
+                    .decision
+                    .clone()
+                    .unwrap_or_else(|| existing.decision.clone()),
+                priority: patch.priority.unwrap_or(existing.priority),
+                enabled: existing.enabled,
+                created_at: existing.created_at,
+                updated_at: now_ms(),
+            };
+            let outcome = write
+                .execute(StoreCommand::UpdatePermissionRule {
+                    rule: record.clone(),
+                })
+                .await
+                .map_err(|error| IpcError::internal(format!("规则落库失败：{error}")))?;
+            ensure_rule_applied(outcome)?;
+            insert_rule_audit(
+                &write,
+                "rule.updated",
+                &record.id,
+                "updated",
+                json!({
+                    "before": rule_record_json(&existing),
+                    "after": rule_record_json(&record),
+                }),
+            )
+            .await?;
+            service
+                .restore_rules()
+                .await
+                .map_err(map_permission_error)?;
+            Ok(rule_record_json(&record))
+        })
+    }
+
+    /// M6-01 DoD4：`rule_delete`——删除规则（`rule_id` 不存在 → `rule_not_found`）。
+    fn rule_delete(&self, request: &RuleDeleteRequest) -> Result<Value, IpcError> {
+        let reads = self.reads_required()?.clone();
+        let write = self.write_required()?.clone();
+        let service = self.permissions_required()?.clone();
+        let rule_id = request.rule_id.clone();
+        self.call(async move {
+            let existing = reads
+                .permission_rules()
+                .await
+                .map_err(|error| IpcError::internal(format!("规则清单读取失败：{error}")))?
+                .into_iter()
+                .find(|rule| rule.id == rule_id)
+                .ok_or_else(|| IpcError::rule_not_found(&rule_id))?;
+            let outcome = write
+                .execute(StoreCommand::DeletePermissionRule {
+                    id: rule_id.clone(),
+                })
+                .await
+                .map_err(|error| IpcError::internal(format!("规则删除失败：{error}")))?;
+            ensure_rule_applied(outcome)?;
+            insert_rule_audit(
+                &write,
+                "rule.deleted",
+                &rule_id,
+                "deleted",
+                json!({ "name": existing.name }),
+            )
+            .await?;
+            service
+                .restore_rules()
+                .await
+                .map_err(map_permission_error)?;
+            Ok(json!({ "rule_id": rule_id, "deleted": true }))
+        })
+    }
+
+    /// M6-01 DoD4：`rule_toggle`——启用/停用规则（`rule_id` 不存在 → `rule_not_found`）。
+    fn rule_toggle(&self, request: &RuleToggleRequest) -> Result<Value, IpcError> {
+        let reads = self.reads_required()?.clone();
+        let write = self.write_required()?.clone();
+        let service = self.permissions_required()?.clone();
+        let rule_id = request.rule_id.clone();
+        let enabled = request.enabled;
+        self.call(async move {
+            let existing = reads
+                .permission_rules()
+                .await
+                .map_err(|error| IpcError::internal(format!("规则清单读取失败：{error}")))?
+                .into_iter()
+                .find(|rule| rule.id == rule_id)
+                .ok_or_else(|| IpcError::rule_not_found(&rule_id))?;
+            let now = now_ms();
+            let outcome = write
+                .execute(StoreCommand::SetPermissionRuleEnabled {
+                    id: rule_id.clone(),
+                    enabled,
+                    updated_at: now,
+                })
+                .await
+                .map_err(|error| IpcError::internal(format!("规则落库失败：{error}")))?;
+            ensure_rule_applied(outcome)?;
+            insert_rule_audit(
+                &write,
+                "rule.toggled",
+                &rule_id,
+                "toggled",
+                json!({ "enabled": enabled, "name": existing.name }),
+            )
+            .await?;
+            service
+                .restore_rules()
+                .await
+                .map_err(map_permission_error)?;
+            Ok(json!({ "rule_id": rule_id, "enabled": enabled }))
         })
     }
 
@@ -1247,6 +1576,105 @@ fn session_status_to_dto(status: SessionStatus) -> crate::ipc::dto::SessionStatu
         SessionStatus::Completed => crate::ipc::dto::SessionStatus::Completed,
         SessionStatus::Failed => crate::ipc::dto::SessionStatus::Failed,
         SessionStatus::Cancelled => crate::ipc::dto::SessionStatus::Cancelled,
+    }
+}
+
+/// `rule_update` 补丁字段（`None` = 不变；字段级校验在 DTO 层先行完成）。
+#[derive(Debug, Clone, Default)]
+struct RuleUpdatePatch {
+    name: Option<String>,
+    resource: Option<String>,
+    action: Option<String>,
+    target_kind: Option<String>,
+    target: Option<String>,
+    decision: Option<String>,
+    priority: Option<i64>,
+}
+
+/// 新 ULID（规则 id / 审计 id；与核心 `ulid` 生成器同源，26 位 Crockford Base32）。
+fn new_rule_id() -> String {
+    ulid::Ulid::new().to_string()
+}
+
+fn new_audit_id() -> String {
+    ulid::Ulid::new().to_string()
+}
+
+/// 规则 `resource × action` 匹配校验（ADR-019 附录 A-1：`fs.read→read` 等）。
+fn ensure_rule_resource_action(resource: PermissionResource, action: &str) -> Result<(), IpcError> {
+    if resource.rule_action() != action {
+        return Err(IpcError::invalid_value(format!(
+            "resource={} 要求 action={}，收到 {action}（ADR-019 兼容矩阵）",
+            resource.as_str(),
+            resource.rule_action()
+        )));
+    }
+    Ok(())
+}
+
+/// 规则写命令必须影响 1 行（0 行 = 不变量破坏）。
+fn ensure_rule_applied(outcome: StoreOutcome) -> Result<(), IpcError> {
+    if let StoreOutcome::Applied { affected } = outcome {
+        if affected == 0 {
+            return Err(IpcError::internal("规则写入未影响任何行（不变量破坏）"));
+        }
+    }
+    Ok(())
+}
+
+/// 规则条目响应形状（`rules_list` / `rule_*` 回执；字段与 `permission_rules` 表一致）。
+fn rule_record_json(record: &PermissionRuleRecord) -> Value {
+    json!({
+        "id": record.id,
+        "name": record.name,
+        "resource": record.resource,
+        "action": record.action,
+        "target_kind": record.target_kind,
+        "target": record.target,
+        "decision": record.decision,
+        "priority": record.priority,
+        "enabled": record.enabled,
+        "created_at": record.created_at,
+        "updated_at": record.updated_at,
+    })
+}
+
+/// 规则变更审计（M6-01/ADR-019 附录 A-3：`rule.created/updated/deleted/toggled`）。
+async fn insert_rule_audit(
+    write: &WriteQueue,
+    action: &str,
+    rule_id: &str,
+    result: &str,
+    detail: Value,
+) -> Result<(), IpcError> {
+    write
+        .execute(StoreCommand::InsertAudit {
+            record: AuditLogRecord {
+                id: new_audit_id(),
+                session_id: None,
+                runtime_id: None,
+                actor: "user".to_owned(),
+                action: action.to_owned(),
+                resource: Some(format!("rule:{rule_id}")),
+                detail: Some(detail.to_string()),
+                result: Some(result.to_owned()),
+                ts: now_ms(),
+            },
+        })
+        .await
+        .map_err(|error| IpcError::internal(format!("审计落库失败：{error}")))?;
+    Ok(())
+}
+
+/// 规则校验错误 → 结构化 IPC 错误（ADR-019 附录 A-1：非法组合 → `invalid_enum`）。
+fn map_rule_error(error: RuleError) -> IpcError {
+    match error {
+        RuleError::TargetKindMismatch { .. } => {
+            IpcError::invalid_enum("target_kind", error.message())
+        }
+        RuleError::ResourceActionMismatch { .. } | RuleError::InvalidTargetForm { .. } => {
+            IpcError::invalid_value(error.message())
+        }
     }
 }
 

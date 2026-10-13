@@ -39,10 +39,12 @@ pub use manager::{
     SecurityConfig, SecurityManager, SecurityStatus, BASE_ENV_ALLOWLIST,
 };
 pub use permission::{
-    case_insensitive_platform, expand_t7_sample, ApprovalQueue, ApprovalTicket, PathGuard,
-    PathGuardError, PathViolation, PermissionResource, PolicyDecision, PolicyEngine, PolicyRequest,
-    PolicyVerdict, APPROVAL_TIMEOUT_MS, MEMORY_FILE_MAX_BYTES, MEMORY_FILE_NAMES,
-    T7_TEXTUAL_SAMPLES,
+    canonicalize_free_path, case_insensitive_platform, evaluate_rules, expand_t7_sample,
+    normalize_rule_target, ApprovalQueue, ApprovalTicket, PathGuard, PathGuardError, PathViolation,
+    PermissionResource, PermissionRule, PolicyDecision, PolicyEngine, PolicyRequest, PolicyVerdict,
+    ResolvedTarget, RuleDecision, RuleError, RuleHit, RuleOutcome, RuleTargetKind,
+    APPROVAL_TIMEOUT_MS, MEMORY_FILE_MAX_BYTES, MEMORY_FILE_NAMES, RULE_COMMAND_MAX_LEN,
+    RULE_HOST_MAX_LEN, T7_TEXTUAL_SAMPLES,
 };
 pub use redact::{RedactKind, Redactor};
 pub use reference::{

@@ -1,12 +1,15 @@
 //! M3-12 生产组合路径集成 E2E：会话等待态写入（ADR-011 / D9）。
 //!
+//! 矩阵口径由 ADR-014 设计变更驱动（M6-01）：缺省档 `workspace_write` 区内写
+//! 免审批，制造 pending 的样本一律改用区外写（ask）。
+//!
 //! 组合面（与生产组合根一致，M3-08 关闭后的口径）：
 //! 工作区基准（`workspace_set` 换根） + 执行器权限网关（`PermissionServiceGate`）
 //! + 真实 `PermissionService`（票据/超时/审计） + `SessionManager`（等待态唯一写者）
-//! + Mock 适配器进程（`permission-loop:` 回环触发真实工作区 ask）。
+//! + Mock 适配器进程（`permission-loop:` 回环触发真实区外写 ask）。
 //!
 //! 断言（DoD6）：
-//! - 真实工作区 `fs.write` ask → 会话 `running → waiting_permission`；
+//! - 真实区外 `fs.write` ask → 会话 `running → waiting_permission`；
 //! - 决议（allow once / deny）→ 合法回程 `waiting_permission → running`；
 //! - `session.status_changed` 的 `from/to` 精确匹配；事件序列全部命中 19 边白名单；
 //! - 回环零直通（执行器探针计数，复用 M2-10/M3-08 口径）。
@@ -78,6 +81,20 @@ fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool) -> bool {
         std::thread::sleep(Duration::from_millis(10));
     }
     predicate()
+}
+
+/// canonical 路径 → 目标字符串形态（剥离 `\\?\` 扩展前缀；该前缀属输入检查
+/// 拒绝形态，测试夹具不得以其构造 target）。
+fn plain(path: &Path) -> String {
+    let text = path.to_string_lossy().to_string();
+    text.strip_prefix(r"\\?\").unwrap_or(&text).to_owned()
+}
+
+/// 区外写目标（M6-01/ADR-014 矩阵口径更新：缺省档区内写免审批，制造 pending 的
+/// 样本必须改用区外写 `ask`）。目标从 canonical 基准派生，规避 CI 临时目录 8.3
+/// 短名别名对路径形态检查的误伤。
+fn outside_target(dir: &Path, name: &str) -> String {
+    plain(&std::fs::canonicalize(dir).unwrap().join(name))
 }
 
 fn evidence(name: &str, value: &Value) {
@@ -229,6 +246,7 @@ impl Harness {
                 workspace_id: None,
                 model: None,
                 thinking_depth: None,
+                permission_mode: None,
             })
             .expect("session_create");
         SessionId::new(value["id"].as_str().expect("会话 id")).expect("会话 id 形态")
@@ -377,7 +395,13 @@ fn production_composition_real_workspace_ask_marks_waiting_and_returns() {
     let session = h.create_session();
 
     // ===== 路径 1：allow once =====
-    let run_allow = h.send(&session, "permission-loop:notes.txt", "m3-12-allow-1");
+    // M6-01/ADR-014 矩阵口径更新：缺省档区内写 allow 免审批，pending 样本改区外写 ask。
+    let outside_allow = outside_target(h.dir.path(), "notes.txt");
+    let run_allow = h.send(
+        &session,
+        &format!("permission-loop:{outside_allow}"),
+        "m3-12-allow-1",
+    );
     let ticket = h.wait_pending(&session);
     assert_eq!(ticket.resource, "fs.write");
     assert_eq!(ticket.action, "write");
@@ -386,7 +410,7 @@ fn production_composition_real_workspace_ask_marks_waiting_and_returns() {
             .canonical_target
             .as_deref()
             .is_some_and(|target| target.contains("notes.txt")),
-        "target 应为工作区内 canonical 路径：{:?}",
+        "target 应为区外 canonical 路径：{:?}",
         ticket.canonical_target
     );
     assert!(
@@ -409,7 +433,12 @@ fn production_composition_real_workspace_ask_marks_waiting_and_returns() {
     assert!(h.wait_session_status(&session, SessionStatus::Idle));
 
     // ===== 路径 2：deny =====
-    let run_deny = h.send(&session, "permission-loop:denied.txt", "m3-12-deny-1");
+    let outside_deny = outside_target(h.dir.path(), "denied.txt");
+    let run_deny = h.send(
+        &session,
+        &format!("permission-loop:{outside_deny}"),
+        "m3-12-deny-1",
+    );
     let denied = h.wait_pending(&session);
     assert!(
         h.wait_session_status(&session, SessionStatus::WaitingPermission),

@@ -249,7 +249,7 @@ fn dod1_provider_tables_match_adr_010_and_seed_builtins() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(schema_version, 3, "迁移必须到 0003（ADR-010）");
+    assert_eq!(schema_version, 4, "迁移必须到 0004（ADR-010 + M6-01）");
 }
 
 /// DoD1：写路径经单写队列（D3）；增/改/启停/删除级联/重复模型拒绝。

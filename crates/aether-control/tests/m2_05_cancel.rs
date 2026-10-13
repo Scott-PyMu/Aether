@@ -1,6 +1,9 @@
 //! M2-05 集成测试：取消树（interrupt/dispose/父取消级联）+ 10s 任务看门狗
 //! （dump + 强制清理）+ 权限等待可取消。
 //!
+//! 矩阵口径由 ADR-014 设计变更驱动（M6-01）：缺省档 `workspace_write` 区内写
+//! 免审批，制造 pending 的样本一律改用区外写（ask）。
+//!
 //! 设计依据：D8「取消树：会话级 CancellationToken，interrupt/dispose/父会话取消级联；
 //! 权限等待可取消」；失败场景表「取消风暴 → 10s 未退出的会话任务强制清理并记 dump」。
 //!
@@ -15,8 +18,8 @@ use aether_control::{LifecycleConfig, PermissionConfig, TASK_DUMP_ACTION_FORCED_
 use aether_core::{PermissionDecision, RunStatus, SessionStatus};
 use m2_support::{
     build_manager, build_permission_service, create_session, insert_session_row, manual_clock,
-    permission_request, system_clock, wait_for, wait_permissions_pending, wait_run_status,
-    wait_session_status, CancellableExecutor, TestCore, UnresponsiveExecutor,
+    outside_target, permission_request, system_clock, wait_for, wait_permissions_pending,
+    wait_run_status, wait_session_status, CancellableExecutor, TestCore, UnresponsiveExecutor,
 };
 use serde_json::json;
 
@@ -163,6 +166,7 @@ async fn dod1_cancel_storm_twenty_sessions_dispose_within_10s() {
 async fn dod2_interrupt_returns_idle_and_conversation_continues() {
     let core = TestCore::open().await;
     let workspace = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
     let executor = CancellableExecutor::new();
     let manager = build_manager(
         &core,
@@ -202,19 +206,19 @@ async fn dod2_interrupt_returns_idle_and_conversation_continues() {
         "流式 delta 应被管线受理：{outcome:?}"
     );
 
-    // 权限等待绑定在途 run 令牌（M2-05：权限等待可取消）。
+    // 权限等待绑定在途 run 令牌（M2-05：权限等待可取消）；区外写（缺省档 ask）制造 pending。
     let run_token = manager
         .active_run_cancel_token(&session.id)
         .await
         .unwrap()
         .expect("在途 run 应提供取消令牌");
-    let target = workspace.path().join("note.txt");
+    let target = outside_target(&outside, "note.txt");
     let request = permission_request(
         "req-e2e-1",
         Some(&session.id),
         "fs.write",
         "write",
-        target.to_str(),
+        Some(&target),
         None,
     );
     let waiter = {

@@ -5,8 +5,8 @@
 //!   工作区内第一个可读记忆文件，注入上限 32KB（超出按 UTF-8 字符边界截断并附
 //!   **显式标记**）；注入内容标记为「工作区约定」，优先级低于系统提示；
 //! - **工具映射**：`memory.read` / `memory.append` / `memory.write` → D9 权限请求
-//!   （`fs.read` / `fs.write`；记忆文件白名单 ≤1MB allow、工作区外 deny 由
-//!   [`aether_security::PolicyEngine`] 判定，本模块不复制策略）。
+//!   （`fs.read` / `fs.write`；档位矩阵、记忆文件白名单 ≤1MB 上限与区外重解析点规则
+//!   由 [`aether_security::PolicyEngine`] 判定，本模块不复制策略）。
 //!
 //! 分层（D14）：核心只负责注入组合与权限映射；实际文件读写由适配器侧工具执行
 //! （经线协议上报 `tool.call_started/completed/failed`，权限经 `permission.request`
@@ -18,6 +18,7 @@
 
 use std::path::{Path, PathBuf};
 
+use aether_core::PermissionMode;
 use aether_security::{
     PermissionResource, PolicyEngine, PolicyRequest, PolicyVerdict, MEMORY_FILE_MAX_BYTES,
     MEMORY_FILE_NAMES,
@@ -126,9 +127,9 @@ pub fn compose_memory_injection(workspace_root: &Path) -> MemoryInjection {
 /// 记忆工具（D14：`memory.read` / `memory.append` / `memory.write`）。
 ///
 /// 映射契约（与适配器侧实现一致；本模块为权威定义）：
-/// - `memory.read` → `fs.read`（工作区内 allow / 外 deny）；
-/// - `memory.append` / `memory.write` → `fs.write`（记忆文件白名单 allow ≤1MB；
-///   工作区内非白名单文件 ask；工作区外 deny）。
+/// - `memory.read` → `fs.read`（三档一致；区外无重解析点 allow）；
+/// - `memory.append` / `memory.write` → `fs.write`（记忆文件白名单 ≤1MB allow；
+///   档位矩阵：`read_only` 一律 deny——不变量 10；缺省档区内 allow、区外 ask）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryTool {
     Read,
@@ -179,18 +180,21 @@ impl MemoryTool {
 /// 以记忆工具语义评估一次权限请求（`fs.read` / `fs.write` → 策略矩阵）。
 ///
 /// `content_bytes`：写入内容字节数（`memory.read` 传 `None`）；记忆白名单 1MB 上限
-/// 由策略引擎判定（[`MEMORY_FILE_MAX_BYTES`]）。
+/// 由策略引擎判定（[`MEMORY_FILE_MAX_BYTES`]）。`permission_mode` 为会话档位
+/// （M6-01/ADR-014 附录 B；`read_only` 档记忆写入被拒——不变量 10）。
 pub fn evaluate_memory_tool(
     policy: &PolicyEngine,
     tool: MemoryTool,
     target: &str,
     content_bytes: Option<u64>,
+    permission_mode: PermissionMode,
 ) -> PolicyVerdict {
     policy.evaluate(&PolicyRequest {
         resource: tool.resource(),
         action: tool.action(),
         target: Some(target),
         content_bytes,
+        permission_mode,
     })
 }
 
@@ -380,49 +384,108 @@ mod tests {
     }
 
     #[test]
-    fn memory_tool_policy_in_workspace_allow_outside_deny_and_1mb_limit() {
+    fn memory_tool_policy_follows_mode_matrix_and_1mb_limit() {
         let dir = scratch_dir();
         std::fs::create_dir_all(dir.join("sub")).unwrap();
         let policy = PolicyEngine::new(&dir).unwrap();
         let agents = dir.join("AGENTS.md").to_string_lossy().to_string();
+        let default_mode = PermissionMode::WorkspaceWrite;
 
-        // 注入/读取：工作区内 allow。
-        let verdict = evaluate_memory_tool(&policy, MemoryTool::Read, &agents, None);
-        assert_eq!(verdict.decision, PolicyDecision::Allow, "memory.read allow");
-        // 写/追加：记忆白名单 allow（≤1MB）。
+        // 注入/读取：工作区内 allow（三档一致）。
+        for mode in PermissionMode::ALL {
+            let verdict = evaluate_memory_tool(&policy, MemoryTool::Read, &agents, None, mode);
+            assert_eq!(
+                verdict.decision,
+                PolicyDecision::Allow,
+                "memory.read {mode:?}"
+            );
+        }
+        // 写/追加：记忆白名单 allow（≤1MB）；>1MB deny。
         for tool in [MemoryTool::Append, MemoryTool::Write] {
             assert_eq!(
-                evaluate_memory_tool(&policy, tool, &agents, Some(MEMORY_FILE_MAX_BYTES)).decision,
+                evaluate_memory_tool(
+                    &policy,
+                    tool,
+                    &agents,
+                    Some(MEMORY_FILE_MAX_BYTES),
+                    default_mode
+                )
+                .decision,
                 PolicyDecision::Allow,
                 "{} ≤1MB allow",
                 tool.tool_name()
             );
             assert_eq!(
-                evaluate_memory_tool(&policy, tool, &agents, Some(MEMORY_FILE_MAX_BYTES + 1))
-                    .decision,
+                evaluate_memory_tool(
+                    &policy,
+                    tool,
+                    &agents,
+                    Some(MEMORY_FILE_MAX_BYTES + 1),
+                    default_mode
+                )
+                .decision,
                 PolicyDecision::Deny,
                 "{} >1MB deny",
                 tool.tool_name()
             );
+            // read_only：记忆写入被拒（不变量 10；含白名单文件）。
+            assert_eq!(
+                evaluate_memory_tool(&policy, tool, &agents, Some(1), PermissionMode::ReadOnly)
+                    .decision,
+                PolicyDecision::Deny,
+                "{} read_only deny",
+                tool.tool_name()
+            );
         }
 
-        // 工作区内非白名单文件：写走 ask（D9 矩阵）。
+        // 工作区内非白名单文件：缺省档写 allow（矩阵覆盖）。
         let notes = dir.join("NOTES.md").to_string_lossy().to_string();
         assert_eq!(
-            evaluate_memory_tool(&policy, MemoryTool::Write, &notes, Some(10)).decision,
-            PolicyDecision::Ask
+            evaluate_memory_tool(&policy, MemoryTool::Write, &notes, Some(10), default_mode)
+                .decision,
+            PolicyDecision::Allow
         );
 
-        // 工作区外 deny（读/写一致）。
-        let outside = std::env::temp_dir()
-            .join("aether-m3-08-outside.md")
-            .to_string_lossy()
-            .to_string();
-        for tool in MemoryTool::ALL {
+        // 区外：读三档 allow；写缺省档 ask、read_only deny、顶档 allow（从 canonical
+        // 基准派生样本，规避临时目录 8.3 短名别名）。
+        let base = std::fs::canonicalize(&dir).unwrap();
+        let outside_path = base
+            .parent()
+            .unwrap()
+            .join("aether-m6-01-memory-outside.md");
+        let outside_text = outside_path.to_string_lossy().to_string();
+        let outside = outside_text.strip_prefix(r"\\?\").unwrap_or(&outside_text);
+        assert_eq!(
+            evaluate_memory_tool(&policy, MemoryTool::Read, outside, Some(1), default_mode)
+                .decision,
+            PolicyDecision::Allow,
+            "区外读三档一致 allow"
+        );
+        for tool in [MemoryTool::Append, MemoryTool::Write] {
             assert_eq!(
-                evaluate_memory_tool(&policy, tool, &outside, Some(1)).decision,
+                evaluate_memory_tool(&policy, tool, outside, Some(1), default_mode).decision,
+                PolicyDecision::Ask,
+                "{} 区外写缺省档 ask",
+                tool.tool_name()
+            );
+            assert_eq!(
+                evaluate_memory_tool(&policy, tool, outside, Some(1), PermissionMode::ReadOnly)
+                    .decision,
                 PolicyDecision::Deny,
-                "{} 工作区外 deny",
+                "{} 区外写 read_only deny",
+                tool.tool_name()
+            );
+            assert_eq!(
+                evaluate_memory_tool(
+                    &policy,
+                    tool,
+                    outside,
+                    Some(1),
+                    PermissionMode::DangerFullAccess
+                )
+                .decision,
+                PolicyDecision::Allow,
+                "{} 区外写顶档 allow",
                 tool.tool_name()
             );
         }
@@ -434,16 +497,42 @@ mod tests {
         let dir = scratch_dir();
         let policy = PolicyEngine::new(&dir).unwrap();
         let root = dir.to_string_lossy().to_string();
+        let escape_only = [
+            "parent_traversal",
+            "parent_traversal_forward",
+            "relative_traversal",
+        ];
         for (label, template) in T7_TEXTUAL_SAMPLES {
             let target = expand_t7_sample(template, &root);
             for tool in MemoryTool::ALL {
-                let verdict = evaluate_memory_tool(&policy, tool, &target, Some(1));
-                assert_eq!(
-                    verdict.decision,
-                    PolicyDecision::Deny,
-                    "T7 样本 {label} 对 {} 必须 deny（target={target}）",
-                    tool.tool_name()
+                let verdict = evaluate_memory_tool(
+                    &policy,
+                    tool,
+                    &target,
+                    Some(1),
+                    PermissionMode::WorkspaceWrite,
                 );
+                if escape_only.contains(label) {
+                    // 区外读按矩阵 allow；写（缺省档）ask——均不得进入 deny 以外的放行
+                    // 口径以外路径由 always 不命中用例另行断言（DoD3）。
+                    let expected = match tool {
+                        MemoryTool::Read => PolicyDecision::Allow,
+                        _ => PolicyDecision::Ask,
+                    };
+                    assert_eq!(
+                        verdict.decision,
+                        expected,
+                        "样本 {label} 对 {} 的区外口径（target={target}）",
+                        tool.tool_name()
+                    );
+                } else {
+                    assert_eq!(
+                        verdict.decision,
+                        PolicyDecision::Deny,
+                        "T7 样本 {label} 对 {} 必须 deny（target={target}）",
+                        tool.tool_name()
+                    );
+                }
             }
         }
         std::fs::remove_dir_all(&dir).ok();

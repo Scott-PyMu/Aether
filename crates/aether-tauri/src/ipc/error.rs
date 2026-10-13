@@ -55,6 +55,8 @@ pub enum IpcErrorCode {
     ProviderNotFound,
     /// 供应商模型不存在（ADR-010：`provider_model_toggle`）。
     ProviderModelNotFound,
+    /// 权限规则不存在（M6-01/ADR-018：`rule_update` / `rule_delete` / `rule_toggle` 按 id 查无）。
+    RuleNotFound,
 }
 
 impl IpcErrorCode {
@@ -80,6 +82,7 @@ impl IpcErrorCode {
             Self::BuiltinProviderUndeletable => "builtin_provider_undeletable",
             Self::ProviderNotFound => "provider_not_found",
             Self::ProviderModelNotFound => "provider_model_not_found",
+            Self::RuleNotFound => "rule_not_found",
         }
     }
 }
@@ -209,6 +212,14 @@ impl IpcError {
         Self::new(
             IpcErrorCode::ProviderModelNotFound,
             format!("模型不存在（provider_id={provider_id}, model_id={model_id}）；已刷新模型列表"),
+        )
+    }
+
+    /// M6-01/ADR-018：权限规则不存在（按 id 查无）。
+    pub fn rule_not_found(rule_id: &str) -> Self {
+        Self::new(
+            IpcErrorCode::RuleNotFound,
+            format!("权限规则不存在（{rule_id}）；已刷新规则列表"),
         )
     }
 

@@ -54,9 +54,9 @@ pub use journal::{
 };
 pub use lifecycle::{
     run_is_retryable, ExecutorFuture, ExecutorOutcome, InterruptReport, LifecycleConfig,
-    LifecycleError, ReconcileReport, RetryAck, RunExecutor, RunRequest, SendAck, SessionManager,
-    MAX_WAITING_RUNS_PER_SESSION, RUN_INTERRUPTED_CODE, RUN_STREAM_TIMEOUT_CODE,
-    RUN_STREAM_TIMEOUT_MS, RUN_TASK_PANIC_CODE, WATCHDOG_TICK,
+    LifecycleError, ReconcileReport, RetryAck, RunExecutor, RunRequest, SendAck,
+    SessionCreateOptions, SessionManager, MAX_WAITING_RUNS_PER_SESSION, RUN_INTERRUPTED_CODE,
+    RUN_STREAM_TIMEOUT_CODE, RUN_STREAM_TIMEOUT_MS, RUN_TASK_PANIC_CODE, WATCHDOG_TICK,
 };
 pub use memory::{
     compose_memory_injection, evaluate_memory_tool, memory_write_within_limit, MemoryInjection,

@@ -12,6 +12,7 @@ import { EventStore } from "./eventStore";
 import { SessionWorkbench } from "./SessionWorkbench";
 import type {
   MessagesPageResult,
+  PermissionMode,
   RuntimeInfo,
   SessionIpc,
   SessionStatus,
@@ -113,6 +114,12 @@ describe("SessionWorkbench 会话分组（M3-12 / ADR-011）", () => {
         run_id: "01J8ZQ5R0N7W9Y8X6V4T2S0K1R",
         input_message_id: "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
         queued: false,
+      })),
+      // M6-01/ADR-014：权限模式命令面（本文件不消费；缺省替身保持接口完整）。
+      setPermissionMode: vi.fn(async (sessionId: string, mode: PermissionMode) => ({
+        session_id: sessionId,
+        permission_mode: mode,
+        previous_permission_mode: "workspace_write",
       })),
     };
     render(<SessionWorkbench store={newStore()} ipc={ipc} />);

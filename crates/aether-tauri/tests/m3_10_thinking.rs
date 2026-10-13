@@ -145,8 +145,11 @@ fn harness(binary: &Path) -> Harness {
             .with_args(unsupported_args),
     );
     let supervisor = Arc::new(
-        boot_supervisor(vec![supported, unsupported], Some(&dir.path().join("adapters.json")))
-            .expect("构造监督器"),
+        boot_supervisor(
+            vec![supported, unsupported],
+            Some(&dir.path().join("adapters.json")),
+        )
+        .expect("构造监督器"),
     );
     let executor = Arc::new(AdapterRunExecutor::new(
         Arc::clone(&supervisor),
@@ -213,6 +216,7 @@ impl Harness {
             workspace_id: None,
             model: None,
             thinking_depth,
+            permission_mode: None,
         })
     }
 
@@ -343,7 +347,9 @@ fn dod2_passthrough_default_override_and_echo() {
     assert!(h.start_runtime(RUNTIME_SUPPORTED), "支持运行时必须 Ready");
 
     // 会话级 4：响应回显 + 落库 + 适配器 session.create 收到 4（无警告）。
-    let created = h.create(RUNTIME_SUPPORTED, Some(4)).expect("session_create");
+    let created = h
+        .create(RUNTIME_SUPPORTED, Some(4))
+        .expect("session_create");
     assert_eq!(created["thinking_depth"], 4);
     assert!(created.get("warnings").is_none(), "支持运行时不得有警告");
     let session_id = created["id"].as_str().unwrap().to_owned();
@@ -371,11 +377,18 @@ fn dod2_passthrough_default_override_and_echo() {
     assert_eq!(h.run_row(&session_run).thinking_depth, Some(4));
 
     // 新建缺省会话：响应 2；adapter create 收到 2；run 落 2。
-    let default_created = h.create(RUNTIME_SUPPORTED, None).expect("session_create(缺省)");
+    let default_created = h
+        .create(RUNTIME_SUPPORTED, None)
+        .expect("session_create(缺省)");
     assert_eq!(default_created["thinking_depth"], 2);
     let default_session = default_created["id"].as_str().unwrap().to_owned();
     let ack = h
-        .send(&default_session, "plain", "01J8ZQ5R0N7W9Y8X6V4T2S0K13", None)
+        .send(
+            &default_session,
+            "plain",
+            "01J8ZQ5R0N7W9Y8X6V4T2S0K13",
+            None,
+        )
         .expect("session_send(plain)");
     let plain_run = ack["run_id"].as_str().unwrap().to_owned();
     assert_eq!(h.wait_run_terminal(&plain_run), RunStatus::Succeeded);
@@ -436,7 +449,9 @@ fn dod3_sync_gate_warning_and_defaults() {
         "未支持运行时需 ready（同步判定路径）"
     );
 
-    let created = h.create(RUNTIME_UNSUPPORTED, Some(3)).expect("session_create");
+    let created = h
+        .create(RUNTIME_UNSUPPORTED, Some(3))
+        .expect("session_create");
     // 同步判定路径：响应警告 + 生效值 2 + 请求值不透传。
     assert_eq!(created["thinking_depth"], 2, "未支持时必须落缺省 2");
     let warning = &created["warnings"][0];
@@ -496,7 +511,9 @@ fn dod3_delayed_gate_after_runtime_ready() {
         RuntimeStatus::Cold
     );
 
-    let created = h.create(RUNTIME_UNSUPPORTED, Some(3)).expect("cold 时必须接受请求");
+    let created = h
+        .create(RUNTIME_UNSUPPORTED, Some(3))
+        .expect("cold 时必须接受请求");
     assert!(
         created.get("warnings").is_none(),
         "延迟判定路径不得产生响应警告（ADR-010 v0.4）"
@@ -554,7 +571,9 @@ fn dod4_retry_uses_session_level_and_regates() {
     assert!(h.start_runtime(RUNTIME_SUPPORTED), "支持运行时必须 Ready");
 
     // 会话级 3；原 run 覆盖 1（终态 cancelled）→ 重放须按会话级 3 恢复（忽略覆盖）。
-    let created = h.create(RUNTIME_SUPPORTED, Some(3)).expect("session_create");
+    let created = h
+        .create(RUNTIME_SUPPORTED, Some(3))
+        .expect("session_create");
     let session_id = created["id"].as_str().unwrap().to_owned();
     let ack = h
         .send(&session_id, "long", "01J8ZQ5R0N7W9Y8X6V4T2S0K41", Some(1))

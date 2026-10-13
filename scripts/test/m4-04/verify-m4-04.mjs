@@ -6,8 +6,9 @@
  *   2) 覆盖率：Rust 与 TS 行覆盖 >70%（T15；--skip-coverage 可本地快跑）；
  *   3) 验收报告产出：每项附证据链接与失败重跑记录（本脚本输出 acceptance.json，
  *      报告 `docs/M4-04-验收报告.md` 引用；失败项记录 rerun 命令）；
- *   4) 命令面完整性：D7 P0 全集 35 条目 / 36 可调用命令（bindings ↔ collect_commands
- *      ↔ generate_handler 三方一致）+ 错误码全集 20 个分支覆盖扫描 + 警告码
+ *   4) 命令面完整性：命令全集（P0 36 + M5-05 导出 2 + M6-01 权限模式/规则 6 = 44；
+ *      bindings ↔ collect_commands ↔ generate_handler 三方一致）+ 错误码全集 21 个
+ *      分支覆盖扫描（M6-01 新增 `rule_not_found`）+ 警告码
  *      `thinking_depth_unsupported` 分支验证。
  *
  * 参数：--skip-coverage（跳过 T15 重负载），--skip-e2e（非 Windows 本地调试）。
@@ -44,6 +45,12 @@ const EXPECTED_COMMANDS = [
   "messages_page",
   "permissions_pending",
   "permission_resolve",
+  "session_permission_mode_set",
+  "rules_list",
+  "rule_add",
+  "rule_update",
+  "rule_delete",
+  "rule_toggle",
   "settings_get",
   "settings_set",
   "backup_create",
@@ -66,6 +73,8 @@ const EXPECTED_COMMANDS = [
   "provider_model_add",
   "provider_model_toggle",
   "export_diagnostics",
+  "session_export",
+  "archive_export",
   "health",
   "startup_get",
   "startup_pick_target",
@@ -94,6 +103,7 @@ const EXPECTED_ERROR_CODES = [
   "builtin_provider_undeletable",
   "provider_not_found",
   "provider_model_not_found",
+  "rule_not_found",
 ];
 
 const results = [];
@@ -323,7 +333,7 @@ if (selected("T6") || selected("T7")) {
   );
   record(
     "T7",
-    "路径逃逸对抗（全部 deny + 审计；TOCTOU 已知限制明示）",
+    "路径逃逸对抗（形态违规全部 deny + 审计；区外读按 ADR-014 矩阵 allow；TOCTOU 已知限制明示）",
     result.status === 0 && t7,
     { marker_found: t7, toctou_note: "D9 已知限制：P3 沙箱消除（测试报告明示）" },
     "node scripts/test/m4-04/verify-m4-04.mjs --only T7",
@@ -544,10 +554,10 @@ if (selected("DoD4")) {
   const setEquals = (values, expected) =>
     values.length === expected.size && values.every((value) => expected.has(value));
   const surfaceOk =
-    collected.length === 36 &&
+    collected.length === EXPECTED_COMMANDS.length &&
     handlerBlocks.length === 2 &&
     handlerBlocks.every((block) => setEquals(block, expectedSet)) &&
-    bindings.length === 36 &&
+    bindings.length === EXPECTED_COMMANDS.length &&
     setEquals(collected, expectedSet) &&
     setEquals(bindings, expectedSet);
   writeArtifact("command-surface.json", {
@@ -608,8 +618,8 @@ if (selected("DoD4")) {
     return !corpus.includes(`"${code}"`) && !corpus.includes(variant);
   });
   const codesOk =
-    codeEnum.length === 20 &&
-    declaredCodes.length === 20 &&
+    codeEnum.length === EXPECTED_ERROR_CODES.length &&
+    declaredCodes.length === EXPECTED_ERROR_CODES.length &&
     uncovered.length === 0 &&
     EXPECTED_ERROR_CODES.every((code) => declaredCodes.includes(code));
   writeArtifact("error-codes.json", {
@@ -639,7 +649,7 @@ if (selected("DoD4")) {
 
   record(
     "DoD4-命令面",
-    "命令面完整性（35 条目 / 36 命令；bindings↔collect↔handler 三方一致）",
+    `命令面完整性（${EXPECTED_COMMANDS.length} 命令；bindings↔collect↔handler 三方一致）`,
     surfaceOk,
     {
       collected: collected.length,
@@ -650,14 +660,14 @@ if (selected("DoD4")) {
   );
   record(
     "DoD4-命令矩阵",
-    "36 命令逐条登记验证（ipc_validation + health + startup + picker 矩阵回归）",
+    `${EXPECTED_COMMANDS.length} 命令逐条登记验证（ipc_validation + health + startup + picker 矩阵回归）`,
     matrix.status === 0,
     { elapsed_ms: matrix.elapsedMs },
     "node scripts/test/m4-04/verify-m4-04.mjs --only DoD4",
   );
   record(
     "DoD4-错误码",
-    `错误码全集 20 个逐条分支验证（未覆盖：${uncovered.length}）`,
+    `错误码全集 ${EXPECTED_ERROR_CODES.length} 个逐条分支验证（未覆盖：${uncovered.length}）`,
     codesOk,
     { uncovered },
     "node scripts/test/m4-04/verify-m4-04.mjs --only DoD4",

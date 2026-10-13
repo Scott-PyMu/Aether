@@ -54,6 +54,7 @@ fn session(id: &str, title: &str) -> Session {
         status: SessionStatus::Idle,
         model: None,
         thinking_depth: aether_core::THINKING_DEPTH_DEFAULT,
+        permission_mode: aether_core::PermissionMode::default(),
         system_prompt: None,
         config: serde_json::json!({"native_id": "n-1"}),
         token_usage: TokenUsage::default(),
@@ -318,6 +319,7 @@ async fn domain_commands_and_reads_round_trip() {
             status: PermissionStatus::Resolved,
             resolved_at: 21,
             resolver: Some("user".to_owned()),
+            target: None,
         })
         .await
         .unwrap();

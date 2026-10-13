@@ -17,7 +17,7 @@ import type { ArtifactsIpc, ArtifactEntry, RefKind } from "./artifacts";
 import { EventStore } from "./eventStore";
 import { FilePanel } from "./FilePanel";
 import type { PermissionIpc } from "./permission";
-import type { SessionIpc, SessionStatus, SessionSummary } from "./session";
+import type { PermissionMode, SessionIpc, SessionStatus, SessionSummary } from "./session";
 import { SessionWorkbench } from "./SessionWorkbench";
 
 const SESSION_A = "01J8ZQ5R0N7W9Y8X6V4T2S0K1A";
@@ -237,6 +237,12 @@ function fakeSessionIpc(): SessionIpc {
       run_id: "01J8ZQ5R0N7W9Y8X6V4T2S0K1R",
       input_message_id: "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
       queued: false,
+    })),
+    // M6-01/ADR-014：权限模式命令面（本文件不消费；缺省替身保持接口完整）。
+    setPermissionMode: vi.fn(async (sessionId: string, mode: PermissionMode) => ({
+      session_id: sessionId,
+      permission_mode: mode,
+      previous_permission_mode: "workspace_write",
     })),
   };
 }

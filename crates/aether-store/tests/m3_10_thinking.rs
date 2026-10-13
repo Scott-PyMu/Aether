@@ -19,9 +19,7 @@ use aether_core::{
     Session, SessionId, SessionStatus, TokenUsage, THINKING_DEPTH_DEFAULT,
 };
 use aether_store::migration::applied_migrations;
-use aether_store::{
-    migrate, ReadPool, Store, StoreCommand, StoreRuntime, WriteQueueConfig,
-};
+use aether_store::{migrate, ReadPool, Store, StoreCommand, StoreRuntime, WriteQueueConfig};
 use tokio::runtime::Handle;
 
 const SESSION: &str = "01J0000000000000000000000S";
@@ -47,18 +45,18 @@ fn pragma_columns(
         .collect()
 }
 
-/// DoD1：迁移 0003 列断言 + 0001→0003 幂等 + 历史 run 行为 NULL。
+/// DoD1：迁移 0003 列断言 + 0001→最新幂等 + 历史 run 行为 NULL。
 #[test]
 fn dod1_migration_0003_columns_idempotent_and_historical_null() {
     let (dir, store) = common::open_temp_store("m3-10-schema");
     let connection = store.connection();
 
-    // 迁移清单应用至 v3（0001 → 0002 → 0003）。
+    // 迁移清单应用至最新（0001 → 0002 → 0003 → 0004；M6-01 合入 0004）。
     let applied = applied_migrations(connection).unwrap();
     assert_eq!(
         applied.iter().map(|item| item.version).collect::<Vec<_>>(),
-        vec![1, 2, 3],
-        "必须应用 0001/0002/0003"
+        vec![1, 2, 3, 4],
+        "必须应用 0001–0004"
     );
 
     // sessions.thinking_depth：INTEGER NOT NULL DEFAULT 2（ADR-010 附录 A）。
@@ -82,7 +80,10 @@ fn dod1_migration_0003_columns_idempotent_and_historical_null() {
         .find(|(name, ..)| name == "thinking_depth")
         .expect("runs.thinking_depth 列必须存在");
     assert_eq!(thinking.1, "INTEGER");
-    assert_eq!(thinking.2, 0, "runs.thinking_depth 必须可空（历史行为 NULL）");
+    assert_eq!(
+        thinking.2, 0,
+        "runs.thinking_depth 必须可空（历史行为 NULL）"
+    );
     assert_eq!(thinking.3, None, "runs.thinking_depth 不得有缺省值");
 
     // 未显式提供 thinking_depth 的行：会话落缺省 2；历史 run 落 NULL。
@@ -97,15 +98,19 @@ fn dod1_migration_0003_columns_idempotent_and_historical_null() {
         )
         .unwrap();
     let depth: i64 = connection
-        .query_row("SELECT thinking_depth FROM sessions WHERE id = 's1'", [], |row| {
-            row.get(0)
-        })
+        .query_row(
+            "SELECT thinking_depth FROM sessions WHERE id = 's1'",
+            [],
+            |row| row.get(0),
+        )
         .unwrap();
     assert_eq!(depth, i64::from(THINKING_DEPTH_DEFAULT), "会话缺省必须为 2");
     let historical: Option<i64> = connection
-        .query_row("SELECT thinking_depth FROM runs WHERE id = 'r1'", [], |row| {
-            row.get(0)
-        })
+        .query_row(
+            "SELECT thinking_depth FROM runs WHERE id = 'r1'",
+            [],
+            |row| row.get(0),
+        )
         .unwrap();
     assert_eq!(historical, None, "历史 run 行必须为 NULL（不回溯填充）");
 
@@ -160,6 +165,7 @@ fn session(id: &str, thinking_depth: u8) -> Session {
         status: SessionStatus::Idle,
         model: None,
         thinking_depth,
+        permission_mode: aether_core::PermissionMode::default(),
         system_prompt: None,
         config: serde_json::json!({}),
         token_usage: TokenUsage::default(),

@@ -81,14 +81,14 @@ fn existing_0001_only_database_is_upgraded_by_0002_increment() {
         assert_eq!(applied[0].version, 1);
     }
 
-    // 以当前程序打开：应增量应用 0002+（当前含 ADR-010 的 0003），
+    // 以当前程序打开：应增量应用 0002+（当前含 ADR-010 的 0003 与 M6-01 的 0004），
     // 且保留 0001 的记录（不得重跑/修改）。
     let store = Store::open(&path).unwrap();
     let applied = store.applied_migrations().unwrap();
     assert_eq!(applied.len(), EMBEDDED_MIGRATIONS.len());
     assert_eq!(applied[0].version, 1);
     assert_eq!(applied[1].version, 2);
-    assert_eq!(applied.last().map(|item| item.version), Some(3));
+    assert_eq!(applied.last().map(|item| item.version), Some(4));
 
     let conn = store.connection();
     let has_column: i64 = conn

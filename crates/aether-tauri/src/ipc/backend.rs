@@ -14,8 +14,9 @@ use super::dto::{
     MessagesPageRequest, PermissionResolveRequest, PermissionsPendingRequest,
     ProviderCreateRequest, ProviderDeleteRequest, ProviderModelAddRequest,
     ProviderModelToggleRequest, ProviderToggleRequest, ProviderUpdateRequest, ProvidersListRequest,
-    RunRetryRequest, RuntimeEnableRequest, RuntimeRetryRequest, SessionCreateRequest,
-    SessionExportRequest, SessionIdRequest, SessionListRequest, SessionSendRequest,
+    RuleAddRequest, RuleDeleteRequest, RuleToggleRequest, RuleUpdateRequest, RunRetryRequest,
+    RuntimeEnableRequest, RuntimeRetryRequest, SessionCreateRequest, SessionExportRequest,
+    SessionIdRequest, SessionListRequest, SessionPermissionModeSetRequest, SessionSendRequest,
     SettingsGetRequest, SettingsSetRequest, WorkspaceSetRequest,
 };
 use super::error::IpcError;
@@ -65,6 +66,40 @@ pub trait IpcBackend: Send + Sync + 'static {
 
     fn permission_resolve(&self, _request: &PermissionResolveRequest) -> Result<Value, IpcError> {
         Err(IpcError::not_implemented("permission_resolve"))
+    }
+
+    /// M6-01/ADR-018：设置会话级权限模式（`read_only` / `workspace_write` /
+    /// `danger_full_access`；档位为判定权威入参，仅影响后续工具调用决策）。
+    fn session_permission_mode_set(
+        &self,
+        _request: &SessionPermissionModeSetRequest,
+    ) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("session_permission_mode_set"))
+    }
+
+    /// M6-01/ADR-019：用户自定义权限规则清单（无参数；按创建时间升序）。
+    fn rules_list(&self) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("rules_list"))
+    }
+
+    /// M6-01/ADR-019：新增权限规则（形态校验 + canonicalize；非法拒绝且不落库）。
+    fn rule_add(&self, _request: &RuleAddRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("rule_add"))
+    }
+
+    /// M6-01/ADR-019：更新权限规则（`rule_id` 不存在 → `rule_not_found`）。
+    fn rule_update(&self, _request: &RuleUpdateRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("rule_update"))
+    }
+
+    /// M6-01/ADR-019：删除权限规则（`rule_id` 不存在 → `rule_not_found`）。
+    fn rule_delete(&self, _request: &RuleDeleteRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("rule_delete"))
+    }
+
+    /// M6-01/ADR-019：启用/停用权限规则（`rule_id` 不存在 → `rule_not_found`）。
+    fn rule_toggle(&self, _request: &RuleToggleRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("rule_toggle"))
     }
 
     fn settings_get(&self, _request: &SettingsGetRequest) -> Result<Value, IpcError> {

@@ -26,6 +26,8 @@ import { useCallback, useEffect, useState } from "react";
 
 import { ProvidersPage } from "./ProvidersPage";
 import { providersIpc as productionProvidersIpc, type ProvidersIpc } from "./providers";
+import { rulesIpc as productionRulesIpc, type RulesIpc } from "./rules";
+import { RulesPage } from "./RulesPage";
 import {
   BACKUP_AUTO_ENABLED_KEY,
   BACKUP_AUTO_FREQUENCY_KEY,
@@ -56,14 +58,16 @@ export interface SettingsPageProps {
   workspace?: WorkspaceIpc;
   /** 供应商配置 IPC 契约（M3-11；缺省 = 生产实现；测试注入替身）。 */
   providersIpc?: ProvidersIpc;
+  /** 权限规则 IPC 契约（M6-01；缺省 = 生产实现；测试注入替身）。 */
+  rulesIpc?: RulesIpc;
   onBack: () => void;
   onOpenBackup?: () => void;
   onOpenDiagnostics?: () => void;
   onOpenAbout?: () => void;
 }
 
-/** 设置页子导航（M3-11：基本设置 / 模型与供应商配置；原型 settings-nav）。 */
-export type SettingsTab = "general" | "providers";
+/** 设置页子导航（M3-11：基本设置 / 模型与供应商配置；M6-01：权限规则）。 */
+export type SettingsTab = "general" | "providers" | "rules";
 
 export function SettingsPage({
   dataDir,
@@ -71,6 +75,7 @@ export function SettingsPage({
   ipc = settingsIpc,
   workspace = workspaceIpc,
   providersIpc = productionProvidersIpc,
+  rulesIpc = productionRulesIpc,
   onBack,
   onOpenBackup,
   onOpenDiagnostics,
@@ -349,9 +354,20 @@ export function SettingsPage({
           >
             模型与供应商配置
           </button>
+          <button
+            type="button"
+            data-testid="settings-tab-rules"
+            data-active={String(tab === "rules")}
+            className={tab === "rules" ? "settings-tab on" : "settings-tab"}
+            onClick={() => setTab("rules")}
+          >
+            权限规则
+          </button>
         </nav>
 
         {tab === "providers" ? <ProvidersPage ipc={providersIpc} /> : null}
+
+        {tab === "rules" ? <RulesPage ipc={rulesIpc} /> : null}
 
         {tab === "general" ? (
           <>

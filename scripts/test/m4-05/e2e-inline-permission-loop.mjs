@@ -64,9 +64,11 @@ const tmpRoot = path.join(repoRoot, "scripts", "test", ".tmp", "m4-05");
 const bundleDir = path.join(tmpRoot, "runtime-bundle");
 const dataDir = path.join(tmpRoot, "data");
 const locationFile = path.join(tmpRoot, "data-location.json");
-// P0 策略矩阵：`fs.write` **工作区内 ask / 工作区外 deny**（M2-03 DoD1）。
-// 未绑定工作区时权限基准 = 数据目录（lib.rs 启动口径），因此回环目标取数据目录内。
-const targetFile = path.join(dataDir, "permission-target.txt");
+// M6-01/ADR-014 矩阵：缺省档 `workspace_write` 下 `fs.write` **工作区内 allow（不弹窗）/
+// 工作区外 ask**。未绑定工作区时权限基准 = 数据目录（lib.rs 启动口径），因此回环目标
+// 取数据目录**之外**的兄弟目录（canonical 形态无重解析点；区外目标要求）。
+const targetDir = path.join(tmpRoot, "permission-outside");
+const targetFile = path.join(targetDir, "permission-target.txt");
 
 const env = buildEnv();
 const checks = [];
@@ -77,7 +79,9 @@ const record = (name, ok, detail) => {
 /** 单次尝试：干净数据目录 → 启动 → 收集报告 → 等待退出（超时整树回收）。 */
 async function attemptRun() {
   rmSync(dataDir, { recursive: true, force: true });
+  rmSync(targetDir, { recursive: true, force: true });
   mkdirSync(dataDir, { recursive: true });
+  mkdirSync(targetDir, { recursive: true });
   writeFileSync(targetFile, "M4-05 inline permission loop target\n", "utf8");
 
   console.log(`\n$ ${binary}   # AETHER_E2E_M4_05_PROBE=1（内联权限回环）`);

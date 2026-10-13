@@ -14,8 +14,11 @@ import { invoke } from "@tauri-apps/api/core";
 /** D9：审批超时（300s；响应携带 `timeout_ms` 时以其为准，常量仅作兜底）。 */
 export const APPROVAL_TIMEOUT_MS = 300_000;
 
-/** 用户决议（D9：`once` / `session` 授权；`deny` 拒绝）。 */
-export type PermissionDecision = "once" | "session" | "deny";
+/**
+ * 用户决议（D9：`once` / `session` 授权；M6-01/ADR-019 增 `always` 持久授权
+ * 「记住」；`deny` 拒绝）。
+ */
+export type PermissionDecision = "once" | "session" | "always" | "deny";
 
 /** `permissions_pending` 清单条目（按 `requested_at` 升序 = 审批队列顺序）。 */
 export interface PendingPermission {
@@ -36,7 +39,7 @@ export interface PendingPermission {
 export interface PermissionResolveResult {
   request_id: string;
   decision: "allow" | "deny";
-  scope: "once" | "session" | null;
+  scope: "once" | "session" | "always" | null;
   ticket_id: string;
 }
 

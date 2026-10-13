@@ -6,7 +6,7 @@
 //!   下发适配器（Mock session-log 观测）；
 //! - DoD2：`memory.read/append/write` 经线协议工具调用上报 → `tool.call_started` →
 //!   权限回环 → `tool.call_completed/failed`（真实 Mock 进程）；
-//! - DoD3：工作区外 deny（越权不执行、不产生文件）、记忆白名单 allow（策略直决）；
+//! - DoD3：工作区外写 ask（审批拒绝后不执行、不产生文件）、记忆白名单 allow（区内策略直决）；
 //! - DoD4：原子写中断（终止适配器进程）→ 目标文件无半写（保持原内容）；
 //! - DoD5：跨会话：会话 A 写入 → 新会话 B 注入读到更新内容；
 //! - DoD6：外部修改后再写入返回 `memory_conflict` 且不覆盖；
@@ -92,6 +92,20 @@ fn evidence(name: &str, value: &Value) {
         return;
     };
     let _ = std::fs::write(dir.join(format!("{name}.json")), text);
+}
+
+/// canonical 路径 → 目标字符串形态（剥离 `\\?\` 扩展前缀；该前缀属输入检查
+/// 拒绝形态，测试夹具不得以其构造 target）。
+fn plain(path: &Path) -> String {
+    let text = path.to_string_lossy().to_string();
+    text.strip_prefix(r"\\?\").unwrap_or(&text).to_owned()
+}
+
+/// 区外写目标（M6-01/ADR-014 矩阵口径更新：缺省档区内写免审批，制造 pending 的
+/// 样本必须改用区外写 `ask`）。目标从 canonical 基准派生，规避 CI 临时目录 8.3
+/// 短名别名对路径形态检查的误伤。
+fn outside_target(dir: &Path, name: &str) -> String {
+    plain(&std::fs::canonicalize(dir).unwrap().join(name))
 }
 
 struct Harness {
@@ -244,6 +258,7 @@ impl Harness {
                 workspace_id,
                 model: None,
                 thinking_depth: None,
+                permission_mode: None,
             })
             .expect("session_create");
         serde_json::from_value(value).expect("Session 反序列化")
@@ -403,6 +418,7 @@ fn workspace_set_injects_memory_and_swaps_permission_root() {
             workspace_id: Some("01J8ZQ5R0N7W9Y8X6V4T2S0K1Z".to_owned()),
             model: None,
             thinking_depth: None,
+            permission_mode: None,
         })
         .expect_err("未知 workspace_id 必须拒绝");
     assert_eq!(
@@ -540,15 +556,32 @@ fn memory_tools_round_trip_through_executor_gate_zero_passthrough() {
     assert!(stats.zero_passthrough, "{}", stats.summary());
     assert_eq!(stats.snapshot.requests_received, 2);
 
-    // `memory.write` 到工作区外：策略 deny（零直通，适配器不执行写）。
-    let outside = h.dir.path().join("outside-memory.md");
+    // `memory.write` 到工作区外：缺省档 ask（M6-01/ADR-014 矩阵）→ 待审批 → 决议 deny
+    // （零直通，适配器不执行写）。
+    let outside = outside_target(h.dir.path(), "outside-memory.md");
     let deny_run = h.send(
         session_id.as_str(),
-        &format!("memory.write|{}|越权内容", outside.display()),
+        &format!("memory.write|{outside}|越权内容"),
         "01J8ZQ5R0N7W9Y8X6V4T2S0K1C",
     );
+    assert!(
+        wait_until(Duration::from_secs(10), || !h
+            .pending_for(&session_id)
+            .is_empty()),
+        "工作区外写必须进入待审批（ask）"
+    );
+    let ticket = h.pending_for(&session_id)[0].clone();
+    assert_eq!(ticket.resource, "fs.write");
+    assert_eq!(ticket.action, "write");
+    assert_eq!(ticket.target.as_deref(), Some(outside.as_str()));
+    assert!(!Path::new(&outside).exists(), "决议前不得执行写（零直通）");
+    h.resolve(&ticket.request_id, DtoPermissionDecision::Deny)
+        .expect("permission_resolve(deny)");
     assert_eq!(h.wait_run_finished(&deny_run), RunStatus::Succeeded);
-    assert!(!outside.exists(), "越权拒绝必须不产生文件（适配器不执行）");
+    assert!(
+        !Path::new(&outside).exists(),
+        "越权拒绝必须不产生文件（适配器不执行）"
+    );
     // 转发提交异步：轮询等待 deny 的 tool.call_failed 到齐后再断言错误码。
     let mut deny_code: Option<String> = None;
     assert!(
@@ -580,10 +613,10 @@ fn memory_tools_round_trip_through_executor_gate_zero_passthrough() {
     assert_eq!(
         h.service.pending_list(None).len(),
         0,
-        "策略直决不产生 pending"
+        "决议后不残留 pending"
     );
 
-    // 审计可查（策略直决路径：allow/deny 各一条；ask 路径见 ask 用例）。
+    // 审计可查（allow 策略直决 + 区外 ask 完整审批流：requested/resolved）。
     let actions: Vec<String> = h
         .runtime
         .block_on(h.reads.audit_log(200))
@@ -593,7 +626,8 @@ fn memory_tools_round_trip_through_executor_gate_zero_passthrough() {
         .collect();
     for expected in [
         "permission.allowed_by_policy",
-        "permission.denied_by_policy",
+        "permission.requested",
+        "permission.resolved",
     ] {
         assert!(
             actions.iter().any(|action| action == expected),
@@ -610,16 +644,18 @@ fn memory_tools_round_trip_through_executor_gate_zero_passthrough() {
             "deny_run": deny_run,
             "tool_event_types": tool_types,
             "probe": stats.summary(),
-            "outside_file_created": outside.exists(),
+            "outside_file_created": Path::new(&outside).exists(),
             "audit_actions": actions,
         }),
     );
     h.shutdown();
 }
 
-/// `fs.write` ask（工作区内非白名单）：pending → IPC 决议 → 适配器执行写（真实回环）。
+/// `fs.write` ask（工作区外）：pending → IPC 决议 → 适配器执行写（真实回环）。
+/// M6-01/ADR-014 矩阵口径更新：缺省档区内写已 allow（原区内 NOTES.md ask 用例
+/// 设计变更驱动改为区外 ask，保留「决议前零直通」语义）。
 #[test]
-fn in_workspace_ask_requires_ipc_resolution_before_write() {
+fn outside_ask_requires_ipc_resolution_before_write() {
     let Some(binary) = mock_binary() else {
         return;
     };
@@ -627,27 +663,24 @@ fn in_workspace_ask_requires_ipc_resolution_before_write() {
     h.bind(h.workspace.path());
     let session = h.create_session();
     let session_id = session.id.clone();
-    // 工作区内非记忆文件（NOTES.md）→ fs.write ask（策略矩阵）。
-    let target = h.workspace.path().join("NOTES.md");
+    // 工作区外文件 → fs.write ask（缺省档策略矩阵）。
+    let target = outside_target(h.dir.path(), "outside-ask.md");
     let run_id = h.send(
         session_id.as_str(),
-        &format!("memory.write|{}|审批后写入", target.display()),
+        &format!("memory.write|{target}|审批后写入"),
         "01J8ZQ5R0N7W9Y8X6V4T2S0K1D",
     );
     assert!(
         wait_until(Duration::from_secs(10), || !h
             .pending_for(&session_id)
             .is_empty()),
-        "工作区内非白名单写必须进入待审批"
+        "工作区外写必须进入待审批"
     );
     let ticket = h.pending_for(&session_id)[0].clone();
     assert_eq!(ticket.resource, "fs.write");
     assert_eq!(ticket.action, "write");
-    assert_eq!(
-        ticket.target.as_deref(),
-        Some(target.to_string_lossy().as_ref())
-    );
-    assert!(!target.exists(), "决议前不得执行写（零直通）");
+    assert_eq!(ticket.target.as_deref(), Some(target.as_str()));
+    assert!(!Path::new(&target).exists(), "决议前不得执行写（零直通）");
     assert!(h.run_status(&run_id) != Some(RunStatus::Succeeded));
 
     let resolved = h
@@ -679,7 +712,7 @@ fn in_workspace_ask_requires_ipc_resolution_before_write() {
     evidence(
         "dod7_ask_ipc_round_trip",
         &json!({
-            "task": "M3-08 DoD7 工作区内 ask：pending → IPC 允许 → 适配器写入（零直通）",
+            "task": "M3-08 DoD7 工作区外 ask：pending → IPC 允许 → 适配器写入（零直通）",
             "request_id": ticket.request_id,
             "target": ticket.target,
             "probe": stats.summary(),

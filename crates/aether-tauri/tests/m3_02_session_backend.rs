@@ -181,6 +181,7 @@ fn session_create(backend: &dyn IpcBackend, title: &str, model: Option<&str>) ->
         workspace_id: None,
         model: model.map(str::to_owned),
         thinking_depth: None,
+        permission_mode: None,
     };
     backend.session_create(&request).expect("session_create")
 }

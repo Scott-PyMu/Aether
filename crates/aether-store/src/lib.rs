@@ -62,8 +62,9 @@ pub use migration::{
     MIGRATIONS_TABLE,
 };
 pub use ops::{
-    ArtifactRecord, AuditLogRecord, PermissionRecord, ProviderModelRecord, ProviderRecord,
-    SessionQuery, StoreCommand, StoreOutcome, StoreSummary, SUMMARY_TABLES,
+    ArtifactRecord, AuditLogRecord, PermissionGrantRecord, PermissionRecord, PermissionRuleRecord,
+    ProviderModelRecord, ProviderRecord, SessionQuery, StoreCommand, StoreOutcome, StoreSummary,
+    SUMMARY_TABLES,
 };
 pub use pragma::PragmaSnapshot;
 pub use store::{quick_check, ExportReport, IntegrityReport, Store, StoreMode, TableExport};

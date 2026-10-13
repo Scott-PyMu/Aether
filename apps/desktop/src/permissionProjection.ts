@@ -26,7 +26,8 @@ export interface PermissionItemView {
   timeoutMs: number;
   status: PermissionItemStatus;
   decision: "allow" | "deny" | null;
-  scope: "once" | "session" | null;
+  /** M6-01/ADR-019：`always` = 持久授权（「记住（始终允许）」）。 */
+  scope: "once" | "session" | "always" | null;
   resolvedAt: number | null;
 }
 
@@ -139,7 +140,7 @@ export function projectPermissions(
       ...previous,
       status: timedOut ? "timeout" : "resolved",
       decision: decision === "allow" ? "allow" : decision === "deny" ? "deny" : null,
-      scope: scope === "once" || scope === "session" ? scope : null,
+      scope: scope === "once" || scope === "session" || scope === "always" ? scope : null,
       resolvedAt: event.ts,
     });
   }

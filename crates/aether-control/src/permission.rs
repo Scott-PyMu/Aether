@@ -28,15 +28,17 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use aether_core::{
-    PermissionDecision, PermissionScope, PermissionStatus, RuntimeId, SessionId, ENVELOPE_FIELDS,
-    EVENT_ENVELOPE_VERSION,
+    PermissionDecision, PermissionMode, PermissionScope, PermissionStatus, RuntimeId, SessionId,
+    ENVELOPE_FIELDS, EVENT_ENVELOPE_VERSION,
 };
 use aether_security::{
-    ApprovalQueue, ApprovalTicket, PathViolation, PermissionResource, PolicyDecision, PolicyEngine,
-    PolicyRequest, APPROVAL_TIMEOUT_MS,
+    canonicalize_free_path, evaluate_rules, ApprovalQueue, ApprovalTicket, PathViolation,
+    PermissionResource, PermissionRule, PolicyDecision, PolicyEngine, PolicyRequest, RuleDecision,
+    RuleOutcome, RuleTargetKind, APPROVAL_TIMEOUT_MS,
 };
 use aether_store::{
-    AuditLogRecord, PermissionRecord, ReadPool, StoreCommand, StoreError, StoreOutcome, WriteQueue,
+    AuditLogRecord, PermissionRecord, PermissionRuleRecord, ReadPool, StoreCommand, StoreError,
+    StoreOutcome, WriteQueue,
 };
 use serde_json::{json, Value};
 use tokio::runtime::Handle;
@@ -221,8 +223,10 @@ struct PermissionInner {
     queue: ApprovalQueue,
     /// 等待者（每请求独立 oneshot；核心内等待）。
     waiters: HashMap<String, oneshot::Sender<PermissionResolution>>,
-    /// 会话级授权（`session` 决议；进程内有效，重启失效——会话为活跃概念）。
+    /// 会话/持久授权（`session` + `always` 决议；启动时从 `permissions` 表重建）。
     grants: HashSet<GrantKey>,
+    /// 用户自定义权限规则快照（M6-01/ADR-019：启动加载 + 规则 CRUD 后刷新）。
+    rules: Vec<PermissionRule>,
 }
 
 struct ServiceInner {
@@ -327,6 +331,70 @@ impl PermissionService {
         }
     }
 
+    /// 加载/刷新用户自定义权限规则快照（M6-01/ADR-019：启动加载 + CRUD 后刷新）。
+    ///
+    /// 规则行无法映射为合法模型（枚举非法等）→ 跳过并告警（fail-closed 至矩阵：
+    /// 无效规则不参与判定，不无限放开）。返回生效规则数。
+    pub async fn restore_rules(&self) -> Result<usize, PermissionError> {
+        let records = self.inner.reads.permission_rules().await?;
+        let mut rules = Vec::with_capacity(records.len());
+        for record in records {
+            match rule_from_record(&record) {
+                Some(rule) => rules.push(rule),
+                None => {
+                    tracing::warn!(
+                        rule_id = record.id.as_str(),
+                        "权限规则行无法解析，已跳过（fail-closed：不参与判定）"
+                    );
+                }
+            }
+        }
+        let count = rules.len();
+        lock_inner(&self.inner).rules = rules;
+        Ok(count)
+    }
+
+    /// 重建持久授权匹配集（M6-01/ADR-019 附录 A-2：核心启动加载
+    /// `scope IN ('session','always') AND status='resolved' AND decision='allow'` 的行）。
+    ///
+    /// 历史行（旧口径存的原始 `target`）加载时尝试 canonicalize；失败 → 该行不命中并
+    /// 告警（fail-closed）。返回重建的授权数。
+    pub async fn restore_grants(&self) -> Result<usize, PermissionError> {
+        let records = self.inner.reads.permission_grants().await?;
+        let mut restored = 0usize;
+        let mut inner = lock_inner(&self.inner);
+        for record in records {
+            let Some(session_id) = record.session_id.as_deref() else {
+                continue; // 无会话归属的授权行不适用（会话级概念）。
+            };
+            match canonicalize_free_path(&record.target) {
+                Ok(canonical) => {
+                    inner.grants.insert(GrantKey {
+                        session_id: session_id.to_owned(),
+                        resource: record.resource.clone(),
+                        action: record.action.clone(),
+                        canonical_target: canonical.to_string_lossy().to_string(),
+                    });
+                    restored += 1;
+                }
+                Err(violation) => {
+                    tracing::warn!(
+                        session_id,
+                        target = record.target.as_str(),
+                        reason = violation.reason().as_str(),
+                        "历史授权行 canonicalize 失败，不命中并告警（fail-closed）"
+                    );
+                }
+            }
+        }
+        Ok(restored)
+    }
+
+    /// 当前规则快照（测试/诊断）。
+    pub fn rules_snapshot(&self) -> Vec<PermissionRule> {
+        lock_inner(&self.inner).rules.clone()
+    }
+
     /// 请求一次工具调用权限（阻塞至决议/超时）。
     pub async fn request(
         &self,
@@ -340,6 +408,12 @@ impl PermissionService {
     /// `cancel` 命中（`interrupt`/`dispose`/父会话取消）时，待审批票据按 deny 收口
     /// （落库 `resolved` + `permission.resolved(deny)` 事件 + 审计 `permission.cancelled`），
     /// 返回 `timed_out=false` 的 deny 决议；决议与取消并发时以票据摘除为仲裁，不丢决议。
+    ///
+    /// 决策顺序（M6-01/ADR-019 §2.1，不可逆序）：
+    /// ① 档位矩阵为硬边界（按会话解析 `permission_mode`；矩阵 deny 不被规则/授权放宽）；
+    /// ② 矩阵 allow → 命中 `deny` 规则收紧（含顶档）；
+    /// ③ 矩阵 ask → `deny` 规则优先；否则命中 `allow` 规则或 `session`/`always` 授权
+    ///    免逐次审批；否则进入完整审批流。
     pub async fn request_cancellable(
         &self,
         request: PermissionRequest,
@@ -350,11 +424,14 @@ impl PermissionService {
                 resource: request.resource.clone(),
             }
         })?;
+        // 档位按会话解析（ADR-014 决策 3：判定权威入参；仅影响后续工具调用决策）。
+        let permission_mode = self.session_permission_mode(&request).await;
         let policy_request = PolicyRequest {
             resource,
             action: &request.action,
             target: request.target.as_deref(),
             content_bytes: request.content_bytes,
+            permission_mode,
         };
         // 同步评估期间取策略锁（不跨 await 持有）；换绑后立即生效。
         let verdict = lock_policy(&self.inner).evaluate(&policy_request);
@@ -366,12 +443,42 @@ impl PermissionService {
 
         match verdict.decision {
             PolicyDecision::Allow => {
+                // ② 矩阵 allow：deny 规则可收紧；allow 规则不改变结果（审计呈现命中）。
+                let outcome = self.evaluate_rules_for(&request, resource, &verdict);
+                if let RuleOutcome::Deny { hits } = &outcome {
+                    let rule = &hits[0];
+                    let reason = format!(
+                        "规则收紧：{} → deny（矩阵 allow 被 deny 规则覆盖；rule:{}）",
+                        verdict.reason, rule.id
+                    );
+                    self.audit(
+                        &request,
+                        "system",
+                        "permission.denied_by_policy",
+                        "deny",
+                        Some(reason.clone()),
+                        Some(&format!("rule:{}", rule.id)),
+                    )
+                    .await?;
+                    return Ok(PermissionResolution {
+                        request_id: request.request_id,
+                        decision: PermissionDecision::Deny,
+                        scope: None,
+                        reason,
+                        timed_out: false,
+                    });
+                }
+                let resolver = match &outcome {
+                    RuleOutcome::Allow { hits } => Some(format!("rule:{}", hits[0].id)),
+                    _ => None,
+                };
                 self.audit(
                     &request,
                     "system",
                     "permission.allowed_by_policy",
                     "allow",
                     Some(verdict.reason.clone()),
+                    resolver.as_deref(),
                 )
                 .await?;
                 return Ok(PermissionResolution {
@@ -383,12 +490,14 @@ impl PermissionService {
                 });
             }
             PolicyDecision::Deny => {
+                // ① 硬边界：规则/授权不可放宽（read_only 写、低档 exec/net、路径拒绝）。
                 self.audit(
                     &request,
                     "system",
                     "permission.denied_by_policy",
                     "deny",
                     Some(verdict.reason.clone()),
+                    None,
                 )
                 .await?;
                 return Ok(PermissionResolution {
@@ -402,7 +511,59 @@ impl PermissionService {
             PolicyDecision::Ask => {}
         }
 
-        // 会话级授权命中（D9：session 作用域仅限具体 target）。
+        // ③ 矩阵 ask：deny 规则优先；否则 allow 规则免审批；否则授权命中。
+        let outcome = self.evaluate_rules_for(&request, resource, &verdict);
+        match &outcome {
+            RuleOutcome::Deny { hits } => {
+                let rule = &hits[0];
+                let reason = format!(
+                    "规则命中 deny（matrix=ask；rule:{}）→ deny（已审计）",
+                    rule.id
+                );
+                self.audit(
+                    &request,
+                    "system",
+                    "permission.denied_by_policy",
+                    "deny",
+                    Some(reason.clone()),
+                    Some(&format!("rule:{}", rule.id)),
+                )
+                .await?;
+                return Ok(PermissionResolution {
+                    request_id: request.request_id,
+                    decision: PermissionDecision::Deny,
+                    scope: None,
+                    reason,
+                    timed_out: false,
+                });
+            }
+            RuleOutcome::Allow { hits } => {
+                let rule = &hits[0];
+                let reason = format!(
+                    "规则命中 allow（matrix=ask；rule:{}）→ 免逐次审批（已审计）",
+                    rule.id
+                );
+                self.audit(
+                    &request,
+                    "system",
+                    "permission.allowed_by_policy",
+                    "allow",
+                    Some(reason.clone()),
+                    Some(&format!("rule:{}", rule.id)),
+                )
+                .await?;
+                return Ok(PermissionResolution {
+                    request_id: request.request_id,
+                    decision: PermissionDecision::Allow,
+                    scope: None,
+                    reason,
+                    timed_out: false,
+                });
+            }
+            RuleOutcome::NoMatch => {}
+        }
+
+        // 持久授权命中（D9：`session`/`always` 作用域仅限具体 canonical target）。
         if let (Some(session_id), Some(canonical)) =
             (request.session_id.as_ref(), &canonical_target)
         {
@@ -413,13 +574,14 @@ impl PermissionService {
                 canonical_target: canonical.clone(),
             };
             if lock_inner(&self.inner).grants.contains(&key) {
-                let reason = format!("会话级授权命中（session 作用域，target={canonical}）");
+                let reason = format!("持久授权命中（session/always 作用域，target={canonical}）");
                 self.audit(
                     &request,
                     "system",
                     "permission.session_grant_hit",
                     "allow",
                     Some(reason.clone()),
+                    Some("user"),
                 )
                 .await?;
                 return Ok(PermissionResolution {
@@ -495,6 +657,7 @@ impl PermissionService {
             "permission.requested",
             "pending",
             Some(verdict.reason.clone()),
+            None,
         )
         .await?;
         if first_pending_for_session {
@@ -586,11 +749,16 @@ impl PermissionService {
         let resolved_at = self.inner.clock.now_ms();
         let (out_decision, out_scope) = match decision {
             PermissionDecision::Ask => (PermissionDecision::Deny, None),
-            PermissionDecision::Allow => {
-                let scope = scope.filter(|scope| *scope != PermissionScope::Always);
-                (PermissionDecision::Allow, scope)
-            }
+            // M6-01/ADR-019：`always` 持久授权启用（移除 P0 的 Always 过滤）。
+            PermissionDecision::Allow => (PermissionDecision::Allow, scope),
             PermissionDecision::Deny => (PermissionDecision::Deny, None),
+        };
+        // ADR-019 附录 A-2：`session`/`always` 授权行以 canonical target 覆写 `permissions.target`。
+        let target_override = match out_scope {
+            Some(PermissionScope::Session | PermissionScope::Always) => {
+                ticket.canonical_target.clone()
+            }
+            _ => None,
         };
         let status = PermissionStatus::Resolved;
         let affected = self
@@ -603,6 +771,7 @@ impl PermissionService {
                 status,
                 resolved_at,
                 resolver: Some("user".to_owned()),
+                target: target_override,
             })
             .await?;
         if let StoreOutcome::Applied { affected } = affected {
@@ -648,7 +817,11 @@ impl PermissionService {
         )
         .await?;
 
-        if out_decision == PermissionDecision::Allow && out_scope == Some(PermissionScope::Session)
+        if out_decision == PermissionDecision::Allow
+            && matches!(
+                out_scope,
+                Some(PermissionScope::Session | PermissionScope::Always)
+            )
         {
             if let (Some(session_id), Some(canonical)) =
                 (ticket.session_id.as_ref(), ticket.canonical_target.as_ref())
@@ -818,6 +991,7 @@ impl PermissionService {
                 status: PermissionStatus::Resolved,
                 resolved_at,
                 resolver: Some("system".to_owned()),
+                target: None,
             })
             .await?;
         if let StoreOutcome::Applied { affected } = affected {
@@ -987,6 +1161,44 @@ impl PermissionService {
         Ok(())
     }
 
+    /// 按会话解析权限档位（M6-01/ADR-014 决策 3：判定权威入参）。
+    ///
+    /// 会话不存在（回环竞态）或读取失败 → 缺省档 `workspace_write`（与 DDL 缺省一致）。
+    async fn session_permission_mode(&self, request: &PermissionRequest) -> PermissionMode {
+        let Some(session_id) = request.session_id.as_ref() else {
+            return PermissionMode::default();
+        };
+        match self.inner.reads.session(session_id).await {
+            Ok(Some(session)) => session.permission_mode,
+            Ok(None) => PermissionMode::default(),
+            Err(error) => {
+                tracing::warn!(
+                    session_id = session_id.as_str(),
+                    error = error.to_string().as_str(),
+                    "会话档位读取失败，按缺省档 workspace_write 判定"
+                );
+                PermissionMode::default()
+            }
+        }
+    }
+
+    /// 规则层评估（M6-01/ADR-019）：快照 + 纯匹配。
+    fn evaluate_rules_for(
+        &self,
+        request: &PermissionRequest,
+        resource: PermissionResource,
+        verdict: &aether_security::PolicyVerdict,
+    ) -> RuleOutcome {
+        let rules = lock_inner(&self.inner).rules.clone();
+        evaluate_rules(
+            &rules,
+            resource,
+            &request.action,
+            request.target.as_deref(),
+            verdict.canonical_target.as_deref(),
+        )
+    }
+
     async fn audit(
         &self,
         request: &PermissionRequest,
@@ -994,6 +1206,7 @@ impl PermissionService {
         action: &str,
         result: &str,
         detail: Option<String>,
+        resolver: Option<&str>,
     ) -> Result<(), PermissionError> {
         self.insert_audit(
             request.session_id.as_ref().map(|id| id.as_str()),
@@ -1007,6 +1220,7 @@ impl PermissionService {
                     "target": request.target,
                     "detail": detail,
                     "runtime_id": request.runtime_id.as_ref().map(|id| id.as_str()),
+                    "resolver": resolver,
                 })
                 .to_string(),
             ),
@@ -1088,6 +1302,22 @@ fn ticket_from_record(record: &PermissionRecord) -> ApprovalTicket {
         canonical_target: None,
         requested_at: record.requested_at,
     }
+}
+
+/// 存储行 → 规则模型（枚举非法/字段无法解析 → `None`；调用方跳过并告警，fail-closed）。
+fn rule_from_record(record: &PermissionRuleRecord) -> Option<PermissionRule> {
+    Some(PermissionRule {
+        id: record.id.clone(),
+        name: record.name.clone(),
+        resource: PermissionResource::from_code(&record.resource)?,
+        action: record.action.clone(),
+        target_kind: RuleTargetKind::from_code(&record.target_kind)?,
+        target: record.target.clone(),
+        decision: RuleDecision::from_code(&record.decision)?,
+        priority: record.priority,
+        enabled: record.enabled,
+        created_at: record.created_at,
+    })
 }
 
 /// 票据摘除后的「同会话 pending `1→0`」判定（M3-12/ADR-011）。

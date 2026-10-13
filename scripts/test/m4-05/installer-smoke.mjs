@@ -121,7 +121,9 @@ function resetWebviewData() {
 /** 单次探针运行（真实 WebView2）。 */
 async function attemptProbe({ binary, dataDir, locationFile, targetFile, timeoutMs }) {
   rmSync(dataDir, { recursive: true, force: true });
+  rmSync(path.dirname(targetFile), { recursive: true, force: true });
   mkdirSync(dataDir, { recursive: true });
+  mkdirSync(path.dirname(targetFile), { recursive: true });
   writeFileSync(targetFile, "M4-05 installer smoke target\n", "utf8");
 
   console.log(`\n$ ${binary}   # 安装产物内联回环冒烟`);
@@ -271,7 +273,8 @@ try {
 
     const dataDir = path.join(tmpRoot, "install-data");
     const locationFile = path.join(tmpRoot, "install-data-location.json");
-    const targetFile = path.join(dataDir, "permission-target.txt");
+    // M6-01/ADR-014 矩阵：缺省档区外 `fs.write` = ask（工作区内为 allow，不再弹审批卡）。
+    const targetFile = path.join(tmpRoot, "install-permission-outside", "permission-target.txt");
     const { reports, exitCode, exitLine } = await runProbe({
       binary: debugBinary,
       dataDir,

@@ -197,17 +197,25 @@ record(
     }
   }
 
-  // 迁移集不得出现 0004+（M3-12 零迁移；ADR-011 §3.3）。
+  // 迁移纪律（M6-01 起更新口径）：0001–0003 永不修改；0004+ 新增迁移必须经
+  // `EMBEDDED_MIGRATIONS` 登记（终态 DDL ↔ 附录 C ↔ 真实库双向比对由 verify:m1-03
+  // 承接——M6-01/ADR-019 已落库 0004）。
+  const storeMigrationRs = read("crates/aether-store/src/migration.rs");
   const migrationFiles = readdirSync(path.join(repoRoot, "migrations"));
   for (const name of migrationFiles) {
-    if (/^000[4-9]/.test(name)) {
-      problems.push(`M3-12 不得新增迁移文件：migrations/${name}`);
+    if (/^000[4-9]/.test(name) && !storeMigrationRs.includes(name)) {
+      problems.push(`0004+ 迁移未在 EMBEDDED_MIGRATIONS 登记：migrations/${name}`);
+    }
+  }
+  for (const published of ["0001_init.sql", "0002_unique_keys.sql", "0003_p0_ui_extensions.sql"]) {
+    if (!storeMigrationRs.includes(published)) {
+      problems.push(`已发布迁移缺失（不得修改 0001–0003）：migrations/${published}`);
     }
   }
 
   if (problems.length > 0) console.error(problems.join("\n"));
   record(
-    "静态检查：单一写者/守卫/接线/分组锚点/固定组序/零迁移在案",
+    "静态检查：单一写者/守卫/接线/分组锚点/固定组序/迁移纪律在案",
     problems.length === 0 ? 0 : 1,
   );
 }

@@ -345,6 +345,24 @@ fn build_backend(
                                 tracing::warn!(error = %error, "权限待审批恢复失败（继续启动）")
                             }
                         }
+                        // M6-01/ADR-019：持久授权（session/always）与用户规则重启重建
+                        // （历史行 canonicalize 失败 → 不命中并告警，fail-closed）。
+                        match handle.block_on(service.restore_grants()) {
+                            Ok(restored) => {
+                                tracing::info!(restored, "持久授权匹配集已重建（ADR-019 附录 A-2）")
+                            }
+                            Err(error) => {
+                                tracing::warn!(error = %error, "持久授权重建失败（继续启动）")
+                            }
+                        }
+                        match handle.block_on(service.restore_rules()) {
+                            Ok(loaded) => {
+                                tracing::info!(loaded, "用户权限规则快照已加载（ADR-019）")
+                            }
+                            Err(error) => {
+                                tracing::warn!(error = %error, "规则快照加载失败（继续启动）")
+                            }
+                        }
                         // D9：300s 超时巡检（deny + 审计；落盘成功才广播 permission.resolved）。
                         let background = service.spawn_background(&handle);
                         tracing::info!(background, "权限超时巡检已启动（300s → deny + 审计）");

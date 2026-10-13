@@ -19,6 +19,24 @@ export type SessionStatus =
   | "failed"
   | "cancelled";
 
+/** M6-01/ADR-014 决策 3：会话级权限模式（三档；与运行时同名同序）。 */
+export type PermissionMode = "read_only" | "workspace_write" | "danger_full_access";
+
+/** 权限模式缺省值（ADR-014 附录 B：`workspace_write`）。 */
+export const PERMISSION_MODE_DEFAULT: PermissionMode = "workspace_write";
+
+/** 权限模式取值判定（非法/缺失返回 `null`；不抛错）。 */
+export function asPermissionMode(value: unknown): PermissionMode | null {
+  return value === "read_only" || value === "workspace_write" || value === "danger_full_access"
+    ? value
+    : null;
+}
+
+/** 权限模式回显归一（非法值回退缺省 `workspace_write`；ADR-014 决策 3）。 */
+export function normalizePermissionMode(value: unknown): PermissionMode {
+  return asPermissionMode(value) ?? PERMISSION_MODE_DEFAULT;
+}
+
 /** 运行时状态（D5 监督状态机）。 */
 export type RuntimeStatus =
   | "cold"
@@ -85,6 +103,8 @@ export interface SessionSummary {
   model?: string | null;
   /** M3-10：会话级思考深度（0–4；`session_create` 生效值回显）。 */
   thinking_depth?: number | null;
+  /** M6-01/ADR-014：会话级权限模式（缺省 `workspace_write`；`session_list` 回显）。 */
+  permission_mode?: string | null;
   created_at: number;
   updated_at: number;
   closed_at?: number | null;
@@ -155,6 +175,8 @@ export interface SessionCreateInput {
   model?: string;
   /** M3-10/ADR-010：会话级思考深度（0–4；缺省 2）。 */
   thinking_depth?: number;
+  /** M6-01/ADR-014 决策 3：会话级权限模式（缺省 `workspace_write`）。 */
+  permission_mode?: PermissionMode;
 }
 
 export interface SessionListFilter {
@@ -191,6 +213,15 @@ export interface SessionIpc {
   messagesPage(input: MessagesPageInput): Promise<MessagesPageResult>;
   /** M3-06：仅终态（failed/timeout/cancelled）run 可重试（ADR-004）。 */
   retryRun(runId: string): Promise<RunRetryResult>;
+  /** M6-01/ADR-014 决策 3：设置会话级权限模式（仅影响后续工具调用决策）。 */
+  setPermissionMode(
+    sessionId: string,
+    mode: PermissionMode,
+  ): Promise<{
+    session_id: string;
+    permission_mode: string;
+    previous_permission_mode: string;
+  }>;
 }
 
 /** 生产实现（Tauri IPC；命令入参统一 `payload` 包装，与生成绑定一致）。 */
@@ -222,6 +253,15 @@ export const sessionIpc: SessionIpc = {
   },
   async retryRun(runId) {
     return invoke<RunRetryResult>("run_retry", { payload: { run_id: runId } });
+  },
+  async setPermissionMode(sessionId, mode) {
+    return invoke<{
+      session_id: string;
+      permission_mode: string;
+      previous_permission_mode: string;
+    }>("session_permission_mode_set", {
+      payload: { session_id: sessionId, permission_mode: mode },
+    });
   },
 };
 

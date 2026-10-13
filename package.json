@@ -63,6 +63,7 @@
     "verify:m5-03:drill": "node scripts/test/m5-03/restore-drill.mjs",
     "verify:m5-04": "node scripts/test/m5-04/verify-m5-04.mjs",
     "verify:m5-05": "node scripts/test/m5-05/verify-m5-05.mjs",
+    "verify:m6-01": "node scripts/test/m6-01/verify-m6-01.mjs",
     "smoke": "node scripts/test/smoke-desktop.mjs",
     "ci:local": "node scripts/test/ci-local.mjs"
   },

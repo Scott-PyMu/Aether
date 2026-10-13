@@ -14,12 +14,13 @@ use super::validate::{
     MAX_PASSPHRASE_CHARS, MAX_PATH_CHARS, MAX_SETTING_VALUE_BYTES, MAX_TITLE_CHARS,
 };
 
-/// 权限决议（D9：`once` / `session` 授权；`deny` 拒绝）。
+/// 权限决议（D9；M6-01/ADR-019 启用 `always` 持久授权「记住」）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, serde::Serialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionDecision {
     Once,
     Session,
+    Always,
     Deny,
 }
 
@@ -72,12 +73,21 @@ pub struct SessionCreateRequest {
     /// 类型非法 `invalid_type`）。
     #[serde(default)]
     pub thinking_depth: Option<i64>,
+    /// 会话级权限模式（M6-01/ADR-014 决策 3：`read_only` / `workspace_write`（缺省）/
+    /// `danger_full_access`；非法枚举 → `invalid_enum`）。
+    #[serde(default)]
+    pub permission_mode: Option<String>,
 }
 
 impl SessionCreateRequest {
     /// 请求的思考深度（已校验）；`None` = 缺省（核心按 2 应用）。
     pub fn thinking_depth_value(&self) -> Result<Option<u8>, IpcError> {
         thinking_depth_value(self.thinking_depth)
+    }
+
+    /// 请求的权限模式（已校验）；`None` = 缺省 `workspace_write`。
+    pub fn permission_mode_value(&self) -> Result<Option<aether_core::PermissionMode>, IpcError> {
+        permission_mode_value(self.permission_mode.as_deref())
     }
 }
 
@@ -101,6 +111,7 @@ impl CommandRequest for SessionCreateRequest {
         if let Some(thinking_depth) = self.thinking_depth {
             validate::validate_thinking_depth(thinking_depth, "thinking_depth")?;
         }
+        self.permission_mode_value()?;
         Ok(())
     }
 }
@@ -112,6 +123,25 @@ impl CommandRequest for SessionCreateRequest {
 pub fn thinking_depth_value(value: Option<i64>) -> Result<Option<u8>, IpcError> {
     match value {
         Some(value) => validate::validate_thinking_depth(value, "thinking_depth").map(Some),
+        None => Ok(None),
+    }
+}
+
+/// 权限模式请求值 → [`aether_core::PermissionMode`]（三档枚举；非法值 → `invalid_enum`）。
+pub fn permission_mode_value(
+    value: Option<&str>,
+) -> Result<Option<aether_core::PermissionMode>, IpcError> {
+    match value {
+        Some(value) => aether_core::PermissionMode::from_code(value)
+            .map(Some)
+            .ok_or_else(|| {
+                IpcError::invalid_enum(
+                    "permission_mode",
+                    format!(
+                        "权限模式非法（{value}）；允许值：read_only / workspace_write / danger_full_access"
+                    ),
+                )
+            }),
         None => Ok(None),
     }
 }
@@ -524,6 +554,244 @@ impl CommandRequest for PermissionResolveRequest {
     fn validate(&self) -> Result<(), IpcError> {
         if !is_ulid(&self.request_id) {
             return Err(IpcError::invalid_format("request_id", "必须是 26 位 ULID"));
+        }
+        Ok(())
+    }
+}
+
+/// M6-01/ADR-014 决策 3：会话级权限模式设置（`session_permission_mode_set`）。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct SessionPermissionModeSetRequest {
+    pub session_id: String,
+    pub permission_mode: String,
+}
+
+impl SessionPermissionModeSetRequest {
+    /// 请求的权限模式（三档枚举；非法值 → `invalid_enum`）。
+    pub fn permission_mode_value(&self) -> Result<aether_core::PermissionMode, IpcError> {
+        permission_mode_value(Some(&self.permission_mode))?.ok_or_else(|| {
+            IpcError::invalid_enum("permission_mode", "权限模式不得为空（三档枚举必填）")
+        })
+    }
+}
+
+impl CommandRequest for SessionPermissionModeSetRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.session_id) {
+            return Err(IpcError::invalid_format("session_id", "必须是 26 位 ULID"));
+        }
+        self.permission_mode_value()?;
+        Ok(())
+    }
+}
+
+/// M6-01/ADR-019：规则名上限（ADR-019 附录 A-1：≤64 字符）。
+pub const MAX_RULE_NAME_CHARS: usize = 64;
+
+/// M6-01/ADR-019：权限规则目标长度上限（path 类按路径上限）。
+pub const MAX_RULE_TARGET_CHARS: usize = MAX_PATH_CHARS;
+
+/// 规则资源白名单（`permission_rules.resource` CHECK 枚举）。
+pub const RULE_RESOURCES: &[&str] = &["fs.read", "fs.write", "exec", "net"];
+/// 规则动作白名单（`permission_rules.action` CHECK 枚举）。
+pub const RULE_ACTIONS: &[&str] = &["read", "write", "exec", "connect"];
+/// 规则目标类型白名单（`permission_rules.target_kind` CHECK 枚举）。
+pub const RULE_TARGET_KINDS: &[&str] = &["path", "command", "host", "any"];
+/// 规则决议白名单（`permission_rules.decision` CHECK 枚举；规则不产生 `ask`）。
+pub const RULE_DECISIONS: &[&str] = &["allow", "deny"];
+
+/// 规则 `resource × target_kind` 兼容矩阵（ADR-019 附录 A-1 硬口径；非法组合 → `invalid_enum`）。
+pub fn rule_target_kind_allowed(resource: &str, target_kind: &str) -> bool {
+    match resource {
+        "fs.read" | "fs.write" => matches!(target_kind, "path" | "any"),
+        "exec" => matches!(target_kind, "command" | "any"),
+        "net" => matches!(target_kind, "host" | "any"),
+        _ => false,
+    }
+}
+
+fn ensure_enum(value: &str, field: &str, allowed: &[&str]) -> Result<(), IpcError> {
+    if !allowed.contains(&value) {
+        return Err(IpcError::invalid_enum(
+            field,
+            format!("取值非法（{value}）；允许值：{}", allowed.join(" / ")),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_rule_name(value: &str) -> Result<(), IpcError> {
+    ensure_not_empty(value, "name")?;
+    ensure_max_chars(value, "name", MAX_RULE_NAME_CHARS)?;
+    reject_control_chars(value, "name", false)
+}
+
+fn validate_rule_target_field(value: &str) -> Result<(), IpcError> {
+    ensure_max_chars(value, "target", MAX_RULE_TARGET_CHARS)
+}
+
+/// M6-01/ADR-018：`rules_list`（无参数）。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct RulesListRequest {}
+
+impl CommandRequest for RulesListRequest {}
+
+/// M6-01/ADR-019：`rule_add` 参数（`{ name, resource, action, target_kind, target?, decision, priority? }`）。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct RuleAddRequest {
+    pub name: String,
+    pub resource: String,
+    pub action: String,
+    pub target_kind: String,
+    #[serde(default)]
+    pub target: Option<String>,
+    pub decision: String,
+    #[serde(default)]
+    pub priority: Option<i64>,
+}
+
+impl RuleAddRequest {
+    pub fn priority_value(&self) -> Result<i64, IpcError> {
+        match self.priority {
+            Some(value) if !(0..=100).contains(&value) => Err(IpcError::out_of_range(
+                "priority",
+                format!("priority 必须在 0..=100 之间，传入 {value}"),
+            )),
+            Some(value) => Ok(value),
+            None => Ok(0),
+        }
+    }
+}
+
+impl CommandRequest for RuleAddRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        validate_rule_name(&self.name)?;
+        ensure_enum(&self.resource, "resource", RULE_RESOURCES)?;
+        ensure_enum(&self.action, "action", RULE_ACTIONS)?;
+        ensure_enum(&self.target_kind, "target_kind", RULE_TARGET_KINDS)?;
+        ensure_enum(&self.decision, "decision", RULE_DECISIONS)?;
+        if !rule_target_kind_allowed(&self.resource, &self.target_kind) {
+            return Err(IpcError::invalid_enum(
+                "target_kind",
+                format!(
+                    "resource={} 不接受 target_kind={}（ADR-019 兼容矩阵）",
+                    self.resource, self.target_kind
+                ),
+            ));
+        }
+        if let Some(target) = &self.target {
+            validate_rule_target_field(target)?;
+        }
+        self.priority_value()?;
+        Ok(())
+    }
+}
+
+/// M6-01/ADR-019：`rule_update` 参数（至少 1 个变更字段；`rule_id` 存在性由后端判定）。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct RuleUpdateRequest {
+    pub rule_id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub resource: Option<String>,
+    #[serde(default)]
+    pub action: Option<String>,
+    #[serde(default)]
+    pub target_kind: Option<String>,
+    #[serde(default)]
+    pub target: Option<String>,
+    #[serde(default)]
+    pub decision: Option<String>,
+    #[serde(default)]
+    pub priority: Option<i64>,
+}
+
+impl RuleUpdateRequest {
+    /// 是否至少提供 1 个变更字段。
+    pub fn has_changes(&self) -> bool {
+        self.name.is_some()
+            || self.resource.is_some()
+            || self.action.is_some()
+            || self.target_kind.is_some()
+            || self.target.is_some()
+            || self.decision.is_some()
+            || self.priority.is_some()
+    }
+}
+
+impl CommandRequest for RuleUpdateRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.rule_id) {
+            return Err(IpcError::invalid_format("rule_id", "必须是 26 位 ULID"));
+        }
+        if !self.has_changes() {
+            return Err(IpcError::invalid_value(
+                "rule_update 至少需要 1 个变更字段（name/resource/action/target_kind/target/decision/priority）",
+            ));
+        }
+        if let Some(name) = &self.name {
+            validate_rule_name(name)?;
+        }
+        if let Some(resource) = &self.resource {
+            ensure_enum(resource, "resource", RULE_RESOURCES)?;
+        }
+        if let Some(action) = &self.action {
+            ensure_enum(action, "action", RULE_ACTIONS)?;
+        }
+        if let Some(target_kind) = &self.target_kind {
+            ensure_enum(target_kind, "target_kind", RULE_TARGET_KINDS)?;
+        }
+        if let Some(decision) = &self.decision {
+            ensure_enum(decision, "decision", RULE_DECISIONS)?;
+        }
+        if let Some(target) = &self.target {
+            validate_rule_target_field(target)?;
+        }
+        if let Some(value) = self.priority {
+            if !(0..=100).contains(&value) {
+                return Err(IpcError::out_of_range(
+                    "priority",
+                    format!("priority 必须在 0..=100 之间，传入 {value}"),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// M6-01/ADR-019：`rule_delete` 参数。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct RuleDeleteRequest {
+    pub rule_id: String,
+}
+
+impl CommandRequest for RuleDeleteRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.rule_id) {
+            return Err(IpcError::invalid_format("rule_id", "必须是 26 位 ULID"));
+        }
+        Ok(())
+    }
+}
+
+/// M6-01/ADR-019：`rule_toggle` 参数。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct RuleToggleRequest {
+    pub rule_id: String,
+    pub enabled: bool,
+}
+
+impl CommandRequest for RuleToggleRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.rule_id) {
+            return Err(IpcError::invalid_format("rule_id", "必须是 26 位 ULID"));
         }
         Ok(())
     }

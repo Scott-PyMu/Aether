@@ -12,8 +12,9 @@ use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use aether_core::{
-    Message, MessageId, MessageRole, PermissionDecision, PermissionScope, PermissionStatus, Run,
-    RunId, RunStatus, Runtime, Session, SessionId, SessionStatus, Workspace, WorkspaceId,
+    Message, MessageId, MessageRole, PermissionDecision, PermissionMode, PermissionScope,
+    PermissionStatus, Run, RunId, RunStatus, Runtime, Session, SessionId, SessionStatus, Workspace,
+    WorkspaceId,
 };
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
@@ -40,6 +41,35 @@ pub struct PermissionRecord {
     pub requested_at: i64,
     pub resolved_at: Option<i64>,
     pub resolver: Option<String>,
+}
+
+/// 用户自定义权限规则行（`permission_rules` 表；M6-01/ADR-019 附录 A-1）。
+///
+/// `resource` / `action` / `target_kind` / `decision` 为 CHECK 枚举文本（应用层先校验）；
+/// `target` 为归一化目标形态（`path` = canonical；`any` 为 `None`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionRuleRecord {
+    pub id: String,
+    pub name: String,
+    pub resource: String,
+    pub action: String,
+    pub target_kind: String,
+    pub target: Option<String>,
+    pub decision: String,
+    pub priority: i64,
+    pub enabled: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// 持久授权行（`permissions` 表投影；M6-01/ADR-019 附录 A-2：`scope IN ('session','always')`
+/// + `status='resolved'` + `decision='allow'`，`target` 为 canonical 形态）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionGrantRecord {
+    pub session_id: Option<String>,
+    pub resource: String,
+    pub action: String,
+    pub target: String,
 }
 
 /// 会话引用行（`artifacts` 表；ADR-010 决策 1：文件/目录引用持久化）。
@@ -129,6 +159,13 @@ pub enum StoreCommand {
         thinking_depth: u8,
         updated_at: i64,
     },
+    /// 改写会话级权限模式（M6-01/ADR-014 决策 3：`session_permission_mode_set`；
+    /// 档位为判定权威入参，仅影响后续工具调用决策——在途会话沙箱参数不变）。
+    UpdateSessionPermissionMode {
+        session_id: SessionId,
+        permission_mode: PermissionMode,
+        updated_at: i64,
+    },
     /// 插入 run 行。
     InsertRun { run: Run },
     /// 改写 run 生效思考深度（ADR-010 能力门：runtime 未声明能力 → 落缺省 2；M3-10）。
@@ -155,6 +192,9 @@ pub enum StoreCommand {
     /// 插入权限请求行（`status=pending` 或策略直决）。
     InsertPermission { record: PermissionRecord },
     /// 审批决议：更新行 `decision/scope/status/resolved_at/resolver`。
+    ///
+    /// `target`（M6-01/ADR-019 附录 A-2）：`session`/`always` 授权决议时以
+    /// `ticket.canonical_target` 覆写 `permissions.target`（不新增列）；`None` = 不改写。
     ResolvePermission {
         id: String,
         decision: PermissionDecision,
@@ -162,9 +202,22 @@ pub enum StoreCommand {
         status: PermissionStatus,
         resolved_at: i64,
         resolver: Option<String>,
+        target: Option<String>,
     },
     /// 审批超时：置 `status=timeout` 且 `decision=deny`（D9：超时按拒绝处理并审计）。
     TimeoutPermission { id: String, resolved_at: i64 },
+    /// 插入用户自定义权限规则（M6-01 `rule_add`；ADR-019）。
+    InsertPermissionRule { rule: PermissionRuleRecord },
+    /// 整体更新用户自定义权限规则（M6-01 `rule_update`；调用方负责合并后整体写入）。
+    UpdatePermissionRule { rule: PermissionRuleRecord },
+    /// 删除用户自定义权限规则（M6-01 `rule_delete`；不存在时影响 0 行）。
+    DeletePermissionRule { id: String },
+    /// 启用/停用用户自定义权限规则（M6-01 `rule_toggle`）。
+    SetPermissionRuleEnabled {
+        id: String,
+        enabled: bool,
+        updated_at: i64,
+    },
     /// 追加审计行。
     InsertAudit { record: AuditLogRecord },
     /// 登记备份台账行（M3-04 `backup_create`：`VACUUM INTO` 产物 + 元数据）。
@@ -304,8 +357,8 @@ pub(crate) fn apply_command(
             let affected = transaction
                 .execute(
                     "INSERT INTO sessions (id, runtime_id, workspace_id, parent_session_id, title, status, \
-                     model, thinking_depth, system_prompt, config, token_usage, created_at, updated_at, closed_at) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                     model, thinking_depth, permission_mode, system_prompt, config, token_usage, created_at, updated_at, closed_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                     params![
                         session.id.as_str(),
                         session.runtime_id.as_str(),
@@ -315,6 +368,7 @@ pub(crate) fn apply_command(
                         session.status.as_str(),
                         session.model,
                         session.thinking_depth,
+                        session.permission_mode.as_str(),
                         session.system_prompt,
                         config,
                         token_usage,
@@ -370,6 +424,21 @@ pub(crate) fn apply_command(
                 .execute(
                     "UPDATE sessions SET thinking_depth = ?2, updated_at = ?3 WHERE id = ?1",
                     params![session_id.as_str(), i64::from(*thinking_depth), updated_at],
+                )
+                .map_err(txn_failed)?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::Applied { affected })
+        }
+        StoreCommand::UpdateSessionPermissionMode {
+            session_id,
+            permission_mode,
+            updated_at,
+        } => {
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            let affected = transaction
+                .execute(
+                    "UPDATE sessions SET permission_mode = ?2, updated_at = ?3 WHERE id = ?1",
+                    params![session_id.as_str(), permission_mode.as_str(), updated_at],
                 )
                 .map_err(txn_failed)?;
             transaction.commit().map_err(txn_failed)?;
@@ -517,12 +586,14 @@ pub(crate) fn apply_command(
             status,
             resolved_at,
             resolver,
+            target,
         } => {
             let transaction = connection.transaction().map_err(txn_failed)?;
             let affected = transaction
                 .execute(
                     "UPDATE permissions SET decision = ?2, scope = ?3, status = ?4, resolved_at = ?5, \
-                     resolver = ?6 WHERE id = ?1 AND status = 'pending'",
+                     resolver = ?6, target = CASE WHEN ?7 IS NULL THEN target ELSE ?7 END \
+                     WHERE id = ?1 AND status = 'pending'",
                     params![
                         id,
                         decision.as_str(),
@@ -530,6 +601,7 @@ pub(crate) fn apply_command(
                         status.as_str(),
                         resolved_at,
                         resolver,
+                        target,
                     ],
                 )
                 .map_err(txn_failed)?;
@@ -543,6 +615,78 @@ pub(crate) fn apply_command(
                     "UPDATE permissions SET decision = 'deny', status = 'timeout', resolved_at = ?2 \
                      WHERE id = ?1 AND status = 'pending'",
                     params![id, resolved_at],
+                )
+                .map_err(txn_failed)?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::Applied { affected })
+        }
+        StoreCommand::InsertPermissionRule { rule } => {
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            let affected = transaction
+                .execute(
+                    "INSERT INTO permission_rules (id, name, resource, action, target_kind, target, \
+                     decision, priority, enabled, created_at, updated_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                    params![
+                        rule.id,
+                        rule.name,
+                        rule.resource,
+                        rule.action,
+                        rule.target_kind,
+                        rule.target,
+                        rule.decision,
+                        rule.priority,
+                        i64::from(rule.enabled),
+                        rule.created_at,
+                        rule.updated_at,
+                    ],
+                )
+                .map_err(txn_failed)?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::Applied { affected })
+        }
+        StoreCommand::UpdatePermissionRule { rule } => {
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            let affected = transaction
+                .execute(
+                    "UPDATE permission_rules SET name = ?2, resource = ?3, action = ?4, \
+                     target_kind = ?5, target = ?6, decision = ?7, priority = ?8, enabled = ?9, \
+                     updated_at = ?10 WHERE id = ?1",
+                    params![
+                        rule.id,
+                        rule.name,
+                        rule.resource,
+                        rule.action,
+                        rule.target_kind,
+                        rule.target,
+                        rule.decision,
+                        rule.priority,
+                        i64::from(rule.enabled),
+                        rule.updated_at,
+                    ],
+                )
+                .map_err(txn_failed)?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::Applied { affected })
+        }
+        StoreCommand::DeletePermissionRule { id } => {
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            let affected = transaction
+                .execute("DELETE FROM permission_rules WHERE id = ?1", params![id])
+                .map_err(txn_failed)?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::Applied { affected })
+        }
+        StoreCommand::SetPermissionRuleEnabled {
+            id,
+            enabled,
+            updated_at,
+        } => {
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            let affected = transaction
+                .execute(
+                    "UPDATE permission_rules SET enabled = ?2, updated_at = ?3 WHERE id = ?1",
+                    params![id, i64::from(*enabled), updated_at],
                 )
                 .map_err(txn_failed)?;
             transaction.commit().map_err(txn_failed)?;
@@ -990,7 +1134,8 @@ impl SessionQuery {
         let limit = i64::from(self.limit.unwrap_or(500).min(500));
         let sql = format!(
             "SELECT id, runtime_id, workspace_id, parent_session_id, title, status, model, system_prompt, \
-             config, token_usage, created_at, updated_at, closed_at, thinking_depth FROM sessions{where_clause} \
+             config, token_usage, created_at, updated_at, closed_at, thinking_depth, permission_mode \
+             FROM sessions{where_clause} \
              ORDER BY created_at DESC, rowid DESC LIMIT ?"
         );
         values.push(Box::new(limit));
@@ -1006,7 +1151,8 @@ impl ReadPool {
             connection
                 .query_row(
                     "SELECT id, runtime_id, workspace_id, parent_session_id, title, status, model, \
-                     system_prompt, config, token_usage, created_at, updated_at, closed_at, thinking_depth \
+                     system_prompt, config, token_usage, created_at, updated_at, closed_at, thinking_depth, \
+                     permission_mode \
                      FROM sessions WHERE id = ?1",
                     [session.as_str()],
                     read_session_row,
@@ -1095,7 +1241,8 @@ impl ReadPool {
         self.with_connection(move |connection| {
             let mut statement = connection.prepare(
                 "SELECT id, runtime_id, workspace_id, parent_session_id, title, status, model, \
-                 system_prompt, config, token_usage, created_at, updated_at, closed_at, thinking_depth \
+                 system_prompt, config, token_usage, created_at, updated_at, closed_at, thinking_depth, \
+                 permission_mode \
                  FROM sessions \
                  WHERE status NOT IN ('idle', 'completed', 'failed', 'cancelled') \
                  ORDER BY created_at ASC, rowid ASC",
@@ -1202,6 +1349,49 @@ impl ReadPool {
                 )
                 .optional()
                 .map_err(StoreError::from)
+        })
+        .await
+    }
+
+    /// 用户自定义权限规则清单（M6-01 `rules_list` 语义；按创建时间升序、`rowid` 兜底）。
+    pub async fn permission_rules(&self) -> Result<Vec<PermissionRuleRecord>, StoreError> {
+        self.with_connection(move |connection| {
+            let mut statement = connection.prepare(
+                "SELECT id, name, resource, action, target_kind, target, decision, priority, enabled, \
+                 created_at, updated_at FROM permission_rules ORDER BY created_at ASC, rowid ASC",
+            )?;
+            let rows = statement.query_map([], read_permission_rule_row)?;
+            let mut rules = Vec::new();
+            for row in rows {
+                rules.push(row?);
+            }
+            Ok(rules)
+        })
+        .await
+    }
+
+    /// 持久授权行（M6-01/ADR-019 附录 A-2 重启重建：`scope IN ('session','always')`
+    /// + `status='resolved'` + `decision='allow'` + `target` 非空）。
+    pub async fn permission_grants(&self) -> Result<Vec<PermissionGrantRecord>, StoreError> {
+        self.with_connection(move |connection| {
+            let mut statement = connection.prepare(
+                "SELECT session_id, resource, action, target FROM permissions \
+                 WHERE scope IN ('session','always') AND status = 'resolved' AND decision = 'allow' \
+                 AND target IS NOT NULL ORDER BY requested_at ASC, rowid ASC",
+            )?;
+            let rows = statement.query_map([], |row| {
+                Ok(PermissionGrantRecord {
+                    session_id: row.get(0)?,
+                    resource: row.get(1)?,
+                    action: row.get(2)?,
+                    target: row.get(3)?,
+                })
+            })?;
+            let mut grants = Vec::new();
+            for row in rows {
+                grants.push(row?);
+            }
+            Ok(grants)
         })
         .await
     }
@@ -1584,6 +1774,11 @@ fn read_session_row(row: &Row<'_>) -> rusqlite::Result<Session> {
         closed_at: row.get(12)?,
         thinking_depth: u8::try_from(row.get::<_, i64>(13)?)
             .map_err(|_| parse_column_error(13, "thinking_depth"))?,
+        permission_mode: {
+            let value: String = row.get(14)?;
+            PermissionMode::from_code(&value)
+                .ok_or_else(|| parse_column_error(14, "permission_mode"))?
+        },
     })
 }
 
@@ -1669,6 +1864,22 @@ fn read_permission_row(row: &Row<'_>) -> rusqlite::Result<PermissionRecord> {
         requested_at: row.get(9)?,
         resolved_at: row.get(10)?,
         resolver: row.get(11)?,
+    })
+}
+
+fn read_permission_rule_row(row: &Row<'_>) -> rusqlite::Result<PermissionRuleRecord> {
+    Ok(PermissionRuleRecord {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        resource: row.get(2)?,
+        action: row.get(3)?,
+        target_kind: row.get(4)?,
+        target: row.get(5)?,
+        decision: row.get(6)?,
+        priority: row.get(7)?,
+        enabled: row.get::<_, i64>(8)? != 0,
+        created_at: row.get(9)?,
+        updated_at: row.get(10)?,
     })
 }
 
@@ -1770,6 +1981,7 @@ mod tests {
             status: SessionStatus::Idle,
             model: None,
             thinking_depth: aether_core::THINKING_DEPTH_DEFAULT,
+            permission_mode: PermissionMode::default(),
             system_prompt: None,
             config: serde_json::json!({}),
             token_usage: TokenUsage::default(),
@@ -2046,6 +2258,7 @@ mod tests {
                 status: PermissionStatus::Resolved,
                 resolved_at: 2,
                 resolver: Some("user".to_owned()),
+                target: None,
             },
         )
         .unwrap();
@@ -2060,6 +2273,7 @@ mod tests {
                 status: PermissionStatus::Resolved,
                 resolved_at: 3,
                 resolver: Some("user".to_owned()),
+                target: None,
             },
         )
         .unwrap();

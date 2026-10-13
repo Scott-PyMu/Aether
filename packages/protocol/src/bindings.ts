@@ -14,6 +14,21 @@ export const commands = {
 	messagesPage: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("messages_page", { payload })),
 	permissionsPending: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("permissions_pending", { payload })),
 	permissionResolve: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("permission_resolve", { payload })),
+	/**
+	 *  M6-01/ADR-014 决策 3：设置会话级权限模式（档位为判定权威入参；
+	 *  仅影响后续工具调用决策，在途会话沙箱参数不变）。
+	 */
+	sessionPermissionModeSet: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("session_permission_mode_set", { payload })),
+	/**  M6-01/ADR-019：用户自定义权限规则清单（无参数；严格解析拒绝未知成员）。 */
+	rulesList: (payload: unknown | null) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("rules_list", { payload })),
+	/**  M6-01/ADR-019：新增权限规则（非法规则拒绝且不落库）。 */
+	ruleAdd: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("rule_add", { payload })),
+	/**  M6-01/ADR-019：更新权限规则（`rule_id` 不存在 → `rule_not_found`）。 */
+	ruleUpdate: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("rule_update", { payload })),
+	/**  M6-01/ADR-019：删除权限规则（`rule_id` 不存在 → `rule_not_found`）。 */
+	ruleDelete: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("rule_delete", { payload })),
+	/**  M6-01/ADR-019：启用/停用权限规则（`enabled` 非布尔由 serde 严格解析拒绝）。 */
+	ruleToggle: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("rule_toggle", { payload })),
 	settingsGet: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("settings_get", { payload })),
 	settingsSet: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("settings_set", { payload })),
 	/**
@@ -278,7 +293,9 @@ export type IpcErrorCode =
 /**  供应商不存在（ADR-010：供应商类命令按 id 查无）。 */
 "provider_not_found" | 
 /**  供应商模型不存在（ADR-010：`provider_model_toggle`）。 */
-"provider_model_not_found";
+"provider_model_not_found" | 
+/**  权限规则不存在（M6-01/ADR-018：`rule_update` / `rule_delete` / `rule_toggle` 按 id 查无）。 */
+"rule_not_found";
 
 /**  IPC 命令错误的线上形态：`{ "code": "...", "message": "...", "field": "..." }`。 */
 export type IpcError_Deserialize = {
@@ -300,8 +317,8 @@ export type MessagesPageRequest = {
 	limit?: number | null,
 };
 
-/**  权限决议（D9：`once` / `session` 授权；`deny` 拒绝）。 */
-export type PermissionDecision = "once" | "session" | "deny";
+/**  权限决议（D9；M6-01/ADR-019 启用 `always` 持久授权「记住」）。 */
+export type PermissionDecision = "once" | "session" | "always" | "deny";
 
 export type PermissionResolveRequest = {
 	request_id: string,
@@ -384,6 +401,43 @@ export type RefPickRequest = {
 	kind: RefPickKind,
 };
 
+/**  M6-01/ADR-019：`rule_add` 参数（`{ name, resource, action, target_kind, target?, decision, priority? }`）。 */
+export type RuleAddRequest = {
+	name: string,
+	resource: string,
+	action: string,
+	target_kind: string,
+	target?: string | null,
+	decision: string,
+	priority?: number | null,
+};
+
+/**  M6-01/ADR-019：`rule_delete` 参数。 */
+export type RuleDeleteRequest = {
+	rule_id: string,
+};
+
+/**  M6-01/ADR-019：`rule_toggle` 参数。 */
+export type RuleToggleRequest = {
+	rule_id: string,
+	enabled: boolean,
+};
+
+/**  M6-01/ADR-019：`rule_update` 参数（至少 1 个变更字段；`rule_id` 存在性由后端判定）。 */
+export type RuleUpdateRequest = {
+	rule_id: string,
+	name?: string | null,
+	resource?: string | null,
+	action?: string | null,
+	target_kind?: string | null,
+	target?: string | null,
+	decision?: string | null,
+	priority?: number | null,
+};
+
+/**  M6-01/ADR-018：`rules_list`（无参数）。 */
+export type RulesListRequest = Record<string, never>;
+
 /**  `run_retry`（ADR-004）：仅终态 run 可重试；格式层校验 ULID，终态由后端判定。 */
 export type RunRetryRequest = {
 	run_id: string,
@@ -415,6 +469,11 @@ export type SessionCreateRequest = {
 	 *  类型非法 `invalid_type`）。
 	 */
 	thinking_depth?: number | null,
+	/**
+	 *  会话级权限模式（M6-01/ADR-014 决策 3：`read_only` / `workspace_write`（缺省）/
+	 *  `danger_full_access`；非法枚举 → `invalid_enum`）。
+	 */
+	permission_mode?: string | null,
 };
 
 export type SessionIdRequest = {
@@ -425,6 +484,12 @@ export type SessionListRequest = {
 	runtime_id?: string | null,
 	status?: SessionStatus | null,
 	limit?: number | null,
+};
+
+/**  M6-01/ADR-014 决策 3：会话级权限模式设置（`session_permission_mode_set`）。 */
+export type SessionPermissionModeSetRequest = {
+	session_id: string,
+	permission_mode: string,
 };
 
 export type SessionSendRequest = {
@@ -480,6 +545,8 @@ export type SessionSummary_Deserialize = {
 	status: SessionStatus,
 	model: string | null,
 	thinking_depth: number | null,
+	/**  会话级权限模式（M6-01/ADR-014 决策 3；`SessionSummary` 回显档位）。 */
+	permission_mode: string | null,
 	system_prompt: string | null,
 	config: unknown,
 	token_usage: unknown,
@@ -511,6 +578,8 @@ export type SessionSummary_Serialize = {
 	status: SessionStatus,
 	model: string | null,
 	thinking_depth?: number | null,
+	/**  会话级权限模式（M6-01/ADR-014 决策 3；`SessionSummary` 回显档位）。 */
+	permission_mode?: string | null,
 	system_prompt: string | null,
 	config: unknown,
 	token_usage: unknown,

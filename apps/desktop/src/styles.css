@@ -1719,3 +1719,140 @@ body {
 .model-selector-item-id { color: #6c7278; font-size: 0.68rem; }
 
 .model-selector-check { color: var(--ae-accent-strong, #82aaff); }
+
+/* M6-01/ADR-014 决策 3：会话级权限模式选择器（输入区工具条；三档 + 常驻边界声明）。 */
+.permission-mode-selector {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  align-items: flex-start;
+}
+
+.permission-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background-color: #2a2f37;
+  border: 1px solid #3a3f47;
+  border-radius: 999px;
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.74rem;
+  padding: 0.25rem 0.6rem;
+  max-width: 14rem;
+}
+
+.permission-mode-toggle:disabled { opacity: 0.5; cursor: default; }
+
+.permission-mode-empty { margin: 0; font-size: 0.72rem; color: #9aa4af; }
+
+.permission-mode-popover {
+  position: absolute;
+  bottom: calc(100% + 0.35rem);
+  left: 0;
+  z-index: 20;
+  width: 26rem;
+  max-width: 80vw;
+  background-color: #232830;
+  border: 1px solid #3a3f47;
+  border-radius: 6px;
+  padding: 0.6rem 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+
+.permission-mode-popover[hidden] { display: none; }
+
+.permission-mode-head { font-size: 0.8rem; color: #9aa0a6; }
+
+.permission-mode-list { display: flex; flex-direction: column; gap: 0.25rem; }
+
+.permission-mode-item {
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.78rem;
+  padding: 0.35rem 0.45rem;
+  text-align: left;
+}
+
+.permission-mode-item:hover,
+.permission-mode-item.on { background-color: #2f3540; }
+
+.permission-mode-item:disabled { color: #6c7278; cursor: not-allowed; }
+
+/* R14：弹层内常驻一行（不随档位切换消失/清空）。 */
+.permission-mode-boundary {
+  margin: 0;
+  padding-top: 0.35rem;
+  border-top: 1px solid #3a3f47;
+  color: #9aa0a6;
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
+/* M6-01/ADR-019：权限规则管理页（设置覆盖层内页面）。 */
+.rules-page { display: flex; flex-direction: column; gap: 0.8rem; }
+
+.rules-desc { margin: 0; font-size: 0.74rem; color: #9aa4af; }
+
+.rules-loading,
+.rules-empty { margin: 0; font-size: 0.76rem; color: #9aa4af; }
+
+.rules-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+
+.rule-item {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  border: 1px solid #3a3f47;
+  border-radius: 6px;
+  padding: 0.45rem 0.6rem;
+  font-size: 0.76rem;
+}
+
+.rule-item[data-enabled="false"] .rule-name { color: #9aa4af; }
+
+.rule-name { font-weight: 600; }
+
+.rule-summary { flex: 1; min-width: 0; color: #9aa4af; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.rule-actions,
+.rule-confirm { display: flex; align-items: center; gap: 0.4rem; }
+
+.rule-confirm-text { color: #f6b26b; font-size: 0.72rem; }
+
+.rule-add-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  border: 1px solid #3a3f47;
+  border-radius: 6px;
+  padding: 0.6rem 0.7rem;
+  align-items: flex-end;
+}
+
+.rule-add-form h4 { flex-basis: 100%; margin: 0; font-size: 0.8rem; }
+
+.rule-field { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.72rem; color: #9aa0a6; }
+
+.rule-field input,
+.rule-field select {
+  background-color: #14161a;
+  border: 1px solid #3a3f47;
+  border-radius: 4px;
+  color: inherit;
+  font-size: 0.74rem;
+  padding: 0.3rem 0.45rem;
+}
+
+.rule-add-actions { display: flex; }
+
+.rules-notice { margin: 0; font-size: 0.74rem; color: var(--ae-success, #8fd18f); }
+
+.rules-error { margin: 0; font-size: 0.74rem; color: var(--ae-danger, #d66f6f); }

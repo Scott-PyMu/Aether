@@ -221,6 +221,15 @@ export function PermissionPanel({
             >
               本会话允许
             </button>
+            {/* M6-01/ADR-019：`always` 持久授权（绑定 canonical target；重启重建）。 */}
+            <button
+              type="button"
+              data-testid="permission-allow-always"
+              disabled={busy}
+              onClick={() => void onResolve(active.requestId, "always")}
+            >
+              记住（始终允许）
+            </button>
             <button
               type="button"
               data-testid="permission-deny"
@@ -257,9 +266,11 @@ export function PermissionPanel({
                 {item.status === "timeout"
                   ? "已超时自动拒绝（300s）"
                   : item.decision === "allow"
-                    ? item.scope === "session"
-                      ? "已允许（本会话）"
-                      : "已允许（本次）"
+                    ? item.scope === "always"
+                      ? "已允许（始终）"
+                      : item.scope === "session"
+                        ? "已允许（本会话）"
+                        : "已允许（本次）"
                     : "已拒绝"}
               </span>
             </li>

@@ -222,6 +222,36 @@ impl PermissionStatus {
     }
 }
 
+/// 会话级权限模式（`sessions.permission_mode` CHECK 约束；ADR-014 决策 3 / D9 修订）。
+///
+/// 档位值与运行时沙箱**同名同序**（`read_only` / `workspace_write` / `danger_full_access`）；
+/// 缺省 [`PermissionMode::WorkspaceWrite`]。档位约束「写的作用域」，不约束读。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionMode {
+    ReadOnly,
+    #[default]
+    WorkspaceWrite,
+    DangerFullAccess,
+}
+
+impl PermissionMode {
+    pub const ALL: [Self; 3] = [Self::ReadOnly, Self::WorkspaceWrite, Self::DangerFullAccess];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read_only",
+            Self::WorkspaceWrite => "workspace_write",
+            Self::DangerFullAccess => "danger_full_access",
+        }
+    }
+
+    /// 解析档位码（未知值 → `None`，由调用方按 `invalid_enum` 处理）。
+    pub fn from_code(code: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|mode| mode.as_str() == code)
+    }
+}
+
 /// 日志级别（`log` 事件 payload，附录 B）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -278,6 +308,7 @@ impl_enum_traits!(MessageRole);
 impl_enum_traits!(PermissionDecision);
 impl_enum_traits!(PermissionScope);
 impl_enum_traits!(PermissionStatus);
+impl_enum_traits!(PermissionMode);
 impl_enum_traits!(LogLevel);
 
 /// 运行时注册实体（`runtimes` 表）。
@@ -321,6 +352,9 @@ pub struct Session {
     pub model: Option<String>,
     /// 会话级思考深度（0–4；缺省 [`THINKING_DEPTH_DEFAULT`]；ADR-010 决策 2）。
     pub thinking_depth: u8,
+    /// 会话级权限模式（缺省 [`PermissionMode::WorkspaceWrite`]；ADR-014 决策 3）。
+    #[serde(default)]
+    pub permission_mode: PermissionMode,
     pub system_prompt: Option<String>,
     pub config: serde_json::Value,
     pub token_usage: TokenUsage,

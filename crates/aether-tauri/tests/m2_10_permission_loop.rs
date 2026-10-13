@@ -84,6 +84,20 @@ fn next_msg_id(prefix: &str) -> String {
     format!("{prefix}-{}", COUNTER.fetch_add(1, Ordering::SeqCst))
 }
 
+/// canonical 路径 → 目标字符串形态（剥离 `\\?\` 扩展前缀；该前缀属输入检查
+/// 拒绝形态，测试夹具不得以其构造 target）。
+fn plain(path: &Path) -> String {
+    let text = path.to_string_lossy().to_string();
+    text.strip_prefix(r"\\?\").unwrap_or(&text).to_owned()
+}
+
+/// 区外写目标（M6-01/ADR-014 矩阵口径更新：缺省档区内写免审批，制造 pending 的
+/// 样本必须改用区外写 `ask`）。目标从 canonical 基准派生，规避 CI 临时目录 8.3
+/// 短名别名对路径形态检查的误伤。
+fn outside_target(dir: &Path, name: &str) -> String {
+    plain(&std::fs::canonicalize(dir).unwrap().join(name))
+}
+
 /// 证据导出（DoD3）：`AETHER_M2_10_EVIDENCE_DIR` 存在时写 JSON；同时打印摘要行。
 fn write_evidence(name: &str, value: &Value) {
     println!("[m2-10] 证据 {name} = {value}");
@@ -237,6 +251,7 @@ impl TestCore {
             status: SessionStatus::Idle,
             model: None,
             thinking_depth: aether_core::THINKING_DEPTH_DEFAULT,
+            permission_mode: aether_core::PermissionMode::default(),
             system_prompt: None,
             config: json!({}),
             token_usage: TokenUsage::default(),
@@ -339,24 +354,24 @@ impl AdapterHarness {
             .session_id
     }
 
-    async fn send_loop(&self, session_id: &str, target: &Path) -> String {
+    async fn send_loop(&self, session_id: &str, target: &str) -> String {
         self.client
             .send(
                 session_id,
                 &next_msg_id("m2-10-write"),
-                &format!("permission-loop:{}", target.display()),
+                &format!("permission-loop:{target}"),
             )
             .await
             .expect("session.send ack")
             .run_id
     }
 
-    async fn send_loop_read(&self, session_id: &str, target: &Path) -> String {
+    async fn send_loop_read(&self, session_id: &str, target: &str) -> String {
         self.client
             .send(
                 session_id,
                 &next_msg_id("m2-10-read"),
-                &format!("permission-loop-read:{}", target.display()),
+                &format!("permission-loop-read:{target}"),
             )
             .await
             .expect("session.send ack")
@@ -407,7 +422,8 @@ fn basic_loop_is_100_percent_and_zero_passthrough() {
         };
         let session_id = adapter.open_session().await;
         core.insert_session(&session_id).await;
-        let target = core.workspace.path().join("notes.md");
+        // M6-01/ADR-014 矩阵口径更新：缺省档区内写 allow 免审批，pending 用例改区外写 ask。
+        let target = outside_target(core.temp.path(), "notes.md");
         std::fs::write(&target, b"x").unwrap();
 
         let run_id = adapter.send_loop(&session_id, &target).await;
@@ -417,7 +433,7 @@ fn basic_loop_is_100_percent_and_zero_passthrough() {
                 Duration::from_secs(10)
             )
             .await,
-            "fs.write 工作区内必须经回环进入待审批（ask）"
+            "fs.write 工作区外必须经回环进入待审批（ask）"
         );
         let pending_rows = core.reads().permissions_pending(None).await.unwrap();
         assert_eq!(pending_rows.len(), 1, "pending 必须已持久化");
@@ -426,7 +442,7 @@ fn basic_loop_is_100_percent_and_zero_passthrough() {
         let ticket = core.service.pending_list(None).first().unwrap().clone();
         assert_eq!(
             ticket.target.as_deref(),
-            Some(target.to_string_lossy().as_ref()),
+            Some(target.as_str()),
             "原始 target 原样上报（D9）"
         );
 
@@ -521,7 +537,8 @@ fn deny_path_resolves_and_fails_tool() {
         };
         let session_id = adapter.open_session().await;
         core.insert_session(&session_id).await;
-        let target = core.workspace.path().join("blocked.md");
+        // M6-01/ADR-014：缺省档区外写 ask（区内写已 allow）。
+        let target = outside_target(core.temp.path(), "blocked.md");
         std::fs::write(&target, b"x").unwrap();
 
         let run_id = adapter.send_loop(&session_id, &target).await;
@@ -607,7 +624,8 @@ fn timeout_deny_is_delivered_to_adapter() {
         };
         let session_id = adapter.open_session().await;
         core.insert_session(&session_id).await;
-        let target = core.workspace.path().join("timeout.md");
+        // M6-01/ADR-014：缺省档区外写 ask（区内写已 allow）。
+        let target = outside_target(core.temp.path(), "timeout.md");
         std::fs::write(&target, b"x").unwrap();
 
         let run_id = adapter.send_loop(&session_id, &target).await;
@@ -675,7 +693,8 @@ fn once_and_session_grants_apply_through_loop() {
         };
         let session_id = adapter.open_session().await;
         core.insert_session(&session_id).await;
-        let target = core.workspace.path().join("grant.md");
+        // M6-01/ADR-014：缺省档区外写 ask（区内写已 allow）。
+        let target = outside_target(core.temp.path(), "grant.md");
         std::fs::write(&target, b"x").unwrap();
 
         // run1：once allow。
@@ -796,7 +815,8 @@ fn once_and_session_grants_apply_through_loop() {
     });
 }
 
-/// 策略直决（fs.read）：工作区内 allow / 工作区外 deny，均经回环上报。
+/// 策略直决（fs.read）：工作区内/区外均 allow（M6-01/ADR-014 矩阵：档位不约束读），
+/// 均经回环上报。
 #[test]
 fn read_policy_decisions_flow_through_loop() {
     let runtime = new_runtime();
@@ -809,8 +829,10 @@ fn read_policy_decisions_flow_through_loop() {
         core.insert_session(&session_id).await;
         let inside = core.workspace.path().join("readme.md");
         std::fs::write(&inside, b"hello").unwrap();
+        let inside = inside.to_string_lossy().to_string();
         let outside_dir = tempfile::tempdir().unwrap();
-        let outside = outside_dir.path().join("secret.txt");
+        // M6-01/ADR-014：区外读三档均 allow（样本从 canonical 基准派生）。
+        let outside = outside_target(outside_dir.path(), "secret.txt");
         std::fs::write(&outside, b"top-secret").unwrap();
 
         // 工作区内：策略 allow（无 pending）。
@@ -829,7 +851,7 @@ fn read_policy_decisions_flow_through_loop() {
         assert_eq!(types_in[2], "permission.resolved");
         assert_eq!(types_in[3], "tool.call_completed");
 
-        // 工作区外：策略 deny（无 pending）。
+        // 工作区外：策略 allow（ADR-014 矩阵；无 pending）。
         let run_out = adapter.send_loop_read(&session_id, &outside).await;
         let outcome = adapter
             .client
@@ -839,32 +861,31 @@ fn read_policy_decisions_flow_through_loop() {
         assert!(matches!(outcome, RunOutcome::Completed { .. }));
         assert!(
             core.service.pending_list(None).is_empty(),
-            "策略 deny 不进入审批"
+            "策略 allow 不进入审批"
         );
         let types_out = adapter.client.run_event_types(&run_out).await;
         assert_eq!(types_out[2], "permission.resolved");
-        assert_eq!(types_out[3], "tool.call_failed");
+        assert_eq!(types_out[3], "tool.call_completed");
         let events = adapter.client.events().await;
         let resolved = payload_of(&events, &run_out, EventType::PermissionResolved).unwrap();
         match &resolved.payload {
             EventPayload::PermissionResolved(payload) => {
-                assert_eq!(payload.decision, PermissionDecision::Deny);
+                assert_eq!(payload.decision, PermissionDecision::Allow);
             }
             other => panic!("payload 类型不符：{other:?}"),
         }
 
         let snapshot = adapter.probe.snapshot();
         assert!(snapshot.zero_passthrough(), "{}", snapshot.summary());
-        assert_eq!(snapshot.decisions, 2, "读/拒两条都必须经回环");
+        assert_eq!(snapshot.decisions, 2, "区内/区外两条都必须经回环");
         let actions = core.audit_actions().await;
         assert!(actions.contains(&"permission.allowed_by_policy".to_owned()));
-        assert!(actions.contains(&"permission.denied_by_policy".to_owned()));
         write_evidence(
             "dod2_policy_direct",
             &json!({
-                "task": "M2-10 DoD2 策略直决（fs.read）",
-                "allow_sequence": types_in,
-                "deny_sequence": types_out,
+                "task": "M2-10 DoD2 策略直决（fs.read 区内/区外均 allow）",
+                "inside_sequence": types_in,
+                "outside_sequence": types_out,
                 "probe": snapshot_evidence(&snapshot),
                 "audit_actions": actions,
             }),
@@ -887,7 +908,8 @@ fn pending_survives_core_restart_and_resolves() {
         };
         let session_id = adapter.open_session().await;
         core.insert_session(&session_id).await;
-        let target = core.workspace.path().join("pending-restart.md");
+        // M6-01/ADR-014：缺省档区外写 ask（区内写已 allow）。
+        let target = outside_target(core.temp.path(), "pending-restart.md");
         std::fs::write(&target, b"x").unwrap();
 
         let run_id = adapter.send_loop(&session_id, &target).await;

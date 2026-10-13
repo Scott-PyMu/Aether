@@ -115,7 +115,7 @@ function checkDesignDoc() {
   }
   // 事件类型不变：附录 B 注记既有发射点。
   expect(text.includes("不新增事件类型"), "设计文档附录 B 未注明事件类型不变");
-  // 附录 C 只做规划位：不得出现未注释的终态 DDL。
+  // 附录 C 规划位与落库进度（M6-01 已落库项为终态 DDL；未落库项不得预合入）。
   const appendixStart = text.indexOf("## 附录 C");
   const codeStart = text.indexOf("```sql", appendixStart);
   const codeEnd = text.indexOf("```", codeStart + 6);
@@ -124,10 +124,19 @@ function checkDesignDoc() {
     .split(/\r?\n/)
     .map((line) => line.replace(/--.*$/, "").trim())
     .join("\n");
-  for (const forbidden of ["CREATE TABLE permission_rules", "CREATE VIRTUAL TABLE", "CREATE TABLE presets", "ALTER TABLE sessions"]) {
-    expect(!uncommented.includes(forbidden), `附录 C 预合入了终态 DDL：${forbidden}`);
+  for (const forbidden of ["CREATE VIRTUAL TABLE", "CREATE TABLE presets"]) {
+    expect(!uncommented.includes(forbidden), `附录 C 预合入了未落库任务的终态 DDL：${forbidden}`);
   }
-  console.log("[dod2] 设计 v1.16：ADR 引用/计数/规划位/事件不变 核验通过");
+  // M6-01 落库核验：permission_rules / sessions.permission_mode 终态 DDL 必在同批附录内。
+  expect(
+    uncommented.includes("CREATE TABLE permission_rules"),
+    "附录 C 缺少 M6-01 permission_rules 终态 DDL（迁移 0004 已落库）",
+  );
+  expect(
+    uncommented.includes("ALTER TABLE sessions ADD COLUMN permission_mode"),
+    "附录 C 缺少 M6-01 sessions.permission_mode 终态 DDL（迁移 0004 已落库）",
+  );
+  console.log("[dod2] 设计 v1.16：ADR 引用/计数/规划位（M6-01 终态已合入）/事件不变 核验通过");
 }
 
 function checkAdr006() {
@@ -243,12 +252,12 @@ function gitLines(args) {
 }
 
 function checkBaselineProtection() {
-  const modified = gitLines(["diff", "--name-only", "--", "migrations/0001_init.sql", "migrations/0002_unique_keys.sql", "migrations/0003_p0_ui_extensions.sql", "packages/protocol/src/bindings.ts"]);
-  expect(modified.length === 0, `已发布迁移/生成物被修改：${modified.join(", ")}`);
-  const status = gitLines(["status", "--porcelain", "--", "migrations"]);
-  const unexpected = status.filter((line) => /0004_|0005_|0006_/.test(line));
-  expect(unexpected.length === 0, `出现 P1 迁移文件（应为规划位）：${unexpected.join(", ")}`);
-  console.log("[baseline] 0001–0003 未改；无 0004+ 迁移文件；bindings.ts 未改");
+  // 不变量（M6-01 起保持）：已发布迁移 0001–0003 永不修改（AGENTS §8）；新增迁移
+  // （0004+）由各 P1 任务按「最大编号 +1」落库，其终态 DDL 与附录 C / bindings 的
+  // 一致由 `verify:m1-03` 与 T14（generate + git diff）分别把关，本脚本不重复约束。
+  const modified = gitLines(["diff", "--name-only", "--", "migrations/0001_init.sql", "migrations/0002_unique_keys.sql", "migrations/0003_p0_ui_extensions.sql"]);
+  expect(modified.length === 0, `已发布迁移 0001–0003 被修改：${modified.join(", ")}`);
+  console.log("[baseline] 已发布迁移 0001–0003 未改（0004+ 由各 P1 任务落库，T14/verify:m1-03 把关）");
 }
 
 // ===== 执行 =====

@@ -21,10 +21,11 @@ use crate::ipc::dto::{
     PermissionResolveRequest, PermissionsPendingRequest, ProviderCreateRequest,
     ProviderDeleteRequest, ProviderModelAddRequest, ProviderModelToggleRequest,
     ProviderToggleRequest, ProviderType, ProviderUpdateRequest, ProvidersListRequest, RefPickKind,
-    RefPickRequest, RunRetryRequest, RuntimeEnableRequest, RuntimeRetryRequest,
-    SessionCreateRequest, SessionIdRequest, SessionListRequest, SessionSendRequest, SessionStatus,
-    SettingsGetRequest, SettingsSetRequest, StartupGetRequest, StartupMigrateRequest,
-    StartupPickTargetRequest, WorkspaceSetRequest,
+    RefPickRequest, RuleAddRequest, RuleDeleteRequest, RuleToggleRequest, RuleUpdateRequest,
+    RulesListRequest, RunRetryRequest, RuntimeEnableRequest, RuntimeRetryRequest,
+    SessionCreateRequest, SessionIdRequest, SessionListRequest, SessionPermissionModeSetRequest,
+    SessionSendRequest, SessionStatus, SettingsGetRequest, SettingsSetRequest, StartupGetRequest,
+    StartupMigrateRequest, StartupPickTargetRequest, WorkspaceSetRequest,
 };
 use crate::ipc::error::IpcError;
 use crate::json_payload::JsonPayload;
@@ -90,6 +91,12 @@ pub fn builder<R: tauri::Runtime>() -> Builder<R> {
         .typ::<PermissionsPendingRequest>()
         .typ::<PermissionResolveRequest>()
         .typ::<PermissionDecision>()
+        .typ::<SessionPermissionModeSetRequest>()
+        .typ::<RulesListRequest>()
+        .typ::<RuleAddRequest>()
+        .typ::<RuleUpdateRequest>()
+        .typ::<RuleDeleteRequest>()
+        .typ::<RuleToggleRequest>()
         .typ::<SessionStatus>()
         .typ::<SettingsGetRequest>()
         .typ::<SettingsSetRequest>()

@@ -1,5 +1,8 @@
 //! M3-07 集成测试：审计最小集（设计 D9 / SE-03 / ADR-003/ADR-004）。
 //!
+//! 矩阵口径由 ADR-014 设计变更驱动（M6-01）：缺省档 `workspace_write` 区内写
+//! 免审批，ask 样本一律改用区外写（ask）。
+//!
 //! 覆盖：
 //! - DoD1（注入动作 ↔ 审计条数一一对应，脚本比对）：会话生命周期 `create → send →
 //!   dispose` 每个边界动作与每次状态转移各 1 条审计（与 `session.*` 事件逐条对应）；
@@ -23,8 +26,9 @@ use aether_control::{LifecycleConfig, PermissionConfig};
 use aether_core::{PermissionDecision, PermissionScope, RunStatus, SessionStatus};
 use aether_store::AuditLogRecord;
 use m2_support::{
-    build_manager, build_permission_service, create_session, manual_clock, permission_request,
-    system_clock, wait_for, wait_run_status, wait_session_status, ScriptedExecutor, TestCore,
+    build_manager, build_permission_service, create_session, manual_clock, outside_target,
+    permission_request, system_clock, wait_for, wait_run_status, wait_session_status,
+    ScriptedExecutor, TestCore,
 };
 use serde_json::{json, Value};
 
@@ -213,6 +217,7 @@ async fn session_lifecycle_audits_are_one_to_one() {
 async fn permission_decision_audits_are_one_to_one() {
     let core = TestCore::open().await;
     let workspace = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
     // 会话行（ask 审计带 session_id；`permissions` 行 FK 可空，但会话内回环有会话）。
     let executor = ScriptedExecutor::new(0);
     let manager = build_manager(&core, system_clock(), executor, LifecycleConfig::default());
@@ -261,12 +266,8 @@ async fn permission_decision_audits_are_one_to_one() {
         .unwrap();
     assert!(allow.is_allowed());
 
-    // ③ ask → 用户 once 允许（requested + resolved = 2 条）。
-    let write_target = workspace
-        .path()
-        .join("new.txt")
-        .to_string_lossy()
-        .to_string();
+    // ③ ask → 用户 once 允许（requested + resolved = 2 条）；区外写（缺省档 ask）。
+    let write_target = outside_target(&outside, "new.txt");
     let request = permission_request(
         &request_id("write-ask"),
         Some(&session_id),
@@ -301,12 +302,8 @@ async fn permission_decision_audits_are_one_to_one() {
     let resolution = ask_task.await.unwrap();
     assert!(resolution.is_allowed());
 
-    // ④ ask → 300s 超时（时钟注入；requested + timeout = 2 条）。
-    let timeout_target = workspace
-        .path()
-        .join("timeout.txt")
-        .to_string_lossy()
-        .to_string();
+    // ④ ask → 300s 超时（时钟注入；requested + timeout = 2 条）；区外写（缺省档 ask）。
+    let timeout_target = outside_target(&outside, "timeout.txt");
     let request = permission_request(
         &request_id("write-timeout"),
         Some(&session_id),

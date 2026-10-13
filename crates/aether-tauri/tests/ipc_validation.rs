@@ -454,8 +454,9 @@ fn malformed_samples_return_structured_errors_and_do_not_reach_backend() {
             None,
         ),
         (
+            // M6-01/ADR-019 启用 `always` 持久授权后，非法枚举样本改用仍不存在的值。
             "permission_resolve",
-            json!({ "request_id": ULID, "decision": "always" }),
+            json!({ "request_id": ULID, "decision": "sometimes" }),
             "invalid_enum",
             None,
         ),

@@ -352,6 +352,7 @@ pub async fn insert_session_row_with_status(
         status,
         model: None,
         thinking_depth: aether_core::THINKING_DEPTH_DEFAULT,
+        permission_mode: aether_core::PermissionMode::default(),
         system_prompt: None,
         config: serde_json::json!({}),
         token_usage: TokenUsage::default(),
@@ -373,6 +374,30 @@ pub async fn insert_session_row_with_status(
         .await
         .unwrap();
     session
+}
+
+/// 改写会话档位（M6-01；走单写队列）。
+pub async fn set_session_permission_mode(
+    core: &TestCore,
+    session_id: &SessionId,
+    mode: aether_core::PermissionMode,
+) {
+    core.write()
+        .execute(StoreCommand::UpdateSessionPermissionMode {
+            session_id: session_id.clone(),
+            permission_mode: mode,
+            updated_at: 2,
+        })
+        .await
+        .unwrap();
+}
+
+/// 区外目标（canonical 基准 + 剥离扩展前缀；规避 CI 临时目录 8.3 短名别名——
+/// 区外路径检查对原始短名路径敏感，区外样本必须从 canonical 后的基准目录派生）。
+pub fn outside_target(dir: &tempfile::TempDir, name: &str) -> String {
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    let text = base.join(name).to_string_lossy().to_string();
+    text.strip_prefix(r"\\?\").unwrap_or(&text).to_owned()
 }
 
 /// 系统时钟句柄（真实时间场景）。

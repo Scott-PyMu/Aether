@@ -1,4 +1,6 @@
-//! M2-03 集成测试：策略矩阵 / 路径逃逸（T7，100% deny + 审计）/ 审批持久化与
+//! M2-03 集成测试：策略矩阵（**矩阵口径由 ADR-014 设计变更驱动（M6-01）**：
+//! 会话级三档 `read_only` / `workspace_write`（缺省）/ `danger_full_access`）/
+//! 路径逃逸（T7，形态违规样本 deny + 审计；纯逃逸三例区外读 allow）/ 审批持久化与
 //! 重启恢复 / 300s 超时 deny / T6 100 并发 ask。
 //!
 //! 测试豁免（AGENTS §2.2）：测试代码允许 unwrap/expect/panic。
@@ -16,8 +18,9 @@ use aether_security::{
     expand_t7_sample, MEMORY_FILE_MAX_BYTES, MEMORY_FILE_NAMES, T7_TEXTUAL_SAMPLES,
 };
 use m2_support::{
-    build_manager, build_permission_service, create_session, manual_clock, permission_request,
-    wait_for, wait_permissions_pending, ScriptedExecutor, TestCore,
+    build_manager, build_permission_service, create_session, insert_session_row, manual_clock,
+    permission_request, set_session_permission_mode, wait_for, wait_permissions_pending,
+    ScriptedExecutor, TestCore,
 };
 use serde_json::Value;
 
@@ -75,18 +78,36 @@ async fn audit_actions(harness: &Harness) -> Vec<String> {
         .collect()
 }
 
-/// DoD1：策略矩阵断言（fs.read/fs.write/exec/记忆白名单 1MB 上限）。
+/// 指定审计动作的条数（矩阵按会话档位三档断言用）。
+async fn audit_count(harness: &Harness, action: &str) -> usize {
+    audit_actions(harness)
+        .await
+        .iter()
+        .filter(|record| record.as_str() == action)
+        .count()
+}
+
+/// 区外目标（canonical 基准 + 剥离扩展前缀；规避 CI 临时目录 8.3 短名别名——
+/// 区外路径检查对原始短名路径敏感，区外样本必须从 canonical 后的基准目录派生）。
+fn outside_target(dir: &tempfile::TempDir, name: &str) -> String {
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    let text = base.join(name).to_string_lossy().to_string();
+    text.strip_prefix(r"\\?\").unwrap_or(&text).to_owned()
+}
+
+/// DoD1：策略矩阵断言（ADR-014 附录 B 会话级三档：缺省 `workspace_write`；
+/// fs.read 区内/区外 allow、fs.write 区内免审批/区外 ask、exec/net 低档 deny、
+/// 记忆白名单 1MB 上限；read_only 与 danger 分档对照）。
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn policy_matrix_allow_deny_ask() {
+async fn policy_matrix_follows_three_modes() {
     let harness = harness().await;
     let workspace_file = harness.workspace.path().join("note.txt");
     std::fs::write(&workspace_file, b"x").unwrap();
     let inside = workspace_file.to_string_lossy().to_string();
-    let outside = harness.outside.path().join("secret.txt");
+    let outside = outside_target(&harness.outside, "secret.txt");
     std::fs::write(&outside, b"x").unwrap();
-    let outside = outside.to_string_lossy().to_string();
 
-    // fs.read 工作区 allow / 外 deny。
+    // 无会话（缺省档 workspace_write）：fs.read 区内 / 区外均 allow（三档一致）。
     let allow = harness
         .service
         .request(permission_request(
@@ -99,9 +120,9 @@ async fn policy_matrix_allow_deny_ask() {
         ))
         .await
         .unwrap();
-    assert!(allow.is_allowed(), "fs.read 工作区应 allow");
+    assert!(allow.is_allowed(), "fs.read 工作区内应 allow");
 
-    let deny = harness
+    let allow = harness
         .service
         .request(permission_request(
             &request_id("read-out"),
@@ -113,21 +134,43 @@ async fn policy_matrix_allow_deny_ask() {
         ))
         .await
         .unwrap();
-    assert!(!deny.is_allowed(), "fs.read 工作区外应 deny");
+    assert!(allow.is_allowed(), "fs.read 区外（无重解析点）应 allow");
 
-    // fs.write 工作区 ask → once 授权 allow。
-    let write_target = harness
+    // 缺省档 fs.write 区内 allow 且不进 pending（ADR-014：区内不再 ask）。
+    let write_inside = harness
         .workspace
         .path()
         .join("new.txt")
         .to_string_lossy()
         .to_string();
+    let allow = harness
+        .service
+        .request(permission_request(
+            &request_id("write-in"),
+            None,
+            "fs.write",
+            "write",
+            Some(&write_inside),
+            Some(10),
+        ))
+        .await
+        .unwrap();
+    assert!(
+        allow.is_allowed(),
+        "fs.write 工作区内应 allow（缺省档免逐次审批）"
+    );
+    assert!(
+        harness.service.pending_list(None).is_empty(),
+        "fs.write 工作区内不得进入待审批"
+    );
+
+    // 缺省档 fs.write 区外 ask → pending → once 授权 allow。
     let request = permission_request(
         &request_id("write-ask"),
         None,
         "fs.write",
         "write",
-        Some(&write_target),
+        Some(&outside),
         Some(10),
     );
     let service = harness.service.clone();
@@ -138,7 +181,7 @@ async fn policy_matrix_allow_deny_ask() {
             Duration::from_secs(3)
         )
         .await,
-        "fs.write 工作区应进入待审批"
+        "fs.write 区外应进入待审批"
     );
     let ticket = harness.service.pending_list(None).first().unwrap().clone();
     harness
@@ -154,22 +197,7 @@ async fn policy_matrix_allow_deny_ask() {
     assert!(resolution.is_allowed(), "once 授权应 allow");
     assert_eq!(resolution.scope, Some(aether_core::PermissionScope::Once));
 
-    // fs.write 工作区外 deny。
-    let deny = harness
-        .service
-        .request(permission_request(
-            &request_id("write-out"),
-            None,
-            "fs.write",
-            "write",
-            Some(&outside),
-            Some(10),
-        ))
-        .await
-        .unwrap();
-    assert!(!deny.is_allowed(), "fs.write 工作区外应 deny");
-
-    // exec / net 恒 deny。
+    // 缺省档 exec / net 低档 deny。
     for (resource, action) in [("exec", "invoke"), ("net", "connect")] {
         let deny = harness
             .service
@@ -183,10 +211,10 @@ async fn policy_matrix_allow_deny_ask() {
             ))
             .await
             .unwrap();
-        assert!(!deny.is_allowed(), "{resource} 应 deny");
+        assert!(!deny.is_allowed(), "缺省档 {resource} 应 deny");
     }
 
-    // 记忆文件白名单：≤1MB allow；>1MB deny。
+    // 缺省档记忆文件白名单（区内）：≤1MB allow；>1MB deny。
     for name in MEMORY_FILE_NAMES {
         let target = harness
             .workspace
@@ -222,6 +250,121 @@ async fn policy_matrix_allow_deny_ask() {
         assert!(!deny.is_allowed(), "记忆文件 {name} >1MB 应 deny");
     }
 
+    // read_only 会话：一切 fs.write deny（区内/区外/记忆文件）；exec/net deny；区外读 allow。
+    let read_only = insert_session_row(&harness.core, "01J00000000000000000000M3A", None).await;
+    set_session_permission_mode(
+        &harness.core,
+        &read_only.id,
+        aether_core::PermissionMode::ReadOnly,
+    )
+    .await;
+    for (target, label) in [(&inside, "区内"), (&outside, "区外")] {
+        let deny = harness
+            .service
+            .request(permission_request(
+                &request_id("ro-write"),
+                Some(&read_only.id),
+                "fs.write",
+                "write",
+                Some(target),
+                Some(10),
+            ))
+            .await
+            .unwrap();
+        assert!(!deny.is_allowed(), "read_only 档 fs.write {label} 应 deny");
+    }
+    let memory = harness
+        .workspace
+        .path()
+        .join(MEMORY_FILE_NAMES[0])
+        .to_string_lossy()
+        .to_string();
+    let deny = harness
+        .service
+        .request(permission_request(
+            &request_id("ro-memory"),
+            Some(&read_only.id),
+            "fs.write",
+            "write",
+            Some(&memory),
+            Some(10),
+        ))
+        .await
+        .unwrap();
+    assert!(!deny.is_allowed(), "read_only 档记忆文件写应 deny");
+    for (resource, action) in [("exec", "invoke"), ("net", "connect")] {
+        let deny = harness
+            .service
+            .request(permission_request(
+                &request_id("ro-shell"),
+                Some(&read_only.id),
+                resource,
+                action,
+                Some("anything"),
+                None,
+            ))
+            .await
+            .unwrap();
+        assert!(!deny.is_allowed(), "read_only 档 {resource} 应 deny");
+    }
+    let allow = harness
+        .service
+        .request(permission_request(
+            &request_id("ro-read-out"),
+            Some(&read_only.id),
+            "fs.read",
+            "read",
+            Some(&outside),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert!(allow.is_allowed(), "read_only 档区外读应 allow");
+
+    // danger 会话：区外写 allow、exec/net allow（3 次 allow 各 +1 allowed_by_policy 审计）。
+    let danger = insert_session_row(&harness.core, "01J00000000000000000000D9X", None).await;
+    set_session_permission_mode(
+        &harness.core,
+        &danger.id,
+        aether_core::PermissionMode::DangerFullAccess,
+    )
+    .await;
+    let allowed_before = audit_count(&harness, "permission.allowed_by_policy").await;
+    let allow = harness
+        .service
+        .request(permission_request(
+            &request_id("danger-write-out"),
+            Some(&danger.id),
+            "fs.write",
+            "write",
+            Some(&outside),
+            Some(10),
+        ))
+        .await
+        .unwrap();
+    assert!(allow.is_allowed(), "danger 档区外写应 allow");
+    for (resource, action) in [("exec", "invoke"), ("net", "connect")] {
+        let allow = harness
+            .service
+            .request(permission_request(
+                &request_id("danger-shell"),
+                Some(&danger.id),
+                resource,
+                action,
+                Some("anything"),
+                None,
+            ))
+            .await
+            .unwrap();
+        assert!(allow.is_allowed(), "danger 档 {resource} 应 allow");
+    }
+    let allowed_after = audit_count(&harness, "permission.allowed_by_policy").await;
+    assert_eq!(
+        allowed_after,
+        allowed_before + 3,
+        "danger 档 3 次 allow 必须各写一条 allowed_by_policy 审计"
+    );
+
     let actions = audit_actions(&harness).await;
     assert!(actions.contains(&"permission.allowed_by_policy".to_owned()));
     assert!(actions.contains(&"permission.denied_by_policy".to_owned()));
@@ -230,25 +373,37 @@ async fn policy_matrix_allow_deny_ask() {
     shutdown(harness).await;
 }
 
-/// DoD2（T7）：路径逃逸样本集 100% deny + 审计（文本样本全平台；软链接/Junction
-/// 文件系统样本按平台可创建性显式记录）。
+/// DoD2（T7）：路径逃逸样本审计与矩阵口径（ADR-014 设计变更驱动）——纯逃逸三例
+/// （`parent_traversal` / `parent_traversal_forward` / `relative_traversal`）在 fs.read 下
+/// 按矩阵区外读 **allow** 并各 +1 `permission.allowed_by_policy`；其余形态违规样本仍
+/// **deny** 并各 +1 `permission.denied_by_policy`；动态软链接/Junction 逃逸样本维持
+/// deny（区外重解析点）。文本样本全平台；文件系统样本按平台可创建性显式记录。
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t7_path_escape_samples_all_denied_and_audited() {
     let harness = harness().await;
-    let root = harness.workspace.path().to_string_lossy().to_string();
+    // canonical 基准 + 剥离扩展前缀（区外样本的 8.3 短名规避，见 m2_support::outside_target）。
+    let root_base = std::fs::canonicalize(harness.workspace.path()).unwrap();
+    let root_text = root_base.to_string_lossy().to_string();
+    let root = root_text
+        .strip_prefix(r"\\?\")
+        .unwrap_or(&root_text)
+        .to_owned();
+    let escape_only = [
+        "parent_traversal",
+        "parent_traversal_forward",
+        "relative_traversal",
+    ];
     let mut denied = 0usize;
-    let mut audited = 0usize;
+    let mut allowed = 0usize;
     for (label, template) in T7_TEXTUAL_SAMPLES {
         let raw = expand_t7_sample(template, &root);
-        let before = harness
-            .core
-            .reads()
-            .audit_log(5_000)
-            .await
-            .unwrap()
-            .into_iter()
-            .filter(|record| record.action == "permission.denied_by_policy")
-            .count();
+        let expected_allow = escape_only.contains(label);
+        let audit_action = if expected_allow {
+            "permission.allowed_by_policy"
+        } else {
+            "permission.denied_by_policy"
+        };
+        let before = audit_count(&harness, audit_action).await;
         let resolution = harness
             .service
             .request(permission_request(
@@ -261,22 +416,21 @@ async fn t7_path_escape_samples_all_denied_and_audited() {
             ))
             .await
             .unwrap();
-        assert!(
-            !resolution.is_allowed(),
-            "T7 样本 {label} 必须 deny（raw={raw}）"
-        );
-        denied += 1;
-        let after = harness
-            .core
-            .reads()
-            .audit_log(5_000)
-            .await
-            .unwrap()
-            .into_iter()
-            .filter(|record| record.action == "permission.denied_by_policy")
-            .count();
-        assert_eq!(after, before + 1, "样本 {label} 必须写审计");
-        audited += 1;
+        if expected_allow {
+            assert!(
+                resolution.is_allowed(),
+                "T7 纯逃逸样本 {label} 按矩阵区外读应 allow（raw={raw}）"
+            );
+            allowed += 1;
+        } else {
+            assert!(
+                !resolution.is_allowed(),
+                "T7 样本 {label} 必须 deny（raw={raw}）"
+            );
+            denied += 1;
+        }
+        let after = audit_count(&harness, audit_action).await;
+        assert_eq!(after, before + 1, "样本 {label} 必须写审计 {audit_action}");
     }
 
     // 文件系统样本：Junction（Windows 无特权可建）/ 软链接（Unix 可建；Windows 需开发者模式）。
@@ -331,15 +485,20 @@ async fn t7_path_escape_samples_all_denied_and_audited() {
     }
 
     println!(
-        "[m2-03-t7] textual={} denied={} audited={} fs_samples={} fs_denied={} skipped={:?} denied_ratio=100%",
+        "[m2-03-t7] textual={} denied={} allowed={} fs_samples={} fs_denied={} skipped={:?} fs_denied_ratio=100%",
         T7_TEXTUAL_SAMPLES.len(),
         denied,
-        audited,
+        allowed,
         fs_samples,
         fs_denied,
         skipped
     );
-    assert_eq!(denied, T7_TEXTUAL_SAMPLES.len(), "文本样本必须 100% deny");
+    assert_eq!(
+        denied,
+        T7_TEXTUAL_SAMPLES.len() - 3,
+        "文本样本除 3 例纯逃逸（区外读 allow）外必须 100% deny"
+    );
+    assert_eq!(allowed, 3, "纯逃逸三例按矩阵区外读必须 allow");
     assert_eq!(fs_denied, fs_samples, "文件系统样本必须 100% deny");
     assert!(
         fs_samples >= 1,
@@ -387,12 +546,8 @@ fn create_symlink_dir(link: &Path, target: &Path) -> Result<(), String> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn pending_survives_restart_and_times_out_after_300s() {
     let harness = harness().await;
-    let target = harness
-        .workspace
-        .path()
-        .join("pending.txt")
-        .to_string_lossy()
-        .to_string();
+    // 区外写（缺省档 ask）制造 pending；区内写免审批不再进入待审批路径。
+    let target = outside_target(&harness.outside, "pending.txt");
 
     // 真实等待者路径：请求进入 pending 后由超时巡检判 deny。
     let service = harness.service.clone();
@@ -471,12 +626,8 @@ async fn pending_survives_restart_and_times_out_after_300s() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn timeout_waiter_receives_deny_within_same_core() {
     let harness = harness().await;
-    let target = harness
-        .workspace
-        .path()
-        .join("same-core-timeout.txt")
-        .to_string_lossy()
-        .to_string();
+    // 区外写（缺省档 ask）制造 pending。
+    let target = outside_target(&harness.outside, "same-core-timeout.txt");
     let service = harness.service.clone();
     let request = permission_request(
         &request_id("same-core"),
@@ -514,12 +665,8 @@ async fn timeout_waiter_receives_deny_within_same_core() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t6_100_concurrent_asks_no_loss_no_duplication() {
     let harness = harness().await;
-    let target = harness
-        .workspace
-        .path()
-        .join("t6.txt")
-        .to_string_lossy()
-        .to_string();
+    // 区外写（缺省档 ask）制造 100 个独立 pending。
+    let target = outside_target(&harness.outside, "t6.txt");
     let mut tasks = tokio::task::JoinSet::new();
     for index in 0..100 {
         let service = harness.service.clone();
@@ -613,12 +760,8 @@ async fn t6_100_concurrent_asks_no_loss_no_duplication() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn audit_preserves_raw_and_canonical_target() {
     let harness = harness().await;
-    let raw = harness
-        .workspace
-        .path()
-        .join("raw-and-canonical.txt")
-        .to_string_lossy()
-        .to_string();
+    // 区外写（缺省档 ask）制造 pending。
+    let raw = outside_target(&harness.outside, "raw-and-canonical.txt");
     let request = permission_request(
         &request_id("audit"),
         None,
@@ -703,12 +846,8 @@ async fn session_scope_grant_applies_to_same_target() {
         aether_control::LifecycleConfig::default(),
     );
     let session = create_session(&manager, "grant").await;
-    let target = harness
-        .workspace
-        .path()
-        .join("grant.txt")
-        .to_string_lossy()
-        .to_string();
+    // 区外写（缺省档 ask）制造 pending；授权命中按 canonical target。
+    let target = outside_target(&harness.outside, "grant.txt");
 
     let first_request = permission_request(
         &request_id("grant-1"),
@@ -775,6 +914,7 @@ async fn resolving_unknown_request_is_rejected() {
 async fn background_sweeper_times_out_and_accessors_work() {
     let core = TestCore::open().await;
     let workspace = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
     let clock = manual_clock(9_000_000);
     let service = build_permission_service(
         &core,
@@ -793,11 +933,8 @@ async fn background_sweeper_times_out_and_accessors_work() {
         1
     );
 
-    let target = workspace
-        .path()
-        .join("bg.txt")
-        .to_string_lossy()
-        .to_string();
+    // 区外写（缺省档 ask）制造 pending。
+    let target = outside_target(&outside, "bg.txt");
     let request = permission_request(
         &request_id("bg-timeout"),
         None,
@@ -864,12 +1001,8 @@ async fn session_bound_events_and_pending_filter() {
         aether_control::LifecycleConfig::default(),
     );
     let session = create_session(&manager, "perm-events").await;
-    let target = harness
-        .workspace
-        .path()
-        .join("perm-events.txt")
-        .to_string_lossy()
-        .to_string();
+    // 区外写（缺省档 ask）制造 pending。
+    let target = outside_target(&harness.outside, "perm-events.txt");
     let request = permission_request(
         &request_id("sess-events"),
         Some(&session.id),
@@ -933,12 +1066,8 @@ async fn session_bound_timeout_emits_deny_event() {
         aether_control::LifecycleConfig::default(),
     );
     let session = create_session(&manager, "perm-timeout").await;
-    let target = harness
-        .workspace
-        .path()
-        .join("perm-timeout.txt")
-        .to_string_lossy()
-        .to_string();
+    // 区外写（缺省档 ask）制造 pending。
+    let target = outside_target(&harness.outside, "perm-timeout.txt");
     let request = permission_request(
         &request_id("sess-timeout"),
         Some(&session.id),

@@ -13,10 +13,11 @@ use super::dto::{
     PermissionResolveRequest, PermissionsPendingRequest, ProviderCreateRequest,
     ProviderDeleteRequest, ProviderModelAddRequest, ProviderModelToggleRequest,
     ProviderToggleRequest, ProviderUpdateRequest, ProvidersListRequest, RefPickKind,
-    RefPickRequest, RunRetryRequest, RuntimeEnableRequest, RuntimeRetryRequest,
+    RefPickRequest, RuleAddRequest, RuleDeleteRequest, RuleToggleRequest, RuleUpdateRequest,
+    RulesListRequest, RunRetryRequest, RuntimeEnableRequest, RuntimeRetryRequest,
     SessionCreateRequest, SessionExportRequest, SessionIdRequest, SessionListRequest,
-    SessionSendRequest, SettingsGetRequest, SettingsSetRequest, StartupGetRequest,
-    StartupMigrateRequest, StartupPickTargetRequest, WorkspaceSetRequest,
+    SessionPermissionModeSetRequest, SessionSendRequest, SettingsGetRequest, SettingsSetRequest,
+    StartupGetRequest, StartupMigrateRequest, StartupPickTargetRequest, WorkspaceSetRequest,
 };
 use super::error::{IpcError, IpcErrorCode};
 use super::validate::{parse_no_params, parse_strict};
@@ -130,6 +131,86 @@ pub(crate) fn permission_resolve(
     state
         .backend_ready()?
         .permission_resolve(&request)
+        .map(JsonPayload)
+}
+
+/// M6-01/ADR-014 决策 3：设置会话级权限模式（档位为判定权威入参；
+/// 仅影响后续工具调用决策，在途会话沙箱参数不变）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn session_permission_mode_set(
+    state: tauri::State<'_, IpcState>,
+    payload: JsonPayload,
+) -> Result<JsonPayload, IpcError> {
+    let request: SessionPermissionModeSetRequest = parse_strict(payload.into_value())?;
+    state
+        .backend_ready()?
+        .session_permission_mode_set(&request)
+        .map(JsonPayload)
+}
+
+/// M6-01/ADR-019：用户自定义权限规则清单（无参数；严格解析拒绝未知成员）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn rules_list(
+    state: tauri::State<'_, IpcState>,
+    payload: Option<JsonPayload>,
+) -> Result<JsonPayload, IpcError> {
+    let _request: RulesListRequest =
+        parse_no_params(payload.map(JsonPayload::into_value).unwrap_or(Value::Null))?;
+    state.backend_ready()?.rules_list().map(JsonPayload)
+}
+
+/// M6-01/ADR-019：新增权限规则（非法规则拒绝且不落库）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn rule_add(
+    state: tauri::State<'_, IpcState>,
+    payload: JsonPayload,
+) -> Result<JsonPayload, IpcError> {
+    let request: RuleAddRequest = parse_strict(payload.into_value())?;
+    state.backend_ready()?.rule_add(&request).map(JsonPayload)
+}
+
+/// M6-01/ADR-019：更新权限规则（`rule_id` 不存在 → `rule_not_found`）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn rule_update(
+    state: tauri::State<'_, IpcState>,
+    payload: JsonPayload,
+) -> Result<JsonPayload, IpcError> {
+    let request: RuleUpdateRequest = parse_strict(payload.into_value())?;
+    state
+        .backend_ready()?
+        .rule_update(&request)
+        .map(JsonPayload)
+}
+
+/// M6-01/ADR-019：删除权限规则（`rule_id` 不存在 → `rule_not_found`）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn rule_delete(
+    state: tauri::State<'_, IpcState>,
+    payload: JsonPayload,
+) -> Result<JsonPayload, IpcError> {
+    let request: RuleDeleteRequest = parse_strict(payload.into_value())?;
+    state
+        .backend_ready()?
+        .rule_delete(&request)
+        .map(JsonPayload)
+}
+
+/// M6-01/ADR-019：启用/停用权限规则（`enabled` 非布尔由 serde 严格解析拒绝）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn rule_toggle(
+    state: tauri::State<'_, IpcState>,
+    payload: JsonPayload,
+) -> Result<JsonPayload, IpcError> {
+    let request: RuleToggleRequest = parse_strict(payload.into_value())?;
+    state
+        .backend_ready()?
+        .rule_toggle(&request)
         .map(JsonPayload)
 }
 
@@ -640,6 +721,12 @@ pub fn collected<R: tauri::Runtime>() -> tauri_specta::Commands<R> {
         messages_page,
         permissions_pending,
         permission_resolve,
+        session_permission_mode_set,
+        rules_list,
+        rule_add,
+        rule_update,
+        rule_delete,
+        rule_toggle,
         settings_get,
         settings_set,
         backup_create,
@@ -689,6 +776,12 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         messages_page,
         permissions_pending,
         permission_resolve,
+        session_permission_mode_set,
+        rules_list,
+        rule_add,
+        rule_update,
+        rule_delete,
+        rule_toggle,
         settings_get,
         settings_set,
         backup_create,
@@ -739,6 +832,12 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         messages_page,
         permissions_pending,
         permission_resolve,
+        session_permission_mode_set,
+        rules_list,
+        rule_add,
+        rule_update,
+        rule_delete,
+        rule_toggle,
         settings_get,
         settings_set,
         backup_create,

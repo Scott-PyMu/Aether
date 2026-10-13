@@ -88,6 +88,22 @@ pub const fn case_insensitive_platform() -> bool {
     cfg!(any(target_os = "windows", target_os = "macos"))
 }
 
+/// 路径解析结果（M6-01/ADR-014：三档矩阵与规则层的判定入参）。
+///
+/// - `inside`：canonical 目标是否位于工作区内（矩阵按区内/区外分流）；
+/// - `reparse_resolved`：解析过程是否经过软链接 / Junction 重解析点（canonical 形态与
+///   词法形态不一致）。区外目标要求 `false`（ADR-014 不变量 3 / 问题 12），
+///   `true` 时区外读写一律拒绝（fail-closed）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedTarget {
+    /// canonical 目标（软链接 / Junction 已解析）。
+    pub canonical: PathBuf,
+    /// 是否位于工作区内（含根自身）。
+    pub inside: bool,
+    /// 解析过程是否经过重解析点（canonical 形态 ≠ 词法形态）。
+    pub reparse_resolved: bool,
+}
+
 /// 工作区路径守卫（构造时锁定 canonical 根）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathGuard {
@@ -147,6 +163,38 @@ impl PathGuard {
         }
         check_component_specials(&relative_tail(&self.root, &resolved))?;
         Ok(resolved)
+    }
+
+    /// 解析目标路径（M6-01/ADR-014：区外目标不再直接拒绝，交矩阵/规则判定）。
+    ///
+    /// 与 [`Self::resolve`] 的差异：
+    /// - 区外 canonical 目标返回 `inside=false`（由调用方按三档矩阵与规则层决策）；
+    /// - 组件形态检查分层：区内目标检查工作区相对段（既有口径）；区外目标检查
+    ///   「与工作区根最长公共祖先之下的词法组件」——工作区根祖先（可信环境，可能含
+    ///   短名别名）不检查，其余全部执行 T7 拒绝清单（UNC/扩展前缀由输入检查承接）；
+    /// - `reparse_resolved`：canonical 与词法形态不一致（软链接/Junction/8.3 展开等
+    ///   解析行为）→ 区外目标由调用方拒绝（不变量 3）。
+    pub fn resolve_any(&self, raw: &str) -> Result<ResolvedTarget, PathViolation> {
+        check_input_form(raw)?;
+        let candidate = self.absolute_candidate(raw);
+        let resolved = canonicalize_with_nonexistent_tail(&candidate).map_err(|error| {
+            PathViolation::CanonicalizeFailed {
+                path: candidate.clone(),
+                reason: error,
+            }
+        })?;
+        let inside = self.contains(&resolved);
+        if inside {
+            check_component_specials(&relative_tail(&self.root, &resolved))?;
+        } else {
+            check_outside_component_specials(&self.root, &candidate, self.case_insensitive)?;
+        }
+        let reparse_resolved = reparse_resolved(&resolved, &candidate, self.case_insensitive);
+        Ok(ResolvedTarget {
+            canonical: resolved,
+            inside,
+            reparse_resolved,
+        })
     }
 
     /// 是否位于工作区内（含根自身）。
@@ -342,6 +390,90 @@ fn relative_tail(root: &Path, resolved: &Path) -> String {
     let root_len = root.components().count();
     let tail: PathBuf = resolved.components().skip(root_len).collect();
     tail.to_string_lossy().to_string()
+}
+
+/// 区外目标的组件形态检查（M6-01）：检查「与工作区根最长公共祖先之下」的**词法组件**。
+///
+/// 工作区根祖先属可信环境（CI 临时目录可能含 8.3 短名别名，不得误伤）；区外段
+/// （含区外路径自身的锚点目录）全部执行 T7 组件的拒绝清单。
+fn check_outside_component_specials(
+    root: &Path,
+    candidate: &Path,
+    case_insensitive: bool,
+) -> Result<(), PathViolation> {
+    let candidate_components: Vec<Component<'_>> = candidate.components().collect();
+    let root_components: Vec<Component<'_>> = root.components().collect();
+    let mut common = 0usize;
+    while common < candidate_components.len() && common < root_components.len() {
+        if !component_eq(
+            &root_components[common],
+            &candidate_components[common],
+            case_insensitive,
+        ) {
+            break;
+        }
+        common += 1;
+    }
+    let tail: PathBuf = candidate_components.iter().skip(common).collect();
+    check_component_specials(&tail.to_string_lossy())
+}
+
+/// canonical 与词法形态是否因解析行为（软链接 / Junction / 8.3 展开等）不一致。
+///
+/// Windows 下 `std::fs::canonicalize` 返回 `\\?\` 扩展前缀形态，比较前剥离；
+/// 大小写按平台规则（Windows/macOS 不敏感）忽略。
+fn reparse_resolved(canonical: &Path, lexical: &Path, case_insensitive: bool) -> bool {
+    let canonical = strip_windows_extended_prefix(canonical);
+    let lexical = strip_windows_extended_prefix(lexical);
+    let canonical_components: Vec<Component<'_>> = canonical.components().collect();
+    let lexical_components: Vec<Component<'_>> = lexical.components().collect();
+    if canonical_components.len() != lexical_components.len() {
+        return true;
+    }
+    for (left, right) in canonical_components.iter().zip(lexical_components.iter()) {
+        if !component_eq(left, right, case_insensitive) {
+            return true;
+        }
+    }
+    false
+}
+
+/// 剥离 Windows `\\?\`（或 `//?/`）扩展前缀；其他平台原样返回。
+fn strip_windows_extended_prefix(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(stripped) = text.strip_prefix(r"\\?\") {
+        return PathBuf::from(stripped);
+    }
+    if let Some(stripped) = text.strip_prefix("//?/") {
+        return PathBuf::from(stripped);
+    }
+    path.to_path_buf()
+}
+
+/// 独立 canonicalize（不绑定工作区；M6-01：规则 target 与 `always` 授权重建）。
+///
+/// 输入形态检查与 [`PathGuard::resolve`] 同口径；系统生成的 canonical 形态
+/// （Windows `\\?\` 前缀）先剥离再校验（幂等再规范化）；不做工作区前缀限制、
+/// 不做组件形态检查（区外规则路径可能合法包含系统锚点；规则命中仍由矩阵与规则
+/// 语义决定）。
+pub fn canonicalize_free_path(raw: &str) -> Result<PathBuf, PathViolation> {
+    let raw = strip_extended_str(raw);
+    check_input_form(raw)?;
+    let candidate = lexical_normalize(Path::new(raw));
+    canonicalize_with_nonexistent_tail(&candidate).map_err(|error| {
+        PathViolation::CanonicalizeFailed {
+            path: candidate.clone(),
+            reason: error,
+        }
+    })
+}
+
+/// 剥离 Windows `\\?\`（或 `//?/`）字符串前缀；其他输入原样返回。
+fn strip_extended_str(value: &str) -> &str {
+    value
+        .strip_prefix(r"\\?\")
+        .or_else(|| value.strip_prefix("//?/"))
+        .unwrap_or(value)
 }
 
 fn special(pattern: &'static str, detail: String) -> PathViolation {

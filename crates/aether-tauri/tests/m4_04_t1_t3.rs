@@ -174,6 +174,7 @@ fn create_session(h: &Harness, title: &str) -> String {
             workspace_id: None,
             model: None,
             thinking_depth: None,
+            permission_mode: None,
         })
         .expect("session_create");
     created["id"].as_str().expect("会话 id").to_owned()

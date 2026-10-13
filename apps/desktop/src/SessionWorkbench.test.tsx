@@ -12,6 +12,7 @@ import { EventStore } from "./eventStore";
 import { SessionWorkbench } from "./SessionWorkbench";
 import type {
   MessagesPageResult,
+  PermissionMode,
   RuntimeInfo,
   SessionIpc,
   SessionStatus,
@@ -120,6 +121,12 @@ function fakeIpc(overrides: Partial<SessionIpc> = {}): SessionIpc {
       input_message_id: "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
       queued: false,
     })),
+    // M6-01/ADR-014：权限模式命令面（本文件不消费；缺省替身保持接口完整）。
+    setPermissionMode: vi.fn(async (sessionId: string, mode: PermissionMode) => ({
+      session_id: sessionId,
+      permission_mode: mode,
+      previous_permission_mode: "workspace_write",
+    })),
     ...overrides,
   };
 }
@@ -204,6 +211,8 @@ describe("SessionWorkbench（M3-02）", () => {
       model: "deepseek-v4-pro",
       // M3-10/ADR-010：会话级思考深度随 `session_create` 透传（本次未调整 → 缺省 2）。
       thinking_depth: 2,
+      // M6-01/ADR-014 附录 C-2：会话级权限模式随 `session_create` 透传（缺省 workspace_write）。
+      permission_mode: "workspace_write",
     });
     const item = await screen.findByTestId("session-item");
     expect(item.getAttribute("data-active")).toBe("true");

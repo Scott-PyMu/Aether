@@ -28,10 +28,12 @@ import { HistoryOverflowNotice } from "./HistoryOverflowNotice";
 import { Markdown } from "./markdown";
 import { ModelSelector } from "./ModelSelector";
 import { permissionIpc as productionPermissionIpc, type PermissionIpc } from "./permission";
+import { PermissionModeSelector } from "./PermissionModeSelector";
 import { PermissionPanel } from "./PermissionPanel";
 import { providersIpc as productionProvidersIpc, type ProvidersIpc } from "./providers";
 import { RuntimePanel } from "./RuntimePanel";
 import {
+  normalizePermissionMode,
   RUNTIME_STATUS_LABELS,
   SESSION_STATUS_LABELS,
   sessionIpc,
@@ -43,6 +45,7 @@ import {
   THINKING_DEPTH_UNSUPPORTED_CODE,
   THINKING_DEPTH_UNSUPPORTED_HINT,
   type MessageRow,
+  type PermissionMode,
   type RuntimeInfo,
   type SessionIpc,
   type SessionSummary,
@@ -154,6 +157,8 @@ export function SessionWorkbench({
   const [thinkingOpen, setThinkingOpen] = useState(false);
   /** M3-10：同步能力门非阻断提示（`thinking_depth_unsupported`；无则 `null`）。 */
   const [thinkingWarning, setThinkingWarning] = useState<string | null>(null);
+  /** M6-01/ADR-014 决策 3：会话级权限模式（缺省 `workspace_write`；随会话回显）。 */
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>("workspace_write");
   /** M5-05：单会话导出进行中（顶栏按钮去抖）与结果回执（`session-export-result`）。 */
   const [exportBusy, setExportBusy] = useState(false);
   const [exportResult, setExportResult] = useState<{
@@ -307,6 +312,33 @@ export function SessionWorkbench({
     setThinkingWarning(null);
   }, [activeSessionId, activeSessionDepth]);
 
+  // M6-01/ADR-014：会话切换/生效值变化时回显档位；非法值回退缺省 `workspace_write`
+  // （会话列表刷新但档位不变时不重置用户当前调整，与思考深度回显同口径）。
+  const activeSessionPermissionMode = normalizePermissionMode(
+    activeSession?.permission_mode ?? null,
+  );
+  useEffect(() => {
+    setPermissionMode(activeSessionPermissionMode);
+  }, [activeSessionId, activeSessionPermissionMode]);
+
+  /** M6-01/ADR-014：档位切换（`session_permission_mode_set`；失败走既有错误呈现）。 */
+  const onChangePermissionMode = useCallback(
+    async (mode: PermissionMode) => {
+      if (!activeSessionId) {
+        return;
+      }
+      clearError();
+      try {
+        await ipc.setPermissionMode(activeSessionId, mode);
+        setPermissionMode(mode);
+        await refreshSessions();
+      } catch (failure) {
+        reportError(failure);
+      }
+    },
+    [activeSessionId, clearError, ipc, refreshSessions, reportError],
+  );
+
   /**
    * M3-11：模型选择器选择（作用于新建会话；M3-11 前置登记：与手动输入共存）。
    * 选择结果写入 `modelDraft`（UI-05 既有透传路径），不引入运行期切换入口。
@@ -347,6 +379,8 @@ export function SessionWorkbench({
         ...(model ? { model } : {}),
         // M3-10/ADR-010：会话级思考深度随 `session_create` 透传（缺省 2）。
         thinking_depth: thinkingDepth,
+        // M6-01/ADR-014：会话级权限模式随 `session_create` 透传（缺省 workspace_write）。
+        permission_mode: permissionMode,
       });
       // M3-10：同步判定路径非阻断警告（delta 等；延迟判定路径无警告，以回显为准）。
       setThinkingWarning(thinkingWarningOf(created.warnings));
@@ -367,6 +401,7 @@ export function SessionWorkbench({
   }, [
     ipc,
     modelDraft,
+    permissionMode,
     refreshSessions,
     reportError,
     runtimes,
@@ -857,6 +892,15 @@ export function SessionWorkbench({
                 value={selectedModelId}
                 onChange={onSelectModel}
                 sessionModel={activeSession?.model ?? null}
+                disabled={degraded}
+              />
+              {/* M6-01/ADR-014：会话级权限模式选择器（无激活会话禁用 + 空态；
+                  常驻边界声明 `permission-mode-boundary` 在弹层内，见组件）。 */}
+              <PermissionModeSelector
+                ipc={ipc}
+                sessionId={activeSessionId}
+                value={activeSessionId ? permissionMode : null}
+                onChange={(mode) => void onChangePermissionMode(mode)}
                 disabled={degraded}
               />
               <button

@@ -197,6 +197,7 @@ fn run_retry_uses_terminal_guard_and_replays_per_mode_r_and_n() {
             workspace_id: None,
             model: None,
             thinking_depth: None,
+            permission_mode: None,
         })
         .expect("session_create");
     let session_id = SessionId::new(created["id"].as_str().expect("会话 id").to_owned()).unwrap();

@@ -92,6 +92,20 @@ fn next_msg_id(prefix: &str) -> String {
     format!("{prefix}-{}", COUNTER.fetch_add(1, Ordering::SeqCst))
 }
 
+/// canonical 路径 → 目标字符串形态（剥离 `\\?\` 扩展前缀；该前缀属输入检查
+/// 拒绝形态，测试夹具不得以其构造 target）。
+fn plain(path: &Path) -> String {
+    let text = path.to_string_lossy().to_string();
+    text.strip_prefix(r"\\?\").unwrap_or(&text).to_owned()
+}
+
+/// 区外写目标（M6-01/ADR-014 矩阵口径更新：缺省档区内写免审批，制造 pending 的
+/// 样本必须改用区外写 `ask`）。目标从 canonical 基准派生，规避 CI 临时目录 8.3
+/// 短名别名对路径形态检查的误伤。
+fn outside_target(dir: &Path, name: &str) -> String {
+    plain(&std::fs::canonicalize(dir).unwrap().join(name))
+}
+
 /// 证据导出（DoD1 归档）：`AETHER_M3_03_EVIDENCE_DIR` 存在时写 JSON；同时打印摘要行。
 fn write_evidence(name: &str, value: &Value) {
     println!("[m3-03] 证据 {name} = {value}");
@@ -241,6 +255,7 @@ impl TestCore {
             status: SessionStatus::Idle,
             model: None,
             thinking_depth: aether_core::THINKING_DEPTH_DEFAULT,
+            permission_mode: aether_core::PermissionMode::default(),
             system_prompt: None,
             config: json!({}),
             token_usage: TokenUsage::default(),
@@ -369,12 +384,12 @@ impl AdapterHarness {
             .session_id
     }
 
-    async fn send_loop(&self, session_id: &str, target: &Path) -> String {
+    async fn send_loop(&self, session_id: &str, target: &str) -> String {
         self.client
             .send(
                 session_id,
                 &next_msg_id("m3-03-write"),
-                &format!("permission-loop:{}", target.display()),
+                &format!("permission-loop:{target}"),
             )
             .await
             .expect("session.send ack")
@@ -424,7 +439,8 @@ fn pending_list_exposes_target_pair_and_allow_reaches_adapter() {
         };
         let session_id = adapter.open_session().await;
         core.insert_session(&session_id).await;
-        let target = core.workspace.path().join("notes.md");
+        // M6-01/ADR-014 矩阵口径更新：缺省档区内写 allow 免审批，pending 用例改区外写 ask。
+        let target = outside_target(core.temp.path(), "notes.md");
         std::fs::write(&target, b"x").unwrap();
         let backend = permission_backend(&core);
 
@@ -435,7 +451,7 @@ fn pending_list_exposes_target_pair_and_allow_reaches_adapter() {
                 Duration::from_secs(10)
             )
             .await,
-            "fs.write 工作区内必须进入待审批（ask）"
+            "fs.write 工作区外必须进入待审批（ask）"
         );
 
         // UI 数据源：待审批清单（原文 target + canonical 对照字段，D9 评审 #10）。
@@ -446,12 +462,16 @@ fn pending_list_exposes_target_pair_and_allow_reaches_adapter() {
         assert_eq!(item["action"], "write");
         assert_eq!(
             item["target"].as_str().map(str::to_owned),
-            Some(target.to_string_lossy().to_string()),
+            Some(target.clone()),
             "原始 target 原样展示（防视觉欺骗）"
         );
         assert_eq!(
             item["canonical_target"].as_str(),
-            target.canonicalize().ok().as_deref().and_then(Path::to_str),
+            Path::new(&target)
+                .canonicalize()
+                .ok()
+                .as_deref()
+                .and_then(Path::to_str),
             "规范化结果必须随清单返回（UI 并排对照）"
         );
         assert_eq!(item["timeout_ms"], 300_000, "D9：300s");
@@ -538,7 +558,8 @@ fn deny_via_ipc_reaches_adapter_and_audits() {
         };
         let session_id = adapter.open_session().await;
         core.insert_session(&session_id).await;
-        let target = core.workspace.path().join("blocked.md");
+        // M6-01/ADR-014：缺省档区外写 ask（区内写已 allow）。
+        let target = outside_target(core.temp.path(), "blocked.md");
         std::fs::write(&target, b"x").unwrap();
         let backend = permission_backend(&core);
 
@@ -618,7 +639,8 @@ fn timeout_deny_clears_pending_and_audits() {
         };
         let session_id = adapter.open_session().await;
         core.insert_session(&session_id).await;
-        let target = core.workspace.path().join("timeout.md");
+        // M6-01/ADR-014：缺省档区外写 ask（区内写已 allow）。
+        let target = outside_target(core.temp.path(), "timeout.md");
         std::fs::write(&target, b"x").unwrap();
         let backend = permission_backend(&core);
 
@@ -687,7 +709,8 @@ fn once_then_session_grant_via_ipc() {
         };
         let session_id = adapter.open_session().await;
         core.insert_session(&session_id).await;
-        let target = core.workspace.path().join("grant.md");
+        // M6-01/ADR-014：缺省档区外写 ask（区内写已 allow）。
+        let target = outside_target(core.temp.path(), "grant.md");
         std::fs::write(&target, b"x").unwrap();
         let backend = permission_backend(&core);
 
@@ -797,7 +820,8 @@ fn pending_survives_restart_and_resolves_via_ipc() {
         };
         let session_id = adapter.open_session().await;
         core.insert_session(&session_id).await;
-        let target = core.workspace.path().join("pending-restart.md");
+        // M6-01/ADR-014：缺省档区外写 ask（区内写已 allow）。
+        let target = outside_target(core.temp.path(), "pending-restart.md");
         std::fs::write(&target, b"x").unwrap();
         let backend = permission_backend(&core);
 
@@ -883,7 +907,8 @@ fn concurrent_asks_are_listed_in_queue_order() {
         let session_id = "01J8ZQ5R0N7W9Y8X6V4T2S0K1A";
         core.insert_session(session_id).await;
         let backend = permission_backend(&core);
-        let target = core.workspace.path().join("queue.md");
+        // M6-01/ADR-014：缺省档区外写 ask（区内写已 allow）。
+        let target = outside_target(core.temp.path(), "queue.md");
         std::fs::write(&target, b"x").unwrap();
 
         // 同会话 3 条并发 ask（服务层允许并存；D9「≤1 激活」为 UI 排队口径）。
@@ -905,7 +930,7 @@ fn concurrent_asks_are_listed_in_queue_order() {
                         runtime_id: Some(RuntimeId::new("mock").unwrap()),
                         resource: "fs.write".to_owned(),
                         action: "write".to_owned(),
-                        target: Some(target.to_string_lossy().to_string()),
+                        target: Some(target),
                         content_bytes: None,
                     })
                     .await
@@ -1025,6 +1050,7 @@ fn disabled_runtime_cannot_create_session() {
                 workspace_id: None,
                 model: None,
                 thinking_depth: None,
+                permission_mode: None,
             })
             .expect_err("disabled 运行时必须拒绝创建会话");
         assert_eq!(error.code, IpcErrorCode::InvalidValue);

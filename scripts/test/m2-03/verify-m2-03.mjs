@@ -1,11 +1,12 @@
 /**
- * M2-03 验证入口：权限网关与审批（设计 D9、评审 #1/#10）。
+ * M2-03 验证入口：权限网关与审批（设计 D9；矩阵口径已按 M6-01/ADR-014 附录 B 三档更新）。
  *
  * 覆盖 DoD：
- *   1) 策略矩阵（fs.read 工作区 allow/外 deny；fs.write 工作区 ask/外 deny；exec deny；
- *      记忆文件白名单 allow，1MB 上限）——aether-security 单测 + aether-control 集成；
- *   2) 路径逃逸样本集 100% deny + 审计（T7：`..`/软链接/Junction/UNC/8.3/ADS/
- *      尾随点空格/保留设备名；文本样本全平台，文件系统样本按平台可创建性显式记录）；
+ *   1) 策略矩阵（三档：fs.read 区内/外 allow；fs.write 区内 allow（缺省档）/区外 ask；
+ *      exec/net 低档 deny、顶档 allow；记忆文件白名单 1MB 上限；read_only 写全 deny）
+ *      ——aether-security 单测 + aether-control 集成（M6-01 三档矩阵见 m6_01 套件）；
+ *   2) 路径逃逸样本集（T7：形态违规样本 100% deny + 审计；纯区外逃逸样本按矩阵
+ *      fs.read allow；软链接/Junction 区外重解析点 deny）；
  *   3) 审批流：pending 持久化、重启恢复、300s 超时 deny + 审计（时钟注入）；
  *   4) T6：100 次并发 ask 无丢失/重复/死锁；
  *   5) 边界口径（D9/AGENTS §2.7）：仅约束经线协议上报的工具调用——文档检查 +
@@ -33,7 +34,7 @@ record(
 // ===== DoD1–DoD5（集成，真实存储 + 审计）：--nocapture 输出 T7 汇总行 =====
 
 record(
-  "m2_03_permission（矩阵/逃逸 100% deny+审计/重启恢复/300s 超时/T6 100 并发，原始输出见日志）",
+  "m2_03_permission（三档矩阵回归/T7 形态拒绝+区外重解析点 deny+审计/重启恢复/300s 超时/T6 100 并发，原始输出见日志）",
   run(cargo, [
     "test",
     "-p",

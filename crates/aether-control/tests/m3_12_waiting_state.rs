@@ -1,6 +1,9 @@
 //! M3-12 集成测试：会话等待态写入（ADR-011 / D9）——置位/回程守卫、回程合法性
 //! （allow/deny/超时/取消/run 失败）、重启 no-op、多会话并发等待。
 //!
+//! 矩阵口径由 ADR-014 设计变更驱动（M6-01）：缺省档 `workspace_write` 区内写
+//! 免审批，制造 pending 的样本一律改用区外写（ask）。
+//!
 //! 验证口径（实施计划 v1.18 §4 M3-12 DoD1–4；生产组合路径集成 E2E 见
 //! `crates/aether-tauri/tests/m3_12_waiting_state.rs`）：
 //! - 状态仅由 [`SessionManager`] 落行并广播 `session.status_changed`（复用既有
@@ -22,9 +25,9 @@ use aether_core::{
     SessionId, SessionStatus,
 };
 use m2_support::{
-    build_manager, build_permission_service, create_session, manual_clock, permission_request,
-    system_clock, wait_for, wait_permissions_pending, wait_run_status, wait_session_status,
-    CancellableExecutor, ScriptedExecutor, TestCore,
+    build_manager, build_permission_service, create_session, manual_clock, outside_target,
+    permission_request, system_clock, wait_for, wait_permissions_pending, wait_run_status,
+    wait_session_status, CancellableExecutor, ScriptedExecutor, TestCore,
 };
 
 /// 会话 `session.status_changed` 转移序列（`from → to`，按落库顺序）。
@@ -93,6 +96,7 @@ async fn wait_transitions_len(
 async fn dod1_mark_clear_guards_and_status_events() {
     let core = TestCore::open().await;
     let workspace = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
     let executor = ScriptedExecutor::new(0);
     let manager = build_manager(
         &core,
@@ -137,11 +141,8 @@ async fn dod1_mark_clear_guards_and_status_events() {
         "run 在途会话应为 running"
     );
 
-    let target = workspace
-        .path()
-        .join("note.txt")
-        .to_string_lossy()
-        .to_string();
+    // 区外写（缺省档 ask）制造 pending → 置位 `running → waiting_permission`。
+    let target = outside_target(&outside, "dod1-note.txt");
     let request = permission_request(
         "dod1-req-1",
         Some(&session.id),
@@ -248,6 +249,7 @@ async fn dod1_mark_clear_guards_and_status_events() {
 async fn dod2_deny_and_timeout_return_to_running() {
     let core = TestCore::open().await;
     let workspace = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
     let clock = manual_clock(1_000_000);
     let executor = ScriptedExecutor::new(0);
     let manager = build_manager(
@@ -267,11 +269,8 @@ async fn dod2_deny_and_timeout_return_to_running() {
     );
     service.set_pending_observer(Arc::new(manager.clone()));
     let session = create_session(&manager, "m3-12-dod2").await;
-    let target = workspace
-        .path()
-        .join("note.txt")
-        .to_string_lossy()
-        .to_string();
+    // 区外写（缺省档 ask）制造 pending。
+    let target = outside_target(&outside, "dod2-note.txt");
 
     let run = manager.send(&session.id, "hold", "dod2-1").await.unwrap();
     assert!(
@@ -367,6 +366,7 @@ async fn dod2_cancel_and_run_failure_return_paths() {
     // 取消路径：request_cancellable 绑定在途 run 令牌 → 取消级联摘除票据。
     let core = TestCore::open().await;
     let workspace = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
     let executor = CancellableExecutor::new();
     let manager = build_manager(
         &core,
@@ -385,11 +385,8 @@ async fn dod2_cancel_and_run_failure_return_paths() {
     );
     service.set_pending_observer(Arc::new(manager.clone()));
     let session = create_session(&manager, "m3-12-dod2-cancel").await;
-    let target = workspace
-        .path()
-        .join("note.txt")
-        .to_string_lossy()
-        .to_string();
+    // 区外写（缺省档 ask）制造 pending。
+    let target = outside_target(&outside, "dod2-cancel-note.txt");
 
     let run = manager
         .send(&session.id, "hold", "dod2-cancel-1")
@@ -451,6 +448,7 @@ async fn dod2_cancel_and_run_failure_return_paths() {
     // 迟到决议命中回程守卫（idle）→ no-op，不产生多余 `session.status_changed`。
     let core = TestCore::open().await;
     let workspace = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
     let executor = ScriptedExecutor::new(0);
     executor.set_outcome(ExecutorOutcome::Failed {
         error: ErrorInfo {
@@ -476,11 +474,8 @@ async fn dod2_cancel_and_run_failure_return_paths() {
     );
     service.set_pending_observer(Arc::new(manager.clone()));
     let session = create_session(&manager, "m3-12-dod2-failure").await;
-    let target = workspace
-        .path()
-        .join("note.txt")
-        .to_string_lossy()
-        .to_string();
+    // 区外写（缺省档 ask）制造 pending。
+    let target = outside_target(&outside, "dod2-fail-note.txt");
 
     let run = manager
         .send(&session.id, "hold", "dod2-fail-1")
@@ -550,6 +545,7 @@ async fn dod2_cancel_and_run_failure_return_paths() {
 async fn dod3_restore_pending_never_marks_waiting_state() {
     let core = TestCore::open().await;
     let workspace = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
     let executor = ScriptedExecutor::new(4);
     let manager = build_manager(
         &core,
@@ -569,11 +565,8 @@ async fn dod3_restore_pending_never_marks_waiting_state() {
     );
     service.set_pending_observer(Arc::new(manager.clone()));
     let session = create_session(&manager, "m3-12-dod3").await;
-    let target = workspace
-        .path()
-        .join("note.txt")
-        .to_string_lossy()
-        .to_string();
+    // 区外写（缺省档 ask）制造 pending。
+    let target = outside_target(&outside, "dod3-note.txt");
     // 会话保持 idle（无在途 run）——重启恢复票据的决议/超时不得标记等待态。
     let baseline = status_transitions(&core, &session.id).await;
     assert_eq!(baseline.len(), 1, "仅创建时 creating → idle");
@@ -663,6 +656,7 @@ async fn dod3_restore_pending_never_marks_waiting_state() {
 async fn dod4_multiple_sessions_wait_concurrently() {
     let core = TestCore::open().await;
     let workspace = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
     let executor = ScriptedExecutor::new(0);
     let manager = build_manager(
         &core,
@@ -696,11 +690,8 @@ async fn dod4_multiple_sessions_wait_concurrently() {
         "两个会话的 run 均应派发"
     );
 
-    let target = workspace
-        .path()
-        .join("note.txt")
-        .to_string_lossy()
-        .to_string();
+    // 区外写（缺省档 ask）制造两会话并发 pending。
+    let target = outside_target(&outside, "dod4-note.txt");
     let request_a = permission_request(
         "dod4-a",
         Some(&session_a.id),

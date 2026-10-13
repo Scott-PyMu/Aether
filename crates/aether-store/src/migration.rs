@@ -43,6 +43,11 @@ pub const EMBEDDED_MIGRATIONS: &[MigrationFile] = &[
         name: "0003_p0_ui_extensions.sql",
         bytes: include_bytes!("../../../migrations/0003_p0_ui_extensions.sql"),
     },
+    MigrationFile {
+        version: 4,
+        name: "0004_permission_mode_and_rules.sql",
+        bytes: include_bytes!("../../../migrations/0004_permission_mode_and_rules.sql"),
+    },
 ];
 
 /// 迁移文件 sha256（小写十六进制）。

@@ -175,6 +175,7 @@ fn mock_adapter_end_to_end_create_stream_interrupt_and_backfill() {
             workspace_id: None,
             model: Some("mock-model".to_owned()),
             thinking_depth: None,
+            permission_mode: None,
         })
         .expect("session_create");
     let session_id = created["id"].as_str().expect("会话 id").to_owned();

@@ -100,6 +100,31 @@ impl Default for LifecycleConfig {
     }
 }
 
+/// 会话创建选项（M6-01/ADR-014：档位与思考深度为显式会话级参数；缺省值见
+/// [`SessionCreateOptions::default`]）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionCreateOptions {
+    pub workspace_id: Option<WorkspaceId>,
+    pub model: Option<String>,
+    pub system_prompt: Option<String>,
+    /// 会话级思考深度（0–4；缺省 [`aether_core::THINKING_DEPTH_DEFAULT`]）。
+    pub thinking_depth: u8,
+    /// 会话级权限模式（缺省 `workspace_write`）。
+    pub permission_mode: aether_core::PermissionMode,
+}
+
+impl Default for SessionCreateOptions {
+    fn default() -> Self {
+        Self {
+            workspace_id: None,
+            model: None,
+            system_prompt: None,
+            thinking_depth: aether_core::THINKING_DEPTH_DEFAULT,
+            permission_mode: aether_core::PermissionMode::default(),
+        }
+    }
+}
+
 /// run 执行请求（M2-02 真实适配器据此调用 `session.create/send`）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunRequest {
@@ -514,13 +539,15 @@ impl SessionManager {
         model: Option<String>,
         system_prompt: Option<String>,
     ) -> Result<Session, LifecycleError> {
-        self.create_session_with_depth(
+        self.create_session_with_options(
             runtime,
             title,
-            workspace_id,
-            model,
-            system_prompt,
-            aether_core::THINKING_DEPTH_DEFAULT,
+            SessionCreateOptions {
+                workspace_id,
+                model,
+                system_prompt,
+                ..SessionCreateOptions::default()
+            },
         )
         .await
     }
@@ -535,6 +562,31 @@ impl SessionManager {
         system_prompt: Option<String>,
         thinking_depth: u8,
     ) -> Result<Session, LifecycleError> {
+        self.create_session_with_options(
+            runtime,
+            title,
+            SessionCreateOptions {
+                workspace_id,
+                model,
+                system_prompt,
+                thinking_depth,
+                ..SessionCreateOptions::default()
+            },
+        )
+        .await
+    }
+
+    /// 创建会话（M6-01/ADR-014 决策 3：显式会话级权限模式；其余语义同
+    /// [`Self::create_session_with_depth`]）。
+    ///
+    /// 档位是持久化的判定权威入参（按会话解析）；适配器启动参数投影由 M7-06 承接，
+    /// 本方法只负责落库与判定语义（在途会话沙箱参数不变）。
+    pub async fn create_session_with_options(
+        &self,
+        runtime: Runtime,
+        title: &str,
+        options: SessionCreateOptions,
+    ) -> Result<Session, LifecycleError> {
         // M2-04：L3 熔断/存储侧隔离期拒绝新会话。
         self.check_backpressure(&runtime.id)?;
         let now = self.inner.clock.now_ms();
@@ -543,13 +595,14 @@ impl SessionManager {
         let session = Session {
             id: session_id.clone(),
             runtime_id: runtime_id.clone(),
-            workspace_id,
+            workspace_id: options.workspace_id,
             parent_session_id: None,
             title: title.to_owned(),
             status: SessionStatus::Creating,
-            model,
-            thinking_depth,
-            system_prompt,
+            model: options.model,
+            thinking_depth: options.thinking_depth,
+            permission_mode: options.permission_mode,
+            system_prompt: options.system_prompt,
             config: json!({}),
             token_usage: TokenUsage::default(),
             created_at: now,
@@ -590,7 +643,7 @@ impl SessionManager {
                     title: title.to_owned(),
                     status: SessionStatus::Creating,
                     model: session.model.clone(),
-                    thinking_depth: Some(thinking_depth),
+                    thinking_depth: Some(session.thinking_depth),
                     created_at: now,
                     updated_at: now,
                 },

@@ -10,7 +10,8 @@ mod common;
 use aether_store::StoreError;
 use rusqlite::Connection;
 
-/// 附录 C 全部表（设计文档 v1.10；含 schema_migrations 与 ADR-010 的 3 张表，共 20 张）。
+/// 附录 C 全部表（设计文档 v1.16；含 schema_migrations、ADR-010 的 3 张表与
+/// M6-01 的 permission_rules，共 21 张）。
 const APPENDIX_C_TABLES: &[&str] = &[
     "adapter_plugins",
     "artifacts",
@@ -20,6 +21,7 @@ const APPENDIX_C_TABLES: &[&str] = &[
     "memories",
     "messages",
     "node_runs",
+    "permission_rules",
     "permissions",
     "provider_models",
     "providers",
@@ -112,7 +114,8 @@ fn appendix_c_explicit_indexes_exist_with_expected_columns() {
     let (_dir, store) = common::open_temp_store("schema-indexes");
     let conn = store.connection();
 
-    // 附录 C 显式索引 + ADR-004/ADR-005 唯一索引（0002 迁移落地，UNIQUE 由唯一索引承载）。
+    // 附录 C 显式索引 + ADR-004/ADR-005 唯一索引（0002 迁移落地，UNIQUE 由唯一索引承载）
+    // + M6-01 permission_rules 启用态索引。
     let expected: &[(&str, &str, &[&str], bool)] = &[
         ("idx_audit_ts", "audit_log", &["ts"], false),
         (
@@ -132,6 +135,12 @@ fn appendix_c_explicit_indexes_exist_with_expected_columns() {
             "idx_messages_session_seq",
             "messages",
             &["session_id", "seq"],
+            false,
+        ),
+        (
+            "idx_permission_rules_enabled",
+            "permission_rules",
+            &["enabled"],
             false,
         ),
         (
