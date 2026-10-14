@@ -367,12 +367,28 @@ fn rule_matches(
 }
 
 /// 路径规则匹配：目录前缀（规则目标以分隔符收尾 → canonical 位于其下）或精确路径。
+///
+/// 形态鲁棒性（M6-02 抽查缺陷修复）：规则目标与 canonical 目标可能分别为
+/// 普通形态与 `\\?\` 扩展形态（Windows `std::fs::canonicalize` 返回扩展形态，
+/// 而 `canonicalize_free_path` 剥离后再校验）；比较前统一剥离扩展前缀，
+/// 前缀比较按平台大小写规则（Windows 不敏感）。
 fn path_matches(rule_target: &str, canonical: &Path) -> bool {
-    let canonical = canonical.to_string_lossy().to_string();
+    let canonical = strip_extended(&canonical.to_string_lossy()).to_owned();
     if rule_target.ends_with(std::path::MAIN_SEPARATOR) {
-        canonical.starts_with(rule_target)
+        prefix_matches(rule_target, &canonical)
     } else {
         path_text_eq(rule_target, &canonical)
+    }
+}
+
+/// 目录前缀比较：剥离扩展前缀 + 按平台大小写规则。
+fn prefix_matches(rule_target: &str, canonical: &str) -> bool {
+    let rule_target = strip_extended(rule_target);
+    if case_insensitive_platform() {
+        canonical.len() >= rule_target.len()
+            && canonical[..rule_target.len()].eq_ignore_ascii_case(rule_target)
+    } else {
+        canonical.starts_with(rule_target)
     }
 }
 
@@ -682,6 +698,51 @@ mod tests {
             RuleOutcome::NoMatch,
             "resource 不匹配不命中"
         );
+    }
+
+    #[test]
+    fn path_directory_prefix_matches_extended_canonical_form() {
+        // M6-02 抽查缺陷修复回归：Windows `std::fs::canonicalize` 返回 `\\?\` 扩展形态，
+        // 目录前缀规则必须仍然命中（剥离扩展前缀后比较）；精确路径同口径幂等。
+        let sep = std::path::MAIN_SEPARATOR;
+        let prefix = rule(
+            "p3",
+            PermissionResource::FsWrite,
+            RuleTargetKind::Path,
+            Some(&format!("C:{sep}data{sep}private{sep}")),
+            RuleDecision::Deny,
+            0,
+        );
+        assert!(matches!(
+            evaluate_rules(
+                &[prefix],
+                PermissionResource::FsWrite,
+                "write",
+                Some("x"),
+                Some(Path::new(&format!(
+                    "\\\\?\\C:{sep}data{sep}private{sep}sub{sep}x.txt"
+                )))
+            ),
+            RuleOutcome::Deny { .. }
+        ));
+        let exact = rule(
+            "p4",
+            PermissionResource::FsWrite,
+            RuleTargetKind::Path,
+            Some(&format!("C:{sep}data{sep}secret.txt")),
+            RuleDecision::Deny,
+            0,
+        );
+        assert!(matches!(
+            evaluate_rules(
+                &[exact],
+                PermissionResource::FsWrite,
+                "write",
+                Some("x"),
+                Some(Path::new(&format!("\\\\?\\C:{sep}data{sep}secret.txt")))
+            ),
+            RuleOutcome::Deny { .. }
+        ));
     }
 
     #[test]

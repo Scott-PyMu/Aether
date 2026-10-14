@@ -354,6 +354,37 @@ impl PermissionService {
         Ok(count)
     }
 
+    /// 以「规则行 → 模型」同源口径加载**规则子集**快照（M6-02 误配率抽查操作细节：
+    /// 单规则判定环境隔离）。
+    ///
+    /// 语义与 [`Self::restore_rules`] 完全一致（同一 `rule_from_record` 映射与
+    /// fail-closed 跳过），仅按 `only_ids` 过滤；`only_ids=[]` → 清空快照。
+    /// 返回生效规则数。抽查为**只读判定**，不改变规则行与业务语义。
+    pub async fn restore_rules_subset(
+        &self,
+        only_ids: &[String],
+    ) -> Result<usize, PermissionError> {
+        let records = self.inner.reads.permission_rules().await?;
+        let mut rules = Vec::new();
+        for record in records {
+            if !only_ids.iter().any(|id| id == &record.id) {
+                continue;
+            }
+            match rule_from_record(&record) {
+                Some(rule) => rules.push(rule),
+                None => {
+                    tracing::warn!(
+                        rule_id = record.id.as_str(),
+                        "权限规则行无法解析，已跳过（fail-closed：不参与判定）"
+                    );
+                }
+            }
+        }
+        let count = rules.len();
+        lock_inner(&self.inner).rules = rules;
+        Ok(count)
+    }
+
     /// 重建持久授权匹配集（M6-01/ADR-019 附录 A-2：核心启动加载
     /// `scope IN ('session','always') AND status='resolved' AND decision='allow'` 的行）。
     ///
