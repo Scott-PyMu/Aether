@@ -438,7 +438,7 @@ impl Drop for Harness {
     }
 }
 
-/// DoD1：迁移已应用到最新（M6-01 起 `schema_version = 4`）；内置 4 条播种形状；
+/// DoD1：迁移已应用到最新（M6-03 起 `schema_version = 5`）；内置 4 条播种形状；
 /// 写路径经单写队列。
 #[test]
 fn dod1_builtin_seed_list_shape_and_write_queue() {
@@ -446,8 +446,8 @@ fn dod1_builtin_seed_list_shape_and_write_queue() {
     let summary = h.runtime.block_on(h.reads.store_summary()).expect("库摘要");
     assert_eq!(
         summary.schema_version,
-        Some(4),
-        "迁移必须到 0004（M6-01/ADR-014 权限模式与规则）"
+        Some(5),
+        "迁移必须到 0005（M6-03/ADR-023 审计索引）"
     );
 
     let list = h.list().expect("供应商清单");

@@ -1,4 +1,5 @@
-//! 归档导出与保留清理命令后端（M5-05 / M5-04；设计 D13、ADR-021、ADR-018 命令登记）。
+//! 归档导出与保留清理命令后端（M5-05 / M5-04 / M6-03；设计 D13、ADR-021/ADR-023、
+//! ADR-018 命令登记）。
 //!
 //! 覆盖：
 //! - `session_export`：单会话 JSONL（`sessions` 行 + `messages` 终稿 + 该会话 `events`
@@ -6,9 +7,12 @@
 //!   `archives/`；空间护栏与 M3-04 同口径；脱敏 0 命中；原子写（临时文件 + rename）；
 //! - `archive_export`：全库归档（`sessions`/`messages`/`events` 全量 + `runs` 摘要）
 //!   + manifest；= 容量「一键归档」（UI-UX §8#16，锚点 `archive`）；
+//! - `audit_query` / `audit_export`（M6-03/ADR-023）：审计过滤查询（分页、稳定排序）
+//!   与 JSONL 导出（kind=`audit`；外部路径 + 空间检查 + 脱敏 + 原子写）；
 //! - 保留策略任务（[`RetentionTask`]）接线：`backup_list.retention` 段、诊断包
 //!   `retention`/`export` 段（ADR-021 附录 A-3 指标）、后台调度器启动/停止；
-//! - 审计（ADR-023 附录 A-1）：`session.exported` / `archive.exported`（actor=user）。
+//! - 审计（ADR-023 附录 A-1）：`session.exported` / `archive.exported`（actor=user）；
+//!   审计导出自身不写入新审计动作（动作台账唯一，ADR-023 A-1 未登记该动作）。
 //!
 //! 桥接口径与 `backup_control` 一致：async 存储操作 spawn 到核心运行时 +
 //! `std::sync::mpsc` 同步等待（不阻塞运行时线程）。
@@ -20,7 +24,9 @@ use std::time::Duration;
 
 use aether_control::SharedClock;
 use aether_security::Redactor;
-use aether_store::archive::{export_full_archive, export_session_archive, ArchiveReport};
+use aether_store::archive::{
+    export_audit_archive, export_full_archive, export_session_archive, ArchiveReport,
+};
 use aether_store::backup::required_space_bytes;
 use aether_store::{AuditLogRecord, ReadPool, StoreCommand, StoreError, WriteQueue};
 use serde_json::{json, Value};
@@ -29,9 +35,9 @@ use crate::backup_control::{file_len, wal_path, NativeSpaceProbe, SpaceProbe};
 use crate::ipc::backend::IpcBackend;
 use crate::ipc::dto::{
     AppRestartRequest, ArchiveExportRequest, ArtifactAddRequest, ArtifactRemoveRequest,
-    ArtifactsListRequest, BackupCreateRequest, BackupRestoreRequest, ExportDiagnosticsRequest,
-    MessagesPageRequest, PermissionResolveRequest, PermissionsPendingRequest,
-    ProviderCreateRequest, ProviderDeleteRequest, ProviderModelAddRequest,
+    ArtifactsListRequest, AuditExportRequest, AuditQueryRequest, BackupCreateRequest,
+    BackupRestoreRequest, ExportDiagnosticsRequest, MessagesPageRequest, PermissionResolveRequest,
+    PermissionsPendingRequest, ProviderCreateRequest, ProviderDeleteRequest, ProviderModelAddRequest,
     ProviderModelToggleRequest, ProviderToggleRequest, ProviderUpdateRequest, ProvidersListRequest,
     RunRetryRequest, RuntimeEnableRequest, RuntimeRetryRequest, SessionCreateRequest,
     SessionExportRequest, SessionIdRequest, SessionListRequest, SessionSendRequest,
@@ -387,6 +393,67 @@ impl IpcBackend for ArchiveControlBackend {
         }
     }
 
+    /// M6-03/ADR-023：审计查询（过滤 + 分页；`ts DESC, id DESC` 稳定排序）。
+    ///
+    /// 响应 `{ rows, limit, offset, has_more }`（v0.3 分页设计修订：不提供命中共计数，
+    /// 以「多取一行」探测 `has_more`；1e6 行下已过滤分页查询 P95 ≤300ms）。
+    fn audit_query(&self, request: &AuditQueryRequest) -> Result<Value, IpcError> {
+        let reads = self.reads_required()?;
+        let query = request.to_store_query()?;
+        let result = self.call(async move {
+            reads.audit_query(query).await.map_err(|error| {
+                IpcError::internal(format!("审计查询失败（audit_query）：{error}"))
+            })
+        })?;
+        let rows: Vec<Value> = result.rows.iter().map(audit_row_value).collect();
+        Ok(json!({
+            "rows": rows,
+            "limit": result.limit,
+            "offset": result.offset,
+            "has_more": result.has_more,
+        }))
+    }
+
+    /// M6-03/ADR-023：审计导出（JSONL + manifest；kind=`audit`）。
+    ///
+    /// 外部路径 + 空间护栏复用 `prepare_target`（与 `session_export` 同口径）；
+    /// 脱敏与 0 命中守门复用 [`sanitize_archive_line`]；原子写（中断不留半成品）。
+    fn audit_export(
+        &self,
+        request: &AuditExportRequest,
+        canonical_target_dir: Option<&Path>,
+    ) -> Result<Value, IpcError> {
+        let reads = self.reads_required()?;
+        let target = self.prepare_target(canonical_target_dir)?;
+        let query = request.to_store_query();
+        let created_at = self.clock.now_ms();
+        let target_for_task = target.clone();
+        let report = self.call(async move {
+            reads
+                .with_connection(move |connection| {
+                    let redactor = Redactor::new().map_err(|error| StoreError::Internal {
+                        reason: format!("脱敏器初始化失败：{error}"),
+                    })?;
+                    let sanitize = |value: &Value| -> Result<String, StoreError> {
+                        sanitize_archive_line(&redactor, value)
+                    };
+                    export_audit_archive(
+                        connection,
+                        &target_for_task,
+                        &query,
+                        created_at,
+                        &sanitize,
+                    )
+                })
+                .await
+                .map_err(|error| {
+                    IpcError::internal(format!("审计导出失败（audit_export）：{error}"))
+                })
+        })?;
+        self.record_export_metrics(&report);
+        Ok(Self::export_response(&report))
+    }
+
     /// 保留任务状态（内部接线，非 IPC 命令；诊断包 `retention` 段）。
     fn retention_status(&self) -> Result<Option<Value>, IpcError> {
         match &self.retention {
@@ -573,6 +640,22 @@ impl IpcBackend for ArchiveControlBackend {
     ) -> Result<Value, IpcError> {
         self.inner.export_diagnostics(request, canonical_target_dir)
     }
+}
+
+/// 审计行 → `audit_query` 响应 JSON（`detail` 为库内文本，原样返回；
+/// 契约与 `audit_log` 表列一一对应）。
+fn audit_row_value(record: &AuditLogRecord) -> Value {
+    json!({
+        "id": record.id,
+        "session_id": record.session_id,
+        "runtime_id": record.runtime_id,
+        "actor": record.actor,
+        "action": record.action,
+        "resource": record.resource,
+        "detail": record.detail,
+        "result": record.result,
+        "ts": record.ts,
+    })
 }
 
 /// 归档行脱敏 + 0 命中守门（D10；与诊断包同一实现）。

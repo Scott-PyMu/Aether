@@ -249,7 +249,14 @@ fn dod1_provider_tables_match_adr_010_and_seed_builtins() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(schema_version, 4, "迁移必须到 0004（ADR-010 + M6-01）");
+    assert_eq!(
+        schema_version,
+        aether_store::EMBEDDED_MIGRATIONS
+            .last()
+            .map(|item| item.version)
+            .unwrap_or(0),
+        "迁移必须应用至最新（ADR-010/M6-01/M6-03）"
+    );
 }
 
 /// DoD1：写路径经单写队列（D3）；增/改/启停/删除级联/重复模型拒绝。

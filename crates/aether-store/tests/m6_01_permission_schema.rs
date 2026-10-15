@@ -254,7 +254,11 @@ fn migration_0004_is_idempotent_and_preserves_existing_permissions_rows() {
     let store = aether_store::Store::open(&path).unwrap();
     let applied = store.applied_migrations().unwrap();
     assert_eq!(applied.len(), EMBEDDED_MIGRATIONS.len());
-    assert_eq!(applied.last().map(|item| item.version), Some(4));
+    // M6-03 合入 0005（审计索引）后，最新版本随迁移清单推进（本断言为「应用至最新」）。
+    assert_eq!(
+        applied.last().map(|item| item.version),
+        EMBEDDED_MIGRATIONS.last().map(|item| item.version)
+    );
     let (target, decision, scope, status): (Option<String>, String, Option<String>, String) = store
         .connection()
         .query_row(

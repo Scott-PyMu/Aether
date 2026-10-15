@@ -2,6 +2,7 @@ import { APP_VERSION, PROTOCOL_VERSION } from "@aether/protocol";
 import { useCallback, useEffect, useState } from "react";
 
 import { AboutPage } from "./AboutPage";
+import { AuditPage } from "./AuditPage";
 import { BackupPage } from "./BackupPage";
 import { DiagnosticsPage } from "./DiagnosticsPage";
 import { EventBridgeIndicator } from "./EventBridgeIndicator";
@@ -12,7 +13,7 @@ import { StartupGate } from "./StartupGate";
 import { describeIpcError, fetchStartup, type StartupSnapshot } from "./startup";
 
 /** 单窗口覆盖层视图（M3-04/M3-05；UI-UX §1.1：不使用 URL 路由）。 */
-type AppView = "workbench" | "backup" | "diagnostics" | "settings" | "about";
+type AppView = "workbench" | "backup" | "diagnostics" | "settings" | "about" | "audit";
 
 export function App() {
   const [startup, setStartup] = useState<StartupSnapshot | null>(null);
@@ -97,6 +98,13 @@ export function App() {
         </button>
         <button
           type="button"
+          data-testid="audit-open"
+          onClick={() => setView("audit")}
+        >
+          审计
+        </button>
+        <button
+          type="button"
           data-testid="about-open"
           onClick={() => setView("about")}
         >
@@ -111,6 +119,9 @@ export function App() {
       ) : null}
       {view === "diagnostics" ? (
         <DiagnosticsPage onBack={() => setView("workbench")} />
+      ) : null}
+      {view === "audit" ? (
+        <AuditPage onBack={() => setView("workbench")} />
       ) : null}
       {view === "settings" ? (
         <SettingsPage

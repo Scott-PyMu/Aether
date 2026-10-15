@@ -1856,3 +1856,111 @@ body {
 .rules-notice { margin: 0; font-size: 0.74rem; color: var(--ae-success, #8fd18f); }
 
 .rules-error { margin: 0; font-size: 0.74rem; color: var(--ae-danger, #d66f6f); }
+
+/* ===== M6-03：审计查询与导出页（锚点 audit-page / audit-filter / audit-export） ===== */
+
+.audit-page {
+  max-width: 1080px;
+  margin: 3rem auto;
+  padding: 1.25rem;
+  background-color: #1d2026;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-height: calc(100vh - 6rem);
+  overflow-y: auto;
+}
+
+.audit-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.audit-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: flex-end;
+  border-top: 1px solid #2c3138;
+  padding-top: 0.75rem;
+}
+
+.audit-filter label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+}
+
+.audit-summary,
+.audit-note {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #9aa4af;
+}
+
+.audit-rows {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.audit-rows th,
+.audit-rows td {
+  text-align: left;
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid #2c3138;
+  vertical-align: top;
+}
+
+.audit-detail {
+  max-width: 380px;
+  overflow-wrap: anywhere;
+  color: #9aa4af;
+}
+
+.audit-pagination {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.audit-target-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border-top: 1px solid #2c3138;
+  padding-top: 0.75rem;
+}
+
+.audit-target-section label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.audit-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.audit-export-result {
+  margin: 0;
+  padding: 0.5rem 0.65rem;
+  border-radius: 6px;
+  background-color: #1d2a1d;
+  border-left: 3px solid var(--ae-success, #7fbf7f);
+  word-break: break-all;
+}
+
+.audit-export-result[data-result="failed"] {
+  background-color: #2a1d1d;
+  border-left-color: var(--ae-danger, #d66f6f);
+}
+
+.audit-error {
+  color: var(--ae-danger, #d66f6f);
+  margin: 0;
+}

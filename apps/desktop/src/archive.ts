@@ -17,6 +17,8 @@ export interface ArchiveCounts {
   messages: number;
   events: number;
   runs: number;
+  /** 审计行数（M6-03 `audit_export`；其余来源恒 0）。 */
+  audits: number;
 }
 
 /** 归档产物报告（`{ export: {...} }` 载荷本体）。 */

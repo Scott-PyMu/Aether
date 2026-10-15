@@ -27,14 +27,15 @@ pub mod store;
 pub mod write_queue;
 
 pub use archive::{
-    archive_line_whitelist, archive_retention_batch, cleanup_archive_temps, compact_date_utc,
-    export_full_archive, export_session_archive, full_archive_file_name,
-    retention_archive_file_name, select_retention_batch, session_archive_file_name,
-    unique_archive_path, verify_archive_file, ArchiveCounts, ArchiveManifest, ArchiveReport,
-    ArchiveSanitizer, ArchiveVerification, RetentionEventRow, ARCHIVE_BUFFER_BYTES,
-    ARCHIVE_FORMAT_VERSION, ARCHIVE_MANIFEST_KIND, ARCHIVE_PARTIAL_INFIX,
-    ARCHIVE_SOURCE_ARCHIVE_EXPORT, ARCHIVE_SOURCE_AUTO_RETENTION, ARCHIVE_SOURCE_SESSION_EXPORT,
-    ARCHIVE_TEMP_INFIX, RETENTION_BATCH_MAX, RETENTION_EVENT_TYPES,
+    archive_line_whitelist, archive_retention_batch, audit_archive_file_name,
+    cleanup_archive_temps, compact_date_utc, export_audit_archive, export_full_archive,
+    export_session_archive, full_archive_file_name, retention_archive_file_name,
+    select_retention_batch, session_archive_file_name, unique_archive_path, verify_archive_file,
+    ArchiveCounts, ArchiveManifest, ArchiveReport, ArchiveSanitizer, ArchiveVerification,
+    RetentionEventRow, ARCHIVE_BUFFER_BYTES, ARCHIVE_FORMAT_VERSION, ARCHIVE_MANIFEST_KIND,
+    ARCHIVE_PARTIAL_INFIX, ARCHIVE_SOURCE_ARCHIVE_EXPORT, ARCHIVE_SOURCE_AUDIT_EXPORT,
+    ARCHIVE_SOURCE_AUTO_RETENTION, ARCHIVE_SOURCE_SESSION_EXPORT, ARCHIVE_TEMP_INFIX,
+    RETENTION_BATCH_MAX, RETENTION_EVENT_TYPES,
 };
 
 pub use backup::{
@@ -62,8 +63,9 @@ pub use migration::{
     MIGRATIONS_TABLE,
 };
 pub use ops::{
-    ArtifactRecord, AuditLogRecord, PermissionGrantRecord, PermissionRecord, PermissionRuleRecord,
-    ProviderModelRecord, ProviderRecord, SessionQuery, StoreCommand, StoreOutcome, StoreSummary,
+    ArtifactRecord, AuditLogRecord, AuditQuery, AuditQueryResult, PermissionGrantRecord,
+    PermissionRecord, PermissionRuleRecord, ProviderModelRecord, ProviderRecord, SessionQuery,
+    StoreCommand, StoreOutcome, StoreSummary, AUDIT_QUERY_DEFAULT_LIMIT, AUDIT_QUERY_MAX_LIMIT,
     SUMMARY_TABLES,
 };
 pub use pragma::PragmaSnapshot;

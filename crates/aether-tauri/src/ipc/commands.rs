@@ -8,16 +8,16 @@ use serde_json::Value;
 
 use super::dto::{
     AppExitRequest, AppRestartRequest, ArchiveExportRequest, ArtifactAddRequest,
-    ArtifactRemoveRequest, ArtifactsListRequest, BackupCreateRequest, BackupListRequest,
-    BackupRestoreRequest, ExportDiagnosticsRequest, HealthRequest, MessagesPageRequest,
-    PermissionResolveRequest, PermissionsPendingRequest, ProviderCreateRequest,
-    ProviderDeleteRequest, ProviderModelAddRequest, ProviderModelToggleRequest,
-    ProviderToggleRequest, ProviderUpdateRequest, ProvidersListRequest, RefPickKind,
-    RefPickRequest, RuleAddRequest, RuleDeleteRequest, RuleToggleRequest, RuleUpdateRequest,
-    RulesListRequest, RunRetryRequest, RuntimeEnableRequest, RuntimeRetryRequest,
-    SessionCreateRequest, SessionExportRequest, SessionIdRequest, SessionListRequest,
-    SessionPermissionModeSetRequest, SessionSendRequest, SettingsGetRequest, SettingsSetRequest,
-    StartupGetRequest, StartupMigrateRequest, StartupPickTargetRequest, WorkspaceSetRequest,
+    ArtifactRemoveRequest, ArtifactsListRequest, AuditExportRequest, AuditQueryRequest,
+    BackupCreateRequest, BackupListRequest, BackupRestoreRequest, ExportDiagnosticsRequest,
+    HealthRequest, MessagesPageRequest, PermissionResolveRequest, PermissionsPendingRequest,
+    ProviderCreateRequest, ProviderDeleteRequest, ProviderModelAddRequest, ProviderModelToggleRequest,
+    ProviderToggleRequest, ProviderUpdateRequest, ProvidersListRequest, RefPickKind, RefPickRequest,
+    RuleAddRequest, RuleDeleteRequest, RuleToggleRequest, RuleUpdateRequest, RulesListRequest,
+    RunRetryRequest, RuntimeEnableRequest, RuntimeRetryRequest, SessionCreateRequest,
+    SessionExportRequest, SessionIdRequest, SessionListRequest, SessionPermissionModeSetRequest,
+    SessionSendRequest, SettingsGetRequest, SettingsSetRequest, StartupGetRequest,
+    StartupMigrateRequest, StartupPickTargetRequest, WorkspaceSetRequest,
 };
 use super::error::{IpcError, IpcErrorCode};
 use super::validate::{parse_no_params, parse_strict};
@@ -442,6 +442,39 @@ pub(crate) fn archive_export(
         .map(JsonPayload)
 }
 
+/// M6-03/ADR-023：审计查询（过滤：会话/时间/actor/action/resource；分页；
+/// `ts DESC, id DESC` 稳定排序）。缺省载荷（`null` / `{}`）= 空过滤（最近 100 条）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn audit_query(
+    state: tauri::State<'_, IpcState>,
+    payload: Option<JsonPayload>,
+) -> Result<JsonPayload, IpcError> {
+    let request: AuditQueryRequest =
+        parse_no_params(payload.map(JsonPayload::into_value).unwrap_or(Value::Null))?;
+    state
+        .backend_ready()?
+        .audit_query(&request)
+        .map(JsonPayload)
+}
+
+/// M6-03/ADR-023：审计导出（过滤同 `audit_query`；缺省写入数据目录 `archives/`，
+/// 外部目录经系统选择器 canonicalize 后进入空间护栏；原子写不留半成品）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn audit_export(
+    state: tauri::State<'_, IpcState>,
+    payload: Option<JsonPayload>,
+) -> Result<JsonPayload, IpcError> {
+    let request: AuditExportRequest =
+        parse_no_params(payload.map(JsonPayload::into_value).unwrap_or(Value::Null))?;
+    let canonical = request.canonical_target_dir()?;
+    state
+        .backend_ready()?
+        .audit_export(&request, canonical.as_deref())
+        .map(JsonPayload)
+}
+
 /// ADR-010/M3-09：引用选择器（`{ kind: "file" | "directory" }`）。
 ///
 /// Rust 侧系统选择器（复用 `DirectoryPicker` 抽象并扩展文件选择；E2E 注入替身），
@@ -751,6 +784,8 @@ pub fn collected<R: tauri::Runtime>() -> tauri_specta::Commands<R> {
         export_diagnostics,
         session_export,
         archive_export,
+        audit_query,
+        audit_export,
         health,
         startup_get,
         startup_pick_target,
@@ -806,6 +841,8 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         export_diagnostics,
         session_export,
         archive_export,
+        audit_query,
+        audit_export,
         health,
         startup_get,
         startup_pick_target,
@@ -862,6 +899,8 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         export_diagnostics,
         session_export,
         archive_export,
+        audit_query,
+        audit_export,
         health,
         startup_get,
         startup_pick_target,

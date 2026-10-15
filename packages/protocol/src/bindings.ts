@@ -110,6 +110,16 @@ export const commands = {
 	 */
 	archiveExport: (payload: unknown | null) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("archive_export", { payload })),
 	/**
+	 *  M6-03/ADR-023：审计查询（过滤：会话/时间/actor/action/resource；分页；
+	 *  `ts DESC, id DESC` 稳定排序）。缺省载荷（`null` / `{}`）= 空过滤（最近 100 条）。
+	 */
+	auditQuery: (payload: unknown | null) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("audit_query", { payload })),
+	/**
+	 *  M6-03/ADR-023：审计导出（过滤同 `audit_query`；缺省写入数据目录 `archives/`，
+	 *  外部目录经系统选择器 canonicalize 后进入空间护栏；原子写不留半成品）。
+	 */
+	auditExport: (payload: unknown | null) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("audit_export", { payload })),
+	/**
 	 *  ADR-007 决策 1：核心健康查询（无参数；严格解析拒绝未知成员）。
 	 * 
 	 *  返回 `HealthReport`（`storage_state` / `write_queue_depth` / `runtimes` 摘要 / `ts`）；
@@ -195,6 +205,37 @@ export type ArtifactRemoveRequest = {
 /**  `artifacts_list`（ADR-010）：会话引用清单（按 `created_at` 升序）。 */
 export type ArtifactsListRequest = {
 	session_id: string,
+};
+
+/**
+ *  `audit_export`（M6-03/ADR-023 §2.1-4；ADR-018 附录 A-1）：
+ *  过滤条件同 `audit_query`；导出 JSONL + manifest（行数/sha256）；外部路径 +
+ *  空间检查与 `session_export` 同口径；原子写（中断不留半成品）。
+ */
+export type AuditExportRequest = {
+	target_dir?: string | null,
+	session_id?: string | null,
+	actor?: string | null,
+	action?: string | null,
+	resource?: string | null,
+	from_ts?: number | null,
+	to_ts?: number | null,
+};
+
+/**
+ *  `audit_query`（M6-03/ADR-023 §2.1-3；ADR-018 附录 A-1）：
+ *  审计查询过滤（会话/时间/actor/action/resource）+ 分页（`limit` ≤500 缺省 100、
+ *  `offset` ≥0；按 `ts DESC, id DESC` 稳定排序）。
+ */
+export type AuditQueryRequest = {
+	session_id?: string | null,
+	actor?: string | null,
+	action?: string | null,
+	resource?: string | null,
+	from_ts?: number | null,
+	to_ts?: number | null,
+	limit?: number | null,
+	offset?: number | null,
 };
 
 export type BackupCreateRequest = {

@@ -131,6 +131,94 @@ pub struct AuditLogRecord {
     pub ts: i64,
 }
 
+/// 审计查询单页上限（ADR-023 §2.1-3：`limit` ≤500）。
+pub const AUDIT_QUERY_MAX_LIMIT: usize = 500;
+/// 审计查询缺省页大小（ADR-023 §2.1-3：缺省 100）。
+pub const AUDIT_QUERY_DEFAULT_LIMIT: usize = 100;
+
+/// 审计查询过滤条件（M6-03/ADR-023 §2.1-3 / v0.3 分页设计修订）。
+///
+/// 过滤语义：`session_id` / `actor` / `action` / `resource` 为**等值匹配**；
+/// 时间过滤为**闭区间** `from_ts ≤ ts ≤ to_ts`；分页经 `limit`（缺省
+/// [`AUDIT_QUERY_DEFAULT_LIMIT`]、上限 [`AUDIT_QUERY_MAX_LIMIT`]）与 `offset`；
+/// 稳定排序 `ts DESC, id DESC`。导出复用同一过滤条件（忽略 `limit`/`offset`）。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AuditQuery {
+    pub session_id: Option<String>,
+    pub actor: Option<String>,
+    pub action: Option<String>,
+    pub resource: Option<String>,
+    pub from_ts: Option<i64>,
+    pub to_ts: Option<i64>,
+    /// 页大小（`None` = 缺省 100；调用方负责上限校验，本层再钳制）。
+    pub limit: Option<usize>,
+    pub offset: usize,
+}
+
+/// 审计查询结果（`rows` 按 `ts DESC, id DESC` 稳定排序）。
+///
+/// v0.3 分页设计修订（ADR-023 §6-3）：不提供命中总数（`COUNT(*)` 在多谓词过滤下
+/// 需逐行回表，1e6 行实测 0.36–3.4s，超出 P95 目标）；以 `has_more`
+/// （多取一行的探测）表达「还有下一页」。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditQueryResult {
+    pub rows: Vec<AuditLogRecord>,
+    pub limit: usize,
+    pub offset: usize,
+    /// 是否还有下一页（`rows.len()` 回填为 `limit` 后判定）。
+    pub has_more: bool,
+}
+
+/// 审计过滤条件 → `WHERE` 子句与命名参数（等值 + 闭区间时间）。
+pub(crate) fn audit_filter_sql(query: &AuditQuery) -> (String, Vec<rusqlite::types::Value>) {
+    let mut clauses: Vec<&str> = Vec::new();
+    let mut values: Vec<rusqlite::types::Value> = Vec::new();
+    let mut push = |clause: &'static str, value: rusqlite::types::Value| {
+        clauses.push(clause);
+        values.push(value);
+    };
+    if let Some(session_id) = &query.session_id {
+        push("session_id = ?", rusqlite::types::Value::Text(session_id.clone()));
+    }
+    if let Some(actor) = &query.actor {
+        push("actor = ?", rusqlite::types::Value::Text(actor.clone()));
+    }
+    if let Some(action) = &query.action {
+        push("action = ?", rusqlite::types::Value::Text(action.clone()));
+    }
+    if let Some(resource) = &query.resource {
+        push("resource = ?", rusqlite::types::Value::Text(resource.clone()));
+    }
+    if let Some(from_ts) = query.from_ts {
+        push("ts >= ?", rusqlite::types::Value::Integer(from_ts));
+    }
+    if let Some(to_ts) = query.to_ts {
+        push("ts <= ?", rusqlite::types::Value::Integer(to_ts));
+    }
+    let where_sql = if clauses.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", clauses.join(" AND "))
+    };
+    (where_sql, values)
+}
+
+/// `audit_log` 行读取（查询与导出共用口径）。
+pub(crate) fn read_audit_row(row: &Row<'_>) -> rusqlite::Result<AuditLogRecord> {
+    Ok(AuditLogRecord {
+        id: row.get(0)?,
+        session_id: row.get(1)?,
+        runtime_id: row.get(2)?,
+        actor: row.get(3)?,
+        action: row.get(4)?,
+        resource: row.get(5)?,
+        detail: row.get(6)?,
+        result: row.get(7)?,
+        ts: row.get(8)?,
+    })
+}
+
+
 /// 领域写命令（经单写队列执行；每个命令一个事务）。
 #[derive(Debug, Clone, PartialEq)]
 pub enum StoreCommand {
@@ -1503,24 +1591,69 @@ impl ReadPool {
                 "SELECT id, session_id, runtime_id, actor, action, resource, detail, result, ts \
                  FROM audit_log ORDER BY ts ASC, rowid ASC LIMIT ?1",
             )?;
-            let rows = statement.query_map([limit], |row| {
-                Ok(AuditLogRecord {
-                    id: row.get(0)?,
-                    session_id: row.get(1)?,
-                    runtime_id: row.get(2)?,
-                    actor: row.get(3)?,
-                    action: row.get(4)?,
-                    resource: row.get(5)?,
-                    detail: row.get(6)?,
-                    result: row.get(7)?,
-                    ts: row.get(8)?,
-                })
-            })?;
+            let rows = statement.query_map([limit], read_audit_row)?;
             let mut records = Vec::new();
             for row in rows {
                 records.push(row?);
             }
             Ok(records)
+        })
+        .await
+    }
+
+    /// 审计查询（M6-03 `audit_query`；ADR-023 §2.1-3 / v0.3 分页设计修订）。
+    ///
+    /// 等值过滤（会话/actor/action/resource）+ 闭区间时间 + `offset`/`limit` 分页；
+    /// 稳定排序 `ts DESC, id DESC`；不执行 `COUNT(*)`，以「多取一行」判定
+    /// `has_more`（1e6 行下已过滤分页查询 P95 ≤300ms；见任务证据）。
+    pub async fn audit_query(
+        &self,
+        query: AuditQuery,
+    ) -> Result<AuditQueryResult, StoreError> {
+        self.with_connection(move |connection| {
+            let (where_sql, values) = audit_filter_sql(&query);
+            let limit = query
+                .limit
+                .unwrap_or(AUDIT_QUERY_DEFAULT_LIMIT)
+                .min(AUDIT_QUERY_MAX_LIMIT);
+            // 多取一行用于 has_more 探测（不额外回表/计数）。
+            let probe_limit = limit.saturating_add(1);
+            let limit_sql = i64::try_from(probe_limit).map_err(|_| StoreError::Internal {
+                reason: "审计分页上限转换失败".to_owned(),
+            })?;
+            let offset_sql = i64::try_from(query.offset).map_err(|_| StoreError::Internal {
+                reason: "审计分页偏移转换失败".to_owned(),
+            })?;
+            let mut statement = connection.prepare(&format!(
+                "SELECT id, session_id, runtime_id, actor, action, resource, detail, result, ts \
+                 FROM audit_log{where_sql} ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?"
+            ))?;
+            let rows = statement.query_map(
+                rusqlite::params_from_iter(
+                    values
+                        .iter()
+                        .cloned()
+                        .chain([
+                            rusqlite::types::Value::Integer(limit_sql),
+                            rusqlite::types::Value::Integer(offset_sql),
+                        ]),
+                ),
+                read_audit_row,
+            )?;
+            let mut records = Vec::new();
+            for row in rows {
+                records.push(row?);
+            }
+            let has_more = records.len() > limit;
+            if has_more {
+                records.truncate(limit);
+            }
+            Ok(AuditQueryResult {
+                rows: records,
+                limit,
+                offset: query.offset,
+                has_more,
+            })
         })
         .await
     }

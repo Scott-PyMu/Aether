@@ -10,9 +10,9 @@ use serde_json::Value;
 
 use super::dto::{
     AppRestartRequest, ArchiveExportRequest, ArtifactAddRequest, ArtifactRemoveRequest,
-    ArtifactsListRequest, BackupCreateRequest, BackupRestoreRequest, ExportDiagnosticsRequest,
-    MessagesPageRequest, PermissionResolveRequest, PermissionsPendingRequest,
-    ProviderCreateRequest, ProviderDeleteRequest, ProviderModelAddRequest,
+    ArtifactsListRequest, AuditExportRequest, AuditQueryRequest, BackupCreateRequest,
+    BackupRestoreRequest, ExportDiagnosticsRequest, MessagesPageRequest, PermissionResolveRequest,
+    PermissionsPendingRequest, ProviderCreateRequest, ProviderDeleteRequest, ProviderModelAddRequest,
     ProviderModelToggleRequest, ProviderToggleRequest, ProviderUpdateRequest, ProvidersListRequest,
     RuleAddRequest, RuleDeleteRequest, RuleToggleRequest, RuleUpdateRequest, RunRetryRequest,
     RuntimeEnableRequest, RuntimeRetryRequest, SessionCreateRequest, SessionExportRequest,
@@ -256,6 +256,21 @@ pub trait IpcBackend: Send + Sync + 'static {
         _canonical_target_dir: Option<&Path>,
     ) -> Result<Value, IpcError> {
         Err(IpcError::not_implemented("archive_export"))
+    }
+
+    /// M6-03/ADR-023：审计查询（过滤 + 分页；`ts DESC, id DESC` 稳定排序）。
+    fn audit_query(&self, _request: &AuditQueryRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("audit_query"))
+    }
+
+    /// M6-03/ADR-023：审计导出（JSONL + manifest；外部路径与空间检查同
+    /// `session_export` 口径；中断不留半成品）。
+    fn audit_export(
+        &self,
+        _request: &AuditExportRequest,
+        _canonical_target_dir: Option<&Path>,
+    ) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("audit_export"))
     }
 
     /// M5-04（内部接线，非 IPC 命令）：保留策略运行状态（诊断包 `retention` 段与

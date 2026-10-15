@@ -81,14 +81,14 @@ fn existing_0001_only_database_is_upgraded_by_0002_increment() {
         assert_eq!(applied[0].version, 1);
     }
 
-    // 以当前程序打开：应增量应用 0002+（当前含 ADR-010 的 0003 与 M6-01 的 0004），
-    // 且保留 0001 的记录（不得重跑/修改）。
+    // 以当前程序打开：应增量应用 0002+（当前含 ADR-010 的 0003、M6-01 的 0004 与
+    // M6-03 的 0005），且保留 0001 的记录（不得重跑/修改）。
     let store = Store::open(&path).unwrap();
     let applied = store.applied_migrations().unwrap();
     assert_eq!(applied.len(), EMBEDDED_MIGRATIONS.len());
     assert_eq!(applied[0].version, 1);
     assert_eq!(applied[1].version, 2);
-    assert_eq!(applied.last().map(|item| item.version), Some(4));
+    assert_eq!(applied.last().map(|item| item.version), Some(5));
 
     let conn = store.connection();
     let has_column: i64 = conn
@@ -141,6 +141,22 @@ fn existing_0001_only_database_is_upgraded_by_0002_increment() {
         thinking_depth, 1,
         "0003 必须补齐 sessions.thinking_depth 列"
     );
+
+    // 0005（M6-03/ADR-023 v0.3）：审计三复合索引（末位含 id）。
+    for index in [
+        "idx_audit_session_ts",
+        "idx_audit_actor_ts",
+        "idx_audit_action_ts",
+    ] {
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?1",
+                [index],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "0005 必须创建 {index}");
+    }
 }
 
 #[test]

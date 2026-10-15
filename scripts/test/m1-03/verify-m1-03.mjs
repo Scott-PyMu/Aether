@@ -41,8 +41,8 @@ const record = (name, exit, expect = 0) => checks.push({ name, exit, expect });
 
 const D5_RUNTIME_STATES = ["cold", "starting", "ready", "degraded", "disabled"];
 // 附录 C 显式 `CREATE INDEX` 数量（idx_events_session_seq 已由 0002 删除并收敛为 UNIQUE 索引；
-// M6-01 落库 permission_rules 后 5 → 6；M6-03 审计三索引后 → 8）。
-const EXPECTED_EXPLICIT_INDEXES = 6;
+// M6-01 落库 permission_rules 后 5 → 6；M6-03 审计三索引后 6 → 9）。
+const EXPECTED_EXPLICIT_INDEXES = 9;
 
 // ===== SQL 解析工具 =====
 

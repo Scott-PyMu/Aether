@@ -16,9 +16,9 @@ use std::sync::{Arc, Mutex};
 use aether_tauri::ipc::backend::IpcBackend;
 use aether_tauri::ipc::dto::{
     AppRestartRequest, ArchiveExportRequest, ArtifactAddRequest, ArtifactRemoveRequest,
-    ArtifactsListRequest, BackupCreateRequest, BackupRestoreRequest, ExportDiagnosticsRequest,
-    MessagesPageRequest, PermissionResolveRequest, PermissionsPendingRequest,
-    ProviderCreateRequest, ProviderDeleteRequest, ProviderModelAddRequest,
+    ArtifactsListRequest, AuditExportRequest, AuditQueryRequest, BackupCreateRequest,
+    BackupRestoreRequest, ExportDiagnosticsRequest, MessagesPageRequest, PermissionResolveRequest,
+    PermissionsPendingRequest, ProviderCreateRequest, ProviderDeleteRequest, ProviderModelAddRequest,
     ProviderModelToggleRequest, ProviderToggleRequest, ProviderUpdateRequest, ProvidersListRequest,
     RunRetryRequest, RuntimeEnableRequest, RuntimeRetryRequest, SessionCreateRequest,
     SessionExportRequest, SessionIdRequest, SessionListRequest, SessionSendRequest,
@@ -226,6 +226,18 @@ impl IpcBackend for RecordingBackend {
         _canonical_target_dir: Option<&Path>,
     ) -> Result<Value, IpcError> {
         self.record("archive_export")
+    }
+
+    fn audit_query(&self, _request: &AuditQueryRequest) -> Result<Value, IpcError> {
+        self.record("audit_query")
+    }
+
+    fn audit_export(
+        &self,
+        _request: &AuditExportRequest,
+        _canonical_target_dir: Option<&Path>,
+    ) -> Result<Value, IpcError> {
+        self.record("audit_export")
     }
 }
 
@@ -809,6 +821,103 @@ fn malformed_samples_return_structured_errors_and_do_not_reach_backend() {
             "invalid_type",
             None,
         ),
+        // ===== ADR-018/M6-03：审计查询/导出校验矩阵 =====
+        (
+            "audit_query",
+            json!({ "unexpected": 1 }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
+        (
+            "audit_query",
+            json!({ "session_id": "short" }),
+            "invalid_format",
+            Some("session_id"),
+        ),
+        (
+            "audit_query",
+            json!({ "actor": "robot" }),
+            "invalid_enum",
+            Some("actor"),
+        ),
+        (
+            "audit_query",
+            json!({ "action": "Tool.Call!" }),
+            "invalid_format",
+            Some("action"),
+        ),
+        (
+            "audit_query",
+            json!({ "action": "x".repeat(65) }),
+            "too_large",
+            Some("action"),
+        ),
+        (
+            "audit_query",
+            json!({ "resource": "" }),
+            "invalid_format",
+            Some("resource"),
+        ),
+        (
+            "audit_query",
+            json!({ "from_ts": -1 }),
+            "out_of_range",
+            Some("from_ts"),
+        ),
+        (
+            "audit_query",
+            json!({ "to_ts": -1 }),
+            "out_of_range",
+            Some("to_ts"),
+        ),
+        (
+            "audit_query",
+            json!({ "from_ts": 200, "to_ts": 100 }),
+            "invalid_value",
+            None,
+        ),
+        (
+            "audit_query",
+            json!({ "limit": 0 }),
+            "out_of_range",
+            Some("limit"),
+        ),
+        (
+            "audit_query",
+            json!({ "limit": 501 }),
+            "out_of_range",
+            Some("limit"),
+        ),
+        (
+            "audit_query",
+            json!({ "limit": "100" }),
+            "invalid_type",
+            None,
+        ),
+        (
+            "audit_export",
+            json!({ "unexpected": true }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
+        (
+            "audit_export",
+            json!({ "actor": "nobody" }),
+            "invalid_enum",
+            Some("actor"),
+        ),
+        (
+            "audit_export",
+            json!({ "target_dir": "relative/path" }),
+            "path_rejected",
+            None,
+        ),
+        (
+            "audit_export",
+            json!({ "from_ts": 10, "to_ts": 5 }),
+            "invalid_value",
+            None,
+        ),
     ];
 
     for (command, payload, code, field) in samples {
@@ -1007,6 +1116,29 @@ fn valid_requests_reach_backend_exactly_once() {
             json!({ "session_id": ULID, "target_dir": inside }),
             "session_export",
         ),
+        // ADR-018/M6-03：审计查询/导出（缺省载荷 = 空过滤；合法过滤形态到达后端）。
+        ("audit_query", Value::Null, "audit_query"),
+        ("audit_query", json!({}), "audit_query"),
+        (
+            "audit_query",
+            json!({
+                "session_id": ULID,
+                "actor": "agent",
+                "action": "tool.call",
+                "resource": "mock.echo",
+                "from_ts": 100,
+                "to_ts": 200,
+                "limit": 50,
+                "offset": 10,
+            }),
+            "audit_query",
+        ),
+        ("audit_export", Value::Null, "audit_export"),
+        (
+            "audit_export",
+            json!({ "actor": "system", "target_dir": inside }),
+            "audit_export",
+        ),
     ];
 
     for (command, payload, expected) in samples {
@@ -1078,6 +1210,11 @@ fn valid_requests_reach_backend_exactly_once() {
         "archive_export",
         "session_export",
         "session_export",
+        "audit_query",
+        "audit_query",
+        "audit_query",
+        "audit_export",
+        "audit_export",
     ]
     .into_iter()
     .map(str::to_string)

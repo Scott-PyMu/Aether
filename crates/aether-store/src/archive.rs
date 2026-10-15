@@ -1,4 +1,4 @@
-//! 归档导出与事件保留设施（M5-05 / M5-04；设计 D4/D13、ADR-021）。
+//! 归档导出与事件保留设施（M5-05 / M5-04 / M6-03；设计 D4/D13、ADR-021/ADR-023）。
 //!
 //! 范围（ADR-021 附录 A-2 归档 JSONL 格式；自动归档与导出共用）：
 //! - 会话导出（`source=session-export`）：`sessions` 行 + 该会话 `messages` 终稿
@@ -6,7 +6,9 @@
 //! - 全库归档（`source=archive-export`）：`sessions` + `messages` + `events` 全量
 //!   + `runs` 摘要；
 //! - 保留清理归档（`source=auto-retention`）：待删事件批（白名单 `message.delta`/
-//!   `usage`/`log`），**先归档后删除**（删除由调用方经单写队列执行）。
+//!   `usage`/`log`），**先归档后删除**（删除由调用方经单写队列执行）；
+//! - 审计导出（`source=audit-export`；M6-03/ADR-023 附录 A-3）：`audit_log` 行
+//!   （kind=`audit`；过滤条件与 `audit_query` 一致；`ts DESC, id DESC` 稳定排序）。
 //!
 //! 写出纪律：
 //! - manifest 为首行（`v/kind/created_at/source/session_id/rows/sha256`；`sha256` =
@@ -29,6 +31,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::error::StoreError;
+use crate::ops::{audit_filter_sql, read_audit_row, AuditQuery};
 
 /// 归档格式版本（manifest `v`；ADR-021 附录 A-2）。
 pub const ARCHIVE_FORMAT_VERSION: u32 = 1;
@@ -40,6 +43,8 @@ pub const ARCHIVE_SOURCE_SESSION_EXPORT: &str = "session-export";
 pub const ARCHIVE_SOURCE_ARCHIVE_EXPORT: &str = "archive-export";
 /// 导出来源：保留清理自动归档（M5-04）。
 pub const ARCHIVE_SOURCE_AUTO_RETENTION: &str = "auto-retention";
+/// 导出来源：审计导出（M6-03/ADR-023 附录 A-3）。
+pub const ARCHIVE_SOURCE_AUDIT_EXPORT: &str = "audit-export";
 /// payload 暂存文件标记（`<dest>.archive-partial-<ts>`；中断残留清理依据）。
 pub const ARCHIVE_PARTIAL_INFIX: &str = ".archive-partial-";
 /// 最终产物暂存文件标记（`<dest>.archive-tmp-<ts>`；与产物同目录保证原子 rename）。
@@ -83,6 +88,8 @@ pub struct ArchiveCounts {
     pub messages: u64,
     pub events: u64,
     pub runs: u64,
+    /// 审计行数（M6-03 `audit_export`；其余来源恒 0）。
+    pub audits: u64,
 }
 
 /// 归档产物报告。
@@ -188,6 +195,7 @@ impl PayloadSink {
             Some("message") => self.counts.messages = self.counts.messages.saturating_add(1),
             Some("event") => self.counts.events = self.counts.events.saturating_add(1),
             Some("run") => self.counts.runs = self.counts.runs.saturating_add(1),
+            Some("audit") => self.counts.audits = self.counts.audits.saturating_add(1),
             _ => {}
         }
         Ok(())
@@ -221,6 +229,11 @@ pub fn session_archive_file_name(session_id: &str, created_at_ms: i64) -> String
 /// 归档产物文件名（全库导出：`aether-archive-<ts>.jsonl`；ADR-021 实现要点 3）。
 pub fn full_archive_file_name(created_at_ms: i64) -> String {
     format!("aether-archive-{created_at_ms}.jsonl")
+}
+
+/// 归档产物文件名（审计导出：`aether-audit-<ts>.jsonl`；M6-03/ADR-023 附录 A-3）。
+pub fn audit_archive_file_name(created_at_ms: i64) -> String {
+    format!("aether-audit-{created_at_ms}.jsonl")
 }
 
 /// 归档产物文件名（保留清理：`events-archive-<yyyymmdd>.jsonl` + 冲突消解）。
@@ -454,6 +467,81 @@ pub fn export_full_archive(
         rollback?;
         Ok(report)
     })
+}
+
+/// 审计导出（`audit_export`；M6-03/ADR-023 附录 A-3）。
+///
+/// 行形态与 ADR-021 附录 A-2 同构：`kind=audit`，字段
+/// `v/kind/id/session_id/runtime_id/actor/action/resource/detail/result/ts`；
+/// 过滤条件与 `audit_query` 一致（等值 + 闭区间时间；忽略 `limit`/`offset`），
+/// 稳定排序 `ts DESC, id DESC`；单读连接 + 单读事务（WAL 快照一致）。
+pub fn export_audit_archive(
+    conn: &Connection,
+    dir: &Path,
+    filter: &AuditQuery,
+    created_at_ms: i64,
+    sanitize: ArchiveSanitizer<'_>,
+) -> Result<ArchiveReport, StoreError> {
+    let dest = unique_archive_path(dir, &audit_archive_file_name(created_at_ms))?;
+    conn.execute_batch("BEGIN DEFERRED;")?;
+    let result = write_archive(
+        &dest,
+        ARCHIVE_SOURCE_AUDIT_EXPORT,
+        None,
+        created_at_ms,
+        |sink| export_audit_rows(conn, sink, sanitize, filter),
+    );
+    let rollback = conn.execute_batch("COMMIT;");
+    result.and_then(|report| {
+        rollback?;
+        Ok(report)
+    })
+}
+
+/// `audit_log` 行 → 归档行（`kind=audit`；`detail` 为 JSON 文本时按 JSON 输出，
+/// 否则按字符串原样输出；脱敏由 sanitizer 承担）。
+fn export_audit_rows(
+    conn: &Connection,
+    sink: &mut PayloadSink,
+    sanitize: ArchiveSanitizer<'_>,
+    filter: &AuditQuery,
+) -> Result<(), StoreError> {
+    let (where_sql, values) = audit_filter_sql(filter);
+    let mut statement = conn.prepare(&format!(
+        "SELECT id, session_id, runtime_id, actor, action, resource, detail, result, ts \
+         FROM audit_log{where_sql} ORDER BY ts DESC, id DESC"
+    ))?;
+    let mut rows = statement.query(rusqlite::params_from_iter(values.iter()))?;
+    while let Some(row) = rows.next()? {
+        let record = read_audit_row(row)?;
+        let value = json!({
+            "v": ARCHIVE_FORMAT_VERSION,
+            "kind": "audit",
+            "id": record.id,
+            "session_id": record.session_id,
+            "runtime_id": record.runtime_id,
+            "actor": record.actor,
+            "action": record.action,
+            "resource": record.resource,
+            "detail": parse_detail_value(record.detail),
+            "result": record.result,
+            "ts": record.ts,
+        });
+        sink.insert(&value, sanitize)?;
+    }
+    Ok(())
+}
+
+/// `audit_log.detail` 文本 → 归档 JSON 值（合法 JSON 对象/数组按 JSON 输出；
+/// 其余（含纯文本错误消息）按字符串原样输出）。
+fn parse_detail_value(detail: Option<String>) -> Value {
+    match detail {
+        Some(text) => match serde_json::from_str::<Value>(&text) {
+            Ok(value) if value.is_object() || value.is_array() => value,
+            _ => Value::String(text),
+        },
+        None => Value::Null,
+    }
 }
 
 /// 保留清理批归档（M5-04；待删行 → `events-archive-<yyyymmdd>.jsonl`）。
@@ -854,6 +942,19 @@ pub fn archive_line_whitelist(kind: &str) -> Option<&'static [&'static str]> {
             "error",
             "started_at",
             "finished_at",
+        ]),
+        "audit" => Some(&[
+            "v",
+            "kind",
+            "id",
+            "session_id",
+            "runtime_id",
+            "actor",
+            "action",
+            "resource",
+            "detail",
+            "result",
+            "ts",
         ]),
         _ => None,
     }

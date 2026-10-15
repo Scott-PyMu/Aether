@@ -200,7 +200,7 @@ fn write_file(dir: &std::path::Path, name: &str, content: &str) -> PathBuf {
     path
 }
 
-/// DoD1：迁移已应用到最新（M6-01 起 `schema_version = 4`；引用写路径经单写队列在
+/// DoD1：迁移已应用到最新（M6-03 起 `schema_version = 5`；引用写路径经单写队列在
 /// store 测试以计数断言锁定）。
 #[test]
 fn dod1_migration_0003_is_applied() {
@@ -208,8 +208,8 @@ fn dod1_migration_0003_is_applied() {
     let summary = h.runtime.block_on(h.reads.store_summary()).expect("库摘要");
     assert_eq!(
         summary.schema_version,
-        Some(4),
-        "迁移必须到 0004（M6-01/ADR-014 权限模式与规则）"
+        Some(5),
+        "迁移必须到 0005（M6-03/ADR-023 审计索引）"
     );
     evidence(
         "dod1_migration_0003",

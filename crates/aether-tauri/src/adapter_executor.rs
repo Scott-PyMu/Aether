@@ -9,12 +9,17 @@
 //!   `tool.call_*`）经会话/run 归属重写后提交 `EventPipeline`（先日志后广播）；
 //!   `run.*` / `session.*` / `message.completed` 由核心生命周期统一产出，不转发
 //!   （避免重复事件）；
+//! - 工具调用审计（M6-03/ADR-023 §2.1-1）：`tool.call_completed` / `tool.call_failed`
+//!   **终态事件落库后**聚合为一条 `tool.call` 审计行（actor=`agent`，resource=工具名，
+//!   result=success/failed；detail 脱敏）；经单写队列写入（[`ToolCallAuditSink`]），
+//!   失败计数供诊断（不阻断事件转发）；
 //! - 终态投影：`RunOutcome` → [`ExecutorOutcome`]（终态行与事件由生命周期落库）；
 //!   中断（取消令牌命中）→ 通知适配器 `session.interrupt` 并返回 `Cancelled`。
 //!
 //! 边界：本模块不写 run/message 行（生命周期负责）、不直接广播（管线负责）。
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -25,11 +30,15 @@ use aether_adapters::permission_loop::{
 };
 use aether_adapters::session_client::{AdapterSessionClient, RunOutcome};
 use aether_adapters::supervisor::Supervisor;
-use aether_control::{EventPipeline, ExecutorFuture, ExecutorOutcome, RunExecutor, RunRequest};
-use aether_core::{
-    ErrorInfo, EventEnvelope, EventType, RunId, RuntimeId, Session, SessionId, TokenUsage,
+use aether_control::{
+    EventPipeline, ExecutorFuture, ExecutorOutcome, RunExecutor, RunRequest, SubmitOutcome,
 };
-use aether_store::{ReadPool, StoreCommand, WriteQueue};
+use aether_core::{
+    ErrorInfo, EventEnvelope, EventPayload, EventType, RunId, RuntimeId, Session, SessionId,
+    TokenUsage,
+};
+use aether_security::Redactor;
+use aether_store::{AuditLogRecord, ReadPool, StoreCommand, WriteQueue};
 use serde_json::{json, Value};
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
@@ -45,6 +54,138 @@ pub const ADAPTER_REQUEST_FAILED_CODE: &str = "adapter_request_failed";
 pub const RUN_EXECUTOR_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 /// 未映射 run 事件的本地缓冲上限（超过即丢弃并计数，缺口由核心补读恢复）。
 pub const PENDING_EVENT_LIMIT: usize = 1024;
+/// 工具调用审计动作（ADR-023 附录 A-1：`tool.call`；resource=工具名）。
+pub const AUDIT_ACTION_TOOL_CALL: &str = "tool.call";
+
+/// 工具调用终态审计出口（M6-03/ADR-023 §2.1-1）。
+///
+/// `tool.call_completed` / `tool.call_failed` 的**终态事件落库后**由执行器调用
+/// [`ToolCallAuditSink::audit_terminal`]：构造 `tool.call` 审计行并经单写队列追加
+/// （`execute` 在队列满时 await 容量——不丢行；队列关闭/写失败计入
+/// [`ToolCallAuditSink::failures`] 诊断计数，不影响事件转发主路径）。
+#[derive(Clone)]
+pub struct ToolCallAuditSink {
+    write: WriteQueue,
+    handle: Handle,
+    /// 脱敏器（构造失败 = `None`：detail 省略，行本体照写；D10 宁可少写内容）。
+    redactor: Option<Arc<Redactor>>,
+    records: Arc<AtomicU64>,
+    failures: Arc<AtomicU64>,
+}
+
+impl ToolCallAuditSink {
+    pub fn new(write: WriteQueue, handle: Handle) -> Self {
+        let redactor = match Redactor::new() {
+            Ok(redactor) => Some(Arc::new(redactor)),
+            Err(error) => {
+                tracing::warn!(error = %error, "工具调用审计脱敏器初始化失败（detail 将省略）");
+                None
+            }
+        };
+        Self {
+            write,
+            handle,
+            redactor,
+            records: Arc::new(AtomicU64::new(0)),
+            failures: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    /// 已落库的工具调用审计行数（诊断/断言）。
+    pub fn records(&self) -> u64 {
+        self.records.load(Ordering::Relaxed)
+    }
+
+    /// 审计写入失败计数（诊断；ADR-023「失败计入诊断」）。
+    pub fn failures(&self) -> u64 {
+        self.failures.load(Ordering::Relaxed)
+    }
+
+    /// 终态工具事件 → `tool.call` 审计行（非终态类型为 no-op）。
+    pub fn audit_terminal(
+        &self,
+        session_id: &SessionId,
+        run_id: &RunId,
+        envelope: &EventEnvelope,
+    ) {
+        let (tool_call_id, tool_name, duration_ms, error) = match &envelope.payload {
+            EventPayload::ToolCallCompleted(payload) => (
+                payload.tool_call_id.as_str().to_owned(),
+                payload.tool_name.clone(),
+                payload.duration_ms,
+                None,
+            ),
+            EventPayload::ToolCallFailed(payload) => (
+                payload.tool_call_id.as_str().to_owned(),
+                payload.tool_name.clone(),
+                payload.duration_ms,
+                Some(payload.error.clone()),
+            ),
+            _ => return,
+        };
+        let result = if error.is_some() { "failed" } else { "success" };
+        let mut detail = json!({
+            "tool_call_id": tool_call_id,
+            "run_id": run_id.as_str(),
+            "duration_ms": duration_ms,
+        });
+        if let Some(error) = &error {
+            if let Some(object) = detail.as_object_mut() {
+                object.insert(
+                    "error".to_owned(),
+                    json!({
+                        "code": error.code,
+                        "message": error.message,
+                        "recoverable": error.recoverable,
+                    }),
+                );
+            }
+        }
+        let detail = self.redacted_detail(&detail);
+        let record = AuditLogRecord {
+            id: ulid::Ulid::new().to_string(),
+            session_id: Some(session_id.as_str().to_owned()),
+            runtime_id: Some(envelope.runtime_id.as_str().to_owned()),
+            actor: "agent".to_owned(),
+            action: AUDIT_ACTION_TOOL_CALL.to_owned(),
+            resource: Some(tool_name),
+            detail,
+            result: Some(result.to_owned()),
+            ts: envelope.ts,
+        };
+        self.enqueue(record);
+    }
+
+    /// detail 脱敏（D10）：脱敏后仍命中即省略 detail（行本体照写）。
+    fn redacted_detail(&self, value: &Value) -> Option<String> {
+        let redactor = self.redactor.as_ref()?;
+        let redacted = redactor.redact_json(value);
+        let line = serde_json::to_string(&redacted).ok()?;
+        if redactor.is_clean(&line) {
+            Some(line)
+        } else {
+            tracing::warn!("工具调用审计 detail 脱敏后仍命中密钥模式，已省略（D10）");
+            None
+        }
+    }
+
+    fn enqueue(&self, record: AuditLogRecord) {
+        let write = self.write.clone();
+        let records = Arc::clone(&self.records);
+        let failures = Arc::clone(&self.failures);
+        self.handle.spawn(async move {
+            match write.execute(StoreCommand::InsertAudit { record }).await {
+                Ok(_) => {
+                    records.fetch_add(1, Ordering::Relaxed);
+                }
+                Err(error) => {
+                    failures.fetch_add(1, Ordering::Relaxed);
+                    tracing::warn!(error = %error, "工具调用审计写入失败（M6-03；计入诊断）");
+                }
+            }
+        });
+    }
+}
 
 /// 会话归属映射网关（M3-08 生产接线修正）：适配器 `permission.request.session_id`
 /// 为**适配器会话 id**，须映射为核心 `sessions.id` 后进入权限服务——否则待审批行
@@ -212,6 +353,8 @@ pub struct AdapterRunExecutor {
     adapter_sessions: Arc<Mutex<HashMap<SessionId, (String, String)>>>,
     /// 事件转发状态（与转发任务共享）。
     forward: Arc<Mutex<ForwardState>>,
+    /// 工具调用终态审计出口（M6-03/ADR-023）。
+    tool_audit: ToolCallAuditSink,
 }
 
 impl AdapterRunExecutor {
@@ -223,6 +366,7 @@ impl AdapterRunExecutor {
         handle: Handle,
         permission_gate: Option<Arc<PermissionServiceGate>>,
     ) -> Self {
+        let tool_audit = ToolCallAuditSink::new(write.clone(), handle.clone());
         Self {
             supervisor,
             pipeline,
@@ -234,7 +378,13 @@ impl AdapterRunExecutor {
             clients: Arc::new(AsyncMutex::new(HashMap::new())),
             adapter_sessions: Arc::new(Mutex::new(HashMap::new())),
             forward: Arc::new(Mutex::new(ForwardState::default())),
+            tool_audit,
         }
+    }
+
+    /// 工具调用审计出口（统计/断言；M6-03）。
+    pub fn tool_audit(&self) -> &ToolCallAuditSink {
+        &self.tool_audit
     }
 
     /// 事件缓冲溢出计数（诊断/测试）。
@@ -357,8 +507,9 @@ impl AdapterRunExecutor {
     fn spawn_forwarder(&self, receiver: UnboundedReceiver<EventEnvelope>) {
         let forward = Arc::clone(&self.forward);
         let pipeline = self.pipeline.clone();
+        let tool_audit = self.tool_audit.clone();
         self.handle.spawn(async move {
-            forward_loop(forward, pipeline, receiver).await;
+            forward_loop(forward, pipeline, tool_audit, receiver).await;
         });
     }
 
@@ -521,6 +672,7 @@ impl AdapterRunExecutor {
         for envelope in buffered {
             submit_mapped(
                 &self.pipeline,
+                &self.tool_audit,
                 &request.session_id,
                 &request.run_id,
                 envelope,
@@ -599,6 +751,7 @@ impl RunExecutor for UnavailableExecutor {
 async fn forward_loop(
     forward: Arc<Mutex<ForwardState>>,
     pipeline: EventPipeline,
+    tool_audit: ToolCallAuditSink,
     mut receiver: UnboundedReceiver<EventEnvelope>,
 ) {
     while let Some(envelope) = receiver.recv().await {
@@ -607,14 +760,18 @@ async fn forward_loop(
             state.handle(envelope)
         };
         if let Some((session_id, run_id, envelope)) = mapped {
-            submit_mapped(&pipeline, &session_id, &run_id, envelope).await;
+            submit_mapped(&pipeline, &tool_audit, &session_id, &run_id, envelope).await;
         }
     }
 }
 
 /// 归属重写后提交管线（先日志后广播；归一化失败按管线死信计数，不阻断）。
+///
+/// M6-03/ADR-023：工具调用终态（`tool.call_completed` / `tool.call_failed`）在
+/// **落盘成功后**聚合为 `tool.call` 审计行（幂等命中/未落盘不写）。
 async fn submit_mapped(
     pipeline: &EventPipeline,
+    tool_audit: &ToolCallAuditSink,
     session_id: &SessionId,
     run_id: &RunId,
     envelope: EventEnvelope,
@@ -637,13 +794,19 @@ async fn submit_mapped(
         "run_id".to_owned(),
         Value::String(run_id.as_str().to_owned()),
     );
-    if let Err(error) = pipeline.submit(value).await {
-        tracing::warn!(
-            session_id = %session_id,
-            run_id = %run_id,
-            error = %error,
-            "适配器增量事件提交管线失败（缺口由补读恢复）"
-        );
+    match pipeline.submit(value).await {
+        Ok(SubmitOutcome::Persisted { .. }) => {
+            tool_audit.audit_terminal(session_id, run_id, &envelope);
+        }
+        Ok(_) => {}
+        Err(error) => {
+            tracing::warn!(
+                session_id = %session_id,
+                run_id = %run_id,
+                error = %error,
+                "适配器增量事件提交管线失败（缺口由补读恢复）"
+            );
+        }
     }
 }
 

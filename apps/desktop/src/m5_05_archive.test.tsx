@@ -30,7 +30,7 @@ const exportResponse: ArchiveExportResponse = {
     source: "archive-export",
     session_id: null,
     created_at: 1_800_000_000_000,
-    counts: { sessions: 1, messages: 2, events: 39, runs: 0 },
+    counts: { sessions: 1, messages: 2, events: 39, runs: 0, audits: 0 },
   },
 };
 

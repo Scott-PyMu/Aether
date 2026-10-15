@@ -1193,6 +1193,202 @@ impl CommandRequest for ArchiveExportRequest {
     }
 }
 
+/// 审计 actor 白名单（ADR-018 附录 A-1：`user` / `agent` / `system`）。
+pub const AUDIT_ACTORS: [&str; 3] = ["user", "agent", "system"];
+/// 审计 action 上限（ADR-018 附录 A-1：`action` ≤64 字符）。
+pub const MAX_AUDIT_ACTION_CHARS: usize = 64;
+/// 审计 resource 上限（等值过滤目标；与动作字段同量级）。
+pub const MAX_AUDIT_RESOURCE_CHARS: usize = 256;
+
+/// 审计过滤字段校验（`audit_query` / `audit_export` 共用；ADR-018 附录 A-1）。
+fn validate_audit_filters(
+    session_id: Option<&str>,
+    actor: Option<&str>,
+    action: Option<&str>,
+    resource: Option<&str>,
+    from_ts: Option<i64>,
+    to_ts: Option<i64>,
+) -> Result<(), IpcError> {
+    if let Some(session_id) = session_id {
+        if !is_ulid(session_id) {
+            return Err(IpcError::invalid_format("session_id", "必须是 26 位 ULID"));
+        }
+    }
+    if let Some(actor) = actor {
+        if !AUDIT_ACTORS.contains(&actor) {
+            return Err(IpcError::invalid_enum(
+                "actor",
+                format!("必须为 {AUDIT_ACTORS:?} 之一"),
+            ));
+        }
+    }
+    if let Some(action) = action {
+        ensure_not_empty(action, "action")?;
+        ensure_max_chars(action, "action", MAX_AUDIT_ACTION_CHARS)?;
+        if !action
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-'))
+        {
+            return Err(IpcError::invalid_format(
+                "action",
+                "仅允许小写字母、数字与 . _ -",
+            ));
+        }
+    }
+    if let Some(resource) = resource {
+        ensure_not_empty(resource, "resource")?;
+        ensure_max_chars(resource, "resource", MAX_AUDIT_RESOURCE_CHARS)?;
+        reject_control_chars(resource, "resource", false)?;
+    }
+    if let Some(from_ts) = from_ts {
+        if from_ts < 0 {
+            return Err(IpcError::out_of_range("from_ts", "必须为非负毫秒时间戳"));
+        }
+    }
+    if let Some(to_ts) = to_ts {
+        if to_ts < 0 {
+            return Err(IpcError::out_of_range("to_ts", "必须为非负毫秒时间戳"));
+        }
+    }
+    if let (Some(from_ts), Some(to_ts)) = (from_ts, to_ts) {
+        if from_ts > to_ts {
+            return Err(IpcError::invalid_value("from_ts 不得大于 to_ts"));
+        }
+    }
+    Ok(())
+}
+
+/// `audit_query`（M6-03/ADR-023 §2.1-3；ADR-018 附录 A-1）：
+/// 审计查询过滤（会话/时间/actor/action/resource）+ 分页（`limit` ≤500 缺省 100、
+/// `offset` ≥0；按 `ts DESC, id DESC` 稳定排序）。
+#[derive(Debug, Default, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct AuditQueryRequest {
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub actor: Option<String>,
+    #[serde(default)]
+    pub action: Option<String>,
+    #[serde(default)]
+    pub resource: Option<String>,
+    #[serde(default)]
+    pub from_ts: Option<i64>,
+    #[serde(default)]
+    pub to_ts: Option<i64>,
+    #[serde(default)]
+    pub limit: Option<u32>,
+    #[serde(default)]
+    pub offset: Option<u64>,
+}
+
+impl AuditQueryRequest {
+    /// 转换为存储层过滤条件（`limit` 缺省 100；上限由校验与存储层双重钳制）。
+    pub fn to_store_query(&self) -> Result<aether_store::AuditQuery, IpcError> {
+        Ok(aether_store::AuditQuery {
+            session_id: self.session_id.clone(),
+            actor: self.actor.clone(),
+            action: self.action.clone(),
+            resource: self.resource.clone(),
+            from_ts: self.from_ts,
+            to_ts: self.to_ts,
+            limit: self.limit.map(|value| value as usize),
+            offset: usize::try_from(self.offset.unwrap_or(0)).map_err(|_| {
+                IpcError::out_of_range("offset", "超出本机分页寻址范围")
+            })?,
+        })
+    }
+}
+
+impl CommandRequest for AuditQueryRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        validate_audit_filters(
+            self.session_id.as_deref(),
+            self.actor.as_deref(),
+            self.action.as_deref(),
+            self.resource.as_deref(),
+            self.from_ts,
+            self.to_ts,
+        )?;
+        match self.limit {
+            Some(0) => Err(IpcError::out_of_range(
+                "limit",
+                "必须在 1..=500 之间（ADR-023）",
+            )),
+            Some(limit) if limit > aether_store::AUDIT_QUERY_MAX_LIMIT as u32 => {
+                Err(IpcError::out_of_range(
+                    "limit",
+                    format!("审计查询上限 {}", aether_store::AUDIT_QUERY_MAX_LIMIT),
+                ))
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+/// `audit_export`（M6-03/ADR-023 §2.1-4；ADR-018 附录 A-1）：
+/// 过滤条件同 `audit_query`；导出 JSONL + manifest（行数/sha256）；外部路径 +
+/// 空间检查与 `session_export` 同口径；原子写（中断不留半成品）。
+#[derive(Debug, Default, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct AuditExportRequest {
+    #[serde(default)]
+    pub target_dir: Option<String>,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub actor: Option<String>,
+    #[serde(default)]
+    pub action: Option<String>,
+    #[serde(default)]
+    pub resource: Option<String>,
+    #[serde(default)]
+    pub from_ts: Option<i64>,
+    #[serde(default)]
+    pub to_ts: Option<i64>,
+}
+
+impl AuditExportRequest {
+    /// 外部目标目录的规范化结果（缺省来源为 `None` = 数据目录 `archives/`）。
+    pub fn canonical_target_dir(&self) -> Result<Option<std::path::PathBuf>, IpcError> {
+        match &self.target_dir {
+            Some(target_dir) => path::validate_backup_target_dir(target_dir).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    /// 转换为存储层过滤条件（导出忽略分页；全量命中行）。
+    pub fn to_store_query(&self) -> aether_store::AuditQuery {
+        aether_store::AuditQuery {
+            session_id: self.session_id.clone(),
+            actor: self.actor.clone(),
+            action: self.action.clone(),
+            resource: self.resource.clone(),
+            from_ts: self.from_ts,
+            to_ts: self.to_ts,
+            limit: None,
+            offset: 0,
+        }
+    }
+}
+
+impl CommandRequest for AuditExportRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        validate_audit_filters(
+            self.session_id.as_deref(),
+            self.actor.as_deref(),
+            self.action.as_deref(),
+            self.resource.as_deref(),
+            self.from_ts,
+            self.to_ts,
+        )?;
+        if let Some(target_dir) = &self.target_dir {
+            ensure_not_empty(target_dir, "target_dir")?;
+        }
+        Ok(())
+    }
+}
+
 fn validate_page_limit(limit: Option<u32>) -> Result<(), IpcError> {
     match limit {
         Some(0) => Err(IpcError::out_of_range(

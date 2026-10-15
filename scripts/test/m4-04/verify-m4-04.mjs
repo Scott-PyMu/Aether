@@ -6,9 +6,9 @@
  *   2) 覆盖率：Rust 与 TS 行覆盖 >70%（T15；--skip-coverage 可本地快跑）；
  *   3) 验收报告产出：每项附证据链接与失败重跑记录（本脚本输出 acceptance.json，
  *      报告 `docs/M4-04-验收报告.md` 引用；失败项记录 rerun 命令）；
- *   4) 命令面完整性：命令全集（P0 36 + M5-05 导出 2 + M6-01 权限模式/规则 6 = 44；
- *      bindings ↔ collect_commands ↔ generate_handler 三方一致）+ 错误码全集 21 个
- *      分支覆盖扫描（M6-01 新增 `rule_not_found`）+ 警告码
+ *   4) 命令面完整性：命令全集（P0 36 + M5-05 导出 2 + M6-01 权限模式/规则 6 +
+ *      M6-03 审计查询/导出 2 = 46；bindings ↔ collect_commands ↔ generate_handler 三方一致）
+ *      + 错误码全集 21 个分支覆盖扫描（M6-01 新增 `rule_not_found`）+ 警告码
  *      `thinking_depth_unsupported` 分支验证。
  *
  * 参数：--skip-coverage（跳过 T15 重负载），--skip-e2e（非 Windows 本地调试）。
@@ -75,6 +75,8 @@ const EXPECTED_COMMANDS = [
   "export_diagnostics",
   "session_export",
   "archive_export",
+  "audit_query",
+  "audit_export",
   "health",
   "startup_get",
   "startup_pick_target",

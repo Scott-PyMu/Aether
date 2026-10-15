@@ -16,10 +16,10 @@ use tauri_specta::{collect_events, Builder};
 
 use crate::ipc::dto::{
     AppExitRequest, AppRestartRequest, ArtifactAddRequest, ArtifactRemoveRequest,
-    ArtifactsListRequest, BackupCreateRequest, BackupListRequest, BackupRestoreRequest,
-    BackupSource, ExportDiagnosticsRequest, HealthRequest, MessagesPageRequest, PermissionDecision,
-    PermissionResolveRequest, PermissionsPendingRequest, ProviderCreateRequest,
-    ProviderDeleteRequest, ProviderModelAddRequest, ProviderModelToggleRequest,
+    ArtifactsListRequest, AuditExportRequest, AuditQueryRequest, BackupCreateRequest,
+    BackupListRequest, BackupRestoreRequest, BackupSource, ExportDiagnosticsRequest, HealthRequest,
+    MessagesPageRequest, PermissionDecision, PermissionResolveRequest, PermissionsPendingRequest,
+    ProviderCreateRequest, ProviderDeleteRequest, ProviderModelAddRequest, ProviderModelToggleRequest,
     ProviderToggleRequest, ProviderType, ProviderUpdateRequest, ProvidersListRequest, RefPickKind,
     RefPickRequest, RuleAddRequest, RuleDeleteRequest, RuleToggleRequest, RuleUpdateRequest,
     RulesListRequest, RunRetryRequest, RuntimeEnableRequest, RuntimeRetryRequest,
@@ -126,6 +126,8 @@ pub fn builder<R: tauri::Runtime>() -> Builder<R> {
         .typ::<SessionSummary>()
         .typ::<SessionWarning>()
         .typ::<ExportDiagnosticsRequest>()
+        .typ::<AuditQueryRequest>()
+        .typ::<AuditExportRequest>()
         .typ::<HealthRequest>()
         .typ::<StartupGetRequest>()
         .typ::<StartupMigrateRequest>()

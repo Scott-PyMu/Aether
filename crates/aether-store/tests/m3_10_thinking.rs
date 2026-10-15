@@ -51,12 +51,13 @@ fn dod1_migration_0003_columns_idempotent_and_historical_null() {
     let (dir, store) = common::open_temp_store("m3-10-schema");
     let connection = store.connection();
 
-    // 迁移清单应用至最新（0001 → 0002 → 0003 → 0004；M6-01 合入 0004）。
+    // 迁移清单应用至最新（0001 → 0002 → 0003 → 0004 → 0005；M6-01 合入 0004、
+    // M6-03 合入 0005）。
     let applied = applied_migrations(connection).unwrap();
     assert_eq!(
         applied.iter().map(|item| item.version).collect::<Vec<_>>(),
-        vec![1, 2, 3, 4],
-        "必须应用 0001–0004"
+        vec![1, 2, 3, 4, 5],
+        "必须应用 0001–0005"
     );
 
     // sessions.thinking_depth：INTEGER NOT NULL DEFAULT 2（ADR-010 附录 A）。

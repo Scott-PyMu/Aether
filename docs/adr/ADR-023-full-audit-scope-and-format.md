@@ -3,14 +3,14 @@
 | 项 | 内容 |
 |---|---|
 | 编号 | ADR-023（P1-A08） |
-| 版本 | **v0.2（批次评审通过稿）**：v0.1 创建（批次稿）；v0.2 按 `docs/M5-01-ADR批次评审意见.md` 修订闭环（P0/P1/P2 相关条目全部闭环；不改决策） |
-| 状态 | **已批准（2026-10-09；人工授权 AI 审批——独立评审通过即批准，见 `docs/M5-01-ADR批次评审意见.md` §7）**；已合入《设计文档》v1.16 |
-| 决策日期 | 2026-10-09 |
-| 决策载体 | 《设计文档》v1.15 → v1.16（D9 审计段扩展、§4#15 落实、附录 A SE-03 行、附录 C 迁移规划位）；`docs/P1-实施计划与验收标准.md` v0.7（§9 行标注） |
+| 版本 | **v0.3（M6-03 实现批次修订）**：v0.1 创建（批次稿）；v0.2 按 `docs/M5-01-ADR批次评审意见.md` 修订闭环（P0/P1/P2 相关条目全部闭环；不改决策）；**v0.3 按 §6-3 失效路径修订索引/分页设计**——审计三索引末位追加 `id`（覆盖 `ts DESC, id DESC` 稳定排序）、查询不执行 `COUNT(*)` 改以「多取一行」判定 `has_more`；P95 断言不变（≤300ms；实测 P95 5.2ms，见 M6-03 证据） |
+| 状态 | **已批准（2026-10-09；人工授权 AI 审批——独立评审通过即批准，见 `docs/M5-01-ADR批次评审意见.md` §7）**；已合入《设计文档》v1.16；**v0.3 为 §6-3 显式授权的实现批次修订（2026-10-14，M6-03 落库，随任务证据归档）** |
+| 决策日期 | 2026-10-09（v0.3 修订：2026-10-14） |
+| 决策载体 | 《设计文档》v1.15 → v1.16（D9 审计段扩展、§4#15 落实、附录 A SE-03 行、附录 C 迁移规划位）；`docs/P1-实施计划与验收标准.md` v0.7（§9 行标注）；**v0.3：设计文档附录 C `0005` 终态 DDL（三索引含 `id` 尾列）与 M6-03 任务证据** |
 | 关联 | 设计 D9/D10、§2.1 第 5 条、§4#15、附录 A SE-03；需求 SE-03；ADR-003（P0 最小审计口径）、ADR-004/007/009（命令面先例）、ADR-018（`audit_query`/`audit_export` 登记）、ADR-021（events 保留不联动审计）、本批次各 ADR 的审计动作登记；P1 计划 M6-03 |
-| 取代 / 被取代 | 无（新增；不修改 P0 最小审计语义） |
+| 取代 / 被取代 | 无（新增；不修改 P0 最小审计语义）；v0.3 修订 §2.1-1/§2.1-3 的实现设计，不改记录边界、动作台账与不可改约束 |
 | 回退条件 | 见 §6 |
-| 实现状态 | 未开始（登记先行；由 M6-03 执行） |
+| 实现状态 | **已实现（M6-03，2026-10-14）**：迁移 `0005`（三索引，含 `id` 尾列）、`audit_query`/`audit_export` 命令、`tool.call` 聚合、静态不可改检查；证据 `docs/M6-03-证据.md` |
 
 ## 1. 背景
 
@@ -25,12 +25,12 @@
 - **决策**：
   1. **记录边界（P1 完整口径；信任级边界不变）**：审计范围 = ① 既有最小集（会话生命周期/权限/运行器状态）；② **所有经线协议上报的工具调用**（`tool.call_*` 生命周期聚合为审计行：动作 `tool.call`，resource=工具名，result=成功/失败）；③ 本批次新增的 P1 管理面动作（规则/路由/备份/保留/归档/导出/会话管理/工作区/预设/暂停恢复/档位变更/供应商测试）。**不含适配器进程内行为**（设计 §2.1 第 4 条；任何表述不得写成「已隔离」）。哈希链**不在 P1**（P3，声明保留）。
   2. **动作字典**：P1 全量审计动作以**附录 A-1 为唯一台账**（既有点 + 本批次 ADR-017/019/020/021/022/024/025/026 登记项）；新增动作必须先在本台账增行（ADR 修订），不得自造。
-  3. **查询**：`audit_query`（过滤：会话/时间/actor/action/resource；`limit` ≤500 缺省 100、`offset` 分页；按 `ts DESC, id DESC` 稳定排序）。**性能目标：1e6 行下已过滤分页查询 P95 ≤300ms**（任务内定值；基准环境 16GB 与库内数据构造记录于 M6-03 证据）。
+  3. **查询**：`audit_query`（过滤：会话/时间/actor/action/resource；`limit` ≤500 缺省 100、`offset` 分页；按 `ts DESC, id DESC` 稳定排序）。**性能目标：1e6 行下已过滤分页查询 P95 ≤300ms**（任务内定值；基准环境 16GB 与库内数据构造记录于 M6-03 证据）。**v0.3（§6-3 修订）**：响应为 `{ rows, limit, offset, has_more }`——不执行 `COUNT(*)`（多谓词过滤下需逐行回表，1e6 行实测 0.36–3.4s，突破目标），以「多取一行」探测 `has_more`；页查询由索引逆向扫描覆盖（实测 P95 5.2ms）。
   4. **导出**：`audit_export` — 外部路径（选择器 + 可写 + 空间检查 M3-04 口径）+ 脱敏（`sk-`/`eyJ`/PEM 0 命中）+ JSONL + manifest（行数/sha256）+ 原子写（临时文件 + rename；中断不留半成品）；过滤条件与查询一致。
   5. **不可改**：应用层**无 UPDATE/DELETE `audit_log` 路径**（静态检查：源码扫描 SQL 文本 + 存储层 API 白名单）；`audit_log` 不参与 M5-04 保留清理（ADR-021 §2.1-7 断言）。
   6. **仅本地 IPC**：不提供网络/远程访问面（D11）；导出产物由用户自行处置。
 - **实现要点**：
-  1. 迁移 `0004+`：审计查询索引 `idx_audit_session_ts(session_id, ts)`、`idx_audit_actor_ts(actor, ts)`、`idx_audit_action_ts(action, ts)`（终态 DDL 随 M6-03 落库；`EXPECTED_EXPLICIT_INDEXES` 5 → 8 同批同步）；保留既有 `idx_audit_ts`。
+  1. 迁移 `0004+`：审计查询索引 `idx_audit_session_ts(session_id, ts, id)`、`idx_audit_actor_ts(actor, ts, id)`、`idx_audit_action_ts(action, ts, id)`（终态 DDL 随 M6-03 落库；`EXPECTED_EXPLICIT_INDEXES` 6 → 9 同批同步）；保留既有 `idx_audit_ts`。**v0.3（§6-3 修订）**：末位追加 `id`，使 `ts DESC, id DESC` 稳定排序在等值前缀下由索引逆向扫描全覆盖（v0.2 的 `(col, ts)` 形态不覆盖 `id` 尾键，低选择度过滤触发全量排序，实测 P95 3.2s）。
   2. 写入路径：复用既有单写队列（不新增写者）；`tool.call_*` 聚合为审计行的时机 = 终态事件落库后（网络忙时不得丢行；失败计入诊断）。
   3. 命令：`audit_query`/`audit_export`（ADR-018 附录 A-1 登记 + 参数校验矩阵）。
   4. UI：审计页（锚点 `audit-page`/`audit-filter`/`audit-export`，ADR-014 已登记）。
@@ -80,7 +80,7 @@
 
 1. **本 ADR 被否决** → M6-03 退回「最小审计 + 只读导出」形态；`audit_query`/`audit_export`、三索引与锚点承接撤回。
 2. **覆盖率不达标** → 补齐写入点后再验；不得放宽「协议上报面 100%」口径。
-3. **P95 不达标** → 修订索引/分页设计（本 ADR 修订），不得改断言。
+3. **P95 不达标** → 修订索引/分页设计（本 ADR 修订），不得改断言。**已应用（v0.3，2026-10-14，M6-03）**：索引末位追加 `id` + 分页不执行 `COUNT(*)`（`has_more` 探测）；断言不变，实测 P95 5.2ms（1e6 行；证据 `docs/M6-03-证据.md`）。
 4. **新错误码/警告码需求** → 先按 ADR-006 附录 B 登记，不得自造。
 
 ## 7. 评审记录
@@ -89,6 +89,7 @@
 |---|---|---|---|
 | 2026-10-09 | 文档维护（AI） | v0.1 创建 | 按 M6-03 DoD；登记先行，代码未改 |
 | 2026-10-09 | 独立评审（M5-01 批次，`docs/M5-01-ADR批次评审意见.md`） | 通过（含修订闭环） | 批次复核 17/17 闭环；本 ADR 相关条目见该意见 §6。未另行修改决策 |
+| 2026-10-14 | M6-03 实现批次（AI，按 §6-3 失效路径自修订） | v0.3 修订生效 | 索引/分页设计修订（不改断言）；实测 P95 5.2ms；随任务证据归档，供后续批次复核 |
 
 ## 8. 变更记录
 
@@ -96,6 +97,7 @@
 |---|---|---|---|
 | v0.1 | 2026-10-09 | 创建：记录边界、动作台账、查询/导出契约、索引规划、不可改静态检查、哈希链留 P3 | 文档维护 |
 | v0.2 | 2026-10-09 | 批次评审闭环（不改决策）：按 `docs/M5-01-ADR批次评审意见.md` 修订（含该意见 §6 闭环核验所列条目） | 文档维护 |
+| v0.3 | 2026-10-14 | **§6-3 P95 不达标路径修订（不改断言）**：① 审计三索引末位追加 `id`（`(col, ts, id)`；覆盖 `ts DESC, id DESC`）；② `audit_query` 响应 `{ rows, limit, offset, has_more }`、不执行 `COUNT(*)`；③ 附录 A-2 索引规划位更新为终态 DDL；依据 = M6-03 基准实测（v0.2 形态 P95 3.2s → v0.3 形态 P95 5.2ms，阈值 300ms 不变） | M6-03 实现批次（AI，§6-3 授权） |
 
 ---
 
@@ -136,14 +138,14 @@
 | `workspace.created` / `workspace.updated` / `workspace.deleted` / `session.workspace_assigned` | `user` | ADR-026 | 工作区管理 |
 | `preset.created` / `preset.updated` / `preset.deleted` | `user` | ADR-026 | 预设管理 |
 
-**A-2 索引规划位（迁移 `0004+`；随 M6-03 落库）**
+**A-2 索引规划位（迁移 `0004+`；随 M6-03 落库；v0.3 末位含 `id`）**
 
 ```sql
--- 规划位（非终态；编号取落库时当前最大编号 +1）
--- CREATE INDEX idx_audit_session_ts ON audit_log(session_id, ts);
--- CREATE INDEX idx_audit_actor_ts   ON audit_log(actor, ts);
--- CREATE INDEX idx_audit_action_ts  ON audit_log(action, ts);
--- 既有 idx_audit_ts 保留；EXPECTED_EXPLICIT_INDEXES 由 5 同步为 8（M6-03 落库时）
+-- 终态（M6-03 落库，迁移 migrations/0005_audit_indexes.sql；编号 = 当前最大 +1）
+CREATE INDEX idx_audit_session_ts ON audit_log(session_id, ts, id);
+CREATE INDEX idx_audit_actor_ts   ON audit_log(actor, ts, id);
+CREATE INDEX idx_audit_action_ts  ON audit_log(action, ts, id);
+-- 既有 idx_audit_ts 保留；EXPECTED_EXPLICIT_INDEXES 6 → 9（M6-03 落库时）
 ```
 
 **A-3 导出格式**：与 ADR-021 附录 A-2 同构，`kind` ∈ `manifest|audit`；`source="audit-export"`。

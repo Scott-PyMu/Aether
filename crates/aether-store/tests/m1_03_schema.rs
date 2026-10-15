@@ -115,9 +115,27 @@ fn appendix_c_explicit_indexes_exist_with_expected_columns() {
     let conn = store.connection();
 
     // 附录 C 显式索引 + ADR-004/ADR-005 唯一索引（0002 迁移落地，UNIQUE 由唯一索引承载）
-    // + M6-01 permission_rules 启用态索引。
+    // + M6-01 permission_rules 启用态索引 + M6-03 审计三复合索引（ADR-023 v0.3）。
     let expected: &[(&str, &str, &[&str], bool)] = &[
         ("idx_audit_ts", "audit_log", &["ts"], false),
+        (
+            "idx_audit_action_ts",
+            "audit_log",
+            &["action", "ts", "id"],
+            false,
+        ),
+        (
+            "idx_audit_actor_ts",
+            "audit_log",
+            &["actor", "ts", "id"],
+            false,
+        ),
+        (
+            "idx_audit_session_ts",
+            "audit_log",
+            &["session_id", "ts", "id"],
+            false,
+        ),
         (
             "idx_events_session_seq_uq",
             "events",
