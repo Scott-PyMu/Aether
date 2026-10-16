@@ -32,6 +32,7 @@ pub mod nav;
 pub mod permission_loop;
 pub mod picker;
 pub mod provider_control;
+pub mod registry_identity;
 pub mod retention;
 pub mod runtime_control;
 pub mod runtime_registry;
@@ -302,9 +303,27 @@ fn build_backend(
                 }
                 // M3-07（D9/SE-03）：适配器状态变化/监督审计落库出口接线（存储就绪后、
                 // 启动序列尾段（孤儿清理/预热）前完成；此前监督器无回调活动）。
+                // M7-01/ADR-015（DoD0）：同时注入事件管线——每次合法状态转移发射
+                // `runtime.status_changed`（合成归段 `runtime:<id>`；先日志后广播）。
                 deferred_audit_observer.set(std::sync::Arc::new(
-                    audit_bridge::StoreAuditObserver::new(write.clone(), handle.clone()),
+                    audit_bridge::StoreAuditObserver::new(write.clone(), handle.clone())
+                        .with_pipeline(pipeline.clone()),
                 ));
+                // M7-01/ADR-015 决策 4：注册清单条目拒绝 → 审计 `runtime.registry_rejected`
+                // （存储就绪后回放；此前仅有 tracing 告警；不阻塞启动）。
+                for (runtime_id, reason) in &registry.rejected {
+                    if let Ok(id) = aether_core::RuntimeId::new(runtime_id.clone()) {
+                        aether_adapters::supervisor::SupervisorObserver::on_audit(
+                            deferred_audit_observer.as_ref(),
+                            &aether_adapters::supervisor::AuditRecord::new(
+                                id,
+                                aether_adapters::supervisor::AuditKind::RegistryRejected,
+                                reason.clone(),
+                                aether_adapters::supervisor::now_ms(),
+                            ),
+                        );
+                    }
+                }
                 // M3-04：备份/恢复命令面的存储句柄（读写队列均已就绪）。
                 let backup_deps = (reads.clone(), write.clone());
                 // M2-07 DoD3：核心 RSS 巡检（2GB 告警 / 2.5GB 强制 delta 限流；
@@ -483,28 +502,44 @@ fn build_backend(
         };
 
     // M2-08 启动序列尾段（D2：库打开 + quick_check → 孤儿清理 → 迁移/预热）：
-    // 清理台账残留（强杀核心后的孤儿）；预热 enabled 适配器；接线心跳监控（T5b）。
+    // 清理台账残留（强杀核心后的孤儿）；按持久化偏好预热（M7-01/ADR-015 决策 5：
+    // `enabled=0` 不 spawn、置 `cold → disabled(user_disabled)`）；接线心跳监控（T5b）。
     let monitors = match &supervisor {
-        Some(supervisor) => match runtime_control::run_supervisor_startup(supervisor, &handle) {
-            Ok(startup_report) => {
-                let reclaimed = startup_report.cleanup.reclaimed().count();
-                let skipped = startup_report.cleanup.skipped().count();
-                tracing::info!(
-                    reclaimed,
-                    skipped,
-                    actions = startup_report.cleanup.actions.len(),
-                    "启动孤儿清理完成（D5 台账三条件）"
-                );
-                for (runtime_id, outcome) in &startup_report.warmups {
-                    tracing::info!(runtime_id = %runtime_id, outcome = ?outcome, "适配器预热结果");
+        Some(supervisor) => {
+            let prefs = match &reads {
+                Some(reads) => match handle.block_on(reads.runtime_preferences()) {
+                    Ok(prefs) => prefs,
+                    Err(error) => {
+                        tracing::warn!(
+                            error = %error,
+                            "运行时启停偏好读取失败（按构建期缺省预热；不阻塞启动）"
+                        );
+                        std::collections::BTreeMap::new()
+                    }
+                },
+                None => std::collections::BTreeMap::new(),
+            };
+            match runtime_control::run_supervisor_startup_with_prefs(supervisor, &handle, &prefs) {
+                Ok(startup_report) => {
+                    let reclaimed = startup_report.cleanup.reclaimed().count();
+                    let skipped = startup_report.cleanup.skipped().count();
+                    tracing::info!(
+                        reclaimed,
+                        skipped,
+                        actions = startup_report.cleanup.actions.len(),
+                        "启动孤儿清理完成（D5 台账三条件）"
+                    );
+                    for (runtime_id, outcome) in &startup_report.warmups {
+                        tracing::info!(runtime_id = %runtime_id, outcome = ?outcome, "适配器预热结果");
+                    }
+                    startup_report.monitors
                 }
-                startup_report.monitors
+                Err(error) => {
+                    tracing::warn!(error = %error, "启动序列尾段失败（孤儿清理/预热未完成）");
+                    Vec::new()
+                }
             }
-            Err(error) => {
-                tracing::warn!(error = %error, "启动序列尾段失败（孤儿清理/预热未完成）");
-                Vec::new()
-            }
-        },
+        }
         None => Vec::new(),
     };
 
@@ -531,11 +566,21 @@ fn build_backend(
 
     let control: Option<std::sync::Arc<dyn runtime_control::RuntimeControl>> =
         supervisor.clone().map(|supervisor| {
-            std::sync::Arc::new(runtime_control::SupervisorControl::new(
+            let control = runtime_control::SupervisorControl::new(
                 supervisor,
                 handle.clone(),
                 runtime_control::RUNTIME_CONTROL_TIMEOUT,
-            )) as std::sync::Arc<dyn runtime_control::RuntimeControl>
+            );
+            // M7-01/ADR-015：注入启停偏好与在途计数（`runtime_disable` 确认门需要
+            // 存储接线；`runtime_enable` 偏好写序）。存储未就绪（降级启动）时保持
+            // 无存储构造：disable 回 `core_not_ready`，retry/enable 沿用既有语义。
+            let control = match (&reads, &write_slot) {
+                (Some(reads), Some(write)) => {
+                    control.with_runtime_store(reads.clone(), write.clone())
+                }
+                _ => control,
+            };
+            std::sync::Arc::new(control) as std::sync::Arc<dyn runtime_control::RuntimeControl>
         });
     let inner: std::sync::Arc<dyn ipc::IpcBackend> =
         std::sync::Arc::new(runtime_control::RuntimeControlBackend::new(health, control));

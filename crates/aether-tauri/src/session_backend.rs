@@ -420,7 +420,23 @@ impl IpcBackend for SessionBackend {
         let supervisor = self.supervisor.clone().ok_or_else(|| {
             IpcError::core_not_ready("监督器未接线：runtimes_list 不可用（启动序列未完成）")
         })?;
+        let reads = self.reads.clone();
         self.call(async move {
+            // M7-01/ADR-015 决策 6：`enabled` 取持久化偏好（`runtimes.enabled`），
+            // `active_sessions` = 在途计数（与 `runtime_disable` 确认门同源读路径）。
+            // 无存储接线的测试构造回退构建期缺省（`RuntimeManifest.enabled`；计数 0）。
+            let preferences = match &reads {
+                Some(reads) => reads.runtime_preferences().await.map_err(|error| {
+                    IpcError::internal(format!("运行时启停偏好读取失败：{error}"))
+                })?,
+                None => std::collections::BTreeMap::new(),
+            };
+            let active_work = match &reads {
+                Some(reads) => reads.active_work_counts().await.map_err(|error| {
+                    IpcError::internal(format!("在途会话计数读取失败：{error}"))
+                })?,
+                None => std::collections::BTreeMap::new(),
+            };
             let mut runtimes = Vec::new();
             for id in supervisor.runtime_ids() {
                 let Some(runtime) = supervisor.get(&id) else {
@@ -439,6 +455,8 @@ impl IpcBackend for SessionBackend {
                     },
                     None => Vec::new(),
                 };
+                let enabled = preferences.get(&id).copied().unwrap_or(manifest.enabled);
+                let active_sessions = active_work.get(&id).copied().unwrap_or(0);
                 runtimes.push(json!({
                     "id": manifest.id,
                     "name": manifest.name,
@@ -446,9 +464,10 @@ impl IpcBackend for SessionBackend {
                     "version": manifest.version,
                     "protocol": manifest.protocol,
                     "capabilities": capabilities,
-                    "enabled": manifest.enabled,
+                    "enabled": enabled,
                     "status": status.as_str(),
                     "status_reason": reason.map(|reason| reason.as_str()),
+                    "active_sessions": active_sessions,
                 }));
             }
             runtimes.sort_by(|left, right| {
@@ -1504,6 +1523,13 @@ impl IpcBackend for SessionBackend {
         request: &crate::ipc::dto::RuntimeEnableRequest,
     ) -> Result<Value, IpcError> {
         self.inner.runtime_enable(request)
+    }
+
+    fn runtime_disable(
+        &self,
+        request: &crate::ipc::dto::RuntimeDisableRequest,
+    ) -> Result<Value, IpcError> {
+        self.inner.runtime_disable(request)
     }
 
     fn export_diagnostics(

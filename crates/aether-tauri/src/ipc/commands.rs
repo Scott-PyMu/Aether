@@ -14,9 +14,10 @@ use super::dto::{
     ProviderCreateRequest, ProviderDeleteRequest, ProviderModelAddRequest, ProviderModelToggleRequest,
     ProviderToggleRequest, ProviderUpdateRequest, ProvidersListRequest, RefPickKind, RefPickRequest,
     RuleAddRequest, RuleDeleteRequest, RuleToggleRequest, RuleUpdateRequest, RulesListRequest,
-    RunRetryRequest, RuntimeEnableRequest, RuntimeRetryRequest, SessionCreateRequest,
-    SessionExportRequest, SessionIdRequest, SessionListRequest, SessionPermissionModeSetRequest,
-    SessionSendRequest, SettingsGetRequest, SettingsSetRequest, StartupGetRequest,
+    RunRetryRequest, RuntimeDisableRequest, RuntimeEnableRequest, RuntimeRetryRequest,
+    SessionCreateRequest, SessionExportRequest, SessionIdRequest, SessionListRequest,
+    SessionPermissionModeSetRequest, SessionSendRequest, SettingsGetRequest, SettingsSetRequest,
+    StartupGetRequest,
     StartupMigrateRequest, StartupPickTargetRequest, WorkspaceSetRequest,
 };
 use super::error::{IpcError, IpcErrorCode};
@@ -376,6 +377,21 @@ pub(crate) fn runtime_enable(
     state
         .backend_ready()?
         .runtime_enable(&request)
+        .map(JsonPayload)
+}
+
+/// M7-01/ADR-015：运行期禁用官方适配器（存在在途会话且未确认 → `runtime_busy`；
+/// 确认后偏好先写 → `disabled + user_disabled` → 受控终止）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn runtime_disable(
+    state: tauri::State<'_, IpcState>,
+    payload: JsonPayload,
+) -> Result<JsonPayload, IpcError> {
+    let request: RuntimeDisableRequest = parse_strict(payload.into_value())?;
+    state
+        .backend_ready()?
+        .runtime_disable(&request)
         .map(JsonPayload)
 }
 
@@ -769,6 +785,7 @@ pub fn collected<R: tauri::Runtime>() -> tauri_specta::Commands<R> {
         run_retry,
         runtime_retry,
         runtime_enable,
+        runtime_disable,
         workspace_set,
         ref_pick,
         artifacts_list,
@@ -826,6 +843,7 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         run_retry,
         runtime_retry,
         runtime_enable,
+        runtime_disable,
         workspace_set,
         ref_pick,
         artifacts_list,
@@ -884,6 +902,7 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         run_retry,
         runtime_retry,
         runtime_enable,
+        runtime_disable,
         workspace_set,
         ref_pick,
         artifacts_list,

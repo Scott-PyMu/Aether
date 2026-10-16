@@ -168,6 +168,13 @@ function fakePermissionIpc(overrides: Partial<PermissionIpc> = {}): PermissionIp
       outcome: "ready",
       status: "ready",
     })),
+    // M7-01/ADR-015：启停开关命令面（本文件不消费；缺省替身保持接口完整）。
+    disableRuntime: vi.fn(async (runtimeId: string) => ({
+      runtime_id: runtimeId,
+      outcome: "disabled",
+      status: "disabled",
+      status_reason: "user_disabled",
+    })),
     ...overrides,
   };
 }

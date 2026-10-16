@@ -43,10 +43,10 @@ export interface PermissionResolveResult {
   ticket_id: string;
 }
 
-/** `runtime_retry` / `runtime_enable` 回执（M1-10 `StartOutcome` 的 JSON 形状）。 */
+/** `runtime_retry` / `runtime_enable` / `runtime_disable` 回执（M1-10 `StartOutcome` 的 JSON 形状）。 */
 export interface RuntimeControlResult {
   runtime_id: string;
-  /** `ready` / `already_running` / `failed` / `rejected`。 */
+  /** `ready` / `already_running` / `failed` / `rejected` / `disabled`（M7-01/ADR-015 扩展）。 */
   outcome: string;
   status: string;
   status_reason?: string | null;
@@ -68,6 +68,14 @@ export interface PermissionIpc {
   ): Promise<PermissionResolveResult>;
   retryRuntime(runtimeId: string): Promise<RuntimeControlResult>;
   enableRuntime(runtimeId: string): Promise<RuntimeControlResult>;
+  /**
+   * M7-01/ADR-015：运行期禁用官方适配器。
+   *
+   * 在途会话未确认 → 结构化错误 `runtime_busy`（`data-count` 二次确认后携
+   * `confirmTerminate=true` 重试）；确认后偏好先写 → `disabled + user_disabled` →
+   * 受控终止（整树回收）。
+   */
+  disableRuntime(runtimeId: string, confirmTerminate?: boolean): Promise<RuntimeControlResult>;
 }
 
 /** 生产实现（Tauri IPC；命令入参统一 `payload` 包装，与生成绑定一致）。 */
@@ -92,12 +100,20 @@ export const permissionIpc: PermissionIpc = {
       payload: { runtime_id: runtimeId },
     });
   },
+  async disableRuntime(runtimeId, confirmTerminate) {
+    return invoke<RuntimeControlResult>("runtime_disable", {
+      payload: confirmTerminate
+        ? { runtime_id: runtimeId, confirm_terminate: true }
+        : { runtime_id: runtimeId },
+    });
+  },
 };
 
-/** `runtime_retry`/`runtime_enable` 结果 outcome 展示文案。 */
+/** `runtime_retry`/`runtime_enable`/`runtime_disable` 结果 outcome 展示文案。 */
 export const RUNTIME_OUTCOME_LABELS: Record<string, string> = {
   ready: "已就绪",
   already_running: "已在运行",
   failed: "启动失败",
   rejected: "被拒绝",
+  disabled: "已禁用",
 };

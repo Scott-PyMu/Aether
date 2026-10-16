@@ -171,7 +171,8 @@ pub fn protocol_major(protocol: &str) -> Option<u32> {
 ///
 /// 覆盖 `disabled` 与 `degraded` 两类转移原因：
 /// - `disabled`：`handshake_timeout` / `version_mismatch` / `start_failed` /
-///   `protocol_error` / `crash_loop` / `untrusted`（D5、ADR-002/评审 #1）；
+///   `protocol_error` / `crash_loop` / `untrusted`（D5、ADR-002/评审 #1）/
+///   `user_disabled`（ADR-015：用户显式禁用，非故障）；
 /// - `degraded`：`heartbeat_failed`（10s×3 连续失败）/ `crashed`（运行中崩溃）/
 ///   `storage_backpressure`（ADR-003，D8 熔断隔离，M1-05 触发）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -194,11 +195,13 @@ pub enum DisabledReason {
     Crashed,
     /// 存储背压熔断隔离（ADR-003/ADR-004；D8，`persist_degraded` 与临时背压的边界）。
     StorageBackpressure,
+    /// 用户显式禁用（ADR-015：非故障；`runtime_disable` 与启动矩阵 `enabled=0`）。
+    UserDisabled,
 }
 
 impl DisabledReason {
-    /// 词典全集（D5「如」清单 + ADR-003/ADR-004 补充值）。
-    pub const ALL: [Self; 9] = [
+    /// 词典全集（D5「如」清单 + ADR-003/ADR-004 补充值 + ADR-015 `user_disabled`）。
+    pub const ALL: [Self; 10] = [
         Self::HandshakeTimeout,
         Self::VersionMismatch,
         Self::StartFailed,
@@ -208,6 +211,7 @@ impl DisabledReason {
         Self::HeartbeatFailed,
         Self::Crashed,
         Self::StorageBackpressure,
+        Self::UserDisabled,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -221,6 +225,7 @@ impl DisabledReason {
             Self::HeartbeatFailed => "heartbeat_failed",
             Self::Crashed => "crashed",
             Self::StorageBackpressure => "storage_backpressure",
+            Self::UserDisabled => "user_disabled",
         }
     }
 

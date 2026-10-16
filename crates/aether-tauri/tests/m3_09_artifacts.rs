@@ -1,7 +1,7 @@
 //! M3-09 集成测试：文件引用面板后端（ADR-010 决策 1；只读引用，不列目录/不预览）。
 //!
 //! 覆盖实施计划 M3-09 DoD1–3/DoD6 的 IPC 后端面：
-//! - DoD1：迁移已应用到最新（M6-01 起 `schema_version = 4`；表/约束行为见
+//! - DoD1：迁移已应用到最新（M7-01 起 `schema_version = 6`；表/约束行为见
 //!   `aether-store/tests/m3_09_artifacts.rs`）；引用写路径经单写队列（D3）；
 //! - DoD2：`artifact_add` canonicalize + 可访问性检查（失败 `artifact_path_rejected`；
 //!   合法路径不误拒）/ 文件与目录 `kind` 探测 / 重复添加幂等（返回既有引用）；
@@ -200,7 +200,7 @@ fn write_file(dir: &std::path::Path, name: &str, content: &str) -> PathBuf {
     path
 }
 
-/// DoD1：迁移已应用到最新（M6-03 起 `schema_version = 5`；引用写路径经单写队列在
+/// DoD1：迁移已应用到最新（M7-01 起 `schema_version = 6`；引用写路径经单写队列在
 /// store 测试以计数断言锁定）。
 #[test]
 fn dod1_migration_0003_is_applied() {
@@ -208,8 +208,8 @@ fn dod1_migration_0003_is_applied() {
     let summary = h.runtime.block_on(h.reads.store_summary()).expect("库摘要");
     assert_eq!(
         summary.schema_version,
-        Some(5),
-        "迁移必须到 0005（M6-03/ADR-023 审计索引）"
+        Some(6),
+        "迁移必须到 0006（M7-01/ADR-015 runtimes.enabled）"
     );
     evidence(
         "dod1_migration_0003",

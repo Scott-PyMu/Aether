@@ -151,10 +151,13 @@ try {
   }
 
   if (!skipRustBuild) {
+    // M7-01/ADR-015 §2.2#2：构建期把该运行时包的期望摘要（清单规范化摘要 + program
+    // sha256）编译进二进制；E2E 的包目录为临时目录，须经 AETHER_RUNTIME_BUNDLE_DIR
+    // 让 build.rs 与运行期（AETHER_RUNTIME_REGISTRY_DIR）指向同源，否则注册清单一律拒绝。
     const exit = run(
       bin("cargo"),
       ["build", "-p", "aether-tauri", "--features", "custom-protocol"],
-      { env },
+      { env: { ...env, AETHER_RUNTIME_BUNDLE_DIR: bundleDir } },
     );
     if (exit !== 0) throw new Error(`cargo build 失败（exit=${exit}）`);
   }

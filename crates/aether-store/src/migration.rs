@@ -53,6 +53,12 @@ pub const EMBEDDED_MIGRATIONS: &[MigrationFile] = &[
         name: "0005_audit_indexes.sql",
         bytes: include_bytes!("../../../migrations/0005_audit_indexes.sql"),
     },
+    // M7-01/ADR-015：runtimes.enabled（用户启停偏好；启动矩阵与 runtime_disable/enable）。
+    MigrationFile {
+        version: 6,
+        name: "0006_runtime_enabled.sql",
+        bytes: include_bytes!("../../../migrations/0006_runtime_enabled.sql"),
+    },
 ];
 
 /// 迁移文件 sha256（小写十六进制）。

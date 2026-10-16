@@ -20,9 +20,9 @@ use aether_tauri::ipc::dto::{
     BackupRestoreRequest, ExportDiagnosticsRequest, MessagesPageRequest, PermissionResolveRequest,
     PermissionsPendingRequest, ProviderCreateRequest, ProviderDeleteRequest, ProviderModelAddRequest,
     ProviderModelToggleRequest, ProviderToggleRequest, ProviderUpdateRequest, ProvidersListRequest,
-    RunRetryRequest, RuntimeEnableRequest, RuntimeRetryRequest, SessionCreateRequest,
-    SessionExportRequest, SessionIdRequest, SessionListRequest, SessionSendRequest,
-    SettingsGetRequest, SettingsSetRequest, WorkspaceSetRequest,
+    RunRetryRequest, RuntimeDisableRequest, RuntimeEnableRequest, RuntimeRetryRequest,
+    SessionCreateRequest, SessionExportRequest, SessionIdRequest, SessionListRequest,
+    SessionSendRequest, SettingsGetRequest, SettingsSetRequest, WorkspaceSetRequest,
 };
 use aether_tauri::ipc::error::IpcError;
 use aether_tauri::ipc::path::{
@@ -147,6 +147,10 @@ impl IpcBackend for RecordingBackend {
 
     fn runtime_enable(&self, _request: &RuntimeEnableRequest) -> Result<Value, IpcError> {
         self.record("runtime_enable")
+    }
+
+    fn runtime_disable(&self, _request: &RuntimeDisableRequest) -> Result<Value, IpcError> {
+        self.record("runtime_disable")
     }
 
     fn workspace_set(
@@ -599,6 +603,37 @@ fn malformed_samples_return_structured_errors_and_do_not_reach_backend() {
             "missing_field",
             Some("runtime_id"),
         ),
+        // ===== M7-01/ADR-015：runtime_disable 畸形参数矩阵（校验失败不落库/不透传） =====
+        (
+            "runtime_disable",
+            json!({ "runtime_id": "mock", "extra": true }),
+            "unknown_field",
+            Some("extra"),
+        ),
+        (
+            "runtime_disable",
+            json!({}),
+            "missing_field",
+            Some("runtime_id"),
+        ),
+        (
+            "runtime_disable",
+            json!({ "runtime_id": "mock", "confirm_terminate": "yes" }),
+            "invalid_type",
+            None,
+        ),
+        (
+            "runtime_disable",
+            json!({ "runtime_id": "bad id!" }),
+            "invalid_format",
+            Some("runtime_id"),
+        ),
+        (
+            "runtime_disable",
+            json!({ "runtime_id": 42 }),
+            "invalid_type",
+            None,
+        ),
         ("workspace_set", json!({}), "invalid_value", None),
         (
             "workspace_set",
@@ -1005,6 +1040,17 @@ fn valid_requests_reach_backend_exactly_once() {
             json!({ "runtime_id": "mock" }),
             "runtime_enable",
         ),
+        // M7-01/ADR-015：runtime_disable 合法形态（缺省确认/显式确认）到达后端。
+        (
+            "runtime_disable",
+            json!({ "runtime_id": "mock" }),
+            "runtime_disable",
+        ),
+        (
+            "runtime_disable",
+            json!({ "runtime_id": "mock", "confirm_terminate": true }),
+            "runtime_disable",
+        ),
         (
             "workspace_set",
             json!({ "workspace_id": ULID }),
@@ -1184,6 +1230,8 @@ fn valid_requests_reach_backend_exactly_once() {
         "run_retry",
         "runtime_retry",
         "runtime_enable",
+        "runtime_disable",
+        "runtime_disable",
         "workspace_set",
         "workspace_set",
         "artifacts_list",

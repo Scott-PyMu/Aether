@@ -81,14 +81,14 @@ fn existing_0001_only_database_is_upgraded_by_0002_increment() {
         assert_eq!(applied[0].version, 1);
     }
 
-    // 以当前程序打开：应增量应用 0002+（当前含 ADR-010 的 0003、M6-01 的 0004 与
-    // M6-03 的 0005），且保留 0001 的记录（不得重跑/修改）。
+    // 以当前程序打开：应增量应用 0002+（当前含 ADR-010 的 0003、M6-01 的 0004、
+    // M6-03 的 0005 与 M7-01 的 0006），且保留 0001 的记录（不得重跑/修改）。
     let store = Store::open(&path).unwrap();
     let applied = store.applied_migrations().unwrap();
     assert_eq!(applied.len(), EMBEDDED_MIGRATIONS.len());
     assert_eq!(applied[0].version, 1);
     assert_eq!(applied[1].version, 2);
-    assert_eq!(applied.last().map(|item| item.version), Some(5));
+    assert_eq!(applied.last().map(|item| item.version), Some(6));
 
     let conn = store.connection();
     let has_column: i64 = conn
@@ -157,6 +157,21 @@ fn existing_0001_only_database_is_upgraded_by_0002_increment() {
             .unwrap();
         assert_eq!(count, 1, "0005 必须创建 {index}");
     }
+
+    // 0006（M7-01/ADR-015 决策 5）：runtimes.enabled（NOT NULL DEFAULT 1）。
+    let enabled_column: (i64, Option<String>) = conn
+        .query_row(
+            "SELECT \"notnull\", dflt_value FROM pragma_table_info('runtimes') WHERE name = 'enabled'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(enabled_column.0, 1, "0006 必须补齐 runtimes.enabled（NOT NULL）");
+    assert_eq!(
+        enabled_column.1.as_deref(),
+        Some("1"),
+        "0006 缺省值必须为 1"
+    );
 }
 
 #[test]

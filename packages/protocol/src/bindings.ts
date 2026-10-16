@@ -61,6 +61,11 @@ export const commands = {
 	runtimeRetry: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("runtime_retry", { payload })),
 	/**  ADR-004/M1-10：仅 `disabled` 可用；`untrusted`/`version_mismatch` 需先修复。 */
 	runtimeEnable: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("runtime_enable", { payload })),
+	/**
+	 *  M7-01/ADR-015：运行期禁用官方适配器（存在在途会话且未确认 → `runtime_busy`；
+	 *  确认后偏好先写 → `disabled + user_disabled` → 受控终止）。
+	 */
+	runtimeDisable: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("runtime_disable", { payload })),
 	/**  ADR-004/D14：`workspace_id` 或 `root_path`（canonicalize + 同步盘拒绝）。 */
 	workspaceSet: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("workspace_set", { payload })),
 	/**
@@ -336,7 +341,12 @@ export type IpcErrorCode =
 /**  供应商模型不存在（ADR-010：`provider_model_toggle`）。 */
 "provider_model_not_found" | 
 /**  权限规则不存在（M6-01/ADR-018：`rule_update` / `rule_delete` / `rule_toggle` 按 id 查无）。 */
-"rule_not_found";
+"rule_not_found" | 
+/**
+ *  运行时有在途会话（M7-01/ADR-015：`runtime_disable` 未带 `confirm_terminate: true`；
+ *  消息携带在途计数，UI 二次确认后携确认标志重试）。
+ */
+"runtime_busy";
 
 /**  IPC 命令错误的线上形态：`{ "code": "...", "message": "...", "field": "..." }`。 */
 export type IpcError_Deserialize = {
@@ -482,6 +492,16 @@ export type RulesListRequest = Record<string, never>;
 /**  `run_retry`（ADR-004）：仅终态 run 可重试；格式层校验 ULID，终态由后端判定。 */
 export type RunRetryRequest = {
 	run_id: string,
+};
+
+/**
+ *  `runtime_disable`（M7-01/ADR-015）：`runtime_id` 命中注册表（存在性由后端判定）；
+ *  存在在途会话且未带 `confirm_terminate: true` → `runtime_busy`（不转移、不写偏好）。
+ */
+export type RuntimeDisableRequest = {
+	runtime_id: string,
+	/**  显式确认终止在途会话（缺省 `false`）。 */
+	confirm_terminate?: boolean | null,
 };
 
 /**

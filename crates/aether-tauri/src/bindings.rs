@@ -22,9 +22,10 @@ use crate::ipc::dto::{
     ProviderCreateRequest, ProviderDeleteRequest, ProviderModelAddRequest, ProviderModelToggleRequest,
     ProviderToggleRequest, ProviderType, ProviderUpdateRequest, ProvidersListRequest, RefPickKind,
     RefPickRequest, RuleAddRequest, RuleDeleteRequest, RuleToggleRequest, RuleUpdateRequest,
-    RulesListRequest, RunRetryRequest, RuntimeEnableRequest, RuntimeRetryRequest,
-    SessionCreateRequest, SessionIdRequest, SessionListRequest, SessionPermissionModeSetRequest,
-    SessionSendRequest, SessionStatus, SettingsGetRequest, SettingsSetRequest, StartupGetRequest,
+    RulesListRequest, RunRetryRequest, RuntimeDisableRequest, RuntimeEnableRequest,
+    RuntimeRetryRequest, SessionCreateRequest, SessionIdRequest, SessionListRequest,
+    SessionPermissionModeSetRequest, SessionSendRequest, SessionStatus, SettingsGetRequest,
+    SettingsSetRequest, StartupGetRequest,
     StartupMigrateRequest, StartupPickTargetRequest, WorkspaceSetRequest,
 };
 use crate::ipc::error::IpcError;
@@ -109,6 +110,7 @@ pub fn builder<R: tauri::Runtime>() -> Builder<R> {
         .typ::<RunRetryRequest>()
         .typ::<RuntimeRetryRequest>()
         .typ::<RuntimeEnableRequest>()
+        .typ::<RuntimeDisableRequest>()
         .typ::<WorkspaceSetRequest>()
         .typ::<RefPickRequest>()
         .typ::<RefPickKind>()

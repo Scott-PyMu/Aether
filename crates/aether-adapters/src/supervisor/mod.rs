@@ -41,9 +41,9 @@ pub use resources::{
     RESOURCE_CPU_LIMIT_PERCENT, RESOURCE_RSS_LIMIT_BYTES, RESOURCE_SAMPLE_INTERVAL,
 };
 pub use runtime::{
-    kill_tree_system, new_launch_token, IsolationOutcome, MonitorOutcome, ReleaseOutcome,
-    RestartOutcome, RuntimeSpec, RuntimeSupervisor, StartOutcome, Supervisor, SupervisorConfig,
-    SupervisorError, SystemTreeKiller, ENV_ARTIFACTS_DIR, INITIALIZE_TIMEOUT,
+    kill_tree_system, new_launch_token, DisableOutcome, IsolationOutcome, MonitorOutcome,
+    ReleaseOutcome, RestartOutcome, RuntimeSpec, RuntimeSupervisor, StartOutcome, Supervisor,
+    SupervisorConfig, SupervisorError, SystemTreeKiller, ENV_ARTIFACTS_DIR, INITIALIZE_TIMEOUT,
 };
 pub use state::{
     now_ms, AuditKind, AuditRecord, NoopObserver, ResourceEvent, ResourceLimitKind, StateCore,

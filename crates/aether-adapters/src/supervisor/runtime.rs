@@ -125,6 +125,9 @@ pub enum StartOutcome {
     },
     /// 准入拒绝：`disabled + untrusted`（DoD⑤）。
     Rejected { detail: String },
+    /// 用户禁用（ADR-015 决策 5 启动矩阵：`enabled=0` 不预热，直接置
+    /// `disabled + user_disabled`；命令层禁用使用 [`DisableOutcome`]）。
+    Disabled { reason: DisabledReason },
 }
 
 impl StartOutcome {
@@ -188,6 +191,19 @@ pub enum ReleaseOutcome {
     },
 }
 
+/// `runtime_disable` 结果（ADR-015 决策 2/3：先转移 `→ disabled`、后受控终止）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct DisableOutcome {
+    /// 命令执行后的监督器状态（恒为 `disabled`）。
+    pub status: RuntimeStatus,
+    /// 转移原因（恒为 `user_disabled`）。
+    pub reason: DisabledReason,
+    /// 本次是否终止了运行中的进程（`cold` 上禁用为 `false`）。
+    pub terminated: bool,
+    /// 受控终止报告（未终止时为默认值；D5 整树回收机制与耗时）。
+    pub termination: TerminationReport,
+}
+
 /// 命令层错误（`runtime_retry` / `runtime_enable` 的参数与状态校验，DoD⑦）。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SupervisorError {
@@ -204,6 +220,8 @@ pub enum SupervisorError {
     EnableNotAllowed { status: RuntimeStatus },
     #[error("runtime_enable 被拒：{reason} 必须先修复清单/版本（ADR-004）")]
     NeedsRemedy { reason: DisabledReason },
+    #[error("runtime_disable 不适用于已禁用状态（ADR-015 命令矩阵）")]
+    DisableNotAllowed { status: RuntimeStatus },
     #[error("状态转移失败：{0}")]
     Transition(String),
     #[error("台账错误：{0}")]
@@ -634,6 +652,10 @@ impl RuntimeSupervisor {
                 reason: DisabledReason::Untrusted,
                 detail,
             },
+            // 不可达：`start()` 不产生该分支（仅启动矩阵预热路径使用）。
+            StartOutcome::Disabled { .. } => RestartOutcome::NotApplicable {
+                status: RuntimeStatus::Disabled,
+            },
         }
     }
 
@@ -700,9 +722,76 @@ impl RuntimeSupervisor {
                     reason: DisabledReason::Untrusted,
                     detail,
                 },
+                // 不可达：`start()` 不产生该分支（仅启动矩阵预热路径使用）。
+                StartOutcome::Disabled { .. } => ReleaseOutcome::NotApplicable {
+                    status: RuntimeStatus::Disabled,
+                },
             },
             other => ReleaseOutcome::NotApplicable { status: other },
         }
+    }
+
+    /// `runtime_disable`（ADR-015 决策 2/3）：先转移 `* → disabled + user_disabled`
+    /// （阻断自动重启与新准入），后按 D5 受控终止序列整树回收。
+    ///
+    /// 偏好（`runtimes.enabled=0`）由命令层在调用本方法**之前**写入（失败即命令失败，
+    /// ADR-015 §2.1#5「偏好写序（失败关闭）」）；本方法只负责状态与进程。
+    /// `disabled` 上再禁用 → [`SupervisorError::DisableNotAllowed`]（不转移）。
+    pub async fn disable(
+        &self,
+        detail: Option<String>,
+    ) -> Result<DisableOutcome, SupervisorError> {
+        let mut state = self.state.lock().await;
+        let status = state.fsm.status();
+        if status == RuntimeStatus::Disabled {
+            return Err(SupervisorError::DisableNotAllowed { status });
+        }
+        self.transition_locked(
+            &mut state,
+            RuntimeStatus::Disabled,
+            Some(DisabledReason::UserDisabled),
+            detail.clone(),
+        )?;
+        let mut termination = TerminationReport::default();
+        let mut terminated = false;
+        if let Some(mut running) = state.running.take() {
+            terminated = true;
+            termination = self.terminate_running(&mut running).await;
+            self.observer.on_audit(&AuditRecord::new(
+                self.runtime_id.clone(),
+                AuditKind::Terminated,
+                format!(
+                    "用户禁用终止（{}）；机制={:?}，退出={}，耗时={}ms",
+                    detail.as_deref().unwrap_or("-"),
+                    termination.mechanisms(),
+                    termination.exited,
+                    termination.total_ms
+                ),
+                now_ms(),
+            ));
+        }
+        Ok(DisableOutcome {
+            status: RuntimeStatus::Disabled,
+            reason: DisabledReason::UserDisabled,
+            terminated,
+            termination,
+        })
+    }
+
+    /// 启动矩阵（ADR-015 决策 5）：`enabled=0` 条目显式转移 `cold → disabled(user_disabled)`，
+    /// 不 spawn；转移经观察者广播 `runtime.status_changed` 并保留审计（事件与审计并存）。
+    pub async fn apply_startup_disabled(&self, detail: String) {
+        let mut state = self.state.lock().await;
+        if state.fsm.status() != RuntimeStatus::Cold {
+            // 启动序列内不应发生；防御性返回（不修改现状）。
+            return;
+        }
+        let _ = self.transition_locked(
+            &mut state,
+            RuntimeStatus::Disabled,
+            Some(DisabledReason::UserDisabled),
+            Some(detail),
+        );
     }
 
     /// 资源采样（D5：5s、RSS >1GB 或 CPU >200% 持续 60s → 告警；不自动杀）。
@@ -1066,11 +1155,33 @@ impl Supervisor {
 
     /// 预热：应用启动即启动全部 `enabled` 适配器并完成 `initialize`（D5）。
     pub async fn warmup_all(&self) -> Vec<(String, StartOutcome)> {
+        self.warmup_all_with_prefs(&BTreeMap::new()).await
+    }
+
+    /// 预热（ADR-015 决策 5 启动矩阵）：`prefs` = `runtimes.enabled` 持久化偏好；
+    /// 无记录回退构建期缺省（[`RuntimeManifest::enabled`]）。`enabled=0` 条目
+    /// **不 spawn**，显式 `cold → disabled(user_disabled)`（发事件；审计保留 `audit_log`）。
+    pub async fn warmup_all_with_prefs(
+        &self,
+        prefs: &BTreeMap<String, bool>,
+    ) -> Vec<(String, StartOutcome)> {
         let mut outcomes = Vec::new();
         let mut ready = Vec::new();
         for (id, runtime) in &self.runtimes {
             let manifest = runtime.manifest();
-            if !manifest.enabled {
+            let effective = prefs.get(id).copied().unwrap_or(manifest.enabled);
+            if !effective {
+                runtime
+                    .apply_startup_disabled(
+                        "启动矩阵：用户已禁用（runtimes.enabled=0），不预热（ADR-015）".to_owned(),
+                    )
+                    .await;
+                outcomes.push((
+                    id.clone(),
+                    StartOutcome::Disabled {
+                        reason: DisabledReason::UserDisabled,
+                    },
+                ));
                 continue;
             }
             match self.policy.admit(manifest) {
@@ -1112,12 +1223,28 @@ impl Supervisor {
 
     /// `runtime_enable`（ADR-004）：`runtime_id` 白名单 + 仅 `disabled`；
     /// `untrusted` / `version_mismatch` 必须先修复清单/版本（禁止直接启用）。
+    /// ADR-015：适用范围扩展至 `user_disabled`（守卫与错误映射不变）。
     pub async fn runtime_enable(&self, runtime_id: &str) -> Result<StartOutcome, SupervisorError> {
         let runtime = self
             .get(runtime_id)
             .ok_or_else(|| SupervisorError::UnknownRuntime(runtime_id.to_owned()))?;
         runtime.begin_enable().await?;
         Ok(runtime.start().await)
+    }
+
+    /// `runtime_disable`（ADR-015 决策 2/3）：`runtime_id` 白名单（否则
+    /// [`SupervisorError::UnknownRuntime`]）；先转移 `→ disabled(user_disabled)`、
+    /// 后受控终止。偏好（`enabled=0`）由命令层在调用前写入（§2.1#5 偏好写序）。
+    pub async fn runtime_disable(
+        &self,
+        runtime_id: &str,
+    ) -> Result<DisableOutcome, SupervisorError> {
+        let runtime = self
+            .get(runtime_id)
+            .ok_or_else(|| SupervisorError::UnknownRuntime(runtime_id.to_owned()))?;
+        runtime
+            .disable(Some(format!("runtime_disable：{runtime_id}")))
+            .await
     }
 
     /// 应用关闭：终止全部运行时并清台账。
@@ -1159,6 +1286,9 @@ impl RuntimeSupervisor {
     }
 
     /// `runtime_enable` 的状态校验与 `disabled → cold` 转移（DoD⑦）。
+    ///
+    /// ADR-015：适用原因集合 = 既有全部 disabled 原因 − `{untrusted, version_mismatch}`；
+    /// **`user_disabled` 允许直接启用**（守卫与错误映射不变）。
     pub async fn begin_enable(&self) -> Result<(), SupervisorError> {
         let mut state = self.state.lock().await;
         let status = state.fsm.status();

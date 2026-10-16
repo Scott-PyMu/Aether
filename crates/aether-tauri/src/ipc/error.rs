@@ -57,6 +57,9 @@ pub enum IpcErrorCode {
     ProviderModelNotFound,
     /// 权限规则不存在（M6-01/ADR-018：`rule_update` / `rule_delete` / `rule_toggle` 按 id 查无）。
     RuleNotFound,
+    /// 运行时有在途会话（M7-01/ADR-015：`runtime_disable` 未带 `confirm_terminate: true`；
+    /// 消息携带在途计数，UI 二次确认后携确认标志重试）。
+    RuntimeBusy,
 }
 
 impl IpcErrorCode {
@@ -83,6 +86,7 @@ impl IpcErrorCode {
             Self::ProviderNotFound => "provider_not_found",
             Self::ProviderModelNotFound => "provider_model_not_found",
             Self::RuleNotFound => "rule_not_found",
+            Self::RuntimeBusy => "runtime_busy",
         }
     }
 }
@@ -220,6 +224,18 @@ impl IpcError {
         Self::new(
             IpcErrorCode::RuleNotFound,
             format!("权限规则不存在（{rule_id}）；已刷新规则列表"),
+        )
+    }
+
+    /// M7-01/ADR-015：运行时有在途会话，禁用需显式确认（消息携带计数；UI 二次确认）。
+    pub fn runtime_busy(runtime_id: &str, count: u32) -> Self {
+        Self::at_field(
+            IpcErrorCode::RuntimeBusy,
+            "confirm_terminate",
+            format!(
+                "运行时 {runtime_id} 有 {count} 个在途会话；禁用将终止在途任务（会话与数据保留）。\
+                 确认继续请携 confirm_terminate=true 重试"
+            ),
         )
     }
 

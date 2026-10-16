@@ -224,6 +224,15 @@ pub(crate) fn read_audit_row(row: &Row<'_>) -> rusqlite::Result<AuditLogRecord> 
 pub enum StoreCommand {
     /// 确保运行时注册行存在（FK `sessions.runtime_id` 前置；已存在则更新摘要字段）。
     EnsureRuntime { runtime: Runtime },
+    /// 写入运行时用户启停偏好（M7-01/ADR-015 决策 5：`runtimes.enabled` 唯一事实源）。
+    ///
+    /// 行不存在时为完整 upsert（`Runtime` 携带全部非空列）；已存在时**仅**更新
+    /// `enabled` 与 `updated_at`（不得覆盖 `EnsureRuntime` 维护的摘要字段）。
+    SetRuntimeEnabled {
+        runtime: Runtime,
+        /// 目标偏好（`true`=启用 / `false`=用户禁用）。
+        enabled: bool,
+    },
     /// 插入会话行。
     InsertSession { session: Session },
     /// 更新会话状态（`closed_at` 仅在给出时写入）。
@@ -429,6 +438,39 @@ pub(crate) fn apply_command(
                         runtime.status.as_str(),
                         runtime.status_reason,
                         runtime.last_seen_at,
+                        runtime.created_at,
+                        runtime.updated_at,
+                    ],
+                )
+                .map_err(txn_failed)?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::Applied { affected })
+        }
+        StoreCommand::SetRuntimeEnabled { runtime, enabled } => {
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            let config = json_text(&runtime.config)?;
+            let capabilities = serde_json::to_string(&runtime.capabilities)
+                .map_err(|error| serialization_failed("runtimes.capabilities", &error))?;
+            let affected = transaction
+                .execute(
+                    "INSERT INTO runtimes (id, name, kind, version, protocol, capabilities, endpoint, config, \
+                     status, status_reason, last_seen_at, enabled, created_at, updated_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14) \
+                     ON CONFLICT(id) DO UPDATE SET enabled = excluded.enabled, \
+                     updated_at = excluded.updated_at",
+                    params![
+                        runtime.id.as_str(),
+                        runtime.name,
+                        runtime.kind,
+                        runtime.version,
+                        runtime.protocol,
+                        capabilities,
+                        runtime.endpoint,
+                        config,
+                        runtime.status.as_str(),
+                        runtime.status_reason,
+                        runtime.last_seen_at,
+                        enabled,
                         runtime.created_at,
                         runtime.updated_at,
                     ],
@@ -1264,6 +1306,52 @@ impl ReadPool {
                 sessions.push(row?);
             }
             Ok(sessions)
+        })
+        .await
+    }
+
+    /// 运行时启停偏好快照（M7-01/ADR-015：`runtimes.enabled`；启动矩阵与
+    /// `runtimes_list.enabled` 的唯一读路径）。表可为空（无注册行）。
+    pub async fn runtime_preferences(&self) -> Result<BTreeMap<String, bool>, StoreError> {
+        self.with_connection(|connection| {
+            let mut statement = connection.prepare("SELECT id, enabled FROM runtimes")?;
+            let rows = statement.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? != 0))
+            })?;
+            let mut preferences = BTreeMap::new();
+            for row in rows {
+                let (id, enabled) = row?;
+                preferences.insert(id, enabled);
+            }
+            Ok(preferences)
+        })
+        .await
+    }
+
+    /// 在途工作量计数（M7-01/ADR-015 §2.1#2，禁用确认门与 `active_sessions` 同一读路径口径）：
+    /// 会话处于 `creating`/`running`/`paused`/`waiting_permission`，**或**存在
+    /// `queued`/`running` run（终态不计）。
+    pub async fn active_work_counts(&self) -> Result<BTreeMap<String, u32>, StoreError> {
+        self.with_connection(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT runtime_id, COUNT(*) FROM ( \
+                   SELECT runtime_id FROM sessions \
+                    WHERE status IN ('creating','running','paused','waiting_permission') \
+                   UNION ALL \
+                   SELECT sessions.runtime_id FROM runs \
+                     JOIN sessions ON sessions.id = runs.session_id \
+                    WHERE runs.status IN ('queued','running') \
+                 ) GROUP BY runtime_id",
+            )?;
+            let rows = statement.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?;
+            let mut counts = BTreeMap::new();
+            for row in rows {
+                let (runtime_id, count) = row?;
+                counts.insert(runtime_id, u32::try_from(count).unwrap_or(u32::MAX));
+            }
+            Ok(counts)
         })
         .await
     }

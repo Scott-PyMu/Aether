@@ -1041,6 +1041,23 @@ impl CommandRequest for RuntimeEnableRequest {
     }
 }
 
+/// `runtime_disable`（M7-01/ADR-015）：`runtime_id` 命中注册表（存在性由后端判定）；
+/// 存在在途会话且未带 `confirm_terminate: true` → `runtime_busy`（不转移、不写偏好）。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeDisableRequest {
+    pub runtime_id: String,
+    /// 显式确认终止在途会话（缺省 `false`）。
+    #[serde(default)]
+    pub confirm_terminate: Option<bool>,
+}
+
+impl CommandRequest for RuntimeDisableRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        validate::validate_identifier(&self.runtime_id, "runtime_id")
+    }
+}
+
 /// `workspace_set`（ADR-004/D14）：`workspace_id` 存在性 或 `root_path`
 /// canonicalize（目录须存在；命中同步盘拒绝清单则拒绝）。P0 仅对新会话生效。
 #[derive(Debug, Deserialize, specta::Type)]

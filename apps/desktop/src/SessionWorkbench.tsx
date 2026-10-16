@@ -20,6 +20,10 @@ import { artifactsIpc as productionArtifactsIpc, type ArtifactsIpc } from "./art
 import { describeIpcError, ipcErrorCode } from "./startup";
 import { diagnosticsIpc as productionDiagnosticsIpc, type DiagnosticsIpc } from "./diagnostics";
 import { DiagnosticsEntry } from "./DiagnosticsEntry";
+import {
+  defaultAetherEventListener,
+  type AetherEventListener,
+} from "./eventBridge";
 import type { EventStore } from "./eventStore";
 import { FilePanel } from "./FilePanel";
 import { STORAGE_L2_THRESHOLD } from "./health";
@@ -103,6 +107,12 @@ export interface SessionWorkbenchProps {
   providersIpc?: ProvidersIpc;
   /** M5-05：归档导出 IPC 注入（单会话导出；缺省 = 生产 Tauri 实现）。 */
   archiveIpc?: ArchiveIpc;
+  /**
+   * M7-01/ADR-015（DoD0）：`aether://event` 监听注入（测试替身；缺省 = 生产
+   * tauri-specta 生成绑定）。`runtime.status_changed` 到达时实时刷新运行时注册表
+   * （徽标即时变化；health 轮询保留为兜底）。
+   */
+  eventListener?: AetherEventListener;
 }
 
 function mergeMessages(previous: MessageRow[], incoming: MessageRow[]): MessageRow[] {
@@ -128,6 +138,7 @@ export function SessionWorkbench({
   artifactsIpc: artifactsIpcProp = productionArtifactsIpc,
   providersIpc: providersIpcProp = productionProvidersIpc,
   archiveIpc: archiveIpcProp = productionArchiveIpc,
+  eventListener = defaultAetherEventListener,
 }: SessionWorkbenchProps) {
   const [runtimes, setRuntimes] = useState<RuntimeInfo[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
@@ -296,6 +307,37 @@ export function SessionWorkbench({
     lastRuntimeSignature.current = runtimeSummarySignature;
     void refreshRuntimes();
   }, [refreshRuntimes, runtimeSummarySignature]);
+
+  // M7-01/ADR-015（DoD0）：`runtime.status_changed` 事件实时刷新运行时注册表
+  // （合成归段 `runtime:<id>`；徽标/选择器即时变化）。监听注册失败不阻断工作台
+  // （health 轮询仍为兜底刷新路径）。
+  const refreshRuntimesRef = useRef(refreshRuntimes);
+  refreshRuntimesRef.current = refreshRuntimes;
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | null = null;
+    void eventListener((event) => {
+      if (event.type === "runtime.status_changed") {
+        void refreshRuntimesRef.current();
+      }
+    })
+      .then((dispose) => {
+        if (active) {
+          unlisten = dispose;
+        } else {
+          dispose();
+        }
+      })
+      .catch(() => {
+        // 事件通道不可用（如 jsdom 测试环境）：保持静默，由 health 轮询兜底。
+      });
+    return () => {
+      active = false;
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, [eventListener]);
 
   useEffect(() => {
     if (!activeSessionId) {

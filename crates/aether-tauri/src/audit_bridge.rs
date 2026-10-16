@@ -7,16 +7,26 @@
 //! 不产生任何回调，就绪后（启动序列尾段/预热/控制命令）全部审计经单写队列追加
 //! `audit_log`（应用层仅 INSERT，无 UPDATE/DELETE）。
 //!
+//! M7-01/ADR-015（DoD0）：注入事件管线后，**每次合法转移同时发射
+//! `runtime.status_changed` 事件**（信封 9 字段；先日志后广播，D4），会话归段为
+//! 全局合成段 `session_id = "runtime:<runtime_id>"`（不建 `sessions` 行、不进
+//! `session_list`/`messages_page`/补读；审计记录保留不变——事件与审计并存）。
+//!
 //! 审计动作命名沿用既有约定（与 `permission.*` / `backup.restore` 一致）：
 //! - `runtime.status_changed`：每次合法状态转移（`result` = `from→to`）；
 //! - `runtime.<audit_kind>`：监督器审计记录（`admission_rejected` / `circuit_broken` /
-//!   `terminated` / `ledger_reclaimed` / `ledger_stale_record` / `ledger_skipped`）。
+//!   `terminated` / `ledger_reclaimed` / `ledger_stale_record` / `ledger_skipped` /
+//!   `registry_rejected`）。
 
 use std::sync::{Arc, RwLock};
 
 use aether_adapters::supervisor::{AuditRecord, ResourceEvent, StatusChange, SupervisorObserver};
+use aether_control::EventPipeline;
 use aether_store::{AuditLogRecord, StoreCommand, WriteQueue};
 use serde_json::json;
+
+/// 全局事件的合成会话归段前缀（ADR-015 附录 C-8：`session_id = "runtime:<id>"`）。
+pub const RUNTIME_EVENT_SESSION_PREFIX: &str = "runtime:";
 
 /// 延迟接线观察者：监督器构造期无存储句柄时的占位出口。
 ///
@@ -70,16 +80,31 @@ impl SupervisorObserver for DeferredObserver {
 
 /// 存储审计出口：监督器回调 → `audit_log` 追加（经单写队列，D3）。
 ///
-/// 回调为同步接口，写入经核心运行时 spawn（fire-and-forget，不阻塞监督器任务）；
-/// 写入失败仅记 tracing 告警（审计为追加日志，不反向阻断适配器监督）。
+/// M7-01/ADR-015（DoD0）：注入事件管线后，状态转移同时发射 `runtime.status_changed`
+/// 事件（合成归段 `runtime:<id>`；经管线归一化 → 先日志后广播 → `aether://event`）。
+///
+/// 回调为同步接口，写入/事件提交经核心运行时 spawn（fire-and-forget，不阻塞监督器
+/// 任务）；失败仅记 tracing 告警（审计为追加日志，不反向阻断适配器监督）。
 pub struct StoreAuditObserver {
     write: WriteQueue,
     handle: tokio::runtime::Handle,
+    pipeline: Option<EventPipeline>,
 }
 
 impl StoreAuditObserver {
     pub fn new(write: WriteQueue, handle: tokio::runtime::Handle) -> Self {
-        Self { write, handle }
+        Self {
+            write,
+            handle,
+            pipeline: None,
+        }
+    }
+
+    /// 注入事件管线（M7-01 DoD0：状态转移 → 事件发射链路；未注入仅审计）。
+    #[must_use]
+    pub fn with_pipeline(mut self, pipeline: EventPipeline) -> Self {
+        self.pipeline = Some(pipeline);
+        self
     }
 
     fn enqueue(&self, record: AuditLogRecord) {
@@ -87,6 +112,40 @@ impl StoreAuditObserver {
         self.handle.spawn(async move {
             if let Err(error) = write.execute(StoreCommand::InsertAudit { record }).await {
                 tracing::warn!(error = %error, "适配器审计写入失败（M3-07）");
+            }
+        });
+    }
+
+    /// 发射 `runtime.status_changed`（附录 B 信封 9 字段；合成会话归段）。
+    ///
+    /// 走管线 `submit` 与适配器事件同一路径（Normalizer 严格校验 → 会话 sequencer →
+    /// 先日志后广播）；提交失败仅告警（状态审计仍在，缺口可经补读/前端轮询兜底）。
+    fn submit_status_event(&self, change: &StatusChange) {
+        let Some(pipeline) = self.pipeline.clone() else {
+            return;
+        };
+        let raw = json!({
+            "v": aether_core::EVENT_ENVELOPE_VERSION,
+            "id": ulid::Ulid::new().to_string(),
+            "session_id": format!("{RUNTIME_EVENT_SESSION_PREFIX}{}", change.runtime_id.as_str()),
+            "run_id": null,
+            "runtime_id": change.runtime_id.as_str(),
+            "seq": null,
+            "ts": change.at_ms,
+            "type": "runtime.status_changed",
+            "payload": {
+                "runtime_id": change.runtime_id.as_str(),
+                "from": change.from.as_str(),
+                "to": change.to.as_str(),
+                "reason": change.reason.map(|reason| reason.as_str()),
+            },
+        });
+        self.handle.spawn(async move {
+            if let Err(error) = pipeline.submit(raw).await {
+                tracing::warn!(
+                    error = %error,
+                    "runtime.status_changed 事件提交管线失败（审计保留；事件缺口不阻断监督器）"
+                );
             }
         });
     }
@@ -114,6 +173,7 @@ impl SupervisorObserver for StoreAuditObserver {
             result: Some(format!("{}→{}", change.from.as_str(), change.to.as_str())),
             ts: change.at_ms,
         });
+        self.submit_status_event(change);
     }
 
     fn on_audit(&self, record: &AuditRecord) {

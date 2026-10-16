@@ -66,7 +66,8 @@ fn migration_0005_creates_audit_indexes_and_is_idempotent() {
     }
 
     let applied = store.applied_migrations().unwrap();
-    assert_eq!(applied.last().map(|item| item.version), Some(5));
+    // 迁移清单推进至最新（M7-01 合入 0006；本断言为「应用至最新」语义）。
+    assert_eq!(applied.last().map(|item| item.version), Some(6));
 
     // 旧库（0001）→ 增量迁移：历史 audit_log 行保留，索引补齐（幂等复跑）。
     let dir = tempfile::tempdir().unwrap();

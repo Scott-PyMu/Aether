@@ -53,9 +53,12 @@ export interface RuntimeInfo {
   version: string;
   protocol: string;
   capabilities: string[];
+  /** M7-01/ADR-015：用户启停偏好（`runtimes.enabled` 持久化值；非静态字段）。 */
   enabled: boolean;
   status: RuntimeStatus;
   status_reason?: string | null;
+  /** M7-01/ADR-015：在途会话/run 计数（禁用二次确认 `data-count` 依据；0 为合法值）。 */
+  active_sessions?: number;
 }
 
 /** 思考深度档位缺省值（ADR-010 决策 2：默认「高」= 2）。 */
@@ -287,7 +290,8 @@ export const RUNTIME_STATUS_LABELS: Record<RuntimeStatus, string> = {
 };
 
 /**
- * 运行时 `status_reason` 展示文案（M3-03；UI-UX §3.2/§5，D5 五种 + 握手超时）。
+ * 运行时 `status_reason` 展示文案（M3-03；UI-UX §3.2/§5，D5 五种 + 握手超时 +
+ * ADR-015 `user_disabled`）。
  *
  * 未知 reason 原样展示（不隐藏诊断信息）。
  */
@@ -298,4 +302,6 @@ export const RUNTIME_REASON_LABELS: Record<string, string> = {
   version_mismatch: "版本不匹配",
   untrusted: "未受信任（非官方清单）",
   storage_backpressure: "存储背压隔离",
+  // ADR-015 附录 E-2/E-3：用户显式禁用（非故障；灰点语义由 RuntimePanel 承接）。
+  user_disabled: "已由用户手动禁用（非故障）",
 };

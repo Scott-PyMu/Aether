@@ -15,7 +15,8 @@ use super::dto::{
     PermissionsPendingRequest, ProviderCreateRequest, ProviderDeleteRequest, ProviderModelAddRequest,
     ProviderModelToggleRequest, ProviderToggleRequest, ProviderUpdateRequest, ProvidersListRequest,
     RuleAddRequest, RuleDeleteRequest, RuleToggleRequest, RuleUpdateRequest, RunRetryRequest,
-    RuntimeEnableRequest, RuntimeRetryRequest, SessionCreateRequest, SessionExportRequest,
+    RuntimeDisableRequest, RuntimeEnableRequest, RuntimeRetryRequest, SessionCreateRequest,
+    SessionExportRequest,
     SessionIdRequest, SessionListRequest, SessionPermissionModeSetRequest, SessionSendRequest,
     SettingsGetRequest, SettingsSetRequest, WorkspaceSetRequest,
 };
@@ -160,6 +161,12 @@ pub trait IpcBackend: Send + Sync + 'static {
     /// ADR-004/M1-10：仅 `disabled` 可用；`untrusted`/`version_mismatch` 需先修复。
     fn runtime_enable(&self, _request: &RuntimeEnableRequest) -> Result<Value, IpcError> {
         Err(IpcError::not_implemented("runtime_enable"))
+    }
+
+    /// M7-01/ADR-015：运行期禁用官方适配器；在途未确认 → `runtime_busy`；
+    /// 确认后偏好先写、`→ disabled + user_disabled`、受控终止（整树回收）。
+    fn runtime_disable(&self, _request: &RuntimeDisableRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("runtime_disable"))
     }
 
     /// ADR-004/D14：绑定/切换工作区；`canonical_root_path` 为 root_path 的 canonicalize 结果。

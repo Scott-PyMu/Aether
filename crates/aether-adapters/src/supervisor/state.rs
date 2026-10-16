@@ -87,6 +87,10 @@ pub enum AuditKind {
     CircuitBroken,
     /// 终止序列完成（含逐步机制与耗时）。
     Terminated,
+    /// 注册清单条目拒绝加载（ADR-015 决策 4：`runtime.registry_rejected`；
+    /// detail = id + 原因分类：`missing_file`/`digest_mismatch`/`unknown_id`/
+    /// `path_rejected`/`schema_invalid`）。
+    RegistryRejected,
 }
 
 impl AuditKind {
@@ -98,6 +102,7 @@ impl AuditKind {
             Self::LedgerStaleRecord => "ledger_stale_record",
             Self::CircuitBroken => "circuit_broken",
             Self::Terminated => "terminated",
+            Self::RegistryRejected => "registry_rejected",
         }
     }
 }
@@ -294,7 +299,7 @@ mod tests {
 
     #[test]
     fn status_reason_dictionary_values_are_from_d5() {
-        // D5「如」清单 + ADR-003/ADR-004 补充（无 CHECK 约束，取值只增不改语义）。
+        // D5「如」清单 + ADR-003/ADR-004 补充 + ADR-015 `user_disabled`（只增不改语义）。
         let expected = [
             "handshake_timeout",
             "version_mismatch",
@@ -305,9 +310,37 @@ mod tests {
             "heartbeat_failed",
             "crashed",
             "storage_backpressure",
+            "user_disabled",
         ];
         let actual: Vec<&str> = DisabledReason::ALL.iter().map(|r| r.as_str()).collect();
         assert_eq!(actual, expected);
+    }
+
+    /// ADR-015：`user_disabled` 走既有边集（`* → disabled`），`disabled` 必带原因。
+    #[test]
+    fn user_disabled_uses_existing_disabled_edges() {
+        for from in [
+            RuntimeStatus::Cold,
+            RuntimeStatus::Starting,
+            RuntimeStatus::Ready,
+            RuntimeStatus::Degraded,
+        ] {
+            assert!(
+                transition_allowed(from, RuntimeStatus::Disabled),
+                "{from} → disabled 必须在既有边集内（ADR-015：不新增转移边）"
+            );
+        }
+        let mut fsm = core();
+        fsm.transition(RuntimeStatus::Starting, None, None).unwrap();
+        let change = fsm
+            .transition(
+                RuntimeStatus::Disabled,
+                Some(DisabledReason::UserDisabled),
+                None,
+            )
+            .unwrap();
+        assert_eq!(change.reason, Some(DisabledReason::UserDisabled));
+        assert_eq!(fsm.status_reason(), Some(DisabledReason::UserDisabled));
     }
 
     #[test]
