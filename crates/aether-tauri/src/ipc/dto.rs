@@ -63,7 +63,11 @@ pub const SETTINGS_KEY_ALLOWLIST: &[&str] = &[
 #[derive(Debug, Deserialize, specta::Type)]
 #[serde(deny_unknown_fields)]
 pub struct SessionCreateRequest {
-    pub runtime_id: String,
+    /// 运行时 id（M7-02/ADR-022：由必填改**可选**——缺省 = 自动路由；显式 = 手动指定，
+    /// 优先于自动路由且不参与打分；仍须通过可用性校验：未注册 → `invalid_enum`，
+    /// 已注册但 `enabled=0`/`disabled` → `invalid_value`）。
+    #[serde(default)]
+    pub runtime_id: Option<String>,
     pub title: String,
     #[serde(default)]
     pub workspace_id: Option<String>,
@@ -93,7 +97,9 @@ impl SessionCreateRequest {
 
 impl CommandRequest for SessionCreateRequest {
     fn validate(&self) -> Result<(), IpcError> {
-        validate::validate_identifier(&self.runtime_id, "runtime_id")?;
+        if let Some(runtime_id) = &self.runtime_id {
+            validate::validate_identifier(runtime_id, "runtime_id")?;
+        }
         validate::ensure_not_empty(&self.title, "title")?;
         ensure_max_chars(&self.title, "title", MAX_TITLE_CHARS)?;
         reject_control_chars(&self.title, "title", false)?;

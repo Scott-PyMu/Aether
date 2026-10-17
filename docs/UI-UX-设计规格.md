@@ -694,6 +694,8 @@ stateDiagram-v2
 | M5-05 | 归档导出（实现登记，2026-10-12） | `archive`（一键归档，缺省 `archives/`；上文 P1 登记项）/ `archive-external`（外部目录）/ `archive-export-result`；工作台 `session-export`（单会话导出）/ `session-export-result` | `data-result`（ok/failed）/ `data-level`（容量三档联动） |
 | M7-01 | 运行时启停开关（S-04） | `runtime-toggle` | `data-runtime-id` / `data-enabled` / `data-status` |
 | M7-01 | 禁用二次确认 | `runtime-disable-confirm` | `data-count`（在途会话数） |
+| M7-02 | 自动路由开关（实现登记，2026-10-16） | `runtime-auto-route` | `data-auto`（true/false；开启后新建会话不带 `runtime_id`，手动点选运行时即退出） |
+| M7-02 | 闸门排队位置（实现登记，2026-10-16） | `queue-position` | `data-position` / `data-limit`（`session_send` 响应 `queue` 快照；run 派发后隐藏） |
 | M7-03 | 会话暂停/恢复 | `session-pause-toggle` | `data-session-id` / `data-status`（running/paused/idle）/ `data-disabled`（能力未声明或连接未就绪时置灰） |
 | M5-05 | 容量一键归档 | `archive` | `data-result` |
 | M7-06 | 引用注入入口 | `file-reference` | — |

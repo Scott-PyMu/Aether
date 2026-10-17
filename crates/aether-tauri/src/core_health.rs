@@ -169,6 +169,10 @@ pub struct HealthReport {
     pub write_queue_depth: usize,
     /// `array | null`：`null` = 监督器未接线；`[]` = 已接线且无 runtime；`[...]` = 快照。
     pub runtimes: Option<Vec<RuntimeSummary>>,
+    /// `concurrency_gate: { limit, active, queued }`（M7-02/ADR-022 附录 A-5；UI 轮询 5s）。
+    /// 未接线（降级启动/测试构造）省略。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub concurrency_gate: Option<aether_control::ConcurrencyGateSnapshot>,
     pub ts: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub degrade_trigger: Option<String>,
@@ -182,6 +186,8 @@ pub struct HealthReport {
 pub struct HealthProvider {
     pipeline: Arc<dyn PipelineHealthSource>,
     runtimes: Arc<dyn RuntimeSummarySource>,
+    /// 并发闸门快照单元（M7-02：由 `SessionManager` 单写；未接线 → 字段省略）。
+    gate: Option<aether_control::ConcurrencyGateCell>,
 }
 
 impl HealthProvider {
@@ -189,7 +195,18 @@ impl HealthProvider {
         pipeline: Arc<dyn PipelineHealthSource>,
         runtimes: Arc<dyn RuntimeSummarySource>,
     ) -> Self {
-        Self { pipeline, runtimes }
+        Self {
+            pipeline,
+            runtimes,
+            gate: None,
+        }
+    }
+
+    /// 接线并发闸门快照单元（M7-02/ADR-022：`health.concurrency_gate`）。
+    #[must_use]
+    pub fn with_concurrency_gate(mut self, cell: aether_control::ConcurrencyGateCell) -> Self {
+        self.gate = Some(cell);
+        self
     }
 
     /// 生成只读健康报告（不落库、不产生事件）。
@@ -199,6 +216,7 @@ impl HealthProvider {
             storage_state: snapshot.storage_state,
             write_queue_depth: snapshot.write_queue_depth,
             runtimes: self.runtimes.summaries(),
+            concurrency_gate: self.gate.as_ref().and_then(|cell| cell.snapshot()),
             ts: now_ms(),
             degrade_trigger: snapshot.degrade_trigger,
             degraded_since_ms: snapshot.degraded_since_ms,
@@ -246,11 +264,26 @@ impl CoreHealthBackend {
         runtimes: Arc<dyn RuntimeSummarySource>,
         storage: Option<Arc<StorageSlot>>,
     ) -> Self {
+        Self::from_pipeline_with_slot_and_gate(pipeline, runtimes, storage, None)
+    }
+
+    /// 由真实管线构造 + 闸门快照单元（M7-02/ADR-022：`health.concurrency_gate` 数据源）。
+    pub fn from_pipeline_with_slot_and_gate(
+        pipeline: EventPipeline,
+        runtimes: Arc<dyn RuntimeSummarySource>,
+        storage: Option<Arc<StorageSlot>>,
+        gate: Option<aether_control::ConcurrencyGateCell>,
+    ) -> Self {
         let pipeline = Arc::new(pipeline);
         let source: Arc<dyn PipelineHealthSource> =
             Arc::clone(&pipeline) as Arc<dyn PipelineHealthSource>;
+        let provider = HealthProvider::new(source, runtimes);
+        let provider = match gate {
+            Some(cell) => provider.with_concurrency_gate(cell),
+            None => provider,
+        };
         Self {
-            provider: HealthProvider::new(source, runtimes),
+            provider,
             storage,
             pipeline: Some(pipeline),
         }
@@ -383,6 +416,17 @@ pub fn boot_core_full(
     handle: &tokio::runtime::Handle,
     runtimes: Arc<dyn RuntimeSummarySource>,
 ) -> Result<CoreBoot, CoreHealthBootError> {
+    boot_core_full_with_gate(data_dir, handle, runtimes, None)
+}
+
+/// 生产启动（M7-02 并发闸门接线版本）：
+/// `gate` = 闸门快照单元（与 `SessionManager` 共享；`health.concurrency_gate` 数据源）。
+pub fn boot_core_full_with_gate(
+    data_dir: &Path,
+    handle: &tokio::runtime::Handle,
+    runtimes: Arc<dyn RuntimeSummarySource>,
+    gate: Option<aether_control::ConcurrencyGateCell>,
+) -> Result<CoreBoot, CoreHealthBootError> {
     let db_path = data_dir.join("aether.db");
     let storage = StoreRuntime::open(&db_path, WriteQueueConfig::default(), handle)
         .map_err(CoreHealthBootError::Storage)?;
@@ -395,10 +439,11 @@ pub fn boot_core_full(
         EventPipeline::start(PipelineConfig::default(), journal, source, &startup, handle)
             .map_err(CoreHealthBootError::Pipeline)?;
     let slot = Arc::new(StorageSlot::new(storage));
-    let backend = CoreHealthBackend::from_pipeline_with_slot(
+    let backend = CoreHealthBackend::from_pipeline_with_slot_and_gate(
         pipeline.clone(),
         runtimes,
         Some(Arc::clone(&slot)),
+        gate,
     );
     Ok(CoreBoot {
         backend,

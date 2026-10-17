@@ -60,6 +60,9 @@ pub enum IpcErrorCode {
     /// 运行时有在途会话（M7-01/ADR-015：`runtime_disable` 未带 `confirm_terminate: true`；
     /// 消息携带在途计数，UI 二次确认后携确认标志重试）。
     RuntimeBusy,
+    /// 自动路由无可用候选（M7-02/ADR-022：`session_create` 缺省路由路径；消息区分
+    /// 「全部禁用」「无匹配模型」「无 ready 候选」，提示手动选择）。
+    NoCandidateRuntime,
 }
 
 impl IpcErrorCode {
@@ -87,6 +90,7 @@ impl IpcErrorCode {
             Self::ProviderModelNotFound => "provider_model_not_found",
             Self::RuleNotFound => "rule_not_found",
             Self::RuntimeBusy => "runtime_busy",
+            Self::NoCandidateRuntime => "no_candidate_runtime",
         }
     }
 }
@@ -236,6 +240,16 @@ impl IpcError {
                 "运行时 {runtime_id} 有 {count} 个在途会话；禁用将终止在途任务（会话与数据保留）。\
                  确认继续请携 confirm_terminate=true 重试"
             ),
+        )
+    }
+
+    /// M7-02/ADR-022：自动路由无可用候选（UI-UX §5 文案「没有可用的运行时：{原因}」；
+    /// `candidates` 为候选摘要文本，供「手动选择」入口旁展示）。
+    pub fn no_candidate_runtime(reason: &str, candidates: &str) -> Self {
+        Self::at_field(
+            IpcErrorCode::NoCandidateRuntime,
+            "runtime_id",
+            format!("没有可用的运行时：{reason}；已注册运行时：{candidates}；请手动选择运行时"),
         )
     }
 

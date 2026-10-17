@@ -192,7 +192,7 @@ fn run_retry_uses_terminal_guard_and_replays_per_mode_r_and_n() {
     let created = core
         .backend
         .session_create(&SessionCreateRequest {
-            runtime_id: "mock".to_owned(),
+            runtime_id: Some("mock".to_owned()),
             title: "M3-06 重放".to_owned(),
             workspace_id: None,
             model: None,

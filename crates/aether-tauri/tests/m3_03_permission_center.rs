@@ -1045,7 +1045,7 @@ fn disabled_runtime_cannot_create_session() {
 
         let error = backend
             .session_create(&SessionCreateRequest {
-                runtime_id: "mock".to_owned(),
+                runtime_id: Some("mock".to_owned()),
                 title: "禁用运行时会话".to_owned(),
                 workspace_id: None,
                 model: None,

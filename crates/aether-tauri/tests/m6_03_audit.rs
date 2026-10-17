@@ -882,7 +882,7 @@ fn protocol_reported_tool_calls_are_fully_audited_end_to_end() {
     let created = h
         .backend
         .session_create(&SessionCreateRequest {
-            runtime_id: "mock".to_owned(),
+            runtime_id: Some("mock".to_owned()),
             title: "M6-03 E2E".to_owned(),
             workspace_id: None,
             model: None,

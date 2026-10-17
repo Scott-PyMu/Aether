@@ -169,7 +169,7 @@ fn create_session(h: &Harness, title: &str) -> String {
     let created = h
         .backend
         .session_create(&SessionCreateRequest {
-            runtime_id: "mock".to_owned(),
+            runtime_id: Some("mock".to_owned()),
             title: title.to_owned(),
             workspace_id: None,
             model: None,

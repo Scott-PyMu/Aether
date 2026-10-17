@@ -241,7 +241,7 @@ impl Harness {
         let value = self
             .backend
             .session_create(&SessionCreateRequest {
-                runtime_id: "mock".to_owned(),
+                runtime_id: Some("mock".to_owned()),
                 title: "M3-12 E2E".to_owned(),
                 workspace_id: None,
                 model: None,

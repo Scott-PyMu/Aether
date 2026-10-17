@@ -50,6 +50,7 @@ import {
   THINKING_DEPTH_UNSUPPORTED_HINT,
   type MessageRow,
   type PermissionMode,
+  type RunQueuePosition,
   type RuntimeInfo,
   type SessionIpc,
   type SessionSummary,
@@ -145,6 +146,11 @@ export function SessionWorkbench({
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<MessageRow[]>([]);
   const [selectedRuntime, setSelectedRuntime] = useState<string>("");
+  /**
+   * M7-02/ADR-022：自动路由开关（缺省关闭 = 手动指定优先；开启后 `session_create`
+   * 不带 `runtime_id`，由固定优先级常量路由；失败回 `no_candidate_runtime`）。
+   */
+  const [autoRoute, setAutoRoute] = useState(false);
   const [modelDraft, setModelDraft] = useState("");
   /** M3-11：输入区模型选择（作用于新建会话；与手动输入共用 `modelDraft` 草稿字段）。 */
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
@@ -154,7 +160,14 @@ export function SessionWorkbench({
   const [error, setError] = useState<string | null>(null);
   /** 结构化错误码（UI-UX §7.3 通用行：错误元素补 `data-code`；无码为 `null`）。 */
   const [errorCode, setErrorCode] = useState<string | null>(null);
-  const [lastAck, setLastAck] = useState<{ runId: string; duplicate: boolean } | null>(null);
+  const [lastAck, setLastAck] = useState<{
+    runId: string;
+    duplicate: boolean;
+    /** M7-02/ADR-022：ack 所属会话（闸门排队位置展示的作用域判定）。 */
+    sessionId: string;
+    /** M7-02/ADR-022：超闸门排队位置（无排队为 `null`）。 */
+    queue: RunQueuePosition | null;
+  } | null>(null);
   /** T1 埋点：会话创建（点击 → `session_create` ack）耗时（毫秒）。 */
   const [createLatencyMs, setCreateLatencyMs] = useState<number | null>(null);
   /** M3-06：重放进行中的 run（按钮去抖）。 */
@@ -216,6 +229,16 @@ export function SessionWorkbench({
     () => new Map(projection.runs.map((run) => [run.runId, run])),
     [projection.runs],
   );
+  /**
+   * M7-02/ADR-022：闸门排队位置（最近一次发送 ack 的 `queue` 快照；`run.started`
+   * 到达（run 视图出现）即隐藏——仅当前会话、仅未派发窗口展示）。
+   */
+  const queueNotice = useMemo(() => {
+    if (!lastAck?.queue || lastAck.sessionId !== activeSessionId) {
+      return null;
+    }
+    return runViews.has(lastAck.runId) ? null : lastAck.queue;
+  }, [lastAck, activeSessionId, runViews]);
   /**
    * M3-12/ADR-011：会话列表分组（固定组序 + 空组隐藏 + 组内 `updated_at` 倒序）。
    *
@@ -397,26 +420,30 @@ export function SessionWorkbench({
   }, []);
 
   const onCreateSession = useCallback(async () => {
-    if (!selectedRuntime) {
+    if (!autoRoute && !selectedRuntime) {
       setErrorCode(null);
-      setError("请选择运行时");
+      setError("请选择运行时或开启自动路由");
       return;
     }
     // M3-03 DoD3（D5）：`disabled` 运行时不可创建会话（选择器已禁用；此处兜底
-    // 覆盖「选中后运行时转为 disabled」的窗口；后端另有等价防线）。
-    const selected = runtimes.find((runtime) => runtime.id === selectedRuntime);
-    if (selected?.status === "disabled") {
-      const reason = selected.status_reason ?? "disabled";
-      setErrorCode("invalid_value");
-      setError(`运行时 ${selected.name} 已禁用（${reason}），不可创建会话；请先修复并重新启用`);
-      return;
+    // 覆盖「选中后运行时转为 disabled」的窗口；后端另有等价防线）。自动路由不带
+    // 运行时（后端按候选过滤排除禁用项；无候选回 `no_candidate_runtime`）。
+    if (!autoRoute) {
+      const selected = runtimes.find((runtime) => runtime.id === selectedRuntime);
+      if (selected?.status === "disabled") {
+        const reason = selected.status_reason ?? "disabled";
+        setErrorCode("invalid_value");
+        setError(`运行时 ${selected.name} 已禁用（${reason}），不可创建会话；请先修复并重新启用`);
+        return;
+      }
     }
     const title = titleDraft.trim() || `会话 ${new Date().toLocaleTimeString()}`;
     const model = modelDraft.trim();
     const startedAt = performance.now();
     try {
       const created = await ipc.createSession({
-        runtime_id: selectedRuntime,
+        // M7-02/ADR-022：缺省 = 自动路由（不带 `runtime_id`）；显式 = 手动优先。
+        ...(autoRoute ? {} : { runtime_id: selectedRuntime }),
         title,
         ...(model ? { model } : {}),
         // M3-10/ADR-010：会话级思考深度随 `session_create` 透传（缺省 2）。
@@ -441,6 +468,7 @@ export function SessionWorkbench({
       reportError(failure);
     }
   }, [
+    autoRoute,
     ipc,
     modelDraft,
     permissionMode,
@@ -470,7 +498,13 @@ export function SessionWorkbench({
       });
       setThinkingWarning(thinkingWarningOf(ack.warnings));
       setDraft("");
-      setLastAck({ runId: ack.run_id, duplicate: ack.duplicate });
+      setLastAck({
+        runId: ack.run_id,
+        duplicate: ack.duplicate,
+        sessionId: activeSessionId,
+        // M7-02/ADR-022：超闸门排队位置（无排队省略）。
+        queue: ack.queue ?? null,
+      });
       if (!ack.duplicate) {
         // 乐观用户气泡（发送即展示；历史由 messages_page 基线回填）。
         const optimistic: MessageRow = {
@@ -634,23 +668,42 @@ export function SessionWorkbench({
           </ul>
 
           <h2 className="workbench-title">运行时</h2>
+          {/* M7-02/ADR-022：自动路由开关（缺省关闭 = 手动指定优先；开启后新建会话
+              不带 runtime_id，由固定优先级常量路由；无候选回 no_candidate_runtime）。 */}
+          <button
+            type="button"
+            role="switch"
+            aria-checked={autoRoute}
+            className={autoRoute ? "runtime-auto-route active" : "runtime-auto-route"}
+            data-testid="runtime-auto-route"
+            data-auto={String(autoRoute)}
+            onClick={() => setAutoRoute((value) => !value)}
+          >
+            自动路由（默认关闭；按固定优先级选择运行时）
+          </button>
           <div className="runtime-selector" data-testid="runtime-selector" role="radiogroup">
             {runtimes.map((runtime) => (
               <button
                 key={runtime.id}
                 type="button"
                 role="radio"
-                aria-checked={runtime.id === selectedRuntime}
+                aria-checked={!autoRoute && runtime.id === selectedRuntime}
                 data-testid="runtime-option"
                 data-runtime-id={runtime.id}
                 data-status={runtime.status}
-                data-selected={String(runtime.id === selectedRuntime)}
+                data-selected={String(!autoRoute && runtime.id === selectedRuntime)}
                 // M3-03 DoD3：disabled 运行时不可选（不可创建会话；D5）。
                 disabled={runtime.status === "disabled"}
                 className={
-                  runtime.id === selectedRuntime ? "runtime-option selected" : "runtime-option"
+                  runtime.id === selectedRuntime && !autoRoute
+                    ? "runtime-option selected"
+                    : "runtime-option"
                 }
-                onClick={() => setSelectedRuntime(runtime.id)}
+                onClick={() => {
+                  // 手动选择运行时即退出自动路由（手动优先；ADR-022 §2.1#1）。
+                  setAutoRoute(false);
+                  setSelectedRuntime(runtime.id);
+                }}
               >
                 <span className="runtime-name">{runtime.name}</span>
                 <span className="runtime-status">{RUNTIME_STATUS_LABELS[runtime.status]}</span>
@@ -836,6 +889,20 @@ export function SessionWorkbench({
               role={exportResult.result === "failed" ? "alert" : "status"}
             >
               {exportResult.message}
+            </p>
+          ) : null}
+
+          {/* M7-02/ADR-022：闸门排队位置（最近发送 ack 的 `queue` 快照；run 派发
+              （`run.started`）后隐藏）。`data-position` / `data-limit` 供断言。 */}
+          {queueNotice ? (
+            <p
+              className="queue-position"
+              data-testid="queue-position"
+              data-position={queueNotice.position}
+              data-limit={queueNotice.limit}
+              role="status"
+            >
+              排队中：第 {queueNotice.position} 位（并发上限 {queueNotice.limit}）
             </p>
           ) : null}
 

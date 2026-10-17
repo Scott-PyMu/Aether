@@ -14,7 +14,10 @@ mod m2_support;
 
 use std::time::{Duration, Instant};
 
-use aether_control::{LifecycleConfig, PermissionConfig, TASK_DUMP_ACTION_FORCED_CLEANUP};
+use aether_control::{
+    FixedFreeRam, LifecycleConfig, PermissionConfig, CONCURRENCY_GATE_MAX,
+    TASK_DUMP_ACTION_FORCED_CLEANUP,
+};
 use aether_core::{PermissionDecision, RunStatus, SessionStatus};
 use m2_support::{
     build_manager, build_permission_service, create_session, insert_session_row, manual_clock,
@@ -41,9 +44,14 @@ fn delta_envelope(session_id: &str, run_id: &str, text: &str) -> serde_json::Val
 }
 
 /// DoD1：取消风暴——20 会话并发 dispose，全部任务 10s 内退出；取消级联零遗漏。
+///
+/// M7-02（ADR-022）设计驱动更新：并发闸门生效（16GB 基准 → 上限
+/// `clamp(floor(16/1.5),2,10)=10`）——20 会话中 10 个 run 立即派发、其余 10 个进入
+/// 全局 FIFO；dispose 风暴须同时收口 FIFO（排队 run 一并取消、快照归零）。
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn dod1_cancel_storm_twenty_sessions_dispose_within_10s() {
     const SESSIONS: usize = 20;
+    const DISPATCHED: usize = CONCURRENCY_GATE_MAX;
     let core = TestCore::open().await;
     let executor = CancellableExecutor::new();
     let manager = build_manager(
@@ -51,7 +59,8 @@ async fn dod1_cancel_storm_twenty_sessions_dispose_within_10s() {
         system_clock(),
         executor.clone(),
         LifecycleConfig::default(),
-    );
+    )
+    .with_free_ram(std::sync::Arc::new(FixedFreeRam::new(16.0)));
 
     let mut session_ids = Vec::new();
     let mut run_ids = Vec::new();
@@ -61,19 +70,24 @@ async fn dod1_cancel_storm_twenty_sessions_dispose_within_10s() {
             .send(&session.id, "storm", &format!("storm-{index}"))
             .await
             .unwrap();
-        assert!(!ack.queued && !ack.duplicate);
+        assert!(!ack.duplicate);
         session_ids.push(session.id);
         run_ids.push(ack.run_id);
     }
+    // M7-02：闸门上限 10 → 仅前 10 个 run 派发（不超卖），其余进入全局 FIFO。
     assert!(
         wait_for(
-            || executor.call_count() == SESSIONS,
+            || executor.call_count() == DISPATCHED,
             Duration::from_secs(10)
         )
         .await,
-        "20 个执行器应全部派发（当前 {}）",
+        "{DISPATCHED} 个执行器应全部派发（当前 {}）",
         executor.call_count()
     );
+    let gate_before = manager.concurrency_gate().await;
+    assert_eq!(gate_before.limit, DISPATCHED);
+    assert_eq!(gate_before.active, DISPATCHED);
+    assert_eq!(gate_before.queued, SESSIONS - DISPATCHED, "其余 run 应排队");
 
     // 20 会话并发 dispose（取消风暴）。
     let started = Instant::now();
@@ -96,14 +110,19 @@ async fn dod1_cancel_storm_twenty_sessions_dispose_within_10s() {
         "有在途 run 的会话 dispose 应为 cancelled：{statuses:?}"
     );
 
-    // 取消树级联：全部 run 令牌取消、run 行终态 cancelled、会话行终态。
+    // 取消树级联：已派发的 run 令牌全部取消（FIFO 中提升后又被取消的 run 一并计入；
+    // 队列内未派发的 run 无执行器调用，由 run 行终态覆盖）。
     assert!(
         wait_for(
-            || executor.cancelled_count() == SESSIONS,
+            || {
+                let calls = executor.call_count();
+                calls >= DISPATCHED && executor.cancelled_count() == calls
+            },
             Duration::from_secs(5)
         )
         .await,
-        "取消令牌必须级联到全部在途 run（当前 {}）",
+        "取消令牌必须级联到全部已派发 run（调用 {} / 已取消 {}）",
+        executor.call_count(),
         executor.cancelled_count()
     );
     for run_id in &run_ids {
@@ -126,6 +145,10 @@ async fn dod1_cancel_storm_twenty_sessions_dispose_within_10s() {
             "会话取消节点应已取消：{session_id}"
         );
     }
+    // M7-02：dispose 风暴必须清空全局 FIFO（排队 run 一并收口，快照归零）。
+    let gate_after = manager.concurrency_gate().await;
+    assert_eq!(gate_after.active, 0, "无在途派发 run");
+    assert_eq!(gate_after.queued, 0, "全局 FIFO 必须清空");
 
     // 全部任务 10s 内退出（取消响应型执行器：实测毫秒级），无强制清理 dump。
     let exit_started = Instant::now();

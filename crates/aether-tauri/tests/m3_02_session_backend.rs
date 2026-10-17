@@ -176,7 +176,7 @@ fn wait_until(timeout: Duration, predicate: impl Fn() -> bool) -> bool {
 
 fn session_create(backend: &dyn IpcBackend, title: &str, model: Option<&str>) -> Value {
     let request = SessionCreateRequest {
-        runtime_id: "mock".to_owned(),
+        runtime_id: Some("mock".to_owned()),
         title: title.to_owned(),
         workspace_id: None,
         model: model.map(str::to_owned),

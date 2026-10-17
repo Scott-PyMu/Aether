@@ -56,7 +56,12 @@ use crate::backpressure::{BackpressureController, BackpressureError};
 use crate::cancel::{CancelTree, RunCancelToken, TaskDump, TaskWatchdog};
 use crate::clock::SharedClock;
 use crate::error::PipelineError;
+use crate::gate::{
+    max_concurrent_for_free_ram, ConcurrencyGateCell, ConcurrencyGateSnapshot, FreeRamSource,
+    GateQueue, CONCURRENCY_GATE_MAX, GATE_RAM_SAMPLE_INTERVAL,
+};
 use crate::pipeline::{EventPipeline, RunInterrupt, SubmitOutcome};
+use crate::routing::RouteDecision;
 use crate::ulid;
 
 /// 断流超时（D8/M2-01 DoD5：120s 无事件 → run failed 且可重试）。
@@ -111,6 +116,9 @@ pub struct SessionCreateOptions {
     pub thinking_depth: u8,
     /// 会话级权限模式（缺省 `workspace_write`）。
     pub permission_mode: aether_core::PermissionMode,
+    /// 自动路由决策（M7-02/ADR-022；`Some` = `runtime_id` 缺省经自动路由选中，
+    /// 落审计 `route.decided` 且 `session.created.routed=true`；手动指定 = `None`）。
+    pub route: Option<RouteDecision>,
 }
 
 impl Default for SessionCreateOptions {
@@ -121,6 +129,7 @@ impl Default for SessionCreateOptions {
             system_prompt: None,
             thinking_depth: aether_core::THINKING_DEPTH_DEFAULT,
             permission_mode: aether_core::PermissionMode::default(),
+            route: None,
         }
     }
 }
@@ -167,14 +176,27 @@ pub trait RunExecutor: Send + Sync + 'static {
     fn execute(&self, request: RunRequest) -> ExecutorFuture<'_>;
 }
 
+/// 闸门排队位置（M7-02/ADR-022 附录 A-5：`session_send` 响应可选 `queue`）。
+///
+/// `position` 仅指**全局 FIFO** 内位置（从 1 计；不含未进全局队列的会话等待槽 run）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QueuePosition {
+    /// 全局 FIFO 内位置（1 起）。
+    pub position: usize,
+    /// 当前闸门上限（`clamp(floor(free_ram_gb / 1.5), 2, 10)`）。
+    pub limit: usize,
+}
+
 /// ack 快路径结果（消息与 run 行已提交；模型执行异步进行）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SendAck {
     pub session_id: SessionId,
     pub message_id: MessageId,
     pub run_id: RunId,
-    /// 是否进入等待队列（当前有 run 在执行）。
+    /// 是否进入**会话等待槽**（D8；当前有 run 在执行）。
     pub queued: bool,
+    /// 闸门排队位置（M7-02/ADR-022：超闸门进入全局 FIFO 时附；否则省略）。
+    pub queue: Option<QueuePosition>,
     /// 是否幂等命中（相同 `client_msg_id` 重放；返回既有 message/run）。
     pub duplicate: bool,
 }
@@ -397,6 +419,9 @@ struct ActiveRun {
     thinking_override: bool,
     last_activity_ms: i64,
     cancel: RunCancelToken,
+    /// `true` = 已派发执行（占全局闸门槽位）；`false` = 闸门排队（占「当前 run 位」，
+    /// 在全局 FIFO 中等待；ADR-022 附录 A-6）。
+    dispatched: bool,
 }
 
 struct QueuedRun {
@@ -417,9 +442,29 @@ struct SessionState {
     cancel: RunCancelToken,
 }
 
+/// 全局闸门状态（M7-02/ADR-022）：上限 + FIFO 队列；`running` 计数由会话 in-memory
+/// 扫描（`active.dispatched`）得到，不维护冗余计数器（单一事实源，防漂移）。
+struct GateState {
+    /// 当前上限；初始缺省 = 上限常量（首轮巡检采样后按 `free_ram_gb` 收窄）。
+    limit: usize,
+    /// 全局 FIFO（单写者；不重排）。
+    queue: GateQueue,
+}
+
+impl Default for GateState {
+    fn default() -> Self {
+        Self {
+            limit: CONCURRENCY_GATE_MAX,
+            queue: GateQueue::default(),
+        }
+    }
+}
+
 #[derive(Default)]
 struct ManagerState {
     sessions: HashMap<SessionId, SessionState>,
+    /// 并发闸门（M7-02/ADR-022）。
+    gate: GateState,
 }
 
 struct ManagerInner {
@@ -439,9 +484,17 @@ struct ManagerInner {
     /// 任务看门狗（M2-05）：取消后 10s 未退出 → dump + 强制清理。
     task_watchdog: TaskWatchdog,
     /// 会话执行任务集合（M2-07；D2：长驻任务全部经 `JoinSet` 管理）。
-    run_tasks: AsyncMutex<JoinSet<()>>,
+    ///
+    /// M7-02：`std::sync::Mutex`（非异步）——`spawn_run_inner` 保持**同步函数**，
+    /// 避免「run 任务内推进闸门 FIFO → 再 spawn run 任务」形成的递归 future
+    /// （递归链无法证明 `Send`，同等待队列提升不递归 spawn 的既有约束）。
+    run_tasks: Mutex<JoinSet<()>>,
     /// run 任务 id →（会话, run）映射（panic 时经 JoinError 定位并恢复）。
     run_task_index: Mutex<HashMap<tokio::task::Id, (SessionId, RunId)>>,
+    /// 空闲内存采样源（M7-02/ADR-022；`None` = 未接线——闸门保持缺省上限，不巡检）。
+    free_ram: Mutex<Option<Arc<dyn FreeRamSource>>>,
+    /// 闸门快照单元（`health.concurrency_gate` 同步读；`None` = 未接线）。
+    gate_cell: Mutex<Option<ConcurrencyGateCell>>,
 }
 
 /// 会话生命周期管理器（克隆共享同一实例；内部状态经异步互斥保护）。
@@ -478,8 +531,10 @@ impl SessionManager {
                 backpressure: Mutex::new(None),
                 cancel_tree: CancelTree::new(),
                 task_watchdog,
-                run_tasks: AsyncMutex::new(JoinSet::new()),
+                run_tasks: Mutex::new(JoinSet::new()),
                 run_task_index: Mutex::new(HashMap::new()),
+                free_ram: Mutex::new(None),
+                gate_cell: Mutex::new(None),
             }),
         }
     }
@@ -493,6 +548,34 @@ impl SessionManager {
     pub fn with_backpressure(&self, controller: Arc<BackpressureController>) -> Self {
         *lock_backpressure(&self.inner) = Some(controller);
         self.clone()
+    }
+
+    /// 接线空闲内存采样源（M7-02/ADR-022）：`spawn_background` 起启动即采样，
+    /// 并按 [`GATE_RAM_SAMPLE_INTERVAL`] 巡检重算闸门上限（只对新 run 生效）。
+    /// 未接线 = 闸门保持缺省上限、不巡检（测试构造与降级路径）。
+    #[must_use]
+    pub fn with_free_ram(&self, source: Arc<dyn FreeRamSource>) -> Self {
+        *lock_free_ram(&self.inner) = Some(source);
+        self.clone()
+    }
+
+    /// 接线闸门快照单元（M7-02/ADR-022：`health.concurrency_gate` 同步读数据源）。
+    #[must_use]
+    pub fn with_concurrency_gate(&self, cell: ConcurrencyGateCell) -> Self {
+        *lock_gate_cell(&self.inner) = Some(cell);
+        self.clone()
+    }
+
+    /// 闸门巡检：采样空闲内存 → 重算上限（只对新 run 生效）→ 空槽按 FIFO 推进。
+    /// 返回新上限；无采样源/采样失败 → `None`（保持既有值）。
+    pub async fn refresh_gate_limit(&self) -> Option<usize> {
+        refresh_gate_limit_inner(&self.inner).await
+    }
+
+    /// 闸门快照（诊断/测试；`health.concurrency_gate` 经快照单元读取）。
+    pub async fn concurrency_gate(&self) -> ConcurrencyGateSnapshot {
+        let state = lock_state(&self.inner).await;
+        gate_snapshot(&state)
     }
 
     /// 生命周期配置。
@@ -619,6 +702,30 @@ impl SessionManager {
                 session: session.clone(),
             })
             .await?;
+        // M7-02/ADR-022 附录 A-3：自动路由决策落审计（actor=system；手动指定不写，
+        // 手动选择已入 `session.created` 载荷）。
+        if let Some(route) = &options.route {
+            self.insert_audit(
+                &session_id,
+                "system",
+                "route.decided",
+                "selected",
+                json!({
+                    "selected": route.runtime_id,
+                    "priority": route.priority,
+                    "reason": route.reason,
+                    "candidates": route.candidates.iter().map(|trace| json!({
+                        "id": trace.id,
+                        "enabled": trace.enabled,
+                        "status": trace.status.as_str(),
+                        "priority": trace.priority,
+                        "eligible": trace.eligible,
+                        "detail": trace.detail,
+                    })).collect::<Vec<_>>(),
+                }),
+            )
+            .await?;
+        }
         // M3-07（D9/SE-03 最小审计）：会话生命周期边界事件落审计（创建）。
         self.insert_audit(
             &session_id,
@@ -647,6 +754,8 @@ impl SessionManager {
                     created_at: now,
                     updated_at: now,
                 },
+                // M7-02/ADR-022 §2.1 实现要点 2：缺省路由回显 `routed=true`。
+                routed: options.route.as_ref().map(|_| true),
             }),
         )
         .await?;
@@ -789,7 +898,8 @@ impl SessionManager {
             })
             .await?;
 
-        let queued = {
+        let (queued, gate_dispatched) = {
+            let has_slot = gate_has_slot(&state);
             let session = state.sessions.get_mut(&run.session_id).ok_or_else(|| {
                 LifecycleError::SessionNotFound {
                     session_id: run.session_id.clone(),
@@ -807,8 +917,18 @@ impl SessionManager {
                     thinking_override: false,
                     last_activity_ms: now,
                     cancel,
+                    // M7-02/ADR-022：闸门前置于 run 启动（`run_retry` 同 `session_send`）。
+                    dispatched: has_slot,
                 });
-                false
+                if has_slot {
+                    (false, true)
+                } else {
+                    state.gate.queue.enqueue(
+                        run.session_id.clone(),
+                        retry_run.id.clone(),
+                    );
+                    (false, false)
+                }
             } else {
                 session.waiting = Some(QueuedRun {
                     run_id: retry_run.id.clone(),
@@ -818,14 +938,14 @@ impl SessionManager {
                     thinking_depth,
                     thinking_override: false,
                 });
-                true
+                (true, false)
             }
         };
+        publish_gate_snapshot(&self.inner, &state);
         drop(state);
 
-        if !queued {
-            self.spawn_run(run.session_id.clone(), retry_run.id.clone())
-                .await;
+        if gate_dispatched {
+            self.spawn_run(run.session_id.clone(), retry_run.id.clone());
         }
         Ok(RetryAck {
             session_id: run.session_id,
@@ -1068,11 +1188,16 @@ impl SessionManager {
                 message_id,
                 run_id,
                 queued: false,
+                queue: None,
                 duplicate: true,
             });
         }
 
-        let queued = {
+        let (queued, gate_queue) = {
+            // M7-02/ADR-022 §2.1#6：闸门计数 = 全局 running run 数；超限 → run 入
+            // 全局 FIFO（`runs.status='queued'`，占「当前 run 位」，不超卖）。
+            let has_slot = gate_has_slot(&state);
+            let limit = state.gate.limit;
             let session = state.sessions.get_mut(session_id).ok_or_else(|| {
                 LifecycleError::SessionNotFound {
                     session_id: session_id.clone(),
@@ -1090,8 +1215,19 @@ impl SessionManager {
                     thinking_override: thinking_is_override,
                     last_activity_ms: now,
                     cancel,
+                    dispatched: has_slot,
                 });
-                false
+                if has_slot {
+                    (false, None)
+                } else {
+                    state.gate.queue.enqueue(session_id.clone(), run_id.clone());
+                    let queue = state
+                        .gate
+                        .queue
+                        .position(&run_id)
+                        .map(|position| QueuePosition { position, limit });
+                    (false, queue)
+                }
             } else {
                 session.waiting = Some(QueuedRun {
                     run_id: run_id.clone(),
@@ -1101,24 +1237,32 @@ impl SessionManager {
                     thinking_depth: requested_thinking_depth,
                     thinking_override: thinking_is_override,
                 });
-                true
+                (true, None)
             }
         };
+        publish_gate_snapshot(&self.inner, &state);
         drop(state);
 
-        if !queued {
-            self.spawn_run(session_id.clone(), run_id.clone()).await;
+        if !queued && gate_queue.is_none() {
+            self.spawn_run(session_id.clone(), run_id.clone());
         }
         Ok(SendAck {
             session_id: session_id.clone(),
             message_id,
             run_id,
             queued,
+            queue: gate_queue,
             duplicate: false,
         })
     }
 
     /// 中断当前 run（最小语义：置取消令牌 + run 终态 `cancelled`；M2-05 扩展取消树）。
+    ///
+    /// M7-02/ADR-022 附录 A-6 合成语义：
+    /// - 已派发的当前 run：P0 语义不变（取消当前 run 与等待槽 run；释放闸门槽位并按
+    ///   FIFO 推进）；
+    /// - 闸门排队的当前 run：从全局 FIFO 移除并取消（槽位让给 FIFO 下一项）；
+    ///   **等待槽不连带清空**——随后按闸门判定提升（有空槽 → 派发；否则入 FIFO 尾部）。
     pub async fn interrupt(
         &self,
         session_id: &SessionId,
@@ -1134,50 +1278,111 @@ impl SessionManager {
             let active = session.active.take();
             let waiting = session.waiting.take();
             if let Some(active) = &active {
-                active.cancel.cancel();
+                if active.dispatched {
+                    active.cancel.cancel();
+                }
             }
             (active, waiting, session.runtime_id.clone())
         };
 
         let interrupted_run = active.as_ref().map(|active| active.run_id.clone());
-        let cancelled_waiting_run = waiting.as_ref().map(|waiting| waiting.run_id.clone());
+        let mut cancelled_waiting_run = None;
+        let mut spawn_queue: Vec<(SessionId, RunId)> = Vec::new();
+        let mut dispatches: Vec<(SessionId, RunId)> = Vec::new();
 
-        if let Some(active) = active {
-            self.finish_run(&active.run_id, aether_core::RunStatus::Cancelled, None)
+        match &active {
+            Some(active) if active.dispatched => {
+                self.finish_run(&active.run_id, aether_core::RunStatus::Cancelled, None)
+                    .await?;
+                // M2-05：任务从在途 run 摘除 → 看门狗计时（10s 未退出 → dump + 强制清理）。
+                self.inner
+                    .task_watchdog
+                    .mark_orphaned_by_run(&active.run_id, self.inner.clock.now_ms());
+                self.emit(
+                    session_id,
+                    Some(&active.run_id),
+                    &active.runtime_id,
+                    EventPayload::RunCancelled(RunCancelledPayload {
+                        run_id: active.run_id.clone(),
+                        reason: Some("user_interrupt".to_owned()),
+                    }),
+                )
                 .await?;
-            // M2-05：任务从在途 run 摘除 → 看门狗计时（10s 未退出 → dump + 强制清理）。
-            self.inner
-                .task_watchdog
-                .mark_orphaned_by_run(&active.run_id, self.inner.clock.now_ms());
-            self.emit(
-                session_id,
-                Some(&active.run_id),
-                &active.runtime_id,
-                EventPayload::RunCancelled(RunCancelledPayload {
-                    run_id: active.run_id.clone(),
-                    reason: Some("user_interrupt".to_owned()),
-                }),
-            )
-            .await?;
-            // 会话回 idle（D9 等待审批时经 running 收口；取消树已级联取消权限等待）。
-            settle_idle_locked(&self.inner, &mut state, session_id, &active.runtime_id).await?;
-        }
-        if let Some(waiting) = waiting {
-            self.finish_run(&waiting.run_id, aether_core::RunStatus::Cancelled, None)
+                // 会话回 idle（D9 等待审批时经 running 收口；取消树已级联取消权限等待）。
+                settle_idle_locked(&self.inner, &mut state, session_id, &active.runtime_id).await?;
+                // P0：等待槽 run 连带取消。
+                if let Some(waiting) = waiting {
+                    self.finish_run(&waiting.run_id, aether_core::RunStatus::Cancelled, None)
+                        .await?;
+                    self.emit(
+                        session_id,
+                        Some(&waiting.run_id),
+                        &waiting.runtime_id,
+                        EventPayload::RunCancelled(RunCancelledPayload {
+                            run_id: waiting.run_id.clone(),
+                            reason: Some("user_interrupt".to_owned()),
+                        }),
+                    )
+                    .await?;
+                    cancelled_waiting_run = Some(waiting.run_id);
+                }
+                // 闸门释放与推进（单写者；降级期不推进）。
+                dispatches = gate_release_and_advance(&self.inner, &mut state);
+            }
+            Some(active) => {
+                // 闸门排队 run（未派发）：从全局 FIFO 移除并取消；不释放槽位。
+                state.gate.queue.remove(&active.run_id);
+                self.finish_run(&active.run_id, aether_core::RunStatus::Cancelled, None)
+                    .await?;
+                self.emit(
+                    session_id,
+                    Some(&active.run_id),
+                    &active.runtime_id,
+                    EventPayload::RunCancelled(RunCancelledPayload {
+                        run_id: active.run_id.clone(),
+                        reason: Some("user_interrupt".to_owned()),
+                    }),
+                )
                 .await?;
-            self.emit(
-                session_id,
-                Some(&waiting.run_id),
-                &waiting.runtime_id,
-                EventPayload::RunCancelled(RunCancelledPayload {
-                    run_id: waiting.run_id.clone(),
-                    reason: Some("user_interrupt".to_owned()),
-                }),
-            )
-            .await?;
-            let _ = runtime_id;
+                // 等待槽不连带清空（ADR-022 附录 A-6）：回填等待槽后按闸门判定提升。
+                if let Some(waiting) = waiting {
+                    if let Some(session) = state.sessions.get_mut(session_id) {
+                        session.waiting = Some(waiting);
+                    }
+                }
+                dispatches = gate_release_and_advance(&self.inner, &mut state);
+                if let Some((promoted_session, promoted_run)) =
+                    promote_waiting_locked(&self.inner, &mut state, session_id)
+                {
+                    spawn_queue.push((promoted_session, promoted_run));
+                }
+            }
+            None => {
+                // P0：无当前 run 时中断等待槽 run。
+                if let Some(waiting) = waiting {
+                    self.finish_run(&waiting.run_id, aether_core::RunStatus::Cancelled, None)
+                        .await?;
+                    self.emit(
+                        session_id,
+                        Some(&waiting.run_id),
+                        &waiting.runtime_id,
+                        EventPayload::RunCancelled(RunCancelledPayload {
+                            run_id: waiting.run_id.clone(),
+                            reason: Some("user_interrupt".to_owned()),
+                        }),
+                    )
+                    .await?;
+                    cancelled_waiting_run = Some(waiting.run_id);
+                }
+            }
         }
+        publish_gate_snapshot(&self.inner, &state);
         drop(state);
+        let _ = runtime_id;
+
+        for (spawn_session, spawn_run) in spawn_queue.into_iter().chain(dispatches) {
+            self.spawn_run(spawn_session, spawn_run);
+        }
         Ok(InterruptReport {
             session_id: session_id.clone(),
             interrupted_run,
@@ -1206,7 +1411,13 @@ impl SessionManager {
         // 会话节点取消：run 子节点与绑定其上的权限等待级联取消（D8）。
         self.inner.cancel_tree.cancel_session(session_id);
         let report = self.interrupt(session_id).await?;
-        let target = if report.interrupted_run.is_some() || report.cancelled_waiting_run.is_some() {
+        // M7-02（ADR-022 附录 A-6）：闸门排队的当前 run 被 interrupt 时等待槽不连带
+        // 清空（可能已提升为当前 run）；dispose 为会话级全清（取消树语义），补收残余。
+        let residual = self.cancel_residual_runs(session_id).await?;
+        let target = if report.interrupted_run.is_some()
+            || report.cancelled_waiting_run.is_some()
+            || residual
+        {
             SessionStatus::Cancelled
         } else {
             SessionStatus::Completed
@@ -1247,6 +1458,89 @@ impl SessionManager {
         )
         .await?;
         Ok(target)
+    }
+
+    /// 取消会话内残余 run（M7-02 闸门语义补充；dispose 全清辅助）。
+    ///
+    /// 覆盖：闸门排队 run（从 FIFO 移除 + 取消）与 interrupt 后提升的 run（取消；
+    /// 已派发时同时释放闸门槽位并按 FIFO 推进）。返回是否存在被取消的残余 run。
+    async fn cancel_residual_runs(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<bool, LifecycleError> {
+        let mut state = lock_state(&self.inner).await;
+        self.hydrate_locked(&mut state, session_id).await?;
+        let (active, waiting, released) = {
+            let session = state.sessions.get_mut(session_id).ok_or_else(|| {
+                LifecycleError::SessionNotFound {
+                    session_id: session_id.clone(),
+                }
+            })?;
+            let active = session.active.take();
+            let waiting = session.waiting.take();
+            let released = active
+                .as_ref()
+                .map(|active| active.dispatched)
+                .unwrap_or(false);
+            if let Some(active) = &active {
+                if active.dispatched {
+                    active.cancel.cancel();
+                }
+            }
+            (active, waiting, released)
+        };
+        if let Some(active) = &active {
+            if !active.dispatched {
+                state.gate.queue.remove(&active.run_id);
+            }
+        }
+        let mut found = false;
+        if let Some(active) = &active {
+            self.finish_run(&active.run_id, aether_core::RunStatus::Cancelled, None)
+                .await?;
+            if active.dispatched {
+                self.inner
+                    .task_watchdog
+                    .mark_orphaned_by_run(&active.run_id, self.inner.clock.now_ms());
+            }
+            self.emit(
+                session_id,
+                Some(&active.run_id),
+                &active.runtime_id,
+                EventPayload::RunCancelled(RunCancelledPayload {
+                    run_id: active.run_id.clone(),
+                    reason: Some("user_interrupt".to_owned()),
+                }),
+            )
+            .await?;
+            found = true;
+        }
+        if let Some(waiting) = &waiting {
+            self.finish_run(&waiting.run_id, aether_core::RunStatus::Cancelled, None)
+                .await?;
+            self.emit(
+                session_id,
+                Some(&waiting.run_id),
+                &waiting.runtime_id,
+                EventPayload::RunCancelled(RunCancelledPayload {
+                    run_id: waiting.run_id.clone(),
+                    reason: Some("user_interrupt".to_owned()),
+                }),
+            )
+            .await?;
+            found = true;
+        }
+        let dispatches = if released {
+            gate_release_and_advance(&self.inner, &mut state)
+        } else {
+            Vec::new()
+        };
+        publish_gate_snapshot(&self.inner, &state);
+        drop(state);
+        for (spawn_session, spawn_run) in dispatches {
+            self.spawn_run(spawn_session, spawn_run);
+        }
+        Ok(found)
     }
 
     /// 收集全部非终态后代会话（BFS；`sessions.parent_session_id` 为唯一事实来源）。
@@ -1484,6 +1778,24 @@ impl SessionManager {
         background.push(watchdog);
         background.push(event_listener);
         background.push(interrupt_listener);
+        // M7-02/ADR-022：空闲内存采样任务（启动即采样 + 按 `GATE_RAM_SAMPLE_INTERVAL`
+        // 巡检重算闸门上限；快照总是在巡检后发布——`health.concurrency_gate` 在首次
+        // 活动前即可读）。仅接线采样源或快照单元时启动（未接线 = 不巡检）。
+        let gate_wired = {
+            let free_ram = lock_free_ram(&self.inner).is_some();
+            let cell = lock_gate_cell(&self.inner).is_some();
+            free_ram || cell
+        };
+        if gate_wired {
+            let gate_inner = Arc::clone(&self.inner);
+            let gate_sampler = handle.spawn(async move {
+                loop {
+                    let _ = refresh_gate_limit_inner(&gate_inner).await;
+                    tokio::time::sleep(GATE_RAM_SAMPLE_INTERVAL).await;
+                }
+            });
+            background.push(gate_sampler);
+        }
         background.len()
     }
 
@@ -1504,8 +1816,8 @@ impl SessionManager {
 
     // ===== 内部（调用方持有状态锁的路径不再重复加锁）=====
 
-    async fn spawn_run(&self, session_id: SessionId, run_id: RunId) {
-        spawn_run_inner(&self.inner, session_id, run_id).await;
+    fn spawn_run(&self, session_id: SessionId, run_id: RunId) {
+        spawn_run_inner(&self.inner, session_id, run_id);
     }
 
     async fn hydrate_locked(
@@ -1722,14 +2034,17 @@ async fn run_active(
 ///
 /// 任务名与 `AbortHandle` 登记进看门狗（M2-05 取消兜底）；`task::Id → (会话, run)`
 /// 映射供 [`reap_run_tasks`] 在 panic 时定位会话。
-async fn spawn_run_inner(inner: &Arc<ManagerInner>, session_id: SessionId, run_id: RunId) {
+///
+/// M7-02：**同步函数**（`run_tasks` 为非异步互斥）——run 任务内推进闸门 FIFO 时可安全
+/// 再 spawn（不形成递归 future 的 `Send` 证明环）。
+fn spawn_run_inner(inner: &Arc<ManagerInner>, session_id: SessionId, run_id: RunId) {
     let task_inner = Arc::clone(inner);
     let task_session = session_id.clone();
     let task_run = run_id.clone();
     let task_name = format!("session:{} run:{}", session_id.as_str(), run_id.as_str());
     let started_at_ms = inner.clock.now_ms();
     let abort: AbortHandle = {
-        let mut set = inner.run_tasks.lock().await;
+        let mut set = lock_run_tasks(inner);
         set.spawn(async move {
             let _ = run_active(&task_inner, task_session, task_run).await;
         })
@@ -1758,7 +2073,7 @@ async fn reap_run_tasks(inner: &Arc<ManagerInner>) -> usize {
     let mut reaped = 0usize;
     loop {
         let joined = {
-            let mut set = inner.run_tasks.lock().await;
+            let mut set = lock_run_tasks(inner);
             set.try_join_next_with_id()
         };
         let Some(joined) = joined else { break };
@@ -1860,6 +2175,17 @@ async fn handle_run_task_panic(
         }
         return;
     };
+    if active_run != run_id {
+        // M7-02：panic 任务属于已收口 run（超时/中断后迟到），活跃位已归其他 run
+        // （等待槽提升等）——不得误伤当前 run（活跃位匹配为唯一收口依据）。
+        tracing::warn!(
+            session_id = %session_id,
+            run_id = %run_id,
+            active_run = %active_run,
+            "panic 任务与活跃位不匹配（迟到 panic）：仅记录，不触碰当前 run（D2）"
+        );
+        return;
+    }
 
     let error = ErrorInfo {
         code: RUN_TASK_PANIC_CODE.to_owned(),
@@ -1872,7 +2198,7 @@ async fn handle_run_task_panic(
     match finalize_failed(inner, &session_id, &active_run, error).await {
         Ok(Some(next)) => {
             // 等待队列已提升：原任务已死，重新 spawn 该会话任务继续执行。
-            spawn_run_inner(inner, session_id.clone(), next.run_id.clone()).await;
+            spawn_run_inner(inner, session_id.clone(), next.run_id.clone());
         }
         Ok(None) => {}
         Err(error) => {
@@ -1903,7 +2229,8 @@ async fn take_run_start(
     let Some(active) = session.active.as_ref() else {
         return Ok(None);
     };
-    if &active.run_id != run_id {
+    // M7-02/ADR-022：仅已派发 run 由执行任务接管；闸门排队 run 不启动执行。
+    if &active.run_id != run_id || !active.dispatched {
         return Ok(None);
     }
     Ok(Some(RunStart {
@@ -1990,53 +2317,184 @@ async fn dispatch_and_finalize(
 /// 活跃位（返回 `RunStart`，由调用方在同任务内继续执行）。
 ///
 /// 返回 `None` 表示该 run 已被超时/中断处理（迟到结果忽略）。
+/// 终态调度（M7-02/ADR-022 附录 A-6）：run 终态后的两层队列合成结果。
+struct TerminalSchedule {
+    /// 经全局闸门推进的 run（已置 `dispatched=true`；调用方 `spawn`）。
+    dispatches: Vec<(SessionId, RunId)>,
+    /// 同会话等待槽提升且已派发（本任务续跑，不重复 spawn）。
+    next: Option<RunStart>,
+    /// 同会话等待槽提升但未派发（仅降级准入失败；由收口方按 D4 语义连带取消）。
+    suspended: Option<RunStart>,
+}
+
+/// 终态公共流程：摘除活跃位 → 等待槽提升 → 闸门调度（FIFO 推进/降级挂起）→
+/// 行终态 → 事件 → 会话 idle；返回调度结果（`None` = 该 run 已被超时/中断处理）。
+///
+/// M7-02/ADR-022 合成顺序（单写者）：当前 run 终态释放槽位 → 全局 FIFO 按序推进
+/// （仅新 run 准入可行时）→ 等待槽 run 提升判定（有空槽 → 派发；饱和 → FIFO 尾部；
+/// 降级 → 不派发不排队，由收口方连带取消）。
 async fn detach_and_prepare(
     inner: &Arc<ManagerInner>,
     session_id: &SessionId,
     run_id: &RunId,
-) -> Result<Option<(RuntimeId, Option<RunStart>)>, LifecycleError> {
+) -> Result<Option<(RuntimeId, TerminalSchedule)>, LifecycleError> {
     let mut state = lock_state(inner).await;
-    let session =
-        state
-            .sessions
-            .get_mut(session_id)
-            .ok_or_else(|| LifecycleError::SessionNotFound {
+    let (runtime_id, promoted) = {
+        let session = state.sessions.get_mut(session_id).ok_or_else(|| {
+            LifecycleError::SessionNotFound {
                 session_id: session_id.clone(),
-            })?;
-    match session.active.as_ref() {
-        Some(active) if &active.run_id == run_id => {
-            let active = session
-                .active
-                .take()
-                .ok_or_else(|| LifecycleError::Internal {
-                    reason: "active 位竞态".to_owned(),
-                })?;
-            let next = session.waiting.take().map(|queued| RunStart {
-                run_id: queued.run_id,
-                input_message_id: queued.input_message_id,
-                runtime_id: queued.runtime_id,
-                text: queued.text,
-                thinking_depth: queued.thinking_depth,
-                thinking_override: queued.thinking_override,
-                // M2-05：提升的 run 亦为会话取消树子节点。
-                cancel: RunCancelToken::child_of(&session.cancel),
-            });
-            if let Some(next_run) = &next {
-                session.active = Some(ActiveRun {
-                    run_id: next_run.run_id.clone(),
-                    input_message_id: next_run.input_message_id.clone(),
-                    runtime_id: next_run.runtime_id.clone(),
-                    text: next_run.text.clone(),
-                    thinking_depth: next_run.thinking_depth,
-                    thinking_override: next_run.thinking_override,
-                    last_activity_ms: inner.clock.now_ms(),
-                    cancel: next_run.cancel.clone(),
-                });
             }
-            Ok(Some((active.runtime_id, next)))
+        })?;
+        match session.active.as_ref() {
+            Some(active) if &active.run_id == run_id => {
+                let active = session
+                    .active
+                    .take()
+                    .ok_or_else(|| LifecycleError::Internal {
+                        reason: "active 位竞态".to_owned(),
+                    })?;
+                let promoted = session.waiting.take().map(|queued| RunStart {
+                    run_id: queued.run_id,
+                    input_message_id: queued.input_message_id,
+                    runtime_id: queued.runtime_id,
+                    text: queued.text,
+                    thinking_depth: queued.thinking_depth,
+                    thinking_override: queued.thinking_override,
+                    // M2-05：提升的 run 亦为会话取消树子节点。
+                    cancel: RunCancelToken::child_of(&session.cancel),
+                });
+                if let Some(start) = &promoted {
+                    session.active = Some(ActiveRun {
+                        run_id: start.run_id.clone(),
+                        input_message_id: start.input_message_id.clone(),
+                        runtime_id: start.runtime_id.clone(),
+                        text: start.text.clone(),
+                        thinking_depth: start.thinking_depth,
+                        thinking_override: start.thinking_override,
+                        last_activity_ms: inner.clock.now_ms(),
+                        cancel: start.cancel.clone(),
+                        dispatched: false,
+                    });
+                }
+                (active.runtime_id, promoted)
+            }
+            _ => return Ok(None),
         }
-        _ => Ok(None),
+    };
+
+    // 闸门调度（锁内单写者）：释放（终态 run 已摘除）→ FIFO 推进 → 等待槽提升判定。
+    let admission_ok = inner.pipeline.admission().is_ok();
+    let dispatches = if admission_ok {
+        gate_advance_locked(&mut state)
+    } else {
+        Vec::new()
+    };
+    let has_slot = admission_ok && gate_has_slot(&state);
+    let (next, suspended) = match promoted {
+        None => (None, None),
+        Some(start) => {
+            if !admission_ok {
+                // 降级（准入失败）：提升但不派发、不入队；由收口方连带取消（D4 语义 3）。
+                (None, Some(start))
+            } else if has_slot {
+                if let Some(active) = state
+                    .sessions
+                    .get_mut(session_id)
+                    .and_then(|session| session.active.as_mut())
+                {
+                    if active.run_id == start.run_id {
+                        active.dispatched = true;
+                    }
+                }
+                (Some(start), None)
+            } else {
+                // 等待槽 run 晋升时闸门饱和 → 进入全局 FIFO 尾部（ADR-022 附录 A-6）。
+                state
+                    .gate
+                    .queue
+                    .enqueue(session_id.clone(), start.run_id.clone());
+                (None, None)
+            }
+        }
+    };
+    publish_gate_snapshot(inner, &state);
+    Ok(Some((
+        runtime_id,
+        TerminalSchedule {
+            dispatches,
+            next,
+            suspended,
+        },
+    )))
+}
+
+/// 应用终态调度：跨会话推进 run 逐个 spawn（单写者顺序）；降级挂起的提升 run 按
+/// D4 语义连带取消（`persist_degraded`），返回本任务续跑的提升 run。
+async fn apply_terminal_schedule(
+    inner: &Arc<ManagerInner>,
+    session_id: &SessionId,
+    schedule: TerminalSchedule,
+) -> Result<Option<RunStart>, LifecycleError> {
+    for (spawn_session, spawn_run) in schedule.dispatches {
+        spawn_run_inner(inner, spawn_session, spawn_run);
     }
+    if let Some(suspended) = schedule.suspended {
+        // 降级（准入失败）：提升的 run 不派发；连带取消（不递归 finalize_cancelled，
+        // 该 run 已在活跃位且无等待槽——等价原 `next` 处理路径）。
+        cancel_suspended_run(inner, session_id, &suspended).await?;
+    }
+    Ok(schedule.next)
+}
+
+/// 降级挂起 run 的连带取消（活跃位摘除 → `cancelled` 行 + `run.cancelled` 事件；
+/// 未派发故不释放槽位、不触发 FIFO 推进）。
+async fn cancel_suspended_run(
+    inner: &Arc<ManagerInner>,
+    session_id: &SessionId,
+    suspended: &RunStart,
+) -> Result<(), LifecycleError> {
+    let runtime_id = {
+        let mut state = lock_state(inner).await;
+        let session =
+            state
+                .sessions
+                .get_mut(session_id)
+                .ok_or_else(|| LifecycleError::SessionNotFound {
+                    session_id: session_id.clone(),
+                })?;
+        match session.active.as_ref() {
+            Some(active) if active.run_id == suspended.run_id => {
+                let active = session
+                    .active
+                    .take()
+                    .ok_or_else(|| LifecycleError::Internal {
+                        reason: "active 位竞态".to_owned(),
+                    })?;
+                active.runtime_id
+            }
+            _ => return Ok(()),
+        }
+    };
+    inner
+        .write
+        .execute(StoreCommand::FinishRun {
+            run_id: suspended.run_id.clone(),
+            status: aether_core::RunStatus::Cancelled,
+            error: None,
+            finished_at: inner.clock.now_ms(),
+        })
+        .await?;
+    emit_inner(
+        inner,
+        session_id,
+        Some(&suspended.run_id),
+        &runtime_id,
+        EventPayload::RunCancelled(RunCancelledPayload {
+            run_id: suspended.run_id.clone(),
+            reason: Some("persist_degraded".to_owned()),
+        }),
+    )
+    .await
 }
 
 async fn finalize_completed(
@@ -2046,7 +2504,7 @@ async fn finalize_completed(
     assistant_text: Option<String>,
     usage: Option<TokenUsage>,
 ) -> Result<Option<RunStart>, LifecycleError> {
-    let Some((runtime_id, next)) = detach_and_prepare(inner, session_id, run_id).await? else {
+    let Some((runtime_id, schedule)) = detach_and_prepare(inner, session_id, run_id).await? else {
         return Ok(None);
     };
     if let Some(text) = assistant_text {
@@ -2114,7 +2572,7 @@ async fn finalize_completed(
     )
     .await?;
     settle_session_idle(inner, session_id, &runtime_id).await?;
-    Ok(next)
+    apply_terminal_schedule(inner, session_id, schedule).await
 }
 
 async fn finalize_failed(
@@ -2123,7 +2581,7 @@ async fn finalize_failed(
     run_id: &RunId,
     error: ErrorInfo,
 ) -> Result<Option<RunStart>, LifecycleError> {
-    let Some((runtime_id, next)) = detach_and_prepare(inner, session_id, run_id).await? else {
+    let Some((runtime_id, schedule)) = detach_and_prepare(inner, session_id, run_id).await? else {
         return Ok(None);
     };
     inner
@@ -2147,7 +2605,7 @@ async fn finalize_failed(
     )
     .await?;
     settle_session_idle(inner, session_id, &runtime_id).await?;
-    Ok(next)
+    apply_terminal_schedule(inner, session_id, schedule).await
 }
 
 async fn finalize_cancelled(
@@ -2156,7 +2614,7 @@ async fn finalize_cancelled(
     run_id: &RunId,
     reason: Option<String>,
 ) -> Result<Option<RunStart>, LifecycleError> {
-    let Some((runtime_id, next)) = detach_and_prepare(inner, session_id, run_id).await? else {
+    let Some((runtime_id, schedule)) = detach_and_prepare(inner, session_id, run_id).await? else {
         return Ok(None);
     };
     inner
@@ -2180,7 +2638,7 @@ async fn finalize_cancelled(
     )
     .await?;
     settle_session_idle(inner, session_id, &runtime_id).await?;
-    Ok(next)
+    apply_terminal_schedule(inner, session_id, schedule).await
 }
 
 /// run 终态后会话回 `idle`（行 + 事件；等待提升的运行随后置 `running`）。
@@ -2236,7 +2694,8 @@ async fn watchdog_once_inner(inner: &Arc<ManagerInner>, timeout_ms: i64) -> Vec<
         let mut timed_out = Vec::new();
         for (session_id, session) in &state.sessions {
             if let Some(active) = &session.active {
-                if now.saturating_sub(active.last_activity_ms) >= timeout_ms {
+                // M7-02/ADR-022：闸门排队 run（未派发）不适用断流计时（无执行即无事件）。
+                if active.dispatched && now.saturating_sub(active.last_activity_ms) >= timeout_ms {
                     timed_out.push((session_id.clone(), active.run_id.clone()));
                 }
             }
@@ -2252,22 +2711,29 @@ async fn watchdog_once_inner(inner: &Arc<ManagerInner>, timeout_ms: i64) -> Vec<
             ),
             recoverable: true,
         };
-        if finalize_failed(inner, &session_id, &run_id, error)
-            .await
-            .is_ok()
-        {
-            // M2-05：run 被摘除（执行器可能仍卡住）→ 看门狗计时。
-            inner
-                .task_watchdog
-                .mark_orphaned_by_run(&run_id, inner.clock.now_ms());
-            failed.push(run_id);
+        match finalize_failed(inner, &session_id, &run_id, error).await {
+            Ok(next) => {
+                // M2-05：run 被摘除（执行器可能仍卡住）→ 看门狗计时。
+                inner
+                    .task_watchdog
+                    .mark_orphaned_by_run(&run_id, inner.clock.now_ms());
+                // M7-02：原任务可能长期卡死，等待槽提升的 run 需新任务续跑（单写者顺序）。
+                if let Some(next) = next {
+                    spawn_run_inner(inner, session_id.clone(), next.run_id.clone());
+                }
+                failed.push(run_id);
+            }
+            Err(error) => {
+                tracing::warn!(run_id = %run_id, error = %error, "断流超时收口失败（继续）");
+            }
         }
     }
     failed
 }
 
 /// 管线降级中断（D4 降级期语义 3）：在途 run 转 `cancelled`（行 + 事件）；
-/// 若终态处理提升了等待队列，则连带取消提升的 run（降级期拒绝新 run）。
+/// 提升的 run 经 `apply_terminal_schedule` 按降级语义连带取消（准入失败 → suspended；
+/// 降级期不做 FIFO 推进）。
 async fn finalize_degraded_interrupt(
     inner: &Arc<ManagerInner>,
     interrupt: RunInterrupt,
@@ -2276,22 +2742,13 @@ async fn finalize_degraded_interrupt(
     inner
         .task_watchdog
         .mark_orphaned_by_run(&interrupt.run_id, inner.clock.now_ms());
-    let promoted = finalize_cancelled(
+    let _ = finalize_cancelled(
         inner,
         &interrupt.session_id,
         &interrupt.run_id,
         Some(interrupt.reason),
     )
     .await?;
-    if let Some(next) = promoted {
-        finalize_cancelled(
-            inner,
-            &interrupt.session_id,
-            &next.run_id,
-            Some("persist_degraded".to_owned()),
-        )
-        .await?;
-    }
     Ok(())
 }
 
@@ -2432,6 +2889,178 @@ fn lock_backpressure(
     inner: &Arc<ManagerInner>,
 ) -> std::sync::MutexGuard<'_, Option<Arc<BackpressureController>>> {
     match inner.backpressure.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+/// 会话执行任务集合加锁（M7-02：非异步互斥；临界区仅同步 spawn/收割，无 I/O）。
+fn lock_run_tasks(inner: &Arc<ManagerInner>) -> std::sync::MutexGuard<'_, JoinSet<()>> {
+    match inner.run_tasks.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+// ===== M7-02/ADR-022：并发闸门辅助（锁内单写者语义；`state` 由调用方持锁）=====
+
+/// 全局 `running` run 数（已派发的当前 run；闸门计数唯一来源）。
+fn running_count(state: &ManagerState) -> usize {
+    state
+        .sessions
+        .values()
+        .filter(|session| {
+            session
+                .active
+                .as_ref()
+                .map(|active| active.dispatched)
+                .unwrap_or(false)
+        })
+        .count()
+}
+
+/// 闸门空槽判定（不超卖：`running < limit`）。
+fn gate_has_slot(state: &ManagerState) -> bool {
+    running_count(state) < state.gate.limit
+}
+
+/// 闸门快照（`limit/active/queued`）。
+fn gate_snapshot(state: &ManagerState) -> ConcurrencyGateSnapshot {
+    ConcurrencyGateSnapshot {
+        limit: state.gate.limit,
+        active: running_count(state),
+        queued: state.gate.queue.len(),
+    }
+}
+
+/// 发布闸门快照到共享单元（`health.concurrency_gate` 同步读）。
+fn publish_gate_snapshot(inner: &Arc<ManagerInner>, state: &ManagerState) {
+    let guard = lock_gate_cell(inner);
+    if let Some(cell) = guard.as_ref() {
+        cell.set(gate_snapshot(state));
+    }
+}
+
+/// 全局 FIFO 推进：有槽则逐个启动队首（每次推进仅启动队首 run，不超卖）。
+fn gate_advance_locked(state: &mut ManagerState) -> Vec<(SessionId, RunId)> {
+    let mut dispatches = Vec::new();
+    loop {
+        if !gate_has_slot(state) {
+            break;
+        }
+        let Some(waiter) = state.gate.queue.pop_front() else {
+            break;
+        };
+        let Some(session) = state.sessions.get_mut(&waiter.session_id) else {
+            continue;
+        };
+        let Some(active) = session.active.as_mut() else {
+            continue;
+        };
+        if active.run_id != waiter.run_id || active.dispatched {
+            continue;
+        }
+        active.dispatched = true;
+        dispatches.push((waiter.session_id, waiter.run_id));
+    }
+    dispatches
+}
+
+/// 闸门释放与推进（run 终态语义）：仅新 run 准入可行时推进（降级期不启动排队 run）。
+fn gate_release_and_advance(
+    inner: &Arc<ManagerInner>,
+    state: &mut ManagerState,
+) -> Vec<(SessionId, RunId)> {
+    if inner.pipeline.admission().is_err() {
+        return Vec::new();
+    }
+    gate_advance_locked(state)
+}
+
+/// 等待槽提升（interrupt 的闸门排队路径用）：有空槽且准入可行 → 派发（返回
+/// `(session, run)` 供调用方 spawn）；饱和 → 入 FIFO 尾部；降级 → 不提升（保留等待槽）。
+fn promote_waiting_locked(
+    inner: &Arc<ManagerInner>,
+    state: &mut ManagerState,
+    session_id: &SessionId,
+) -> Option<(SessionId, RunId)> {
+    let has_waiting = state
+        .sessions
+        .get(session_id)
+        .map(|session| session.waiting.is_some())
+        .unwrap_or(false);
+    if !has_waiting {
+        return None;
+    }
+    if inner.pipeline.admission().is_err() {
+        return None;
+    }
+    let has_slot = gate_has_slot(state);
+    let session = state.sessions.get_mut(session_id)?;
+    let queued = session.waiting.take()?;
+    let run_id = queued.run_id.clone();
+    let cancel = RunCancelToken::child_of(&session.cancel);
+    session.active = Some(ActiveRun {
+        run_id: queued.run_id,
+        input_message_id: queued.input_message_id,
+        runtime_id: queued.runtime_id,
+        text: queued.text,
+        thinking_depth: queued.thinking_depth,
+        thinking_override: queued.thinking_override,
+        last_activity_ms: inner.clock.now_ms(),
+        cancel,
+        dispatched: has_slot,
+    });
+    if has_slot {
+        Some((session_id.clone(), run_id))
+    } else {
+        state
+            .gate
+            .queue
+            .enqueue(session_id.clone(), run_id);
+        None
+    }
+}
+
+/// 闸门巡检主体（`refresh_gate_limit` 与采样任务共用）：采样 → 重算上限（只对新 run
+/// 生效）→ 空槽按 FIFO 推进 → **总是发布快照**（采样失败也发布，保持既有上限；
+/// `health.concurrency_gate` 在首次活动前即可读）。返回新上限；无采样源/采样失败 → `None`。
+async fn refresh_gate_limit_inner(inner: &Arc<ManagerInner>) -> Option<usize> {
+    let sampled = {
+        let guard = lock_free_ram(inner);
+        guard
+            .as_ref()
+            .and_then(|source| source.free_ram_gb())
+            .map(max_concurrent_for_free_ram)
+    };
+    let mut state = lock_state(inner).await;
+    if let Some(limit) = sampled {
+        state.gate.limit = limit;
+    }
+    let dispatches = gate_release_and_advance(inner, &mut state);
+    publish_gate_snapshot(inner, &state);
+    drop(state);
+    for (spawn_session, spawn_run) in dispatches {
+        spawn_run_inner(inner, spawn_session, spawn_run);
+    }
+    sampled
+}
+
+/// 空闲内存采样源槽位加锁（中毒容忍）。
+fn lock_free_ram(
+    inner: &Arc<ManagerInner>,
+) -> std::sync::MutexGuard<'_, Option<Arc<dyn FreeRamSource>>> {
+    match inner.free_ram.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+/// 闸门快照单元槽位加锁（中毒容忍）。
+fn lock_gate_cell(
+    inner: &Arc<ManagerInner>,
+) -> std::sync::MutexGuard<'_, Option<ConcurrencyGateCell>> {
+    match inner.gate_cell.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     }

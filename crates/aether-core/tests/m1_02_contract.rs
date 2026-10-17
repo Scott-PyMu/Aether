@@ -1065,6 +1065,8 @@ fn typed_payload_constructors_roundtrip_through_json() {
     let samples = vec![
         EventPayload::SessionCreated(SessionCreatedPayload {
             summary: session_summary(),
+            // M7-02/ADR-022：缺省路由回显（可选字段）。
+            routed: Some(true),
         }),
         EventPayload::SessionUpdated(SessionUpdatedPayload {
             session_id: SessionId::new("sess-1").unwrap(),

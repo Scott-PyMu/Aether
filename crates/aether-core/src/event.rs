@@ -223,10 +223,15 @@ pub struct SessionSummary {
 }
 
 /// `session.created` payload（附录 B：摘要）。
+///
+/// `routed`（M7-02/ADR-022 §2.1 实现要点 2）：`session_create` 缺省路由成功时回显
+/// `true`（可选字段；附录 B payload 允许扩展）；手动指定运行时省略。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionCreatedPayload {
     pub summary: SessionSummary,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routed: Option<bool>,
 }
 
 /// `session.updated` payload（附录 B：变更字段）。

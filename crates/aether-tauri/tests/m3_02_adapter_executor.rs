@@ -170,7 +170,7 @@ fn mock_adapter_end_to_end_create_stream_interrupt_and_backfill() {
     let created = h
         .backend
         .session_create(&SessionCreateRequest {
-            runtime_id: "mock".to_owned(),
+            runtime_id: Some("mock".to_owned()),
             title: "M3-02 E2E".to_owned(),
             workspace_id: None,
             model: Some("mock-model".to_owned()),

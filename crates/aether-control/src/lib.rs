@@ -21,6 +21,7 @@ pub mod cancel;
 pub mod clock;
 pub mod delta;
 pub mod error;
+pub mod gate;
 pub mod journal;
 pub mod lifecycle;
 pub mod memory;
@@ -28,6 +29,7 @@ pub mod normalizer;
 pub mod permission;
 pub mod pipeline;
 pub mod resource_patrol;
+pub mod routing;
 pub mod sequencer;
 pub mod source;
 pub mod storage_state;
@@ -49,12 +51,17 @@ pub use cancel::{
 pub use clock::{Clock, ManualClock, SharedClock, SystemClock};
 pub use delta::{DeltaBuffer, DELTA_FLUSH_BYTES, DELTA_FLUSH_INTERVAL};
 pub use error::{JournalError, NormalizeError, PipelineError, SourceError};
+pub use gate::{
+    max_concurrent_for_free_ram, ConcurrencyGateCell, ConcurrencyGateSnapshot, FixedFreeRam,
+    FreeRamSource, GateQueue, GateWaiter, SysinfoFreeRam, CONCURRENCY_GATE_MAX,
+    CONCURRENCY_GATE_MIN, CONCURRENCY_GATE_RAM_PER_SLOT_GB, GATE_RAM_SAMPLE_INTERVAL,
+};
 pub use journal::{
     JournalFuture, JournalMetrics, JournalReceipt, JournalWriter, PressureLevel, StoreJournal,
 };
 pub use lifecycle::{
     run_is_retryable, ExecutorFuture, ExecutorOutcome, InterruptReport, LifecycleConfig,
-    LifecycleError, ReconcileReport, RetryAck, RunExecutor, RunRequest, SendAck,
+    LifecycleError, QueuePosition, ReconcileReport, RetryAck, RunExecutor, RunRequest, SendAck,
     SessionCreateOptions, SessionManager, MAX_WAITING_RUNS_PER_SESSION, RUN_INTERRUPTED_CODE,
     RUN_STREAM_TIMEOUT_CODE, RUN_STREAM_TIMEOUT_MS, RUN_TASK_PANIC_CODE, WATCHDOG_TICK,
 };
@@ -78,6 +85,11 @@ pub use pipeline::{
 pub use resource_patrol::{
     ResourcePatrol, ResourcePatrolConfig, ResourcePatrolSnapshot, RssSampler, SysinfoRssSampler,
     ENV_PATROL_INTERVAL_MS, ENV_RSS_ALERT_MB, ENV_RSS_THROTTLE_MB, RESOURCE_PATROL_INTERVAL,
+};
+pub use routing::{
+    route_priority, route_runtime, RouteCandidate, RouteCandidateTrace, RouteDecision,
+    RouteFailure, ROUTE_PRIORITY_CLAUDE_CODE, ROUTE_PRIORITY_CODEX, ROUTE_PRIORITY_DEFAULT,
+    ROUTE_PRIORITY_DEEPSEEK_HARNESS,
 };
 pub use sequencer::SessionSequencer;
 pub use source::{EventSource, SourceFuture, StoreEventSource};

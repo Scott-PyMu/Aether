@@ -346,7 +346,12 @@ export type IpcErrorCode =
  *  运行时有在途会话（M7-01/ADR-015：`runtime_disable` 未带 `confirm_terminate: true`；
  *  消息携带在途计数，UI 二次确认后携确认标志重试）。
  */
-"runtime_busy";
+"runtime_busy" | 
+/**
+ *  自动路由无可用候选（M7-02/ADR-022：`session_create` 缺省路由路径；消息区分
+ *  「全部禁用」「无匹配模型」「无 ready 候选」，提示手动选择）。
+ */
+"no_candidate_runtime";
 
 /**  IPC 命令错误的线上形态：`{ "code": "...", "message": "...", "field": "..." }`。 */
 export type IpcError_Deserialize = {
@@ -521,7 +526,12 @@ export type RuntimeRetryRequest = {
 };
 
 export type SessionCreateRequest = {
-	runtime_id: string,
+	/**
+	 *  运行时 id（M7-02/ADR-022：由必填改**可选**——缺省 = 自动路由；显式 = 手动指定，
+	 *  优先于自动路由且不参与打分；仍须通过可用性校验：未注册 → `invalid_enum`，
+	 *  已注册但 `enabled=0`/`disabled` → `invalid_value`）。
+	 */
+	runtime_id?: string | null,
 	title: string,
 	workspace_id?: string | null,
 	model?: string | null,

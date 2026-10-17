@@ -437,7 +437,7 @@ fn disable_confirmation_closes_in_flight_runs_and_retry_replays() {
     // ===== 建立活跃 run（long）+ queued run =====
     let created = backend
         .session_create(&SessionCreateRequest {
-            runtime_id: "mock".to_owned(),
+            runtime_id: Some("mock".to_owned()),
             title: "M7-01 在途".to_owned(),
             workspace_id: None,
             model: None,
@@ -587,7 +587,7 @@ fn disable_confirmation_closes_in_flight_runs_and_retry_replays() {
     // 被禁用运行时不可创建会话（既有 disabled 语义）。
     let error = backend
         .session_create(&SessionCreateRequest {
-            runtime_id: "mock".to_owned(),
+            runtime_id: Some("mock".to_owned()),
             title: "不应创建".to_owned(),
             workspace_id: None,
             model: None,

@@ -38,10 +38,23 @@ export interface RuntimeSummary {
   status_reason?: string;
 }
 
+/**
+ * 并发闸门快照（M7-02/ADR-022 附录 A-5：`health.concurrency_gate`，UI 轮询 5s；
+ * 未接线省略）。`limit = clamp(floor(free_ram_gb / 1.5), 2, 10)`；`active` = 全局
+ * running run 数；`queued` = 全局 FIFO 长度。
+ */
+export interface ConcurrencyGate {
+  limit: number;
+  active: number;
+  queued: number;
+}
+
 export interface HealthReport {
   storage_state: StorageState;
   write_queue_depth: number;
   runtimes: RuntimeSummary[] | null;
+  /** M7-02/ADR-022：并发闸门快照（未接线省略）。 */
+  concurrency_gate?: ConcurrencyGate;
   ts: number;
   degrade_trigger?: string;
   degraded_since_ms?: number;

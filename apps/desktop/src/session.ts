@@ -122,6 +122,18 @@ export function supportsThinkingDepth(runtime: RuntimeInfo | null | undefined): 
   return runtime?.capabilities.includes(THINKING_DEPTH_CAPABILITY) ?? false;
 }
 
+/**
+ * 闸门排队位置（M7-02/ADR-022 附录 A-5：`session_send` 响应可选 `queue`）。
+ *
+ * `position` 仅指**全局 FIFO** 内位置（从 1 计）；`limit` = 当前闸门上限
+ * （`clamp(floor(free_ram_gb / 1.5), 2, 10)`）。超闸门排队时出现（`queued` 字段
+ * 仍表示会话等待槽，二者语义正交）。
+ */
+export interface RunQueuePosition {
+  position: number;
+  limit: number;
+}
+
 /** `session_send` ack（快路径：消息与 run 行提交后返回，不等模型）。 */
 export interface SessionSendResult {
   session_id: string;
@@ -129,6 +141,8 @@ export interface SessionSendResult {
   run_id: string;
   queued: boolean;
   duplicate: boolean;
+  /** M7-02/ADR-022：超闸门进入全局 FIFO 时的排队位置（否则省略）。 */
+  queue?: RunQueuePosition;
   /** M3-10：同步能力门警告（无警告省略；非阻断）。 */
   warnings?: SessionWarning[];
 }
@@ -172,7 +186,8 @@ export interface MessagesPageResult {
 }
 
 export interface SessionCreateInput {
-  runtime_id: string;
+  /** M7-02/ADR-022：缺省 = 自动路由（固定优先级）；显式 = 手动指定（优先，不参与打分）。 */
+  runtime_id?: string;
   title: string;
   workspace_id?: string;
   model?: string;

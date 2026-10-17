@@ -205,6 +205,48 @@ pub fn thinking_depth_warning(
     None
 }
 
+/// 模型硬条件（M7-02/ADR-022 §2.1#2②）：存在**启用**供应商提供该模型（供应商行与
+/// 模型行均 `enabled`）。M7-06 完成消费映射物化前的既有数据口径判定。
+async fn provider_provides_model(reads: &ReadPool, model: &str) -> Result<bool, IpcError> {
+    let providers = reads
+        .providers()
+        .await
+        .map_err(|error| IpcError::internal(format!("供应商读取失败：{error}")))?;
+    if !providers.iter().any(|provider| provider.enabled) {
+        return Ok(false);
+    }
+    let models = reads
+        .provider_models()
+        .await
+        .map_err(|error| IpcError::internal(format!("供应商模型读取失败：{error}")))?;
+    Ok(models.iter().any(|candidate| {
+        candidate.enabled
+            && candidate.model_id == model
+            && providers
+                .iter()
+                .any(|provider| provider.enabled && provider.id == candidate.provider_id)
+    }))
+}
+
+/// 候选摘要（`no_candidate_runtime` 消息「可用运行时清单一旁展示」文本）。
+fn candidate_summary(candidates: &[aether_control::RouteCandidate]) -> String {
+    if candidates.is_empty() {
+        return "（无）".to_owned();
+    }
+    candidates
+        .iter()
+        .map(|candidate| {
+            format!(
+                "{}[{}，enabled={}]",
+                candidate.id,
+                candidate.status.as_str(),
+                candidate.enabled
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("，")
+}
+
 /// 工作区绑定（M3-08；设计 D14/ADR-004 决策 3）。
 ///
 /// 语义：`root_path` 为 canonical 路径；`workspace_set` 后**新会话**按该工作区注入
@@ -533,17 +575,69 @@ impl IpcBackend for SessionBackend {
         let supervisor = self.supervisor.clone();
         let reads = self.reads.clone();
         let binding = lock_workspace(&self.workspace).clone();
-        let runtime_id = request.runtime_id.clone();
+        let requested_runtime_id = request.runtime_id.clone();
         let title = request.title.clone();
         let workspace_id = request.workspace_id.clone();
         let model = request.model.clone();
         let thinking_depth_request = request.thinking_depth_value()?;
         let permission_mode = request.permission_mode_value()?.unwrap_or_default();
         self.call(async move {
+            let supervisor = supervisor.ok_or_else(|| {
+                IpcError::core_not_ready("监督器未接线：无法解析 runtime_id（启动序列未完成）")
+            })?;
+            // M7-02/ADR-022 §2.1：`runtime_id` 缺省 = 自动路由（固定优先级）；显式 =
+            // 手动指定（优先，不参与打分；仍须通过可用性校验）。候选快照每次现读
+            // （无粘性缓存）——与热插拔联动：禁用即排除、恢复即重新纳入。
+            let (runtime_id, route) = match &requested_runtime_id {
+                Some(runtime_id) => (runtime_id.clone(), None),
+                None => {
+                    let preferences = match &reads {
+                        Some(reads) => reads.runtime_preferences().await.map_err(|error| {
+                            IpcError::internal(format!("运行时启停偏好读取失败：{error}"))
+                        })?,
+                        None => std::collections::BTreeMap::new(),
+                    };
+                    let mut candidates = Vec::new();
+                    for id in supervisor.runtime_ids() {
+                        let Some(runtime) = supervisor.get(&id) else {
+                            continue;
+                        };
+                        let (status, _reason) = runtime.summary_snapshot();
+                        let enabled = preferences
+                            .get(&id)
+                            .copied()
+                            .unwrap_or(runtime.manifest().enabled);
+                        candidates.push(aether_control::RouteCandidate {
+                            id,
+                            enabled,
+                            status,
+                            // DSH 直通由 M7-06 实测登记投影映射后置位（当前恒 false）。
+                            model_passthrough: false,
+                        });
+                    }
+                    // 模型硬条件：存在启用 provider 提供该模型（ADR-022 §2.1#2②；
+                    // M7-06 物化消费前，该判定即「模型可路由」的既有数据口径）。
+                    let model_available = match (&model, &reads) {
+                        (Some(model), Some(reads)) => {
+                            provider_provides_model(reads, model).await?
+                        }
+                        _ => false,
+                    };
+                    let decision = aether_control::route_runtime(
+                        model.as_deref(),
+                        model_available,
+                        &candidates,
+                    )
+                    .map_err(|failure| {
+                        IpcError::no_candidate_runtime(
+                            &failure.reason(),
+                            &candidate_summary(&candidates),
+                        )
+                    })?;
+                    (decision.runtime_id.clone(), Some(decision))
+                }
+            };
             let runtime = {
-                let supervisor = supervisor.ok_or_else(|| {
-                    IpcError::core_not_ready("监督器未接线：无法解析 runtime_id（启动序列未完成）")
-                })?;
                 let runtime = supervisor.get(&runtime_id).ok_or_else(|| {
                     IpcError::invalid_enum(
                         "runtime_id",
@@ -551,6 +645,26 @@ impl IpcBackend for SessionBackend {
                     )
                 })?;
                 let (status, reason) = runtime.summary_snapshot();
+                // M7-02/ADR-022 §2.1#5：手动/自动选中均须通过可用性校验——偏好
+                // `enabled=0` 或监督状态 `disabled` → `invalid_value`（提示启用或改选）。
+                let enabled = match &reads {
+                    Some(reads) => reads
+                        .runtime_preferences()
+                        .await
+                        .map_err(|error| {
+                            IpcError::internal(format!("运行时启停偏好读取失败：{error}"))
+                        })?
+                        .get(&runtime_id)
+                        .copied()
+                        .unwrap_or(runtime.manifest().enabled),
+                    None => runtime.manifest().enabled,
+                };
+                if !enabled {
+                    return Err(IpcError::invalid_value(format!(
+                        "runtime {runtime_id:?} 已被用户禁用（enabled=0），不可创建会话；\
+                         请先启用或改选其他运行时"
+                    )));
+                }
                 // M3-03 DoD3（D5）：`disabled` 运行时不可创建会话；修复后经
                 // `runtime_enable` / `runtime_retry` 恢复。校验在命令层委托的此处，
                 // 防止 UI 之外的调用路径绕过。
@@ -669,6 +783,9 @@ impl IpcBackend for SessionBackend {
                         system_prompt,
                         thinking_depth: effective_depth,
                         permission_mode,
+                        // M7-02/ADR-022：自动路由决策随创建入控制层（审计
+                        // `route.decided` + `session.created.routed=true`）；手动为 `None`。
+                        route,
                     },
                 )
                 .await
@@ -972,6 +1089,13 @@ impl IpcBackend for SessionBackend {
                 "queued": ack.queued,
                 "duplicate": ack.duplicate,
             });
+            // M7-02/ADR-022 附录 A-5：超闸门进入全局 FIFO 时附 `queue: { position, limit }`。
+            if let Some(queue) = ack.queue {
+                response["queue"] = json!({
+                    "position": queue.position,
+                    "limit": queue.limit,
+                });
+            }
             if let Some(warnings) = warnings {
                 response["warnings"] = serde_json::to_value(warnings)
                     .map_err(|error| IpcError::internal(format!("警告序列化失败：{error}")))?;

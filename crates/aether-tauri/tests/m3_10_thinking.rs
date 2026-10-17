@@ -211,7 +211,7 @@ impl Harness {
         thinking_depth: Option<i64>,
     ) -> Result<Value, aether_tauri::ipc::error::IpcError> {
         self.backend.session_create(&SessionCreateRequest {
-            runtime_id: runtime_id.to_owned(),
+            runtime_id: Some(runtime_id.to_owned()),
             title: "M3-10 思考深度".to_owned(),
             workspace_id: None,
             model: None,

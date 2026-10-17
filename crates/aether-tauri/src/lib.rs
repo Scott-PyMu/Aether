@@ -284,11 +284,18 @@ fn build_backend(
     let mut adapter_executor: Option<std::sync::Arc<adapter_executor::AdapterRunExecutor>> = None;
     // M3-03：权限中心命令面（`permissions_pending`/`permission_resolve`）的服务句柄。
     let mut permission_service: Option<aether_control::PermissionService> = None;
+    // M7-02/ADR-022：并发闸门快照单元（`health.concurrency_gate` 同步读；管理器单写）。
+    let concurrency_gate = aether_control::ConcurrencyGateCell::new();
     // M3-05：诊断后端依赖（成功分支注入真实健康/读/写/日志/任务 dump；降级分支注入降级快照）。
     let diagnostics_deps: Option<diagnostics_control::DiagnosticsDeps>;
     let runtimes_for_diagnostics = std::sync::Arc::clone(&runtimes);
     let (health, storage_slot, pipeline, reads, backup_deps, write_slot) =
-        match core_health::boot_core_full(&data_dir, &handle, runtimes) {
+        match core_health::boot_core_full_with_gate(
+            &data_dir,
+            &handle,
+            runtimes,
+            Some(concurrency_gate.clone()),
+        ) {
             Ok(boot) => {
                 let core_health::CoreBoot {
                     backend: core,
@@ -423,7 +430,11 @@ fn build_backend(
                     reads.clone(),
                     pipeline.clone(),
                     run_executor,
-                );
+                )
+                // M7-02/ADR-022：并发闸门——空闲内存采样（启动即采样 + 5s 巡检；
+                // `clamp(floor(free_ram_gb/1.5), 2, 10)`）与 health 快照单元共享。
+                .with_free_ram(std::sync::Arc::new(aether_control::SysinfoFreeRam::new()))
+                .with_concurrency_gate(concurrency_gate.clone());
                 // M3-06 重启状态重建（D5「运行中崩溃 → 在途 run 标 failed，可重试」）：
                 // 启动序列内、UI ready 握手前收口上一进程崩溃遗留的 queued/running run
                 // 与非空闲会话（未确认不伪造完成；收口后可经 run_retry 重放）。
@@ -458,7 +469,8 @@ fn build_backend(
                         std::sync::Arc::new(pipeline.clone())
                             as std::sync::Arc<dyn core_health::PipelineHealthSource>,
                         runtimes_for_diagnostics,
-                    ),
+                    )
+                    .with_concurrency_gate(concurrency_gate.clone()),
                     logs: log_sink.clone(),
                     task_dumps: session_manager.clone().map(|manager| {
                         std::sync::Arc::new(manager)

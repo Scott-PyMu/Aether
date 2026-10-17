@@ -253,7 +253,7 @@ impl Harness {
         let value = self
             .backend
             .session_create(&SessionCreateRequest {
-                runtime_id: "mock".to_owned(),
+                runtime_id: Some("mock".to_owned()),
                 title: "M3-08".to_owned(),
                 workspace_id,
                 model: None,
@@ -413,7 +413,7 @@ fn workspace_set_injects_memory_and_swaps_permission_root() {
     let error = h
         .backend
         .session_create(&SessionCreateRequest {
-            runtime_id: "mock".to_owned(),
+            runtime_id: Some("mock".to_owned()),
             title: "未知工作区".to_owned(),
             workspace_id: Some("01J8ZQ5R0N7W9Y8X6V4T2S0K1Z".to_owned()),
             model: None,
