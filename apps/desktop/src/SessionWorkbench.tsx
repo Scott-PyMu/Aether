@@ -29,6 +29,17 @@ import { FilePanel } from "./FilePanel";
 import { STORAGE_L2_THRESHOLD } from "./health";
 import { useStorageHealth } from "./healthBus";
 import { HistoryOverflowNotice } from "./HistoryOverflowNotice";
+import {
+  activateTab,
+  clampLayout,
+  closeTab,
+  defaultLayout,
+  loadLayout,
+  openTab,
+  saveLayout,
+  setSplit,
+  type WorkbenchLayout,
+} from "./layout";
 import { Markdown } from "./markdown";
 import { ModelSelector } from "./ModelSelector";
 import { permissionIpc as productionPermissionIpc, type PermissionIpc } from "./permission";
@@ -64,10 +75,13 @@ import {
   groupSessions,
   SESSION_GROUP_TITLES,
 } from "./sessionGroups";
+import { settingsIpc as productionSettingsIpc, type SettingsIpc } from "./settings";
+import { SplitPane } from "./SplitPane";
 import { TopBar } from "./TopBar";
 import { generateUlid } from "./ulid";
 import { useSessionEvents } from "./useSessionEvents";
 import { VirtualList } from "./VirtualList";
+import { WorkbenchTabs } from "./WorkbenchTabs";
 
 /** 历史消息加载条数（`messages_page` 最近一页；与 EventStore 重载默认一致）。 */
 export const DEFAULT_HISTORY_LIMIT = 500;
@@ -117,6 +131,11 @@ export interface SessionWorkbenchProps {
    * （徽标即时变化；health 轮询保留为兜底）。
    */
   eventListener?: AetherEventListener;
+  /**
+   * M7-04/ADR-018 附录 A-6：布局持久化 IPC（`ui.layout`；缺省 = 生产实现；
+   * 测试注入替身以覆盖重启恢复与损坏回退）。
+   */
+  settingsIpc?: SettingsIpc;
 }
 
 function mergeMessages(previous: MessageRow[], incoming: MessageRow[]): MessageRow[] {
@@ -143,10 +162,21 @@ export function SessionWorkbench({
   providersIpc: providersIpcProp = productionProvidersIpc,
   archiveIpc: archiveIpcProp = productionArchiveIpc,
   eventListener = defaultAetherEventListener,
+  settingsIpc: settingsIpcProp = productionSettingsIpc,
 }: SessionWorkbenchProps) {
   const [runtimes, setRuntimes] = useState<RuntimeInfo[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  /**
+   * M7-04（UI-01 完整）：工作台多视图布局（标签页/分屏/聚焦窗格）。
+   *
+   * - 持久化落点 = settings `ui.layout`（ADR-018 附录 A-6）；损坏回退默认布局；
+   * - 首次运行（无持久化布局）延续 P0 行为：自动打开首个会话；
+   * - 用户显式操作（打开/切换/关闭/分屏）后立即持久化。
+   */
+  const [layout, setLayout] = useState<WorkbenchLayout>(defaultLayout);
+  /** 布局是否为「显式」（持久化存在或用户已操作）——决定是否自动打开首个会话。 */
+  const layoutExplicit = useRef(false);
+  const activeSessionId = layout.active;
   const [messages, setMessages] = useState<MessageRow[]>([]);
   const [selectedRuntime, setSelectedRuntime] = useState<string>("");
   /**
@@ -223,6 +253,46 @@ export function SessionWorkbench({
     () => sessions.find((session) => session.id === activeSessionId) ?? null,
     [sessions, activeSessionId],
   );
+  // M7-04：布局恢复（settings `ui.layout`；损坏回退默认布局，ADR-018 附录 A-6）。
+  // 仅在挂载时读取一次；后续由显式操作写回（失败静默，不阻断工作台）。
+  // 注意：无持久化布局（首次运行）时**不覆盖**已发生的 P0 自动选中；读取与
+  // `session_list` 的完成顺序不可假设。
+  useEffect(() => {
+    let active = true;
+    void loadLayout(settingsIpcProp).then((result) => {
+      if (!active) {
+        return;
+      }
+      if (layoutExplicit.current) {
+        // 用户在布局读取完成前已显式操作：以用户操作为准，不覆盖。
+        return;
+      }
+      const restored = result.persisted || result.corrupted;
+      layoutExplicit.current = restored;
+      if (restored) {
+        setLayout(result.layout);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [settingsIpcProp]);
+  /** M7-04：打开的标签会话（按标签顺序；过滤已不存在的会话）。 */
+  const tabSessions = useMemo(() => {
+    const byId = new Map(sessions.map((session) => [session.id, session]));
+    return layout.tabs
+      .map((id) => byId.get(id))
+      .filter((session): session is SessionSummary => session !== undefined);
+  }, [layout.tabs, sessions]);
+  /** M7-04：分屏第二窗格会话（`null` = 单窗格）。 */
+  const splitSession = useMemo(
+    () => sessions.find((session) => session.id === layout.split) ?? null,
+    [layout.split, sessions],
+  );
+  /** M7-04：分屏开关可用（已开 → 可关；未开 → 需存在可放入第二窗格的其他标签）。 */
+  const splitEnabled =
+    layout.split !== null ||
+    (layout.active !== null && layout.tabs.some((id) => id !== layout.active));
   /** M3-10：所选运行时能力预判（滑块置灰依据；`runtimes_list` 快照）。 */
   const selectedRuntimeInfo = useMemo(
     () => runtimes.find((runtime) => runtime.id === selectedRuntime) ?? null,
@@ -300,16 +370,76 @@ export function SessionWorkbench({
     try {
       const list = await ipc.listSessions();
       setSessions(list);
-      setActiveSessionId((current) => {
-        if (current && list.some((session) => session.id === current)) {
-          return current;
+      setLayout((current) => {
+        // M7-04：会话删除/列表刷新 → 清掉悬空标签（active/split 随之归位）。
+        const clamped = clampLayout(
+          current,
+          list.map((session) => session.id),
+        );
+        // 首次运行（无持久化布局且用户未操作）：延续 P0 行为自动打开首个会话。
+        if (!layoutExplicit.current && clamped.tabs.length === 0) {
+          const first = list[0];
+          return first ? openTab(clamped, first.id) : clamped;
         }
-        return list[0]?.id ?? null;
+        return clamped;
       });
     } catch (failure) {
       reportError(failure);
     }
   }, [ipc, reportError]);
+
+  /**
+   * M7-04：显式布局操作（打开/切换/关闭/分屏）→ 状态更新 + 立即持久化
+   * （`ui.layout`；写入失败静默——布局为非关键状态，下次操作重试）。
+   */
+  const applyLayout = useCallback(
+    (next: WorkbenchLayout) => {
+      if (next === layout) {
+        return;
+      }
+      layoutExplicit.current = true;
+      setLayout(next);
+      void saveLayout(settingsIpcProp, next);
+    },
+    [layout, settingsIpcProp],
+  );
+
+  /** M7-04：打开/切换标签（左栏会话项点击与新建会话复用；不存在则追加标签）。 */
+  const openSessionView = useCallback(
+    (sessionId: string) => {
+      applyLayout(openTab(layout, sessionId));
+    },
+    [applyLayout, layout],
+  );
+
+  /** M7-04：标签点击（聚焦；分屏窗格会话被聚焦时两窗格对调）。 */
+  const onActivateTab = useCallback(
+    (sessionId: string) => {
+      applyLayout(activateTab(layout, sessionId));
+    },
+    [applyLayout, layout],
+  );
+
+  /** M7-04：关闭标签（不删除会话；聚焦/分屏归位）。 */
+  const onCloseTab = useCallback(
+    (sessionId: string) => {
+      applyLayout(closeTab(layout, sessionId));
+    },
+    [applyLayout, layout],
+  );
+
+  /** M7-04：分屏开关（打开 = 第二个已打开标签进入右窗格；关闭 = 回单窗格）。 */
+  const onToggleSplit = useCallback(() => {
+    if (layout.split !== null) {
+      applyLayout(setSplit(layout, null));
+      return;
+    }
+    const other = layout.tabs.find((id) => id !== layout.active);
+    if (!other) {
+      return;
+    }
+    applyLayout(setSplit(layout, other));
+  }, [applyLayout, layout]);
 
   const loadMessages = useCallback(
     async (sessionId: string) => {
@@ -354,14 +484,20 @@ export function SessionWorkbench({
   // M7-01/ADR-015（DoD0）：`runtime.status_changed` 事件实时刷新运行时注册表
   // （合成归段 `runtime:<id>`；徽标/选择器即时变化）。监听注册失败不阻断工作台
   // （health 轮询仍为兜底刷新路径）。
+  // M7-04（DoD4）：`session.status_changed` 到达时刷新会话列表——标签页后台状态
+  // 角标（运行中/等待审批/失败）与 M3-12 分组口径同源（`sessionGroupOf`）。
   const refreshRuntimesRef = useRef(refreshRuntimes);
   refreshRuntimesRef.current = refreshRuntimes;
+  const refreshSessionsRef = useRef(refreshSessions);
+  refreshSessionsRef.current = refreshSessions;
   useEffect(() => {
     let active = true;
     let unlisten: (() => void) | null = null;
     void eventListener((event) => {
       if (event.type === "runtime.status_changed") {
         void refreshRuntimesRef.current();
+      } else if (event.type === "session.status_changed") {
+        void refreshSessionsRef.current();
       }
     })
       .then((dispose) => {
@@ -482,14 +618,17 @@ export function SessionWorkbench({
           ? previous
           : [created, ...previous],
       );
-      setActiveSessionId(created.id);
+      // M7-04：新建会话即打开标签（并聚焦），布局持久化。
+      applyLayout(openTab(layout, created.id));
       await refreshSessions();
     } catch (failure) {
       reportError(failure);
     }
   }, [
+    applyLayout,
     autoRoute,
     ipc,
+    layout,
     modelDraft,
     permissionMode,
     refreshSessions,
@@ -677,7 +816,18 @@ export function SessionWorkbench({
         onTogglePause={activeSession ? () => void onTogglePause() : undefined}
         pauseBusy={pauseBusy}
       />
-      <div className="workbench-columns">
+      {/* M7-04：标签页（UI-01 完整；锚点 `workbench-tabs` / `session-tab` /
+          `session-tab-badge` / `session-tab-close` / `split-toggle`）。 */}
+      <WorkbenchTabs
+        sessions={tabSessions}
+        activeSessionId={activeSessionId}
+        splitSessionId={splitSession?.id ?? null}
+        onActivate={onActivateTab}
+        onClose={onCloseTab}
+        onToggleSplit={onToggleSplit}
+        splitEnabled={splitEnabled}
+      />
+      <div className="workbench-columns" data-split={String(splitSession !== null)}>
         <aside className="workbench-sidebar">
           <h2 className="workbench-title">会话</h2>
           <ul className="session-list" data-testid="session-list">
@@ -703,7 +853,7 @@ export function SessionWorkbench({
                         className={
                           session.id === activeSessionId ? "session-item active" : "session-item"
                         }
-                        onClick={() => setActiveSessionId(session.id)}
+                        onClick={() => openSessionView(session.id)}
                       >
                         <span className="session-item-title">{session.title}</span>
                         <span className="session-item-status" data-testid="session-item-status">
@@ -813,7 +963,12 @@ export function SessionWorkbench({
           </div>
         </aside>
 
-        <div className="workbench-main">
+        <div className="workbench-main-pair" data-split={String(splitSession !== null)}>
+          <div
+            className="workbench-main"
+            data-testid="pane-primary"
+            data-session-id={activeSessionId ?? ""}
+          >
           {!activeSession ? (
             <p className="workbench-hint" data-testid="no-session-hint">
               请选择或新建会话
@@ -1130,6 +1285,22 @@ export function SessionWorkbench({
             >
               {error}
             </p>
+          ) : null}
+          </div>
+
+          {/* M7-04：分屏第二窗格（UI-01 完整；EventStore 按会话隔离订阅）。 */}
+          {splitSession ? (
+            <SplitPane
+              store={store}
+              ipc={ipc}
+              session={splitSession}
+              historyLimit={historyLimit}
+              streamItemHeight={streamItemHeight}
+              streamHeight={streamHeight}
+              degraded={degraded}
+              onError={reportError}
+              onRefreshSessions={refreshSessions}
+            />
           ) : null}
         </div>
 

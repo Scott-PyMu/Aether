@@ -1,17 +1,17 @@
-# Aether UI/UX 设计规格 v0.7（v0.2 已评审通过；v0.3 为 M3-12 锚点登记；v0.4 为 M3-11 前置登记；v0.5 为 ADR-014 P1 锚点与权限模式登记；v0.6 为 ADR-015 热插拔锚点/文案/配色分色/计数登记；v0.7 为 M5-01 批次 ADR-017–ADR-026 锚点/文案/暂停状态/计数登记）
+# Aether UI/UX 设计规格 v0.8（v0.2 已评审通过；v0.3 为 M3-12 锚点登记；v0.4 为 M3-11 前置登记；v0.5 为 ADR-014 P1 锚点与权限模式登记；v0.6 为 ADR-015 热插拔锚点/文案/配色分色/计数登记；v0.7 为 M5-01 批次 ADR-017–ADR-026 锚点/文案/暂停状态/计数登记；v0.8 为 M7-04 标签页/分屏锚点与 C1 修订登记）
 
 | 项 | 内容 |
 |---|---|
-| 文档 | Aether UI/UX 设计规格 v0.7（v0.2 已评审通过；v0.3 为 M3-12 锚点登记；v0.4 为 M3-11 前置登记；v0.5 为 ADR-014 P1 锚点与权限模式登记；v0.6 为 ADR-015 热插拔锚点/文案/配色分色/计数登记；v0.7 为 M5-01 批次 ADR-017–ADR-026 登记） |
+| 文档 | Aether UI/UX 设计规格 v0.8（v0.2 已评审通过；v0.3 为 M3-12 锚点登记；v0.4 为 M3-11 前置登记；v0.5 为 ADR-014 P1 锚点与权限模式登记；v0.6 为 ADR-015 热插拔锚点/文案/配色分色/计数登记；v0.7 为 M5-01 批次 ADR-017–ADR-026 登记；**v0.8 为 M7-04 标签页/分屏锚点与 C1 修订登记（2026-10-18）**） |
 | 依据基线 | 《需求文档》v0.12（ADR-014 新增 SE-06 会话级权限模式；ADR-015 CP-01 注册口径补注）、《设计文档》**v1.16**（冻结，含 ADR-001–015、017–026）、《实施计划与验收标准》v1.24、`docs/P1-实施计划与验收标准.md` **v0.7**、`AGENTS.md`、ADR-010/ADR-011/ADR-014/ADR-015/ADR-017–ADR-026 |
 | 参考对象 | Proma（proma-ai/Proma）信息组织范式；Hermes Studio / Ekko Studio（EKKOLearnAI/hermes-studio）界面范式（仅借鉴公开界面思路，不拷贝代码，A11/SE-05） |
 | 效力 | **本文件不构成冻结基线**。与设计文档冲突时以设计文档为准；本文件中的实现偏差须先提 ADR（AGENTS §3） |
-| 适用范围 | P0 前端（M3-01…M3-12）与 E2E；**P1 新增界面锚点按 ADR-014 / ADR-015 登记（P1 任务 M5–M8，§7.3）**；P1+ 其余仍仅作预留说明，不进入排期 |
-| 状态 | **已评审通过（2026-09-24，随 ADR-010 批次）**；v0.2 已回流 ADR-010（文件引用面板 / 思考深度 / 模型与供应商配置，M3-09/M3-10/M3-11）；**v0.3（2026-09-29）：按 ADR-011 决策 5 登记 M3-12 分组锚点契约并冻结（§7.3），依据基线同步计划 v1.18**；**v0.4（2026-09-30）：按 M3-11 DoD6 前置要求登记「模型选择器空态与手动输入共存口径」（ADR-010 §5-9；UI-05 回归防护；实施记录见 `docs/M3-11-证据.md`）**；**v0.5（2026-09-30，ADR-014 合入 / 拟合入）：① §7.3 P1 锚点增量 10 组（含 `permission-mode-boundary` 常驻文案，R14）；② §5 文案表 +2 错误码（`provider_unreachable` / `provider_auth_failed`，ADR-014 附录 C-5）；③ 废止 §5「连通性测试将在 P1 开放」行与 `provider-test-notice` 提示（语义相反，ADR-014 附录 F-2）；④ §2.4 增权限模式选择器（三档）与常驻边界声明（ADR-014 决策 3 / 附录 F-3）**；**v0.6（2026-10-08，ADR-015 合入 / 拟合入）：E-0 头部同步；E-1 §3.2 用户启停边与 `user_disabled` 呈现行；E-2 配色分色注（`user_disabled` 灰 / 故障类红，§4.4/§6.4 同步）；E-3/E-5 §5 文案表 +2（`user_disabled` / `runtime_busy`）；E-4 §7.3 锚点 +2（`runtime-toggle` / `runtime-disable-confirm`，注与计数十组 → 十二组）；E-6 §8#10 补注；E-7 §0.1 C10 计数 36 → 52**；**v0.7（2026-10-09，M5-01 批次 ADR-017–ADR-026 合入 / 拟合入）：① §0.1 C2 更新（P1 起 pause/resume 开放，能力未声明置灰；ADR-017）与 C10 计数 52 → 63（ADR-018）；② §5 文案表 +10（`paused` 状态行 + 9 个新错误码：`pause_unsupported`/`rule_not_found`/`no_candidate_runtime`/`provider_error`/`session_not_found`/`workspace_not_found`/`workspace_in_use`/`preset_not_found`/`builtin_preset_undeletable`）；③ §7.3 锚点 +3（`session-pause-toggle`（M7-03）/ `archive`（M5-05）/ `file-reference`（M7-06）；十二组 → **十五组**）；④ §2.4 增暂停语义常驻声明（ADR-017 A-8）；本文件仍不构成冻结基线（与设计文档冲突以设计文档为准）；「开放问题」未关闭前不得据此定稿 |
+| 适用范围 | P0 前端（M3-01…M3-12）与 E2E；**P1 新增界面锚点按 ADR-014 / ADR-015 登记（P1 任务 M5–M8，§7.3）**；**M7-04 任务登记锚点（标签页/分屏）自 v0.8 冻结（§7.3）**；P1+ 其余仍仅作预留说明，不进入排期 |
+| 状态 | **已评审通过（2026-09-24，随 ADR-010 批次）**；v0.2 已回流 ADR-010（文件引用面板 / 思考深度 / 模型与供应商配置，M3-09/M3-10/M3-11）；**v0.3（2026-09-29）：按 ADR-011 决策 5 登记 M3-12 分组锚点契约并冻结（§7.3），依据基线同步计划 v1.18**；**v0.4（2026-09-30）：按 M3-11 DoD6 前置要求登记「模型选择器空态与手动输入共存口径」（ADR-010 §5-9；UI-05 回归防护；实施记录见 `docs/M3-11-证据.md`）**；**v0.5（2026-09-30，ADR-014 合入 / 拟合入）：① §7.3 P1 锚点增量 10 组（含 `permission-mode-boundary` 常驻文案，R14）；② §5 文案表 +2 错误码（`provider_unreachable` / `provider_auth_failed`，ADR-014 附录 C-5）；③ 废止 §5「连通性测试将在 P1 开放」行与 `provider-test-notice` 提示（语义相反，ADR-014 附录 F-2）；④ §2.4 增权限模式选择器（三档）与常驻边界声明（ADR-014 决策 3 / 附录 F-3）**；**v0.6（2026-10-08，ADR-015 合入 / 拟合入）：E-0 头部同步；E-1 §3.2 用户启停边与 `user_disabled` 呈现行；E-2 配色分色注（`user_disabled` 灰 / 故障类红，§4.4/§6.4 同步）；E-3/E-5 §5 文案表 +2（`user_disabled` / `runtime_busy`）；E-4 §7.3 锚点 +2（`runtime-toggle` / `runtime-disable-confirm`，注与计数十组 → 十二组）；E-6 §8#10 补注；E-7 §0.1 C10 计数 36 → 52**；**v0.7（2026-10-09，M5-01 批次 ADR-017–ADR-026 合入 / 拟合入）：① §0.1 C2 更新（P1 起 pause/resume 开放，能力未声明置灰；ADR-017）与 C10 计数 52 → 63（ADR-018）；② §5 文案表 +10（`paused` 状态行 + 9 个新错误码：`pause_unsupported`/`rule_not_found`/`no_candidate_runtime`/`provider_error`/`session_not_found`/`workspace_not_found`/`workspace_in_use`/`preset_not_found`/`builtin_preset_undeletable`）；③ §7.3 锚点 +3（`session-pause-toggle`（M7-03）/ `archive`（M5-05）/ `file-reference`（M7-06）；十二组 → **十五组**）；④ §2.4 增暂停语义常驻声明（ADR-017 A-8）；本文件仍不构成冻结基线（与设计文档冲突以设计文档为准）；「开放问题」未关闭前不得据此定稿**；**v0.8（2026-10-18，M7-04）：① §0.1 C1 修订——P1 起标签页/分屏在单窗口内开放（M7-04；多窗口仍不做）；② §2.1/§2.2 增标签栏与分屏窗格线框说明（布局持久化 = settings ui.layout，ADR-018 附录 A-6）；③ §7.3 登记并冻结 M7-04 锚点组（workbench-tabs / session-tab / session-tab-badge / split-toggle / split-pane 等）；④ §8#1 更新（标签/分屏 P1 已实现，多窗口仍不做）；⑤ §0.2「Chrome 风格 Tab 栏」处置同步为 P1 落地形态（工作台会话视图标签，非多标签窗口）** |
 
 **阅读顺序**：§0 硬约束与参考采纳 → §1 界面清单 → §2 线框 → §3 状态图 → §4 组件矩阵 → §5 文案表 → §6 Token/可访问性 → §7 E2E 选择器 → §8 范围冻结 → §9 开放问题。
 
-**与实现现状的关系**（截至 M3-02）：启动加载态、数据目录阻断页、核心健康横幅、会话工作台（左列表 + 中消息流 + 底部输入 + 会话状态条）已实现；本规格中「顶栏合并状态」「右栏辅助面板」「权限审批卡」「备份/恢复页」「设置/诊断/关于页」为 M3-03…M3-08 目标形态，标注了对应任务；v0.2 增补 ADR-010 三项（S-11 文件引用面板、思考深度、模型与供应商配置，M3-09/M3-10/M3-11）；v0.3 按 ADR-011 登记 M3-12 会话列表分组锚点（§7.3，冻结）。
+**与实现现状的关系**（截至 M3-02）：启动加载态、数据目录阻断页、核心健康横幅、会话工作台（左列表 + 中消息流 + 底部输入 + 会话状态条）已实现；本规格中「顶栏合并状态」「右栏辅助面板」「权限审批卡」「备份/恢复页」「设置/诊断/关于页」为 M3-03…M3-08 目标形态，标注了对应任务；v0.2 增补 ADR-010 三项（S-11 文件引用面板、思考深度、模型与供应商配置，M3-09/M3-10/M3-11）；v0.3 按 ADR-011 登记 M3-12 会话列表分组锚点（§7.3，冻结）；v0.8 按 M7-04 落地标签页/双窗格分屏并登记锚点（§2.1/§7.3，冻结）。
 
 ---
 
@@ -21,7 +21,7 @@
 
 | # | 约束 | 依据 | 对 UI 的直接含义 |
 |---|---|---|---|
-| C1 | 单窗口，无分屏/标签页/多窗口 | 设计 §2.3、§4#20；需求 UI-01 P0 口径「单窗口 + 会话切换」 | 一切界面均为「主工作台 + 覆盖层」；禁止出现 Tab 栏、窗口拆分、多窗口入口 |
+| C1 | 单窗口；**P1 起标签页/分屏在单窗口内开放（M7-04）；多窗口仍不做** | 设计 §2.3、§4#20、§5 P1；需求 UI-01（P0 单窗口 + 会话切换；P1 完整） | 工作台内提供会话标签栏与双窗格分屏（同一窗口）；禁止窗口拆分/多窗口入口；覆盖层形态不变 |
 | C2 | P0：无 pause/resume，仅 interrupt；**P1 起按 ADR-017 开放（核心层受控中断 + Mode R 重放）** | 设计 D8、§4#22；需求 CP-03；**ADR-017** | P1 解除 P0 禁则：运行时声明 `pause_resume` 能力才提供暂停入口（未声明置灰 + `pause_unsupported`）；`sessions.status=paused` P1 可达 |
 | C3 | 无 exec/终端面板 | 设计 D9 策略矩阵（**ADR-014 修订：低档 `exec: deny`，顶档 `danger_full_access` 仅门层 `allow`**）、§4#9 | 禁止终端入口、命令输入框、shell 快捷方式（**PF-05 面板维持 P3**；ADR-014 决策 3 开放的仅是门层判定，不新增任何终端 UI） |
 | C4 | 无工作流画布/编排 UI | 设计 §4#1（引擎 P2、画布 P4） | 禁止节点/连线/拖拽画布；`tasks/workflows` 表无 UI |
@@ -38,7 +38,7 @@
 |---|---|---|---|
 | 左栏 + 主输出 + 右侧工作区三段式 | Proma | **采纳（裁剪）** | 右栏收敛为「运行时状态 / 权限待办 / 文件引用面板（只读，ADR-010）/ 诊断入口」四分区；不设改动/预览/浏览器/终端多标签 |
 | 右侧工作区多标签（文件/改动/预览/记忆/聊天/浏览器） | Proma | **采纳（裁剪，ADR-010）** | 仅「文件」只读引用面板（会话文件/项目文件；不列目录、不预览、不落内容体）；改动/预览/记忆/聊天/浏览器仍不采纳（P3/P4） |
-| Chrome 风格 Tab 栏 | Proma | **不采纳** | C1；落回 P1（§4#20） |
+| Chrome 风格 Tab 栏 | Proma | **P1 落地（M7-04，裁剪）** | C1 仍为单窗口；标签栏收敛为「工作台会话视图标签」（打开/切换/关闭 + 双窗格分屏），不做多标签窗口/多窗口 |
 | 侧边栏 Working 分组（按状态聚合） | Proma | **采纳** | 会话列表按 running / waiting_permission / failed 分组 |
 | 状态「线条语言」（弱徽标） | Proma | **采纳** | 会话项左侧 3px 状态线 + 文本标签，不用大色块徽标 |
 | Agent 灵动岛（常驻浮窗胶囊） | Proma | **不采纳** | 独立浮窗超范围；替代为窗口内顶栏状态条 + 右栏运行时面板 |
@@ -154,9 +154,26 @@
 
 > 右栏分区（ADR-010）：运行时状态 → 权限待办 → 文件引用面板（只读，§2.6）→ 诊断入口；文件面板为 S-11（M3-09）。
 
+**标签页 / 分屏（P1，M7-04；UI-01 完整、设计 §2.3「多视图」、§4#20）**
+
+```
+顶栏（不变）
+├─ 标签栏（`workbench-tabs`）────────────────────────────────────────────┐
+│ [会话A ×] [会话B × ●运行中] [会话C × 等待审批] …            [分屏]     │
+└────────────────────────────────────────────────────────────────────────┘
+├─ 左栏 18rem ─┬─ 主窗格（聚焦标签；`pane-primary`）─┬─ 右栏 20rem ─┐
+│ 会话列表/运行时│  消息流 + 输入区（P0 形态不变）      │ 运行时/权限/… │
+│               ├─ 分屏第二窗格（`split-pane`；同一会话不得占两窗格）─┤
+```
+
+- **标签**：点击左栏会话项或新建会话即打开（或聚焦）标签；点击标签切换聚焦会话；`session-tab-close` 仅关闭视图，**不删除会话**（删除属 M7-07）；关闭聚焦标签 → 聚焦相邻标签；关闭分屏标签 → 分屏关闭；关闭全部标签 → 空态（左栏列表仍可用）。
+- **分屏（双窗格）**：`split-toggle` 开启后，另一个已打开标签进入右窗格（主窗格 = 聚焦标签）；聚焦分屏窗格会话时两窗格对调；一次只支持两个窗格（不做 >2 窗格/窗口拆分）。分屏窗格含独立消息流与输入区，事件视图按会话隔离（EventStore 按 `(session_id, seq)` 分会话存储，不串流/不重复渲染）。
+- **后台会话状态角标（DoD4）**：标签显示 `data-status` = M3-12 分组 id；运行中/等待审批/失败三组渲染 `session-tab-badge`（`data-group` 同值；其他组不渲染，口径同 §2.2「空组隐藏」）；`data-background=true` 表示该标签未显示在任何窗格。
+- **布局持久化**：标签顺序/聚焦会话/分屏会话持久化于 settings 键 `ui.layout`（ADR-018 附录 A-6：JSON 对象字符串 ≤64KiB，缺省 `"{}"`）；重启恢复；损坏（非法 JSON/形状/版本）回退默认布局（空标签、无分屏）。
+
 | 宽度 | 布局 |
 |---|---|
-| ≥1280px | 三栏：18rem / 自适应 / 20rem |
+| ≥1280px | 三栏：18rem / 自适应 / 20rem；分屏时中栏内并排两窗格 |
 | 960–1279px | 两栏：18rem / 自适应；右栏折叠为顶栏「状态」按钮打开的抽屉（overlay，Esc 关闭） |
 | <960px | 不出现（窗口最小宽度 960） |
 
@@ -165,7 +182,7 @@
 - **分组方式（P0 默认）**：按会话状态分组，固定组序：`运行中`（running/creating）→ `等待审批`（waiting_permission）→ `失败`（failed）→ `其他`（idle/completed/cancelled）；组内按 `updated_at` 倒序。空组隐藏。
 - **状态指示（线条语言）**：列表项左侧 3px 竖线着色（运行中=accent 且带脉冲点、等待审批=warning、失败=danger、其他=透明/弱边框）+ 右侧小字状态标签；不使用大色块徽标。颜色见 §6.4。
 - **交互**：
-  - 切换：点击列表项 → 激活态（边框 + 背景提升），加载该会话消息基线（`messages_page` 最近一页）。
+  - 切换：点击列表项 → 激活态（边框 + 背景提升），加载该会话消息基线（`messages_page` 最近一页）；**M7-04 起同时打开/聚焦对应标签**（标签语义见 §2.1）。
   - 新建：表单（标题输入 ≤256 字符、模型输入（可选，自由文本）、运行时单选）→ `session_create` → 立即入列表并选中；T1 埋点锚点保留（`create-latency-ms`）。
   - 重命名/删除：**不设计**（D7 命令面无 rename/delete；`session_dispose` 仅关闭不删除）→ 见 §9。
   - 运行中会话置顶于「运行中」组内并显示脉冲点（Hermes 参考；`prefers-reduced-motion` 下降级为静态点，见 §6.7）。
@@ -699,11 +716,17 @@ stateDiagram-v2
 | M7-03 | 会话暂停/恢复 | `session-pause-toggle` | `data-session-id` / `data-status`（running/paused/idle）/ `data-disabled`（能力未声明或连接未就绪时置灰） |
 | M7-03 | 暂停/恢复实现登记（2026-10-17） | `session-pause-toggle`（顶栏会话操作区；`paused` 时按钮文案「恢复」）+ `paused-notice`（paused 门禁提示 = §5 `paused` 行文案 + §2.4 常驻语义声明） | `data-session-id` / `data-status`（会话状态）/ `data-disabled`（能力未声明 / 连接未就绪 / 降级 / 无会话 / 状态不可暂停） |
 | M5-05 | 容量一键归档 | `archive` | `data-result` |
+| M7-04 | 标签栏（任务登记，2026-10-18） | `workbench-tabs`（容器）/ `workbench-tabs-empty`（空态）/ `session-tab` / `session-tab-title` / `session-tab-close` | `data-session-id`、`data-active`、`data-status`（M3-12 分组 id：running/waiting_permission/failed/other）、`data-background`（true = 未显示在任何窗格） |
+| M7-04 | 后台会话状态角标（任务登记，2026-10-18） | `session-tab-badge` | `data-group`（running/waiting_permission/failed；其他组不渲染——空组隐藏口径同 M3-12） |
+| M7-04 | 分屏（任务登记，2026-10-18） | `split-toggle` / `split-pane` / `split-pane-title` / `split-pane-status` / `split-message-stream` / `split-message-list` / `split-message-bubble` / `split-streaming-indicator` / `split-message-stream-empty` / `split-composer-input` / `split-composer-send` | `split-toggle`：`data-enabled`、`data-split`；`split-pane`：`data-session-id`、`data-status`；气泡：`data-role`、`data-streaming`、`data-run-id`、`data-session-id` |
+| M7-04 | 主窗格标记（任务登记，2026-10-18） | `pane-primary` | `data-session-id`（聚焦标签会话；无激活会话时为空串） |
 | M7-06 | 引用注入入口 | `file-reference` | — |
 
 > **P1 锚点登记（2026-09-30 按 ADR-014 附录 F-1 登记，共 10 组；2026-10-08 按 ADR-015 附录 E-4 增 2 组，共 12 组；2026-10-09 按 M5-01 批次增 3 组——`session-pause-toggle`（ADR-017，M7-03）、`archive`（ADR-021，M5-05）、`file-reference`（ADR-024，M7-06），共 **15 组**）**：上表 M5–M8 十五组为 P1 登记项，实施时不得重命名（§7.1 规则 5；重命名视为破坏性变更）；正式锚点契约由 M5-01 批次登记，实现与断言由对应任务承担；`permission-mode-boundary` 为**常驻文案**锚点（R14，文案定稿见 ADR-014 附录 F-3，交互与档位语义见 §2.4），`permission-mode-selector` 的 `data-mode` 三档取值为 `read_only` / `workspace_write`（缺省）/ `danger_full_access`；`runtime-toggle` / `runtime-disable-confirm` 为 ADR-015（M7-01）登记项；`provider-test-notice`（M3-11 实现登记）已按 ADR-014 附录 F-2 废止，由 `provider-test-result` 承接（P1 = 真实调用）。
 
 > **M3-12 锚点契约（2026-09-29 按 ADR-011 决策 5 登记并冻结）**：`session-group` / `data-group` / `session-group-title` 及 `session-list` 结构变更自本版冻结，实施时不得重命名（§7.1 规则 5；重命名视为破坏性变更）；断言接口（`data-group` 序列 = 非空组固定组序子集、空组不渲染、等待组增删、`session-item` 不得跨组错位）见 `docs/M3-03-遗留项处置草案.md` §5.2 与 `docs/adr/ADR-011-m3-12-waiting-state-grouping.md` 决策 5。
+
+> **M7-04 锚点契约（2026-10-18 任务登记并冻结）**：上表 M7-04 四行（标签栏/后台状态角标/分屏/主窗格标记）自 v0.8 冻结，实施时不得重命名（§7.1 规则 5）；契约口径——`session-tab[data-status]` 与 M3-12 分组同源（`sessionGroupOf`），`session-tab-badge[data-group]` 仅三组渲染（其他组不渲染），`split-toggle[data-enabled]` = 可开启/关闭分屏（未开启时需 ≥2 个标签），`split-pane[data-session-id]` 与 `pane-primary[data-session-id]` 不得相同（同会话不占两窗格）；实现与断言见 `docs/M7-04-证据.md`。
 
 ### 7.4 使用约束
 
@@ -720,7 +743,7 @@ stateDiagram-v2
 
 | # | 不做的界面能力 | 依据 | 落回阶段 |
 |---|---|---|---|
-| 1 | 分屏 / 标签页 / 多窗口 | §2.3、§4#20 | P1 |
+| 1 | ~~分屏 / 标签页 / 多窗口~~ **P1 已实现（M7-04）：标签页 / 双窗格分屏（单窗口内）**；**多窗口仍不做** | §2.3、§4#20、§5 P1；M7-04 | P1（多窗口不计划） |
 | 2 | 终端面板 / exec 入口 / 命令输入 | D9（**ADR-014 修订：低档 `exec: deny` / 顶档 `danger_full_access` 仅门层 `allow`**）、§4#9 | P3（**仅门层开放，不构成 P3 提前**，R13） |
 | 3 | 工作流画布 / 节点编排 / 模板库 | §4#1 | 引擎 P2 / 画布 P4 |
 | 4 | 第三方适配器安装 / 管理 / 信任确认 UI | §2.1、§4#28、D5 | P3 |

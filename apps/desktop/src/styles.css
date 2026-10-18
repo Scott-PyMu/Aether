@@ -1964,3 +1964,167 @@ body {
   color: var(--ae-danger, #d66f6f);
   margin: 0;
 }
+
+/* ===== M7-04：标签页 / 分屏（UI-01 完整；设计 §2.3「多视图」P1、§4#20） ===== */
+
+.workbench-tabs {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  border-bottom: 1px solid #262a30;
+  padding-bottom: 0.25rem;
+}
+
+.workbench-tab-strip {
+  display: flex;
+  align-items: stretch;
+  gap: 0.35rem;
+  overflow-x: auto;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.workbench-tabs-empty {
+  color: #6c7278;
+  font-size: 0.8rem;
+  align-self: center;
+  padding: 0.2rem 0.35rem;
+}
+
+.session-tab {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.45rem;
+  border: 1px solid #2a2f36;
+  border-radius: 6px 6px 0 0;
+  background-color: #1a1d22;
+  cursor: pointer;
+  max-width: 16rem;
+  flex: 0 0 auto;
+}
+
+.session-tab.active {
+  background-color: #232830;
+  border-color: #3d4650;
+}
+
+.session-tab[data-background="true"] {
+  background-color: #171a1e;
+}
+
+.session-tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.82rem;
+}
+
+.session-tab-status {
+  font-size: 0.7rem;
+  color: #6c7278;
+  white-space: nowrap;
+}
+
+.session-tab-badge {
+  font-size: 0.68rem;
+  border-radius: 999px;
+  padding: 0.05rem 0.4rem;
+  white-space: nowrap;
+}
+
+.session-tab-badge[data-group="running"] {
+  color: #9dc1ee;
+  background-color: #1d2a3a;
+}
+
+.session-tab-badge[data-group="waiting_permission"] {
+  color: #e8c677;
+  background-color: #302a1a;
+}
+
+.session-tab-badge[data-group="failed"] {
+  color: #eba3a3;
+  background-color: #33201f;
+}
+
+.session-tab-close {
+  border: none;
+  background: transparent;
+  color: #8a9097;
+  cursor: pointer;
+  font-size: 0.9rem;
+  line-height: 1;
+  padding: 0.05rem 0.2rem;
+  border-radius: 4px;
+}
+
+.session-tab-close:hover {
+  background-color: #303740;
+  color: #e8eaed;
+}
+
+.split-toggle {
+  flex: 0 0 auto;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid #2a2f36;
+  border-radius: 6px;
+  background-color: #1a1d22;
+  color: #cfd3d8;
+  cursor: pointer;
+}
+
+.split-toggle.active {
+  border-color: #4d6a8a;
+  background-color: #223042;
+}
+
+.split-toggle:disabled {
+  cursor: not-allowed;
+  color: #6c7278;
+  border-color: #262a30;
+}
+
+.workbench-main-pair {
+  display: flex;
+  gap: 0.75rem;
+  min-width: 0;
+  align-items: stretch;
+}
+
+.workbench-main-pair[data-split="true"] > .workbench-main,
+.workbench-main-pair[data-split="true"] > .split-pane {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.split-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border-left: 1px solid #262a30;
+  padding-left: 0.75rem;
+  min-width: 0;
+}
+
+.split-pane-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.split-pane-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.split-pane-status {
+  font-size: 0.72rem;
+  color: #6c7278;
+}
+
+.split-message-stream {
+  max-height: none;
+}
