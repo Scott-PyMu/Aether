@@ -67,13 +67,15 @@ describe("D6 协议常量", () => {
       "session.create": 30_000,
       "session.send": 30_000,
       "session.interrupt": 5_000,
+      // M7-03/ADR-017 附录 A-4：净 +1（9 → 10）。
+      "session.pause": 10_000,
       "session.dispose": 15_000,
       "tools.list": 10_000,
       "permission.resolve": 5_000,
       "health.ping": 5_000,
       shutdown: 5_000,
     });
-    expect(RPC_METHODS).toHaveLength(9);
+    expect(RPC_METHODS).toHaveLength(10);
     expect(isRpcMethod("session.send")).toBe(true);
     expect(isRpcMethod("session.listen")).toBe(false);
     expect(isRpcMethod("toString")).toBe(false);

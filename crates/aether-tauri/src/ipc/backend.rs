@@ -53,6 +53,18 @@ pub trait IpcBackend: Send + Sync + 'static {
         Err(IpcError::not_implemented("session_interrupt"))
     }
 
+    /// M7-03/ADR-017：暂停会话（核心层受控中断 + 能力门 `pause_resume`；
+    /// 未声明 → `pause_unsupported`，不产生假暂停）。
+    fn session_pause(&self, _request: &SessionIdRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("session_pause"))
+    }
+
+    /// M7-03/ADR-017：恢复会话（有暂停标记 → 重放 `paused → running`；无标记 →
+    /// `paused → idle`）。
+    fn session_resume(&self, _request: &SessionIdRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("session_resume"))
+    }
+
     fn session_dispose(&self, _request: &SessionIdRequest) -> Result<Value, IpcError> {
         Err(IpcError::not_implemented("session_dispose"))
     }

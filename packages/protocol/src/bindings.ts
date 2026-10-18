@@ -10,6 +10,16 @@ export const commands = {
 	sessionCreate: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("session_create", { payload })),
 	sessionSend: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("session_send", { payload })),
 	sessionInterrupt: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("session_interrupt", { payload })),
+	/**
+	 *  M7-03/ADR-017：暂停会话（`pause_resume` 能力门在命令层实时复核——未声明 →
+	 *  `pause_unsupported`，不产生假暂停；回执 `{ session_id, status: "paused" }`）。
+	 */
+	sessionPause: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("session_pause", { payload })),
+	/**
+	 *  M7-03/ADR-017：恢复会话（有暂停标记 → 重放并 `paused → running`；
+	 *  无标记 → `paused → idle`）。
+	 */
+	sessionResume: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("session_resume", { payload })),
 	sessionDispose: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("session_dispose", { payload })),
 	messagesPage: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("messages_page", { payload })),
 	permissionsPending: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("permissions_pending", { payload })),
@@ -351,7 +361,13 @@ export type IpcErrorCode =
  *  自动路由无可用候选（M7-02/ADR-022：`session_create` 缺省路由路径；消息区分
  *  「全部禁用」「无匹配模型」「无 ready 候选」，提示手动选择）。
  */
-"no_candidate_runtime";
+"no_candidate_runtime" | 
+/**
+ *  运行时未声明 `pause_resume` 能力或连接未就绪，拒绝暂停
+ *  （M7-03/ADR-017/ADR-006 附录 B：不产生假暂停，不做任何状态转移；
+ *  UI 暂停按钮置灰 + 提示）。
+ */
+"pause_unsupported";
 
 /**  IPC 命令错误的线上形态：`{ "code": "...", "message": "...", "field": "..." }`。 */
 export type IpcError_Deserialize = {

@@ -963,3 +963,69 @@ describe("Mock 适配器：思考深度能力与观测（M3-10 / ADR-010）", ()
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("Mock 适配器：暂停/恢复能力与观测（M7-03 / ADR-017）", () => {
+  it("hello/initialize 默认声明 `pause_resume`；`--no-pause-resume` 省略", async () => {
+    const supported = new Harness();
+    await supported.start();
+    const hello = supported.frames.find((frame) => frame.method === "hello");
+    expect((hello?.params?.runtime as { capabilities: string[] }).capabilities).toContain(
+      "pause_resume",
+    );
+    const initialized = await supported.requestResult("initialize", {});
+    expect(initialized.capabilities as string[]).toContain("pause_resume");
+
+    const unsupported = new Harness({ pauseResumeUnsupported: true });
+    await unsupported.start();
+    const helloNo = unsupported.frames.find((frame) => frame.method === "hello");
+    expect(
+      (helloNo?.params?.runtime as { capabilities: string[] }).capabilities,
+    ).not.toContain("pause_resume");
+    const initializedNo = await unsupported.requestResult("initialize", {});
+    expect(initializedNo.capabilities as string[]).not.toContain("pause_resume");
+  });
+
+  it("session.pause 取消残余工作在途 run、会话保留（可继续送消息）；调用入 session-log", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "aether-m7-03-mock-log-"));
+    const logPath = path.join(dir, "session-log.jsonl");
+    const harness = new Harness({
+      sessionLog: logPath,
+      longStreamIntervalMs: 5,
+    });
+    await harness.start();
+    const sessionId = await harness.createSession();
+
+    // 在途 run（`long` 保持流式）；暂停 → 响应 paused + 残余 run 取消。
+    const runId = await harness.sendMessage(sessionId, "long");
+    await harness.waitForFrame(
+      (frame) => frame.method === "event" && (frame.params as { type?: string })?.type === "run.started",
+      "run.started",
+    );
+    const paused = await harness.requestResult("session.pause", { session_id: sessionId });
+    expect(paused["paused"]).toBe(true);
+    expect(paused["cancelled_run"]).toBe(runId);
+
+    // 会话保留：同一 session_id 仍可送消息（native 会话恢复能力不因暂停丢失）。
+    const nextRun = await harness.sendMessage(sessionId, "hello");
+    expect(nextRun).not.toBe(runId);
+    await harness.waitForFrame(
+      (frame) =>
+        frame.method === "event" &&
+        (frame.params as { type?: string; run_id?: string })?.type === "run.completed" &&
+        (frame.params as { run_id?: string })?.run_id === nextRun,
+      "重放后的 run.completed",
+    );
+
+    const logRecords = readFileSync(logPath, "utf8")
+      .split("\n")
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const pauseRecord = logRecords.find((record) => record.method === "session.pause");
+    expect(pauseRecord).toMatchObject({
+      method: "session.pause",
+      session_id: sessionId,
+      cancelled_run: runId,
+    });
+    rmSync(dir, { recursive: true, force: true });
+  });
+});

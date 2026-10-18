@@ -72,6 +72,9 @@ struct Args {
     mb_cycle_file: Option<std::path::PathBuf>,
     /// M3-06 会话夹具：`session.create`/`session.send` 调用记录（JSON Lines 追加）。
     session_log: Option<std::path::PathBuf>,
+    /// M7-03 会话夹具：不声明 `pause_resume` 能力（`pause_unsupported` 负向夹具；
+    /// 口径同 Mock `--no-pause-resume`）。
+    pause_resume_unsupported: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -86,6 +89,7 @@ fn parse_args() -> Result<Args, String> {
         mb: 0,
         mb_cycle_file: None,
         session_log: None,
+        pause_resume_unsupported: false,
     };
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let mut index = 0;
@@ -122,6 +126,7 @@ fn parse_args() -> Result<Args, String> {
             }
             "--mb-cycle-file" => args.mb_cycle_file = Some(value()?.into()),
             "--session-log" => args.session_log = Some(value()?.into()),
+            "--no-pause-resume" => args.pause_resume_unsupported = true,
             "--survive-eof" => args.survive_eof = true,
             "--launch-token" => args.launch_token = Some(value()?),
             other if other.starts_with("--launch-token=") => {
@@ -253,12 +258,18 @@ fn session_event(
 ///   在途直至 `session.interrupt`（`run.cancelled`）；其余 → 2 delta + 终稿 + 完成；
 /// - 调用记录写入 `--session-log`（JSON Lines）。
 fn serve_session(args: &Args) -> Result<(), String> {
+    // M7-03/ADR-017 附录 A-5：`pause_resume` 能力项（存在即支持；`--no-pause-resume`
+    // 省略 → 核心 `session_pause` 回 `pause_unsupported`，不产生假暂停）。
+    let mut capabilities = vec!["session.create", "session.send"];
+    if !args.pause_resume_unsupported {
+        capabilities.push("pause_resume");
+    }
     let hello = serde_json::json!({
         "jsonrpc": "2.0",
         "method": "hello",
         "params": {
             "protocol": "1.0",
-            "runtime": {"name": "fixture", "version": "0.1.0", "capabilities": ["session.create", "session.send"]},
+            "runtime": {"name": "fixture", "version": "0.1.0", "capabilities": capabilities},
         },
     });
     write_frame(&hello)?;
@@ -269,6 +280,8 @@ fn serve_session(args: &Args) -> Result<(), String> {
     let mut event_counter: u64 = 0;
     // `fail-once` 为**进程级**首次消费（Mode R 恢复会重建会话状态，进程级计数跨恢复保持）。
     let mut fail_once_used = false;
+    // M7-03：`long-once` 为进程级首次消费（暂停中断 → 恢复重放端到端）。
+    let mut long_once_used = false;
     let stdin = std::io::stdin();
     let mut reader = stdin.lock();
     let mut line = String::new();
@@ -392,6 +405,12 @@ fn serve_session(args: &Args) -> Result<(), String> {
                 if fail_once {
                     fail_once_used = true;
                 }
+                // M7-03：`long-once` 仅**首次**保持在途（暂停中断用例）；重放（第二次）
+                // 走正常完成路径（恢复重放端到端断言）。
+                let hold_in_flight = text == "long" || (text == "long-once" && !long_once_used);
+                if text == "long-once" {
+                    long_once_used = true;
+                }
                 if fail_once || (text.starts_with("fail") && text != "fail-once") {
                     write_frame(&session_event(
                         &session_id,
@@ -403,7 +422,7 @@ fn serve_session(args: &Args) -> Result<(), String> {
                             "error": {"code": "fixture_fail", "message": "夹具注入失败", "recoverable": true},
                         }),
                     ))?;
-                } else if text == "long" {
+                } else if hold_in_flight {
                     // 保持在途：终态由 `session.interrupt` 收口（崩溃/中断场景）。
                     session.active_run = Some(run_id.clone());
                 } else {
@@ -473,6 +492,38 @@ fn serve_session(args: &Args) -> Result<(), String> {
                     "interrupted": interrupted.is_some(),
                     "run_id": interrupted,
                 }))?;
+            }
+            "session.pause" => {
+                // M7-03/ADR-017：取消残余工作、释放运行时侧会话资源；会话保留
+                // （`native_id` 恢复能力不变——Mode R 重放依赖）。
+                let session_id = params
+                    .get("session_id")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
+                    .to_owned();
+                let Some(session) = sessions.get_mut(&session_id) else {
+                    respond_error(1005, &format!("会话不存在: {session_id}"))?;
+                    continue;
+                };
+                let cancelled = session.active_run.take();
+                if let Some(run_id) = &cancelled {
+                    write_frame(&session_event(
+                        &session_id,
+                        run_id,
+                        &mut event_counter,
+                        "run.cancelled",
+                        serde_json::json!({"run_id": run_id, "reason": "interrupted"}),
+                    ))?;
+                }
+                log_session_call(
+                    args,
+                    serde_json::json!({
+                        "method": "session.pause",
+                        "session_id": session_id,
+                        "cancelled_run": cancelled,
+                    }),
+                );
+                respond(serde_json::json!({"paused": true, "session_id": session_id}))?;
             }
             "session.dispose" => {
                 let session_id = params

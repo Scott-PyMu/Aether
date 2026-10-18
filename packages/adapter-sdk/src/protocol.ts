@@ -61,12 +61,18 @@ export interface ArtifactRefParams {
   refs: ArtifactRefEntry[];
 }
 
-/** 核心 → 适配器方法表（D6）。 */
+/** 核心 → 适配器方法表（D6）。
+ *
+ * M7-03/ADR-017 附录 A-4：净 +1 `session.pause`（10s；核心侧受控中断收口后调用，
+ * 通知适配器取消残余工作、释放运行时侧会话资源；`native_id` 恢复能力保留；
+ * best-effort——未声明 `pause_resume` 的适配器不应收到本方法）。
+ */
 export const METHOD_TIMEOUTS_MS = {
   initialize: 10_000,
   "session.create": 30_000,
   "session.send": 30_000,
   "session.interrupt": 5_000,
+  "session.pause": 10_000,
   "session.dispose": 15_000,
   "tools.list": 10_000,
   "permission.resolve": 5_000,

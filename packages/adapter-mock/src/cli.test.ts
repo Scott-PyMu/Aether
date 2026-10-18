@@ -204,3 +204,20 @@ describe("Mock CLI --no-thinking-depth（M3-10/ADR-010 能力门负向夹具）"
     expect(response.result?.capabilities as string[]).not.toContain("thinking_depth");
   });
 });
+
+describe("Mock CLI --no-pause-resume（M7-03/ADR-017 能力门负向夹具）", () => {
+  it("--no-pause-resume 解析；hello 与 initialize 均不声明能力", async () => {
+    const parsed = parseArgs(["--no-pause-resume"], () => {});
+    expect(parsed.pauseResumeUnsupported).toBe(true);
+
+    const harness = new CliHarness(["--no-pause-resume"]);
+    const hello = await harness.waitForHello();
+    expect(
+      (hello.params?.runtime as { capabilities: string[] }).capabilities,
+    ).not.toContain("pause_resume");
+
+    harness.request("initialize", {}, 1);
+    const response = await harness.waitFor((frame) => frame.id === 1, "initialize");
+    expect(response.result?.capabilities as string[]).not.toContain("pause_resume");
+  });
+});

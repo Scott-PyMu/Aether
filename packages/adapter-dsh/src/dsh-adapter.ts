@@ -37,7 +37,8 @@ export const RUNTIME_NAME = "deepseek-harness";
 /** 适配器版本（semver，hello 上报）。 */
 export const ADAPTER_VERSION = "0.1.0";
 
-/** 适配器能力清单（hello/initialize 上报；M3-10 增 `thinking_depth`）。 */
+/** 适配器能力清单（hello/initialize 上报；M3-10 增 `thinking_depth`；
+ * M7-03/ADR-017 增 `pause_resume`——依据 M2-11 真实运行 Mode R 实测证据登记）。 */
 export const RUNTIME_CAPABILITIES: readonly string[] = [
   "session.create",
   "session.send",
@@ -48,6 +49,9 @@ export const RUNTIME_CAPABILITIES: readonly string[] = [
   // M3-10/ADR-010：档位 0–4 → ACP `session/set_config_option`（`reasoning_effort`，
   // category=thought_level；DSH 0.1.5-rc.2 默认支持，映射表见 M3-10 证据）。
   "thinking_depth",
+  // M7-03/ADR-017：受控中断 + Mode R 原生恢复（ACP `session/resume`；
+  // M2-11 真实证据：`real-dsh-*` Mode R PASS）。
+  "pause_resume",
 ];
 
 /** DSH ACP 思考/推理配置项 id（`category=thought_level`；0.1.5-rc.2 实测）。 */
@@ -344,6 +348,7 @@ export class DshAdapter {
       .handle("session.create", (params) => this.onCreateSession(params))
       .handle("session.send", (params) => this.onSend(params))
       .handle("session.interrupt", (params) => this.onInterrupt(params))
+      .handle("session.pause", (params) => this.onPause(params))
       .handle("session.dispose", (params) => this.onDispose(params))
       .handle("tools.list", (params) => {
         const input = params as { session_id?: string } | null;
@@ -849,6 +854,31 @@ export class DshAdapter {
     this.sessions.delete(sessionId);
     this.releaseRuns(session);
     return Promise.resolve({ disposed: true, residual_channels: this.residualChannels() });
+  }
+
+  /**
+   * `session.pause`（M7-03/ADR-017）：核心侧受控中断收口后调用——取消残余工作
+   * （ACP `session/cancel`，不等 settle；超时/断连由核心侧受控中断与看门狗兜底）、
+   * 释放运行时侧会话资源；**不调用 `session/close`**（ACP 会话持久化正是 Mode R
+   * `session/resume` 的依据），会话本体保留。
+   */
+  private onPause(params: unknown): Record<string, unknown> {
+    const input = (params ?? {}) as { session_id?: unknown };
+    const sessionId = typeof input.session_id === "string" ? input.session_id : "";
+    const session = this.sessions.get(sessionId);
+    if (!session || session.disposed) {
+      throw new RpcError(ERROR_CODES.SESSION_NOT_FOUND, `会话不存在: ${sessionId || "<missing>"}`);
+    }
+    const cancelled: string[] = [];
+    for (const run of session.runs.values()) {
+      if (run.finished) continue;
+      run.interrupted = true;
+      cancelled.push(run.runId);
+    }
+    if (cancelled.length > 0) {
+      this.server?.notify("session/cancel", { sessionId: session.id });
+    }
+    return { paused: true, session_id: session.id, cancelled_runs: cancelled };
   }
 
   private async onShutdown(): Promise<void> {

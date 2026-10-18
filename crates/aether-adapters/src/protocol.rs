@@ -24,12 +24,15 @@ pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 pub const INVALID_FRAME_UNHEALTHY_THRESHOLD: u32 = 20;
 
 /// 核心 → 适配器方法表（D6）。方法集在 MVP 固定，未知方法回 `-32601` 不断连。
+///
+/// M7-03/ADR-017 §2.1-1：P1 净 +1 —— `session.pause`（9 → 10 方法）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Method {
     Initialize,
     SessionCreate,
     SessionSend,
     SessionInterrupt,
+    SessionPause,
     SessionDispose,
     ToolsList,
     PermissionResolve,
@@ -38,12 +41,13 @@ pub enum Method {
 }
 
 impl Method {
-    /// D6 方法表全集（9 个）。
-    pub const ALL: [Self; 9] = [
+    /// D6 方法表全集（10 个；M7-03/ADR-017 净 +1 `session.pause`）。
+    pub const ALL: [Self; 10] = [
         Self::Initialize,
         Self::SessionCreate,
         Self::SessionSend,
         Self::SessionInterrupt,
+        Self::SessionPause,
         Self::SessionDispose,
         Self::ToolsList,
         Self::PermissionResolve,
@@ -57,6 +61,7 @@ impl Method {
             Self::SessionCreate => "session.create",
             Self::SessionSend => "session.send",
             Self::SessionInterrupt => "session.interrupt",
+            Self::SessionPause => "session.pause",
             Self::SessionDispose => "session.dispose",
             Self::ToolsList => "tools.list",
             Self::PermissionResolve => "permission.resolve",
@@ -72,6 +77,8 @@ impl Method {
             // `session.send` 30s（ack 快返回，不等模型）。
             Self::SessionCreate | Self::SessionSend => Duration::from_secs(30),
             Self::SessionInterrupt => Duration::from_secs(5),
+            // M7-03/ADR-017 附录 A-4：`session.pause` 10s（best-effort 收尾调用）。
+            Self::SessionPause => Duration::from_secs(10),
             Self::SessionDispose => Duration::from_secs(15),
             Self::ToolsList => Duration::from_secs(10),
             Self::PermissionResolve => Duration::from_secs(5),
@@ -309,11 +316,13 @@ mod tests {
 
     #[test]
     fn method_table_matches_d6_and_timeouts_are_frozen() {
-        let expected: [(&str, u64); 9] = [
+        let expected: [(&str, u64); 10] = [
             ("initialize", 10),
             ("session.create", 30),
             ("session.send", 30),
             ("session.interrupt", 5),
+            // M7-03/ADR-017 附录 A-4：`session.pause` 10s（净 +1，9 → 10）。
+            ("session.pause", 10),
             ("session.dispose", 15),
             ("tools.list", 10),
             ("permission.resolve", 5),

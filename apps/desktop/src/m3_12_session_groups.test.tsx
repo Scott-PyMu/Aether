@@ -104,6 +104,8 @@ describe("SessionWorkbench 会话分组（M3-12 / ADR-011）", () => {
         session_id: sessionId,
         interrupted_run: null,
       })),
+      pauseSession: vi.fn(),
+      resumeSession: vi.fn(),
       disposeSession: vi.fn(async (sessionId) => ({
         session_id: sessionId,
         status: "completed" as SessionStatus,

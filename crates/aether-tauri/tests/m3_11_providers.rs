@@ -934,6 +934,7 @@ fn dod4_diagnostics_bundle_scans_clean_after_provider_key_write() {
         health,
         logs: None,
         task_dumps: None,
+        session_manager: None,
         security: Some(Arc::new(StaticSecurityProbe)),
     };
     let inner: Arc<dyn IpcBackend> = Arc::clone(&h.backend) as Arc<dyn IpcBackend>;

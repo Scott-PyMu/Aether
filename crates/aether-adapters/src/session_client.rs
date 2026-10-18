@@ -325,6 +325,16 @@ impl AdapterSessionClient {
             .await?)
     }
 
+    /// `session.pause`（D6 10s 超时；M7-03/ADR-017：核心侧受控中断收口后调用，
+    /// 通知适配器取消残余工作、释放运行时侧会话资源；`native_id` 恢复能力保留；
+    /// best-effort——失败不影响核心侧暂停收口）。
+    pub async fn pause(&self, session_id: &str) -> Result<Value, SessionClientError> {
+        Ok(self
+            .connection
+            .request(Method::SessionPause, json!({ "session_id": session_id }))
+            .await?)
+    }
+
     /// `session.dispose`（D6 15s 超时）。
     pub async fn dispose(&self, session_id: &str) -> Result<Value, SessionClientError> {
         Ok(self
@@ -1173,6 +1183,17 @@ mod tests {
         )
         .await;
         assert_eq!(task.await.unwrap().unwrap()["interrupted"], true);
+
+        let task = tokio::spawn({
+            let client = Arc::clone(&client);
+            async move { client.pause("s-1").await }
+        });
+        let request = peer.next_line().await.expect("session.pause");
+        assert_eq!(request["method"], "session.pause");
+        assert_eq!(request["params"]["session_id"], "s-1");
+        peer.respond(request["id"].as_u64().unwrap(), json!({"paused": true}))
+            .await;
+        assert_eq!(task.await.unwrap().unwrap()["paused"], true);
 
         let task = tokio::spawn({
             let client = Arc::clone(&client);

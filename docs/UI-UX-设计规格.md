@@ -697,6 +697,7 @@ stateDiagram-v2
 | M7-02 | 自动路由开关（实现登记，2026-10-16） | `runtime-auto-route` | `data-auto`（true/false；开启后新建会话不带 `runtime_id`，手动点选运行时即退出） |
 | M7-02 | 闸门排队位置（实现登记，2026-10-16） | `queue-position` | `data-position` / `data-limit`（`session_send` 响应 `queue` 快照；run 派发后隐藏） |
 | M7-03 | 会话暂停/恢复 | `session-pause-toggle` | `data-session-id` / `data-status`（running/paused/idle）/ `data-disabled`（能力未声明或连接未就绪时置灰） |
+| M7-03 | 暂停/恢复实现登记（2026-10-17） | `session-pause-toggle`（顶栏会话操作区；`paused` 时按钮文案「恢复」）+ `paused-notice`（paused 门禁提示 = §5 `paused` 行文案 + §2.4 常驻语义声明） | `data-session-id` / `data-status`（会话状态）/ `data-disabled`（能力未声明 / 连接未就绪 / 降级 / 无会话 / 状态不可暂停） |
 | M5-05 | 容量一键归档 | `archive` | `data-result` |
 | M7-06 | 引用注入入口 | `file-reference` | — |
 

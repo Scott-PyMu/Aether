@@ -9,6 +9,8 @@
  */
 import { useStorageHealth } from "./healthBus";
 import {
+  PAUSE_SEMANTICS_NOTICE,
+  PAUSE_UNSUPPORTED_HINT,
   RUNTIME_REASON_LABELS,
   RUNTIME_STATUS_LABELS,
   SESSION_STATUS_LABELS,
@@ -31,6 +33,14 @@ export interface TopBarProps {
   onExportSession?: () => void;
   exportBusy?: boolean;
   exportResult?: "ok" | "failed" | null;
+  /**
+   * M7-03/ADR-017：暂停/恢复入口（锚点 `session-pause-toggle`；
+   * `data-status` = 会话状态，`data-disabled` = 能力未声明/连接未就绪/无会话）。
+   */
+  pauseSupported?: boolean;
+  pauseDisabled?: boolean;
+  onTogglePause?: () => void;
+  pauseBusy?: boolean;
 }
 
 /** 顶栏存储指示（消费共享健康总线；`persist_degraded` 与横幅同一事实源）。 */
@@ -76,6 +86,10 @@ export function TopBar({
   onExportSession,
   exportBusy = false,
   exportResult = null,
+  pauseSupported = false,
+  pauseDisabled = false,
+  onTogglePause,
+  pauseBusy = false,
 }: TopBarProps) {
   return (
     <header className="workbench-topbar" data-testid="topbar">
@@ -111,6 +125,28 @@ export function TopBar({
             >
               中断
             </button>
+            {/* M7-03/ADR-017：暂停/恢复（锚点 `session-pause-toggle`；能力未声明或
+                连接未就绪置灰 + tooltip `pause_unsupported` 文案）。 */}
+            {onTogglePause ? (
+              <button
+                type="button"
+                data-testid="session-pause-toggle"
+                data-session-id={session.id}
+                data-status={session.status}
+                data-disabled={String(pauseDisabled)}
+                disabled={pauseDisabled || pauseBusy}
+                title={
+                  pauseSupported
+                    ? session.status === "paused"
+                      ? "恢复：重放被中断的输入（原生会话上下文保留，Mode R）"
+                      : PAUSE_SEMANTICS_NOTICE
+                    : PAUSE_UNSUPPORTED_HINT
+                }
+                onClick={onTogglePause}
+              >
+                {session.status === "paused" ? "恢复" : "暂停"}
+              </button>
+            ) : null}
             {onExportSession ? (
               <button
                 type="button"

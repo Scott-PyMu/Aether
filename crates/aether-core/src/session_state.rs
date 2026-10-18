@@ -9,8 +9,14 @@
 //! - `running → waiting_permission → running`（D9 审批等待，归属 M3-12（ADR-011/v1.18））；
 //! - `running/idle → cancelled`（interrupt/dispose）；`idle → completed`（优雅关闭）。
 //!
-//! `paused` 为 P1 暂停/恢复预留（设计 §4#22：P0 无 pause/resume），转移表一并给出，
-//! 便于 M2-05 扩展取消树与 P1 启用时保持模型完整。
+//! P1 pause/resume（M7-03/ADR-017 §2.1-2：19 → 22 边显式修订）：
+//! - 新增 `idle → paused`（纯门禁暂停）、`waiting_permission → paused`（直连边）、
+//!   `paused → idle`（无标记解除）；
+//! - 既有 `running → paused`（在途 run 受控中断后）、`paused → running`（有标记重放）
+//!   在 P1 启用；
+//! - 非法清单：`paused → paused`；非 `paused` 态 resume；`creating`/终态 pause；
+//!   `paused` 态 `session_send`/`run_retry`（业务码 `session_paused`）由管理器门禁
+//!   在状态机之前拒绝。
 
 use std::fmt;
 
@@ -46,7 +52,8 @@ impl fmt::Display for SessionTransitionError {
 
 impl std::error::Error for SessionTransitionError {}
 
-/// 合法转移表（白名单；与 D8 run 串行 / D9 审批等待语义一致）。
+/// 合法转移表（白名单；与 D8 run 串行 / D9 审批等待语义一致；
+/// M7-03/ADR-017：19 → 22 边，含 pause/resume 三角形）。
 pub const fn session_transition_allowed(from: SessionStatus, to: SessionStatus) -> bool {
     use SessionStatus::*;
     matches!(
@@ -55,6 +62,7 @@ pub const fn session_transition_allowed(from: SessionStatus, to: SessionStatus) 
             | (Creating, Failed)
             | (Creating, Cancelled)
             | (Idle, Running)
+            | (Idle, Paused)
             | (Idle, Completed)
             | (Idle, Failed)
             | (Idle, Cancelled)
@@ -64,10 +72,12 @@ pub const fn session_transition_allowed(from: SessionStatus, to: SessionStatus) 
             | (Running, Completed)
             | (Running, Failed)
             | (Running, Cancelled)
+            | (Paused, Idle)
             | (Paused, Running)
             | (Paused, Failed)
             | (Paused, Cancelled)
             | (WaitingPermission, Running)
+            | (WaitingPermission, Paused)
             | (WaitingPermission, Failed)
             | (WaitingPermission, Cancelled)
     )
@@ -138,6 +148,7 @@ mod tests {
             (Creating, Failed),
             (Creating, Cancelled),
             (Idle, Running),
+            (Idle, Paused),
             (Idle, Completed),
             (Idle, Failed),
             (Idle, Cancelled),
@@ -147,10 +158,12 @@ mod tests {
             (Running, Completed),
             (Running, Failed),
             (Running, Cancelled),
+            (Paused, Idle),
             (Paused, Running),
             (Paused, Failed),
             (Paused, Cancelled),
             (WaitingPermission, Running),
+            (WaitingPermission, Paused),
             (WaitingPermission, Failed),
             (WaitingPermission, Cancelled),
         ];
@@ -163,7 +176,11 @@ mod tests {
                 );
             }
         }
-        assert_eq!(legal.len(), 19, "转移表为冻结契约，增删需评审");
+        assert_eq!(
+            legal.len(),
+            22,
+            "转移表为冻结契约（M7-03/ADR-017 §2.1-2：19 → 22 边），增删需评审"
+        );
     }
 
     #[test]
@@ -252,8 +269,29 @@ mod tests {
         assert!(fsm.can_transition(SessionStatus::WaitingPermission));
         assert!(!fsm.can_transition(SessionStatus::Creating));
         let idle = SessionFsm::new(SessionStatus::Idle);
-        assert!(!idle.can_transition(SessionStatus::Paused));
+        // M7-03/ADR-017：`idle → paused` 为新增边（纯门禁暂停）。
+        assert!(idle.can_transition(SessionStatus::Paused));
         assert!(idle.can_transition(SessionStatus::Completed));
+    }
+
+    #[test]
+    fn pause_resume_edges_match_adr_017() {
+        use SessionStatus::*;
+        // ADR-017 附录 A-6：新增边 + 既有边启用。
+        assert!(session_transition_allowed(Running, Paused));
+        assert!(session_transition_allowed(Paused, Running));
+        assert!(session_transition_allowed(Idle, Paused));
+        assert!(session_transition_allowed(Paused, Idle));
+        assert!(session_transition_allowed(WaitingPermission, Paused));
+        // 非法：`paused → paused`、creating/终态 pause、同态自环。
+        assert!(!session_transition_allowed(Paused, Paused));
+        assert!(!session_transition_allowed(Creating, Paused));
+        for terminal in [Completed, Failed, Cancelled] {
+            assert!(!session_transition_allowed(terminal, Paused));
+            assert!(!session_transition_allowed(terminal, Running));
+        }
+        assert!(!session_transition_allowed(Running, Running));
+        assert!(!session_transition_allowed(Idle, Idle));
     }
 
     #[test]

@@ -34,6 +34,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -209,6 +210,67 @@ pub struct InterruptReport {
     pub cancelled_waiting_run: Option<RunId>,
 }
 
+/// 暂停标记（M7-03/ADR-017 §2.1-3⑤：= 被中断 run 的输入，**内存态、不落库、
+/// 不跨重启**）。恢复时经 `run_retry` 等价路径重放该输入（Mode R）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PauseMarker {
+    /// 被暂停中断的 run（收口为 `cancelled`，reason=`user_pause`）。
+    pub run_id: RunId,
+    /// 重放复用原输入消息（不新增消息行；ADR-005）。
+    pub input_message_id: MessageId,
+}
+
+/// `session.pause` 线协议下发钩子（M7-03/ADR-017 §2.1-1）：在核心侧受控中断收口
+/// **之后**调用；best-effort——失败/超时记诊断与审计，不阻塞核心侧暂停收口、
+/// 不自动重试。生产实现 = 适配器会话客户端（aether-tauri 接线）；未接线 = 跳过。
+pub trait PauseNotifier: Send + Sync + 'static {
+    fn notify_pause(
+        &self,
+        session_id: SessionId,
+    ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + '_>>;
+}
+
+/// 暂停回执（M7-03/ADR-017 附录 A-1）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PauseReport {
+    pub session_id: SessionId,
+    /// 转移前状态（`idle` / `running` / `waiting_permission`）。
+    pub from: SessionStatus,
+    /// 转移后状态（恒为 `paused`）。
+    pub to: SessionStatus,
+    /// 被受控中断的在途 run（`run.cancelled(reason=user_pause)`）。
+    pub interrupted_run: Option<RunId>,
+    /// 等待队列保留的 run（不提升、不取消；ADR-017 §2.1-3②）。
+    pub waiting_kept: Option<RunId>,
+    /// `session.pause` 下发结果（best-effort；`None` = 未接线/无适配器会话）。
+    pub pause_notify: Option<Result<(), String>>,
+}
+
+/// 恢复回执（M7-03/ADR-017 附录 A-1）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResumeReport {
+    pub session_id: SessionId,
+    /// 转移前状态（恒为 `paused`）。
+    pub from: SessionStatus,
+    /// 转移后状态（有标记重放 → `running`；无标记 → `idle`）。
+    pub to: SessionStatus,
+    /// 重放 run（仅 `running` 分支）。
+    pub run_id: Option<RunId>,
+    /// 重放的输入消息（仅 `running` 分支；不新增消息行）。
+    pub input_message_id: Option<MessageId>,
+}
+
+/// 暂停统计（M7-03 DoD6：诊断包 `session_pause` 段）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PauseStats {
+    /// 累计暂停次数（进程生命周期内）。
+    pub total_pauses: u64,
+    /// 累计恢复次数（进程生命周期内）。
+    pub total_resumes: u64,
+    /// 当前暂停会话数（DB `sessions.status='paused'` 事实源）。
+    pub paused_sessions: usize,
+}
+
 /// `run_retry` 回执（M3-06）：重放产生的新 run 与复用的输入消息；旧 run 保留审计。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RetryAck {
@@ -259,6 +321,17 @@ pub enum LifecycleError {
         run_id: RunId,
         status: aether_core::RunStatus,
     },
+    /// 会话已暂停（M7-03/ADR-017 附录 A-6：`paused` 态 `session_send`/`run_retry`
+    /// 一律拒绝，不排队、不绕过；稳定业务码 `session_paused`，不新增 IPC 错误码枚举）。
+    SessionPaused {
+        session_id: SessionId,
+    },
+    /// 非法暂停/恢复状态（M7-03/ADR-017 附录 A-6 非法清单：`paused → paused`、
+    /// 非 `paused` 态 resume、`creating`/终态 pause；`invalid_value` + 当前状态）。
+    PauseState {
+        session_id: SessionId,
+        status: SessionStatus,
+    },
     /// 存储降级（D4：拒绝新 run）。
     PersistDegraded {
         reason: String,
@@ -301,6 +374,8 @@ impl LifecycleError {
             Self::InvalidTransition { .. } => "invalid_session_transition",
             Self::RunNotFound { .. } => "run_not_found",
             Self::RunNotRetryable { .. } => "run_not_retryable",
+            Self::SessionPaused { .. } => "session_paused",
+            Self::PauseState { .. } => "invalid_value",
             Self::PersistDegraded { .. } => "persist_degraded",
             Self::StorageBackpressure { .. } => "storage_backpressure",
             Self::AdapterIsolated { .. } => "storage_backpressure",
@@ -330,6 +405,16 @@ impl std::fmt::Display for LifecycleError {
                 f,
                 "run 非终态（run_not_retryable）：{run_id} 状态为 {status}；\
                  仅 failed/timeout/cancelled 可重试（ADR-004）"
+            ),
+            Self::SessionPaused { session_id } => write!(
+                f,
+                "会话已暂停（session_paused）：{session_id} 处于 paused 门禁态，\
+                 暂停中拒绝发送与重放；恢复后解除（ADR-017）"
+            ),
+            Self::PauseState { session_id, status } => write!(
+                f,
+                "非法暂停/恢复操作（invalid_value）：会话 {session_id} 当前状态为 {status}；\
+                 pause 仅接受 idle/running/waiting_permission，resume 仅接受 paused（ADR-017）"
             ),
             Self::PersistDegraded { reason } => {
                 write!(f, "存储降级（persist_degraded）：拒绝新 run；{reason}")
@@ -440,6 +525,8 @@ struct SessionState {
     waiting: Option<QueuedRun>,
     /// 会话取消节点（取消树；run 令牌为其子节点，父/子会话级联）。
     cancel: RunCancelToken,
+    /// 暂停标记（M7-03/ADR-017：被中断 run；内存态、不落库、不跨重启）。
+    pause_marker: Option<PauseMarker>,
 }
 
 /// 全局闸门状态（M7-02/ADR-022）：上限 + FIFO 队列；`running` 计数由会话 in-memory
@@ -495,6 +582,16 @@ struct ManagerInner {
     free_ram: Mutex<Option<Arc<dyn FreeRamSource>>>,
     /// 闸门快照单元（`health.concurrency_gate` 同步读；`None` = 未接线）。
     gate_cell: Mutex<Option<ConcurrencyGateCell>>,
+    /// `session.pause` 线协议下发钩子（M7-03/ADR-017；`None` = 未接线 = 跳过下发）。
+    pause_notifier: Mutex<Option<Arc<dyn PauseNotifier>>>,
+    /// 暂停/恢复累计计数（M7-03 DoD6 诊断统计；进程生命周期内）。
+    pause_counters: PauseCounters,
+}
+
+/// 暂停/恢复累计计数（诊断；无锁原子）。
+struct PauseCounters {
+    pauses: AtomicU64,
+    resumes: AtomicU64,
 }
 
 /// 会话生命周期管理器（克隆共享同一实例；内部状态经异步互斥保护）。
@@ -535,6 +632,11 @@ impl SessionManager {
                 run_task_index: Mutex::new(HashMap::new()),
                 free_ram: Mutex::new(None),
                 gate_cell: Mutex::new(None),
+                pause_notifier: Mutex::new(None),
+                pause_counters: PauseCounters {
+                    pauses: AtomicU64::new(0),
+                    resumes: AtomicU64::new(0),
+                },
             }),
         }
     }
@@ -563,6 +665,14 @@ impl SessionManager {
     #[must_use]
     pub fn with_concurrency_gate(&self, cell: ConcurrencyGateCell) -> Self {
         *lock_gate_cell(&self.inner) = Some(cell);
+        self.clone()
+    }
+
+    /// 接线 `session.pause` 下发钩子（M7-03/ADR-017：核心侧受控中断收口后调用；
+    /// best-effort）。未接线 = 跳过下发（审计记录 `pause_notify: "not_wired"`）。
+    #[must_use]
+    pub fn with_pause_notifier(&self, notifier: Arc<dyn PauseNotifier>) -> Self {
+        *lock_pause_notifier(&self.inner) = Some(notifier);
         self.clone()
     }
 
@@ -774,6 +884,7 @@ impl SessionManager {
                 active: None,
                 waiting: None,
                 cancel,
+                pause_marker: None,
             },
         );
         drop(state);
@@ -858,6 +969,12 @@ impl SessionManager {
                 return Err(LifecycleError::SessionClosed {
                     session_id: run.session_id.clone(),
                     status: session.fsm.status(),
+                });
+            }
+            // M7-03/ADR-017 附录 A-6：`paused` 态 run_retry 一律拒绝（防绕过暂停门禁）。
+            if session.fsm.status() == SessionStatus::Paused {
+                return Err(LifecycleError::SessionPaused {
+                    session_id: run.session_id.clone(),
                 });
             }
             if session.active.is_some() && session.waiting.is_some() {
@@ -955,12 +1072,355 @@ impl SessionManager {
         })
     }
 
+    /// 暂停会话（M7-03/ADR-017 §2.1-3：核心层「受控中断 + 恢复重放」语义）。
+    ///
+    /// 流程：① 状态检查（`idle`/`running`/`waiting_permission`，否则 [`LifecycleError::PauseState`]）；
+    /// ② 在途 run 按既有 interrupt 路径受控收口为 `cancelled`（reason=`user_pause`，
+    /// 可 `run_retry`）+ 取消树级联 + 看门狗兜底；等待队列保留不提升；已派发的 run
+    /// 释放全局闸门槽位并按 FIFO 推进其他会话；
+    /// ③ 下发线协议 `session.pause`（best-effort；未接线/无适配器会话 = 跳过；失败只记
+    /// 审计/诊断，不阻塞收口、不自动重试）；
+    /// ④ 状态转移 `paused` + `session.status_changed`（先日志后广播）+ 审计 `session.pause`；
+    /// ⑤ 有在途 run 时登记暂停标记（内存，不落库）。
+    ///
+    /// 能力门（`pause_resume`）由命令层在调用前实时复核（未声明 → `pause_unsupported`，
+    /// 不做任何状态转移；本层不感知适配器能力）。实现注记（不改语义）：状态转移在
+    /// 受控中断收口后先于 `session.pause` 的下发结果落库——下发为收尾性 best-effort，
+    /// 语义上不影响暂停成立（ADR-017 §2.1-1），且避免持全局状态锁等待最长 10s 的
+    /// D6 调用阻塞其他会话。
+    pub async fn pause(&self, session_id: &SessionId) -> Result<PauseReport, LifecycleError> {
+        let mut state = lock_state(&self.inner).await;
+        self.hydrate_locked(&mut state, session_id).await?;
+        // ① 状态检查 + ② 受控中断（等待队列保留）。
+        let (from, runtime_id, active, waiting_kept) = {
+            let session = state.sessions.get_mut(session_id).ok_or_else(|| {
+                LifecycleError::SessionNotFound {
+                    session_id: session_id.clone(),
+                }
+            })?;
+            let from = session.fsm.status();
+            if !matches!(
+                from,
+                SessionStatus::Idle | SessionStatus::Running | SessionStatus::WaitingPermission
+            ) {
+                return Err(LifecycleError::PauseState {
+                    session_id: session_id.clone(),
+                    status: from,
+                });
+            }
+            let active = session.active.take();
+            let waiting_kept = session.waiting.as_ref().map(|queued| queued.run_id.clone());
+            if let Some(active) = &active {
+                if active.dispatched {
+                    // 取消树级联：绑定该 run 的权限等待级联取消（D8）。
+                    active.cancel.cancel();
+                }
+            }
+            (from, session.runtime_id.clone(), active, waiting_kept)
+        };
+        let interrupted_run = active.as_ref().map(|active| active.run_id.clone());
+        let mut dispatches: Vec<(SessionId, RunId)> = Vec::new();
+        if let Some(active) = &active {
+            if !active.dispatched {
+                // 闸门排队 run（未派发）：从全局 FIFO 移除并取消。
+                state.gate.queue.remove(&active.run_id);
+            }
+            self.finish_run(&active.run_id, aether_core::RunStatus::Cancelled, None)
+                .await?;
+            if active.dispatched {
+                // M2-05：任务从在途 run 摘除 → 看门狗计时（10s 未退出 → dump + 强制清理）。
+                self.inner
+                    .task_watchdog
+                    .mark_orphaned_by_run(&active.run_id, self.inner.clock.now_ms());
+            }
+            self.emit(
+                session_id,
+                Some(&active.run_id),
+                &active.runtime_id,
+                EventPayload::RunCancelled(RunCancelledPayload {
+                    run_id: active.run_id.clone(),
+                    reason: Some("user_pause".to_owned()),
+                }),
+            )
+            .await?;
+            // 释放全局闸门槽位（已派发）并按 FIFO 推进**其他会话**的排队 run；
+            // 本会话等待队列保留不提升（ADR-017 §2.1-3②）。
+            dispatches = gate_release_and_advance(&self.inner, &mut state);
+        }
+        // ④ 状态转移（`running`/`waiting_permission`/`idle` 一跳 → `paused`）+ ⑤ 标记。
+        let change = {
+            let session = state.sessions.get_mut(session_id).ok_or_else(|| {
+                LifecycleError::SessionNotFound {
+                    session_id: session_id.clone(),
+                }
+            })?;
+            let change = session.fsm.transition(SessionStatus::Paused)?;
+            if let Some(active) = &active {
+                session.pause_marker = Some(PauseMarker {
+                    run_id: active.run_id.clone(),
+                    input_message_id: active.input_message_id.clone(),
+                });
+            }
+            change
+        };
+        self.persist_status_and_emit(session_id, change, false, &runtime_id)
+            .await?;
+        publish_gate_snapshot(&self.inner, &state);
+        drop(state);
+        for (spawn_session, spawn_run) in dispatches {
+            self.spawn_run(spawn_session, spawn_run);
+        }
+        // ③ 下发 `session.pause`（best-effort；受控中断收口与状态转移完成之后）。
+        let pause_notify = {
+            let notifier = lock_pause_notifier(&self.inner).clone();
+            match notifier {
+                Some(notifier) => Some(notifier.notify_pause(session_id.clone()).await),
+                None => None,
+            }
+        };
+        // 审计（actor=user；from→to、在途 run 收口摘要、waiting 保留数、下发结果）。
+        let notify_detail = match &pause_notify {
+            None => json!("not_wired"),
+            Some(Ok(())) => json!("ok"),
+            Some(Err(detail)) => json!({ "failed": detail }),
+        };
+        let mut audit_detail = json!({
+            "from": from.as_str(),
+            "to": SessionStatus::Paused.as_str(),
+            "interrupted_run": interrupted_run.as_ref().map(|run| run.as_str()),
+            "waiting_kept": waiting_kept.as_ref().map(|run| run.as_str()),
+            "pause_notify": notify_detail,
+        });
+        if interrupted_run.is_some() {
+            // 在途 run 收口摘要：终止原因（`run.cancelled.reason`；ADR-017 附录 A-3）。
+            audit_detail["interrupt_reason"] = json!("user_pause");
+        }
+        self.insert_audit(
+            session_id,
+            "user",
+            "session.pause",
+            &status_transition_result(from, SessionStatus::Paused),
+            audit_detail,
+        )
+        .await?;
+        self.inner.pause_counters.pauses.fetch_add(1, Ordering::Relaxed);
+        Ok(PauseReport {
+            session_id: session_id.clone(),
+            from,
+            to: SessionStatus::Paused,
+            interrupted_run,
+            waiting_kept,
+            pause_notify,
+        })
+    }
+
+    /// 恢复会话（M7-03/ADR-017 §2.1-4）：
+    /// ① 状态 = `paused`（否则 [`LifecycleError::PauseState`]）+ 准入检查（管线段 +
+    /// 适配器级背压；运行时可用性由命令层复核——disabled/未注册 → 拒绝并保持 paused）；
+    /// ② 有暂停标记：以 `run_retry` 等价路径创建重放 run（复用原输入消息与
+    /// `client_msg_id` 语义——不新增消息行；旧 run 保留审计；新 run 先于保留的 queued
+    /// run 设为 active），`paused → running`（**先转移、后 spawn**，避免
+    /// `dispatch_and_finalize` 的 idle 守卫竞态）+ 审计 `session.resume`，清除标记；
+    /// ③ 无标记（含 idle 暂停、重启后）：`paused → idle` + 审计。
+    ///
+    /// 恢复失败（准入拒绝）保持 `paused` 且标记保留，可重试。
+    pub async fn resume(&self, session_id: &SessionId) -> Result<ResumeReport, LifecycleError> {
+        let mut state = lock_state(&self.inner).await;
+        self.hydrate_locked(&mut state, session_id).await?;
+        let (runtime_id, marker) = {
+            let session = state.sessions.get_mut(session_id).ok_or_else(|| {
+                LifecycleError::SessionNotFound {
+                    session_id: session_id.clone(),
+                }
+            })?;
+            let status = session.fsm.status();
+            if status != SessionStatus::Paused {
+                return Err(LifecycleError::PauseState {
+                    session_id: session_id.clone(),
+                    status,
+                });
+            }
+            (session.runtime_id.clone(), session.pause_marker.clone())
+        };
+        // ① 准入门（D4/ADR-017 §2.1-4）：拒绝时保持 paused 且标记保留（可重试）。
+        self.inner
+            .pipeline
+            .admission()
+            .map_err(LifecycleError::from)?;
+        self.check_backpressure(&runtime_id)?;
+
+        let Some(marker) = marker else {
+            // ③ 无标记：`paused → idle`（由用户显式 `run_retry`/发送继续）。
+            let change = {
+                let session = state.sessions.get_mut(session_id).ok_or_else(|| {
+                    LifecycleError::SessionNotFound {
+                        session_id: session_id.clone(),
+                    }
+                })?;
+                session.fsm.transition(SessionStatus::Idle)?
+            };
+            self.persist_status_and_emit(session_id, change, false, &runtime_id)
+                .await?;
+            drop(state);
+            self.insert_audit(
+                session_id,
+                "user",
+                "session.resume",
+                &status_transition_result(change.from, change.to),
+                json!({
+                    "from": change.from.as_str(),
+                    "to": change.to.as_str(),
+                }),
+            )
+            .await?;
+            self.inner.pause_counters.resumes.fetch_add(1, Ordering::Relaxed);
+            return Ok(ResumeReport {
+                session_id: session_id.clone(),
+                from: SessionStatus::Paused,
+                to: SessionStatus::Idle,
+                run_id: None,
+                input_message_id: None,
+            });
+        };
+
+        // ② 有标记：retry_run 等价重放（复用原输入消息；旧 run 保留审计）。
+        let input_message = self
+            .inner
+            .reads
+            .message(&marker.input_message_id)
+            .await?
+            .ok_or_else(|| LifecycleError::Internal {
+                reason: format!(
+                    "暂停重放：输入消息 {} 不存在（审计数据不完整）",
+                    marker.input_message_id
+                ),
+            })?;
+        let session_row = self
+            .inner
+            .reads
+            .session(session_id)
+            .await?
+            .ok_or_else(|| LifecycleError::SessionNotFound {
+                session_id: session_id.clone(),
+            })?;
+        // ADR-010 重放口径：按会话级值恢复（run 启动时重新执行能力门判定）。
+        let thinking_depth = session_row.thinking_depth;
+        let now = self.inner.clock.now_ms();
+        let replay_run = Run {
+            id: RunId::new(ulid::generate()).map_err(internal_from)?,
+            session_id: session_id.clone(),
+            status: aether_core::RunStatus::Queued,
+            input_message_id: Some(marker.input_message_id.clone()),
+            thinking_depth: Some(thinking_depth),
+            error: None,
+            started_at: now,
+            finished_at: None,
+        };
+        self.inner
+            .write
+            .execute(StoreCommand::InsertRun {
+                run: replay_run.clone(),
+            })
+            .await?;
+        // 新 run 先于保留的 queued run 设为 active（D8 串行：等待槽后续按闸门提升）。
+        let replay_dispatched = {
+            let has_slot = gate_has_slot(&state);
+            let session = state.sessions.get_mut(session_id).ok_or_else(|| {
+                LifecycleError::SessionNotFound {
+                    session_id: session_id.clone(),
+                }
+            })?;
+            if session.active.is_some() {
+                return Err(LifecycleError::SessionBusy {
+                    session_id: session_id.clone(),
+                });
+            }
+            let cancel = RunCancelToken::child_of(&session.cancel);
+            session.active = Some(ActiveRun {
+                run_id: replay_run.id.clone(),
+                input_message_id: marker.input_message_id.clone(),
+                runtime_id: session.runtime_id.clone(),
+                text: input_message.content.clone(),
+                thinking_depth,
+                thinking_override: false,
+                last_activity_ms: now,
+                cancel,
+                dispatched: has_slot,
+            });
+            if !has_slot {
+                state
+                    .gate
+                    .queue
+                    .enqueue(session_id.clone(), replay_run.id.clone());
+            }
+            has_slot
+        };
+        // 先转移（`paused → running`）、后 spawn（避免 `dispatch_and_finalize` 的
+        // idle 守卫竞态；ADR-017 §2.1-4）。
+        let change = {
+            let session = state.sessions.get_mut(session_id).ok_or_else(|| {
+                LifecycleError::SessionNotFound {
+                    session_id: session_id.clone(),
+                }
+            })?;
+            session.pause_marker = None;
+            session.fsm.transition(SessionStatus::Running)?
+        };
+        self.persist_status_and_emit(session_id, change, false, &runtime_id)
+            .await?;
+        publish_gate_snapshot(&self.inner, &state);
+        drop(state);
+        if replay_dispatched {
+            self.spawn_run(session_id.clone(), replay_run.id.clone());
+        }
+        self.insert_audit(
+            session_id,
+            "user",
+            "session.resume",
+            &status_transition_result(SessionStatus::Paused, SessionStatus::Running),
+            json!({
+                "from": SessionStatus::Paused.as_str(),
+                "to": SessionStatus::Running.as_str(),
+                "run_id": replay_run.id.as_str(),
+                "replay_of": marker.run_id.as_str(),
+            }),
+        )
+        .await?;
+        self.inner.pause_counters.resumes.fetch_add(1, Ordering::Relaxed);
+        Ok(ResumeReport {
+            session_id: session_id.clone(),
+            from: SessionStatus::Paused,
+            to: SessionStatus::Running,
+            run_id: Some(replay_run.id),
+            input_message_id: Some(marker.input_message_id),
+        })
+    }
+
+    /// 暂停统计（M7-03 DoD6：诊断包 `session_pause` 段；`paused_sessions` 以
+    /// `sessions.status='paused'` 为事实源，重启后仍可读）。
+    pub async fn pause_stats(&self) -> Result<PauseStats, LifecycleError> {
+        let paused = self
+            .inner
+            .reads
+            .sessions(SessionQuery {
+                status: Some(SessionStatus::Paused),
+                ..SessionQuery::default()
+            })
+            .await?;
+        Ok(PauseStats {
+            total_pauses: self.inner.pause_counters.pauses.load(Ordering::Relaxed),
+            total_resumes: self.inner.pause_counters.resumes.load(Ordering::Relaxed),
+            paused_sessions: paused.len(),
+        })
+    }
+
     /// 重启状态重建（M3-06；D5「运行中崩溃 → 在途 run 标 failed，可重试」口径）：
     /// 核心重启后（存储/管线就绪、会话管理器构造完成）调用一次：
     /// 1. `queued`/`running` run → `failed`（错误码 [`RUN_INTERRUPTED_CODE`]，
     ///    `recoverable=true`）+ `run.failed` 事件（先日志后广播，经管线）；
-    /// 2. 非终态、非空闲会话（`creating`/`running`/`waiting_permission`/`paused`）→
-    ///    `idle` + `session.status_changed` 事件。
+    /// 2. 非终态、非空闲会话（`creating`/`running`/`waiting_permission`）→
+    ///    `idle` + `session.status_changed` 事件；
+    ///    **`paused` 保留不收口**（M7-03/ADR-017 §2.1-6：不自动恢复、不自动清理）。
     ///
     /// 语义：崩溃前**未确认**的 run 不伪造完成；收口为失败后经 `run_retry` 重放
     /// （Mode R/N 由执行器按 ADR-005 决定）。逐条尽力收口：单条失败仅记录诊断，
@@ -1016,6 +1476,16 @@ impl SessionManager {
 
         let sessions = self.inner.reads.sessions_for_recovery().await?;
         for session in sessions {
+            // M7-03/ADR-017 §2.1-6：`paused` 核心重启后**保持 paused**（不自动恢复、
+            // 不自动清理）；暂停标记不跨重启（内存），重启后 `session_resume` 走
+            // `paused → idle`（被中断 run 已 `run_interrupted` 失败，可显式 `run_retry`）。
+            if session.status == SessionStatus::Paused {
+                tracing::info!(
+                    session_id = %session.id,
+                    "重启收口：paused 会话保留（ADR-017；不自动恢复/清理）"
+                );
+                continue;
+            }
             let now = self.inner.clock.now_ms();
             if let Err(failure) = self
                 .inner
@@ -1110,6 +1580,13 @@ impl SessionManager {
                 return Err(LifecycleError::SessionClosed {
                     session_id: session_id.clone(),
                     status: session.fsm.status(),
+                });
+            }
+            // M7-03/ADR-017 附录 A-6：`paused` 态 `session_send` 拒绝（不排队；稳定
+            // 业务码 `session_paused`，恢复后解除）。
+            if session.fsm.status() == SessionStatus::Paused {
+                return Err(LifecycleError::SessionPaused {
+                    session_id: session_id.clone(),
                 });
             }
             if session.active.is_some() && session.waiting.is_some() {
@@ -1275,6 +1752,15 @@ impl SessionManager {
                     session_id: session_id.clone(),
                 }
             })?;
+            // M7-03/ADR-017 附录 A-6：paused 态 interrupt = no-op（不动标记、
+            // 不动等待队列；暂停已收口在途 run）。
+            if session.fsm.status() == SessionStatus::Paused {
+                return Ok(InterruptReport {
+                    session_id: session_id.clone(),
+                    interrupted_run: None,
+                    cancelled_waiting_run: None,
+                });
+            }
             let active = session.active.take();
             let waiting = session.waiting.take();
             if let Some(active) = &active {
@@ -1425,13 +1911,25 @@ impl SessionManager {
         let now = self.inner.clock.now_ms();
         let mut state = lock_state(&self.inner).await;
         self.hydrate_locked(&mut state, session_id).await?;
-        let (change, runtime_id) = {
+        let (change, runtime_id, target) = {
             let session = state.sessions.get_mut(session_id).ok_or_else(|| {
                 LifecycleError::SessionNotFound {
                     session_id: session_id.clone(),
                 }
             })?;
-            (session.fsm.transition(target)?, session.runtime_id.clone())
+            // M7-03/ADR-017 附录 A-6：paused 态关闭 → 终态 `cancelled`（修正既有
+            // `dispose_single` 在 paused 无在途时误算 `completed` 的路径，避免命中
+            // 白名单外转移；`paused → cancelled` 为既有边）。
+            let target = if session.fsm.status() == SessionStatus::Paused {
+                SessionStatus::Cancelled
+            } else {
+                target
+            };
+            (
+                session.fsm.transition(target)?,
+                session.runtime_id.clone(),
+                target,
+            )
         };
         self.persist_status_and_emit(session_id, change, true, &runtime_id)
             .await?;
@@ -1845,6 +2343,8 @@ impl SessionManager {
                 active: None,
                 waiting: None,
                 cancel,
+                // M7-03/ADR-017：暂停标记不跨重启（内存态）。
+                pause_marker: None,
             },
         );
         Ok(())
@@ -3066,6 +3566,16 @@ fn lock_gate_cell(
     }
 }
 
+/// `session.pause` 下发钩子槽位加锁（中毒容忍；M7-03/ADR-017）。
+fn lock_pause_notifier(
+    inner: &Arc<ManagerInner>,
+) -> std::sync::MutexGuard<'_, Option<Arc<dyn PauseNotifier>>> {
+    match inner.pause_notifier.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3125,6 +3635,19 @@ mod tests {
                 },
                 "invalid_session_transition",
             ),
+            (
+                LifecycleError::SessionPaused {
+                    session_id: SessionId::new("s").unwrap(),
+                },
+                "session_paused",
+            ),
+            (
+                LifecycleError::PauseState {
+                    session_id: SessionId::new("s").unwrap(),
+                    status: SessionStatus::Paused,
+                },
+                "invalid_value",
+            ),
         ];
         for (error, code) in cases {
             assert_eq!(error.code(), code);
@@ -3182,6 +3705,19 @@ mod tests {
                     to: SessionStatus::WaitingPermission,
                 },
                 "invalid_session_transition",
+            ),
+            (
+                LifecycleError::SessionPaused {
+                    session_id: SessionId::new("s").unwrap(),
+                },
+                "session_paused",
+            ),
+            (
+                LifecycleError::PauseState {
+                    session_id: SessionId::new("s").unwrap(),
+                    status: SessionStatus::Cancelled,
+                },
+                "invalid_value",
             ),
             (
                 LifecycleError::PersistDegraded {

@@ -107,6 +107,9 @@ function fakeSessionIpc(overrides: Partial<SessionIpc> = {}): SessionIpc {
       duplicate: false,
     })),
     interruptSession: vi.fn(async () => ({ session_id: SESSION, interrupted_run: null })),
+    // M7-03/ADR-017：暂停/恢复命令面（本文件不消费；缺省替身保持接口完整）。
+    pauseSession: vi.fn(),
+    resumeSession: vi.fn(),
     disposeSession: vi.fn(async () => ({ session_id: SESSION, status: "completed" as SessionStatus })),
     messagesPage: vi.fn(async () => emptyPage()),
     retryRun: vi.fn(async () => ({

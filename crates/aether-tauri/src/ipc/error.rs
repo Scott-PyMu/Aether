@@ -63,6 +63,10 @@ pub enum IpcErrorCode {
     /// 自动路由无可用候选（M7-02/ADR-022：`session_create` 缺省路由路径；消息区分
     /// 「全部禁用」「无匹配模型」「无 ready 候选」，提示手动选择）。
     NoCandidateRuntime,
+    /// 运行时未声明 `pause_resume` 能力或连接未就绪，拒绝暂停
+    /// （M7-03/ADR-017/ADR-006 附录 B：不产生假暂停，不做任何状态转移；
+    /// UI 暂停按钮置灰 + 提示）。
+    PauseUnsupported,
 }
 
 impl IpcErrorCode {
@@ -91,6 +95,7 @@ impl IpcErrorCode {
             Self::RuleNotFound => "rule_not_found",
             Self::RuntimeBusy => "runtime_busy",
             Self::NoCandidateRuntime => "no_candidate_runtime",
+            Self::PauseUnsupported => "pause_unsupported",
         }
     }
 }
@@ -250,6 +255,18 @@ impl IpcError {
             IpcErrorCode::NoCandidateRuntime,
             "runtime_id",
             format!("没有可用的运行时：{reason}；已注册运行时：{candidates}；请手动选择运行时"),
+        )
+    }
+
+    /// M7-03/ADR-017：运行时未声明 `pause_resume` 能力或连接未就绪 → 拒绝暂停
+    /// （不产生假暂停、不做任何状态转移；UI-UX §5 文案）。
+    pub fn pause_unsupported(runtime_id: &str, reason: &str) -> Self {
+        Self::new(
+            IpcErrorCode::PauseUnsupported,
+            format!(
+                "当前运行时不支持暂停/恢复（需原生会话恢复能力）：{runtime_id}（{reason}）；\
+                 会话状态未改变"
+            ),
         )
     }
 

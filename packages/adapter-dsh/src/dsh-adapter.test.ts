@@ -450,6 +450,33 @@ describe("DshAdapter 中断 / dispose / Mode R", () => {
     await harness.shutdown();
   });
 
+  it("session.pause（M7-03/ADR-017）：能力声明 `pause_resume`；cancel 残余工作在途 run 且会话保留", async () => {
+    const { harness } = await initializedHarness();
+    const hello = harness.frames.find((frame) => frame.method === "hello");
+    const runtime = hello?.params?.["runtime"] as Record<string, unknown> | undefined;
+    expect(runtime?.["capabilities"]).toContain("pause_resume");
+    const initialized = await harness.requestResult("initialize", { config: {} });
+    expect(initialized["capabilities"] as string[]).toContain("pause_resume");
+
+    const session = await harness.createSession();
+    const ack = await harness.send(String(session.session_id), "cancel:long", "m-dsh-pause");
+    await harness.waitForFrame(
+      (frame) => frame.params?.type === "run.started" && frame.params?.run_id === ack.run_id,
+      "run.started",
+    );
+    const paused = await harness.requestResult("session.pause", {
+      session_id: session.session_id,
+    });
+    expect(paused["paused"]).toBe(true);
+    expect(paused["cancelled_runs"] as string[]).toContain(ack.run_id);
+
+    // 会话保留（不调用 session/close）：暂停后可继续送消息（ACP `session/resume` 前提）。
+    const next = await harness.send(String(session.session_id), "chat", "m-dsh-pause-next");
+    expect(await harness.waitTerminal(String(next.run_id))).toBe("run.completed");
+    expect(harness.adapter.residualChannels()).toBe(0);
+    await harness.shutdown();
+  });
+
   it("session.dispose：残留通道数 0（DoD6 探针）", async () => {
     const { harness } = await initializedHarness();
     const session = await harness.createSession();

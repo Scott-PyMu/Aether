@@ -38,9 +38,12 @@ import { providersIpc as productionProvidersIpc, type ProvidersIpc } from "./pro
 import { RuntimePanel } from "./RuntimePanel";
 import {
   normalizePermissionMode,
+  PAUSED_STATUS_HINT,
+  PAUSE_SEMANTICS_NOTICE,
   RUNTIME_STATUS_LABELS,
   SESSION_STATUS_LABELS,
   sessionIpc,
+  supportsPauseResume,
   supportsThinkingDepth,
   THINKING_DEPTH_DEFAULT,
   THINKING_DEPTH_LABELS,
@@ -183,6 +186,8 @@ export function SessionWorkbench({
   const [thinkingWarning, setThinkingWarning] = useState<string | null>(null);
   /** M6-01/ADR-014 决策 3：会话级权限模式（缺省 `workspace_write`；随会话回显）。 */
   const [permissionMode, setPermissionMode] = useState<PermissionMode>("workspace_write");
+  /** M7-03/ADR-017：暂停/恢复进行中（顶栏按钮去抖）。 */
+  const [pauseBusy, setPauseBusy] = useState(false);
   /** M5-05：单会话导出进行中（顶栏按钮去抖）与结果回执（`session-export-result`）。 */
   const [exportBusy, setExportBusy] = useState(false);
   const [exportResult, setExportResult] = useState<{
@@ -224,6 +229,21 @@ export function SessionWorkbench({
     [runtimes, selectedRuntime],
   );
   const thinkingSupported = supportsThinkingDepth(selectedRuntimeInfo);
+  /** M7-03/ADR-017：当前会话运行时的 `pause_resume` 能力（置灰依据；ADR-017 附录 A-5）。 */
+  const activeSessionRuntime = useMemo(
+    () => runtimes.find((runtime) => runtime.id === activeSession?.runtime_id) ?? null,
+    [runtimes, activeSession],
+  );
+  const pauseSupported = supportsPauseResume(activeSessionRuntime);
+  /** 暂停/恢复入口置灰：无会话 / 能力未声明 / 降级 / 状态不可暂停（creating/终态）。 */
+  const pauseDisabled =
+    !activeSession ||
+    !pauseSupported ||
+    degraded ||
+    (activeSession.status !== "paused" &&
+      activeSession.status !== "idle" &&
+      activeSession.status !== "running" &&
+      activeSession.status !== "waiting_permission");
   /** M3-06：run 视图索引（消息气泡 → 终态/取消原因 → 重试入口）。 */
   const runViews = useMemo(
     () => new Map(projection.runs.map((run) => [run.runId, run])),
@@ -548,6 +568,41 @@ export function SessionWorkbench({
     }
   }, [activeSessionId, ipc, refreshSessions, reportError]);
 
+  /**
+   * M7-03/ADR-017：暂停/恢复切换（`session_pause` / `session_resume`）。
+   *
+   * 暂停 = 核心层受控中断（在途 run 收口 `cancelled(user_pause)`）+ `paused` 门禁态；
+   * 恢复 = 有暂停标记时重放被中断输入（Mode R 原生上下文），否则 `paused → idle`。
+   * 能力未声明/连接未就绪 → `pause_unsupported`（按钮已置灰；后端为硬门）。
+   */
+  const onTogglePause = useCallback(async () => {
+    if (!activeSessionId || !activeSession || pauseBusy) {
+      return;
+    }
+    setPauseBusy(true);
+    clearError();
+    try {
+      if (activeSession.status === "paused") {
+        await ipc.resumeSession(activeSessionId);
+      } else {
+        await ipc.pauseSession(activeSessionId);
+      }
+      await refreshSessions();
+    } catch (failure) {
+      reportError(failure);
+    } finally {
+      setPauseBusy(false);
+    }
+  }, [
+    activeSession,
+    activeSessionId,
+    clearError,
+    ipc,
+    pauseBusy,
+    refreshSessions,
+    reportError,
+  ]);
+
   /** M5-05：单会话导出（缺省写入数据目录 `archives/`；锚点 `session-export`）。 */
   const onExportSession = useCallback(async () => {
     if (!activeSessionId || exportBusy) {
@@ -616,6 +671,11 @@ export function SessionWorkbench({
         onExportSession={activeSession ? () => void onExportSession() : undefined}
         exportBusy={exportBusy}
         exportResult={exportResult?.result ?? null}
+        // M7-03/ADR-017：暂停/恢复（锚点 `session-pause-toggle`；有会话时渲染）。
+        pauseSupported={pauseSupported}
+        pauseDisabled={pauseDisabled}
+        onTogglePause={activeSession ? () => void onTogglePause() : undefined}
+        pauseBusy={pauseBusy}
       />
       <div className="workbench-columns">
         <aside className="workbench-sidebar">
@@ -834,7 +894,12 @@ export function SessionWorkbench({
                           type="button"
                           data-testid="run-retry"
                           data-run-id={bubble.runId}
-                          disabled={degraded || retryingRunId !== null}
+                          // M7-03/ADR-017：paused 态 `run_retry` 被拒（session_paused）→ 入口禁用。
+                          disabled={
+                            degraded ||
+                            retryingRunId !== null ||
+                            activeSession?.status === "paused"
+                          }
                           onClick={() => void onRetryRun(bubble.runId as string)}
                         >
                           重试
@@ -903,6 +968,13 @@ export function SessionWorkbench({
               role="status"
             >
               排队中：第 {queueNotice.position} 位（并发上限 {queueNotice.limit}）
+            </p>
+          ) : null}
+
+          {/* M7-03/ADR-017：paused 门禁提示（状态条提示 + 常驻语义声明；UI-UX §5/§2.4）。 */}
+          {activeSession?.status === "paused" ? (
+            <p className="session-paused-notice" data-testid="paused-notice" role="status">
+              {PAUSED_STATUS_HINT}；{PAUSE_SEMANTICS_NOTICE}
             </p>
           ) : null}
 
@@ -985,7 +1057,8 @@ export function SessionWorkbench({
               data-testid="composer-input"
               placeholder="输入消息（Ctrl+Enter 发送）"
               value={draft}
-              disabled={!activeSessionId || degraded}
+              // M7-03/ADR-017：paused 态发送被拒（session_paused，草稿保留；UI-UX §3.3）。
+              disabled={!activeSessionId || degraded || activeSession?.status === "paused"}
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
@@ -1015,7 +1088,13 @@ export function SessionWorkbench({
               <button
                 type="button"
                 data-testid="composer-send"
-                disabled={!activeSessionId || degraded || sending || draft.trim().length === 0}
+                disabled={
+                  !activeSessionId ||
+                  degraded ||
+                  sending ||
+                  draft.trim().length === 0 ||
+                  activeSession?.status === "paused"
+                }
                 onClick={() => void onSend()}
               >
                 发送

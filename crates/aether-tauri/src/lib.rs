@@ -423,7 +423,7 @@ fn build_backend(
                     Some(executor) => executor.clone(),
                     None => std::sync::Arc::new(adapter_executor::UnavailableExecutor),
                 };
-                let manager = aether_control::SessionManager::new(
+                let mut manager = aether_control::SessionManager::new(
                     aether_control::LifecycleConfig::default(),
                     std::sync::Arc::new(aether_control::SystemClock),
                     write.clone(),
@@ -435,6 +435,13 @@ fn build_backend(
                 // `clamp(floor(free_ram_gb/1.5), 2, 10)`）与 health 快照单元共享。
                 .with_free_ram(std::sync::Arc::new(aether_control::SysinfoFreeRam::new()))
                 .with_concurrency_gate(concurrency_gate.clone());
+                // M7-03/ADR-017：`session.pause` 线协议下发钩子（受控中断收口后
+                // best-effort 通知适配器；未接线/无适配器会话 = 跳过）。
+                if let Some(executor) = &executor {
+                    let notifier: std::sync::Arc<dyn aether_control::PauseNotifier> =
+                        executor.clone();
+                    manager = manager.with_pause_notifier(notifier);
+                }
                 // M3-06 重启状态重建（D5「运行中崩溃 → 在途 run 标 failed，可重试」）：
                 // 启动序列内、UI ready 握手前收口上一进程崩溃遗留的 queued/running run
                 // 与非空闲会话（未确认不伪造完成；收口后可经 run_retry 重放）。
@@ -476,6 +483,9 @@ fn build_backend(
                         std::sync::Arc::new(manager)
                             as std::sync::Arc<dyn diagnostics_control::TaskDumpSource>
                     }),
+                    // M7-03/ADR-017：暂停统计（诊断包 `session_pause` 段；
+                    // 暂停次数/恢复次数/当前暂停会话数）。
+                    session_manager: session_manager.clone(),
                     security: None,
                 });
                 (
@@ -499,6 +509,7 @@ fn build_backend(
                     health: core_health::degraded_provider(&reason),
                     logs: log_sink.clone(),
                     task_dumps: None,
+                    session_manager: None,
                     security: None,
                 });
                 (

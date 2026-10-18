@@ -61,7 +61,8 @@ pub use journal::{
 };
 pub use lifecycle::{
     run_is_retryable, ExecutorFuture, ExecutorOutcome, InterruptReport, LifecycleConfig,
-    LifecycleError, QueuePosition, ReconcileReport, RetryAck, RunExecutor, RunRequest, SendAck,
+    LifecycleError, PauseMarker, PauseNotifier, PauseReport, PauseStats, QueuePosition,
+    ReconcileReport, ResumeReport, RetryAck, RunExecutor, RunRequest, SendAck,
     SessionCreateOptions, SessionManager, MAX_WAITING_RUNS_PER_SESSION, RUN_INTERRUPTED_CODE,
     RUN_STREAM_TIMEOUT_CODE, RUN_STREAM_TIMEOUT_MS, RUN_TASK_PANIC_CODE, WATCHDOG_TICK,
 };

@@ -84,6 +84,14 @@ impl IpcBackend for RecordingBackend {
         self.record("session_interrupt")
     }
 
+    fn session_pause(&self, _request: &SessionIdRequest) -> Result<Value, IpcError> {
+        self.record("session_pause")
+    }
+
+    fn session_resume(&self, _request: &SessionIdRequest) -> Result<Value, IpcError> {
+        self.record("session_resume")
+    }
+
     fn session_dispose(&self, _request: &SessionIdRequest) -> Result<Value, IpcError> {
         self.record("session_dispose")
     }
@@ -519,6 +527,45 @@ fn malformed_samples_return_structured_errors_and_do_not_reach_backend() {
             json!({ "session_id": ["not", "a", "string"] }),
             "invalid_type",
             None,
+        ),
+        // ===== M7-03/ADR-017：session_pause / session_resume 校验矩阵（ULID + 严格解析）=====
+        (
+            "session_pause",
+            json!({ "unexpected": 1 }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
+        ("session_pause", json!({}), "missing_field", Some("session_id")),
+        (
+            "session_pause",
+            json!({ "session_id": 42 }),
+            "invalid_type",
+            None,
+        ),
+        (
+            "session_pause",
+            json!({ "session_id": "short" }),
+            "invalid_format",
+            Some("session_id"),
+        ),
+        (
+            "session_resume",
+            json!({ "unexpected": true }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
+        ("session_resume", json!({}), "missing_field", Some("session_id")),
+        (
+            "session_resume",
+            json!({ "session_id": ["not", "a", "string"] }),
+            "invalid_type",
+            None,
+        ),
+        (
+            "session_resume",
+            json!({ "session_id": "short" }),
+            "invalid_format",
+            Some("session_id"),
         ),
         // ===== ADR-004 七命令校验矩阵 =====
         (
@@ -995,6 +1042,9 @@ fn valid_requests_reach_backend_exactly_once() {
             json!({ "session_id": ULID }),
             "session_interrupt",
         ),
+        // M7-03/ADR-017：暂停/恢复合法形态到达后端。
+        ("session_pause", json!({ "session_id": ULID }), "session_pause"),
+        ("session_resume", json!({ "session_id": ULID }), "session_resume"),
         (
             "session_dispose",
             json!({ "session_id": ULID }),
@@ -1218,6 +1268,8 @@ fn valid_requests_reach_backend_exactly_once() {
         "session_create",
         "session_send",
         "session_interrupt",
+        "session_pause",
+        "session_resume",
         "session_dispose",
         "messages_page",
         "permissions_pending",

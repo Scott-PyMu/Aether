@@ -435,6 +435,28 @@ impl AdapterRunExecutor {
         }
     }
 
+    /// `session.pause` 下发（M7-03/ADR-017：核心侧受控中断收口后由 `SessionManager`
+    /// 经 [`aether_control::PauseNotifier`] 调用；best-effort）。
+    ///
+    /// 语义：通知适配器取消残余工作、释放运行时侧会话资源；**保留**核心→适配器会话
+    /// 映射与 `sessions.config.native_id`（Mode R 重放依赖）。无适配器会话（尚无 run
+    /// 或连接重建后未再执行）→ no-op（无残余工作）；失败上抛由调用方记审计/诊断。
+    pub async fn pause_session(&self, session_id: &SessionId) -> Result<(), ErrorInfo> {
+        let target = lock(&self.adapter_sessions).get(session_id).cloned();
+        let Some((runtime_id, adapter_session)) = target else {
+            return Ok(());
+        };
+        let client = self.clients.lock().await.get(&runtime_id).cloned();
+        let Some(client) = client else {
+            return Ok(());
+        };
+        client
+            .pause(&adapter_session)
+            .await
+            .map(|_| ())
+            .map_err(|error| error_info(ADAPTER_REQUEST_FAILED_CODE, error.to_string()))
+    }
+
     /// 取得/重建 runtime 的会话客户端（确保适配器已就绪）。
     async fn client_for(
         &self,
@@ -727,6 +749,21 @@ impl RunExecutor for AdapterRunExecutor {
                 Ok(outcome) => outcome,
                 Err(error) => ExecutorOutcome::Failed { error },
             }
+        })
+    }
+}
+
+/// M7-03/ADR-017：`session.pause` 下发钩子（核心 `SessionManager` → 适配器客户端；
+/// best-effort——失败只记审计/诊断，不阻塞核心侧暂停收口）。
+impl aether_control::PauseNotifier for AdapterRunExecutor {
+    fn notify_pause(
+        &self,
+        session_id: SessionId,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + '_>> {
+        Box::pin(async move {
+            self.pause_session(&session_id)
+                .await
+                .map_err(|error| error.message)
         })
     }
 }

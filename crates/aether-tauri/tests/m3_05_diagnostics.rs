@@ -250,6 +250,7 @@ impl Fixture {
             health,
             logs: Some(log_sink),
             task_dumps,
+            session_manager: None,
             security: Some(Arc::new(StaticSecurityProbe)),
         };
         DiagnosticsControlBackend::new(inner, deps)
@@ -522,6 +523,7 @@ fn capacity_thresholds_are_parameterized() {
             health: normal_health(),
             logs: None,
             task_dumps: None,
+            session_manager: None,
             security: Some(Arc::new(StaticSecurityProbe)),
         };
         DiagnosticsControlBackend::new(inner, deps).with_capacity_config(limits)

@@ -83,6 +83,36 @@ pub(crate) fn session_interrupt(
         .map(JsonPayload)
 }
 
+/// M7-03/ADR-017：暂停会话（`pause_resume` 能力门在命令层实时复核——未声明 →
+/// `pause_unsupported`，不产生假暂停；回执 `{ session_id, status: "paused" }`）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn session_pause(
+    state: tauri::State<'_, IpcState>,
+    payload: JsonPayload,
+) -> Result<JsonPayload, IpcError> {
+    let request: SessionIdRequest = parse_strict(payload.into_value())?;
+    state
+        .backend_ready()?
+        .session_pause(&request)
+        .map(JsonPayload)
+}
+
+/// M7-03/ADR-017：恢复会话（有暂停标记 → 重放并 `paused → running`；
+/// 无标记 → `paused → idle`）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn session_resume(
+    state: tauri::State<'_, IpcState>,
+    payload: JsonPayload,
+) -> Result<JsonPayload, IpcError> {
+    let request: SessionIdRequest = parse_strict(payload.into_value())?;
+    state
+        .backend_ready()?
+        .session_resume(&request)
+        .map(JsonPayload)
+}
+
 #[tauri::command]
 #[specta::specta]
 pub(crate) fn session_dispose(
@@ -766,6 +796,8 @@ pub fn collected<R: tauri::Runtime>() -> tauri_specta::Commands<R> {
         session_create,
         session_send,
         session_interrupt,
+        session_pause,
+        session_resume,
         session_dispose,
         messages_page,
         permissions_pending,
@@ -824,6 +856,8 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         session_create,
         session_send,
         session_interrupt,
+        session_pause,
+        session_resume,
         session_dispose,
         messages_page,
         permissions_pending,
@@ -883,6 +917,8 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         session_create,
         session_send,
         session_interrupt,
+        session_pause,
+        session_resume,
         session_dispose,
         messages_page,
         permissions_pending,

@@ -344,6 +344,33 @@ describe("CodexAdapter（D6 方法实现）", () => {
     expect(again.interrupted).toBe(false);
   });
 
+  it("暂停（M7-03/ADR-017）：能力声明 `pause_resume`；session.pause 取消在途 run 且会话保留", async () => {
+    const harness = new Harness();
+    await harness.start();
+    const hello = harness.frames.find((frame) => frame.method === "hello");
+    const runtime = hello?.params?.["runtime"] as Record<string, unknown> | undefined;
+    expect(runtime?.["capabilities"]).toContain("pause_resume");
+    const initialized = await harness.requestResult("initialize", { config: {} });
+    expect(initialized["capabilities"] as string[]).toContain("pause_resume");
+
+    const session = await createSession(harness);
+    const ack = await send(harness, String(session.session_id), "slow", "m-codex-pause");
+    await harness.waitForFrame(
+      (frame) => frame.params?.type === "run.started" && frame.params?.run_id === ack.run_id,
+      "run.started",
+    );
+    const paused = await harness.requestResult("session.pause", {
+      session_id: session.session_id,
+    });
+    expect(paused["paused"]).toBe(true);
+    expect(paused["session_id"]).toBe(session.session_id);
+    expect(paused["cancelled_runs"] as string[]).toContain(ack.run_id);
+
+    // 会话与别名映射保留：暂停后可继续送消息（Mode R 重放前提）。
+    const next = await send(harness, String(session.session_id), "chat", "m-codex-pause-next");
+    expect(await harness.waitTerminal(String(next.run_id))).toBe("run.completed");
+  });
+
   it("幂等（client_msg_id）与 dispose 后拒绝", async () => {
     const harness = new Harness();
     await harness.start();

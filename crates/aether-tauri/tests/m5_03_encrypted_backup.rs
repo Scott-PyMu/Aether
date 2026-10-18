@@ -371,6 +371,7 @@ impl Fixture {
             ),
             logs: None,
             task_dumps: None,
+            session_manager: None,
             security: Some(Arc::new(StaticSecurityProbe)),
         };
         let diagnostics = Arc::new(

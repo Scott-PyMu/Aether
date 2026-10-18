@@ -32,8 +32,8 @@ use aether_control::{
 };
 use aether_core::{
     EventEnvelope, Message, PermissionDecision, PermissionScope, Runtime, RuntimeId, RuntimeStatus,
-    SessionId, SessionStatus, Workspace, WorkspaceId, THINKING_DEPTH_CAPABILITY,
-    THINKING_DEPTH_DEFAULT,
+    SessionId, SessionStatus, Workspace, WorkspaceId, PAUSE_RESUME_CAPABILITY,
+    THINKING_DEPTH_CAPABILITY, THINKING_DEPTH_DEFAULT,
 };
 use aether_security::{normalize_rule_target, PermissionResource, RuleError, RuleTargetKind};
 use aether_store::{
@@ -1121,6 +1121,82 @@ impl IpcBackend for SessionBackend {
         })
     }
 
+    /// M7-03/ADR-017 `session_pause`：能力门（`pause_resume`）实时复核 → 核心层
+    /// 受控中断收口 → `paused`。未声明/连接未就绪 → `pause_unsupported`（不转移、
+    /// 不产生假暂停）；非 `idle`/`running`/`waiting_permission` → `invalid_value`。
+    fn session_pause(&self, request: &SessionIdRequest) -> Result<Value, IpcError> {
+        let manager = self.manager_required()?.clone();
+        let reads = self.reads_required()?.clone();
+        let supervisor = self.supervisor.clone().ok_or_else(|| {
+            IpcError::core_not_ready("监督器未接线：无法复核 pause_resume 能力（启动序列未完成）")
+        })?;
+        let session_id = request.session_id.clone();
+        self.call(async move {
+            let session_id = parse_session_id(&session_id)?;
+            let session = reads
+                .session(&session_id)
+                .await
+                .map_err(|error| IpcError::internal(format!("会话读取失败：{error}")))?
+                .ok_or_else(|| {
+                    IpcError::invalid_value(format!(
+                        "会话不存在（session_not_found）：{}",
+                        session_id.as_str()
+                    ))
+                })?;
+            ensure_pause_supported(&supervisor, &session.runtime_id).await?;
+            let report = manager
+                .pause(&session_id)
+                .await
+                .map_err(map_lifecycle_error)?;
+            Ok(json!({
+                "session_id": report.session_id.as_str(),
+                "status": report.to.as_str(),
+                "from": report.from.as_str(),
+                "interrupted_run": report.interrupted_run.as_ref().map(|run| run.as_str()),
+                "waiting_kept": report.waiting_kept.as_ref().map(|run| run.as_str()),
+            }))
+        })
+    }
+
+    /// M7-03/ADR-017 `session_resume`：能力门 + 运行时可用性（disabled/未注册 →
+    /// 拒绝并保持 `paused`）→ 有标记重放（`paused → running`）/ 无标记 `paused → idle`。
+    fn session_resume(&self, request: &SessionIdRequest) -> Result<Value, IpcError> {
+        let manager = self.manager_required()?.clone();
+        let reads = self.reads_required()?.clone();
+        let supervisor = self.supervisor.clone().ok_or_else(|| {
+            IpcError::core_not_ready("监督器未接线：无法复核运行时可用性（启动序列未完成）")
+        })?;
+        let session_id = request.session_id.clone();
+        self.call(async move {
+            let session_id = parse_session_id(&session_id)?;
+            let session = reads
+                .session(&session_id)
+                .await
+                .map_err(|error| IpcError::internal(format!("会话读取失败：{error}")))?
+                .ok_or_else(|| {
+                    IpcError::invalid_value(format!(
+                        "会话不存在（session_not_found）：{}",
+                        session_id.as_str()
+                    ))
+                })?;
+            ensure_pause_supported(&supervisor, &session.runtime_id).await?;
+            ensure_runtime_available(&reads, &supervisor, &session.runtime_id).await?;
+            let report = manager
+                .resume(&session_id)
+                .await
+                .map_err(map_lifecycle_error)?;
+            let mut response = json!({
+                "session_id": report.session_id.as_str(),
+                "status": report.to.as_str(),
+                "from": report.from.as_str(),
+            });
+            if let Some(run_id) = report.run_id {
+                response["run_id"] = json!(run_id.as_str());
+            }
+            Ok(response)
+        })
+    }
+
     fn session_dispose(&self, request: &SessionIdRequest) -> Result<Value, IpcError> {
         let manager = self.manager_required()?.clone();
         let executor = self.executor.clone();
@@ -1861,11 +1937,86 @@ fn map_session_status(status: crate::ipc::dto::SessionStatus) -> SessionStatus {
     }
 }
 
+/// `pause_resume` 能力门（M7-03/ADR-017 附录 A-5：Ready/Degraded 可判；
+/// Connecting/Disconnected/未注册/无连接视为未声明 → `pause_unsupported`，
+/// 不做任何状态转移）。命令层实时复核（pause 与 resume 共用）。
+async fn ensure_pause_supported(
+    supervisor: &Supervisor,
+    runtime_id: &RuntimeId,
+) -> Result<(), IpcError> {
+    let Some(runtime) = supervisor.get(runtime_id.as_str()) else {
+        return Err(IpcError::pause_unsupported(
+            runtime_id.as_str(),
+            "运行时未注册",
+        ));
+    };
+    let (reason, supported) = match runtime.connection().await {
+        Some(connection) => match connection.state() {
+            ConnectionState::Ready(hello) | ConnectionState::Degraded { hello, .. } => (
+                "未声明 pause_resume 能力",
+                hello
+                    .runtime
+                    .capabilities
+                    .iter()
+                    .any(|capability| capability == PAUSE_RESUME_CAPABILITY),
+            ),
+            ConnectionState::Connecting => ("连接未就绪（Connecting）", false),
+            ConnectionState::Disconnected(_) => ("连接未就绪（Disconnected）", false),
+        },
+        None => ("连接未就绪（无活动连接）", false),
+    };
+    if supported {
+        Ok(())
+    } else {
+        Err(IpcError::pause_unsupported(runtime_id.as_str(), reason))
+    }
+}
+
+/// 恢复前的运行时可用性复核（M7-03/ADR-017 §2.1-4①：`enabled=0` 或
+/// `disabled` → 拒绝并保持 `paused`；注册表缺失同样拒绝）。
+async fn ensure_runtime_available(
+    reads: &ReadPool,
+    supervisor: &Supervisor,
+    runtime_id: &RuntimeId,
+) -> Result<(), IpcError> {
+    let Some(runtime) = supervisor.get(runtime_id.as_str()) else {
+        return Err(IpcError::invalid_value(format!(
+            "运行时 {} 未注册，无法恢复（保持 paused）；请先修复运行时注册",
+            runtime_id.as_str()
+        )));
+    };
+    let enabled = reads
+        .runtime_preferences()
+        .await
+        .map_err(|error| IpcError::internal(format!("运行时启停偏好读取失败：{error}")))?
+        .get(runtime_id.as_str())
+        .copied()
+        .unwrap_or(runtime.manifest().enabled);
+    if !enabled {
+        return Err(IpcError::invalid_value(format!(
+            "运行时 {} 已被用户禁用（enabled=0），无法恢复（保持 paused）；请先启用",
+            runtime_id.as_str()
+        )));
+    }
+    let (status, reason) = runtime.summary_snapshot();
+    if status == RuntimeStatus::Disabled {
+        let detail = reason.map(|reason| reason.as_str()).unwrap_or("disabled");
+        return Err(IpcError::invalid_value(format!(
+            "运行时 {} 已禁用（{detail}），无法恢复（保持 paused）；请先修复并重新启用",
+            runtime_id.as_str()
+        )));
+    }
+    Ok(())
+}
+
 /// 生命周期错误 → IPC 结构化错误（状态冲突用 `invalid_value`；内部错误用 `internal`）。
 ///
 /// `session_busy` / `storage_backpressure` / `persist_degraded` 的专用 IPC 错误码
 /// 未在本任务登记（避免超出 M3-02 范围新增错误码面）；消息保留稳定业务码，
 /// 供 UI 展示与后续 M3-06 降级 UX 消费。
+/// M7-03/ADR-017：`SessionPaused`（`session_paused`）与 `PauseState` 同样以
+/// `invalid_value` + 稳定业务码/当前状态呈现（ADR-018 附录 A-7 业务码口径；
+/// `pause_unsupported` 为 ADR-006 附录 B 登记码，由能力门路径专门返回）。
 pub fn map_lifecycle_error(error: LifecycleError) -> IpcError {
     match error {
         LifecycleError::Internal { .. } => IpcError::internal(error.to_string()),
@@ -1878,6 +2029,8 @@ pub fn map_lifecycle_error(error: LifecycleError) -> IpcError {
         | LifecycleError::InvalidTransition { .. }
         | LifecycleError::RunNotFound { .. }
         | LifecycleError::RunNotRetryable { .. }
+        | LifecycleError::SessionPaused { .. }
+        | LifecycleError::PauseState { .. }
         | LifecycleError::PersistDegraded { .. }
         | LifecycleError::StorageBackpressure { .. }
         | LifecycleError::AdapterIsolated { .. } => IpcError::invalid_value(error.to_string()),

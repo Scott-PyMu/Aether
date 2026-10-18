@@ -224,6 +224,8 @@ function fakeSessionIpc(): SessionIpc {
       duplicate: false,
     })),
     interruptSession: vi.fn(async () => ({ session_id: SESSION_A })),
+    pauseSession: vi.fn(),
+    resumeSession: vi.fn(),
     disposeSession: vi.fn(async () => ({ session_id: SESSION_A, status: "completed" as SessionStatus })),
     messagesPage: vi.fn(async () => ({
       session_id: SESSION_A,

@@ -16,6 +16,8 @@
  * - `--session-log <path>` 会话调用观测记录（M3-08；M3-10 追加 thinking_depth）
  * - `--no-thinking-depth`（M3-10/ADR-010）：hello/initialize 不声明 `thinking_depth`
  *   能力（能力门负向用例夹具）
+ * - `--no-pause-resume`（M7-03/ADR-017）：hello/initialize 不声明 `pause_resume`
+ *   能力（`pause_unsupported` 负向用例夹具）
  * - `--launch-token=<ULID>`（D5：核心 spawn 注入；合法值仅写 stderr 启动日志，
  *   非法值 warn 后忽略，不阻塞启动；stdout 线协议不受影响）
  */
@@ -42,6 +44,8 @@ export interface CliOptions {
   sessionLog?: string;
   /** M3-10/ADR-010：不声明 `thinking_depth` 能力（能力门负向用例夹具）。 */
   thinkingDepthUnsupported?: boolean;
+  /** M7-03/ADR-017：不声明 `pause_resume` 能力（`pause_unsupported` 负向用例夹具）。 */
+  pauseResumeUnsupported?: boolean;
   /** D5 启动令牌（仅合法 ULID；非法/缺失为 undefined）。 */
   launchToken?: string;
 }
@@ -130,6 +134,9 @@ export function parseArgs(argv: string[], warn: (line: string) => void): CliOpti
       case "--no-thinking-depth":
         options.thinkingDepthUnsupported = true;
         break;
+      case "--no-pause-resume":
+        options.pauseResumeUnsupported = true;
+        break;
       default:
         throw new Error(`未知参数: ${flag || "<empty>"}`);
     }
@@ -198,6 +205,9 @@ export async function runCli(streams: CliStreams): Promise<void> {
   mockOptions.sessionLog = options.sessionLog ?? process.env.AETHER_MOCK_SESSION_LOG;
   if (options.thinkingDepthUnsupported) {
     mockOptions.thinkingDepthUnsupported = true;
+  }
+  if (options.pauseResumeUnsupported) {
+    mockOptions.pauseResumeUnsupported = true;
   }
 
   const mock = new MockAdapter(mockOptions);

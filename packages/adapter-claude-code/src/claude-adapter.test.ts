@@ -356,6 +356,28 @@ describe("ClaudeCodeAdapter：D6 方法（M2-02 DoD1/DoD2）", () => {
     expect(noActive["interrupted"]).toBe(false);
   });
 
+  it("暂停（M7-03/ADR-017）：能力声明 `pause_resume`；session.pause 取消在途 run 且会话保留", { timeout: 40_000 }, async () => {
+    const harness = new Harness();
+    await harness.start();
+    const hello = harness.frames.find((frame) => frame.method === "hello");
+    const runtime = hello?.params?.["runtime"] as Record<string, unknown> | undefined;
+    expect(runtime?.["capabilities"]).toContain("pause_resume");
+    const initialized = await harness.requestResult("initialize", { config: {} });
+    expect(initialized["capabilities"] as string[]).toContain("pause_resume");
+
+    const { session_id: sessionId } = await harness.createSession();
+    const runId = await harness.sendMessage(String(sessionId), "tool:slow");
+    await harness.waitForEvent("tool.call_started", runId);
+    const paused = await harness.requestResult("session.pause", { session_id: sessionId });
+    expect(paused["paused"]).toBe(true);
+    expect(paused["session_id"]).toBe(sessionId);
+    expect(paused["cancelled_runs"] as string[]).toContain(runId);
+
+    // 会话与 nativeId 保留：暂停后可继续送消息（Mode R 重放前提）。
+    const next = await harness.sendMessage(String(sessionId), "chat");
+    expect(await harness.waitTerminal(next)).toBe("run.completed");
+  });
+
   it("异常路径：api 错误 / 无 result / 坏行不健康 / spawn 失败 / 会话与方法的错误码", { timeout: 90_000 }, async () => {
     const harness = new Harness();
     await harness.start();

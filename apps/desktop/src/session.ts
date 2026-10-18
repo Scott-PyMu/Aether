@@ -68,6 +68,17 @@ export const THINKING_DEPTH_MIN = 0;
 export const THINKING_DEPTH_MAX = 4;
 /** 思考深度能力项（D6/ADR-010：`runtime.capabilities` 字符串项，存在即支持）。 */
 export const THINKING_DEPTH_CAPABILITY = "thinking_depth";
+/** 暂停/恢复能力项（D6/ADR-017：`runtime.capabilities` 字符串项，存在即支持；
+ * 未声明或连接未就绪 → 置灰 + `pause_unsupported`）。 */
+export const PAUSE_RESUME_CAPABILITY = "pause_resume";
+/** 暂停能力置灰 tooltip（UI-UX §5 文案；`pause_unsupported` 行）。 */
+export const PAUSE_UNSUPPORTED_HINT = "当前运行时不支持暂停/恢复（需原生会话恢复能力）";
+/** 暂停/恢复语义常驻声明（UI-UX §2.4；ADR-017 附录 A-8）。 */
+export const PAUSE_SEMANTICS_NOTICE =
+  "暂停 = 中断当前回复并冻结会话；恢复 = 重放被中断的输入（原生会话上下文保留，Mode R）；暂停不承诺保留未完成的生成内容";
+/** `paused` 状态行文案（UI-UX §5；ADR-017 附录 A-8）。 */
+export const PAUSED_STATUS_HINT =
+  "已暂停：当前回复已中断；恢复后将重放该输入（原生上下文保留）";
 /** 档位显示文案（ADR-010 与原型一致：关闭/低/高/极高/最大）。 */
 export const THINKING_DEPTH_LABELS: Record<number, string> = {
   0: "关闭",
@@ -122,6 +133,11 @@ export function supportsThinkingDepth(runtime: RuntimeInfo | null | undefined): 
   return runtime?.capabilities.includes(THINKING_DEPTH_CAPABILITY) ?? false;
 }
 
+/** 运行时是否声明暂停/恢复能力（存在即支持；ADR-017：未声明 → 置灰 + `pause_unsupported`）。 */
+export function supportsPauseResume(runtime: RuntimeInfo | null | undefined): boolean {
+  return runtime?.capabilities.includes(PAUSE_RESUME_CAPABILITY) ?? false;
+}
+
 /**
  * 闸门排队位置（M7-02/ADR-022 附录 A-5：`session_send` 响应可选 `queue`）。
  *
@@ -152,6 +168,25 @@ export interface SessionInterruptReport {
   session_id: string;
   interrupted_run?: string | null;
   cancelled_waiting_run?: string | null;
+}
+
+/** `session_pause` 回执（M7-03/ADR-017 附录 A-1）。 */
+export interface SessionPauseResult {
+  session_id: string;
+  status: "paused";
+  /** 转移前状态（idle / running / waiting_permission）。 */
+  from: SessionStatus;
+  interrupted_run?: string | null;
+  waiting_kept?: string | null;
+}
+
+/** `session_resume` 回执（M7-03/ADR-017 附录 A-1）。 */
+export interface SessionResumeResult {
+  session_id: string;
+  status: "running" | "idle";
+  from: SessionStatus;
+  /** 重放 run（仅 running 分支）。 */
+  run_id?: string | null;
 }
 
 /** `messages_page` 中的消息行（`messages` 表投影；工作台消息基线）。 */
@@ -227,6 +262,10 @@ export interface SessionIpc {
     thinking_depth?: number;
   }): Promise<SessionSendResult>;
   interruptSession(sessionId: string): Promise<SessionInterruptReport>;
+  /** M7-03/ADR-017：暂停会话（受控中断 + `paused`；`pause_resume` 能力门）。 */
+  pauseSession(sessionId: string): Promise<SessionPauseResult>;
+  /** M7-03/ADR-017：恢复会话（有暂停标记 → 重放 `paused → running`；否则 `idle`）。 */
+  resumeSession(sessionId: string): Promise<SessionResumeResult>;
   disposeSession(sessionId: string): Promise<{ session_id: string; status: SessionStatus }>;
   messagesPage(input: MessagesPageInput): Promise<MessagesPageResult>;
   /** M3-06：仅终态（failed/timeout/cancelled）run 可重试（ADR-004）。 */
@@ -258,6 +297,16 @@ export const sessionIpc: SessionIpc = {
   },
   async interruptSession(sessionId) {
     return invoke<SessionInterruptReport>("session_interrupt", {
+      payload: { session_id: sessionId },
+    });
+  },
+  async pauseSession(sessionId) {
+    return invoke<SessionPauseResult>("session_pause", {
+      payload: { session_id: sessionId },
+    });
+  },
+  async resumeSession(sessionId) {
+    return invoke<SessionResumeResult>("session_resume", {
       payload: { session_id: sessionId },
     });
   },

@@ -46,7 +46,8 @@ export const RUNTIME_NAME = "claude-code";
 /** 适配器版本（semver，hello 上报）。 */
 export const ADAPTER_VERSION = "0.1.0";
 
-/** 适配器能力清单（hello/initialize 上报；RA-04；M3-10 增 `thinking_depth`）。 */
+/** 适配器能力清单（hello/initialize 上报；RA-04；M3-10 增 `thinking_depth`；
+ * M7-03/ADR-017 增 `pause_resume`）。 */
 export const RUNTIME_CAPABILITIES: readonly string[] = [
   "session.create",
   "session.send",
@@ -56,6 +57,8 @@ export const RUNTIME_CAPABILITIES: readonly string[] = [
   "permission.resolve",
   // M3-10/ADR-010：档位 0–4 → `MAX_THINKING_TOKENS` 预算（映射表见 M3-10 证据）。
   "thinking_depth",
+  // M7-03/ADR-017：受控中断 + Mode R 原生恢复（`--session-id`/`--resume`，ADR-005）。
+  "pause_resume",
 ];
 
 /** CLI stdout 无法解析的行：连续达到该阈值 → 该 run 判不健康（口径同 D6 连续无效帧 20 次）。 */
@@ -208,6 +211,7 @@ export class ClaudeCodeAdapter {
       .handle("session.create", (params) => this.onCreateSession(params))
       .handle("session.send", (params) => this.onSend(params))
       .handle("session.interrupt", (params) => this.onInterrupt(params))
+      .handle("session.pause", (params) => this.onPause(params))
       .handle("session.dispose", (params) => this.onDispose(params))
       .handle("tools.list", (params) => {
         const input = params as { session_id?: string } | null;
@@ -385,6 +389,28 @@ export class ClaudeCodeAdapter {
     }
     this.sessions.delete(sessionId);
     return { disposed: true };
+  }
+
+  /**
+   * `session.pause`（M7-03/ADR-017）：核心侧受控中断收口后调用——取消残余工作
+   * （在途 run 进程树回收）、释放会话运行时侧资源；会话保留（`nativeId` 不变，
+   * Mode R 重放依赖 `--resume`）。
+   */
+  private onPause(params: unknown): Record<string, unknown> {
+    const input = (params ?? {}) as { session_id?: unknown };
+    const sessionId = typeof input.session_id === "string" ? input.session_id : "";
+    const session = this.sessions.get(sessionId);
+    if (!session || session.disposed) {
+      throw new RpcError(ERROR_CODES.SESSION_NOT_FOUND, `会话不存在: ${sessionId || "<missing>"}`);
+    }
+    const cancelled: string[] = [];
+    for (const run of session.runs.values()) {
+      if (run.finished) continue;
+      run.interrupted = true;
+      void run.cli?.interrupt();
+      cancelled.push(run.runId);
+    }
+    return { paused: true, session_id: session.id, cancelled_runs: cancelled };
   }
 
   private onCliEvent(session: ClaudeSession, run: ClaudeRunState, event: unknown): void {

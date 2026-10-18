@@ -125,6 +125,11 @@ export interface MockAdapterOptions {
    * initialize 的 capabilities 均省略该项）。缺省声明（供 CI 能力门正向用例）。
    */
   thinkingDepthUnsupported?: boolean;
+  /**
+   * M7-03/ADR-017：不声明 `pause_resume` 能力（`pause_unsupported` 负向夹具；
+   * hello/initialize 的 capabilities 均省略该项）。缺省声明。
+   */
+  pauseResumeUnsupported?: boolean;
 }
 
 const DEFAULT_DELTAS = 24;
@@ -206,6 +211,7 @@ export class MockAdapter {
     artifactsDir?: string;
     sessionLog?: string;
     thinkingDepthUnsupported: boolean;
+    pauseResumeUnsupported: boolean;
   };
 
   private readonly sessions = new Map<string, MockSession>();
@@ -246,6 +252,7 @@ export class MockAdapter {
       artifactsDir: options.artifactsDir,
       sessionLog: options.sessionLog,
       thinkingDepthUnsupported: options.thinkingDepthUnsupported ?? false,
+      pauseResumeUnsupported: options.pauseResumeUnsupported ?? false,
       protocol,
       sendHello:
         (options.sendHello ?? true) &&
@@ -264,6 +271,8 @@ export class MockAdapter {
         "permission.resolve",
         // M3-10/ADR-010：能力项声明（存在即支持；`--no-thinking-depth` 省略）。
         ...(this.options.thinkingDepthUnsupported ? [] : ["thinking_depth"]),
+        // M7-03/ADR-017：pause/resume 能力项（`--no-pause-resume` 省略 → 负向夹具）。
+        ...(this.options.pauseResumeUnsupported ? [] : ["pause_resume"]),
       ],
     };
     this.adapter = new Adapter({
@@ -510,6 +519,27 @@ export class MockAdapter {
         if (!run) return { interrupted: false };
         run.interrupt();
         return { interrupted: true, run_id: run.runId };
+      })
+      .handle("session.pause", (params) => {
+        // M7-03/ADR-017：核心侧受控中断收口后调用——取消残余工作（在途 run）、
+        // 释放运行时侧会话资源；会话本体保留（`native_id` 恢复能力不变）。
+        const input = params as { session_id?: string };
+        const session = this.session(input.session_id);
+        if (!session) {
+          throw new RpcError(
+            ERROR_CODES.SESSION_NOT_FOUND,
+            `会话不存在: ${input.session_id ?? "<missing>"}`,
+          );
+        }
+        const cancelled = session.activeRun?.runId ?? null;
+        session.activeRun?.interrupt();
+        session.activeRun = undefined;
+        this.logSessionCall({
+          method: "session.pause",
+          session_id: session.id,
+          cancelled_run: cancelled,
+        });
+        return { paused: true, session_id: session.id, cancelled_run: cancelled };
       })
       .handle("session.dispose", (params) => {
         const input = params as { session_id?: string };

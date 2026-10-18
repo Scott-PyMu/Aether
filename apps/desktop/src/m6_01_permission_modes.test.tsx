@@ -120,6 +120,8 @@ function fakeSessionIpc(overrides: Partial<SessionIpc> = {}): SessionIpc {
       duplicate: false,
     })),
     interruptSession: vi.fn(async () => ({ session_id: SESSION_A, interrupted_run: null })),
+    pauseSession: vi.fn(),
+    resumeSession: vi.fn(),
     disposeSession: vi.fn(async () => ({
       session_id: SESSION_A,
       status: "completed" as SessionStatus,

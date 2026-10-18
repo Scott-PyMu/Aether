@@ -455,6 +455,8 @@ function fakeSessionIpc(): SessionIpc {
       duplicate: false,
     })),
     interruptSession: vi.fn(async () => ({ session_id: "01J8ZQ5R0N7W9Y8X6V4T2S0K1A" })),
+    pauseSession: vi.fn(),
+    resumeSession: vi.fn(),
     disposeSession: vi.fn(async () => ({
       session_id: "01J8ZQ5R0N7W9Y8X6V4T2S0K1A",
       status: "completed" as SessionStatus,

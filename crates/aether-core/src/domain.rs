@@ -30,6 +30,9 @@ pub const THINKING_DEPTH_MAX: u8 = 4;
 pub const THINKING_DEPTH_DEFAULT: u8 = 2;
 /// 思考深度适配器能力项（D6/ADR-010：`hello.runtime.capabilities` 字符串项，存在即支持）。
 pub const THINKING_DEPTH_CAPABILITY: &str = "thinking_depth";
+/// 暂停/恢复适配器能力项（D6/D5/ADR-017：`hello.runtime.capabilities` 字符串项，
+/// 存在即支持；未声明或连接未就绪 → `pause_unsupported`，不产生假暂停）。
+pub const PAUSE_RESUME_CAPABILITY: &str = "pause_resume";
 
 /// 会话状态（`sessions.status` CHECK 约束，D2/D8）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

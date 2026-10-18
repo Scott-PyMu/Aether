@@ -89,6 +89,8 @@ pub struct DiagnosticsDeps {
     pub health: HealthProvider,
     pub logs: Option<Arc<LogSink>>,
     pub task_dumps: Option<Arc<dyn TaskDumpSource>>,
+    /// M7-03/ADR-017：会话管理器（诊断包 `session_pause` 段——暂停统计）。
+    pub session_manager: Option<aether_control::SessionManager>,
     /// 安全级别探针（`None` = 生产原生探针；测试注入固定值避免真实凭据库调用）。
     pub security: Option<Arc<dyn crate::security_level::SecurityProbe>>,
 }
@@ -106,6 +108,7 @@ pub struct DiagnosticsControlBackend {
     space: Arc<dyn SpaceProbe>,
     logs: Option<Arc<LogSink>>,
     task_dumps: Option<Arc<dyn TaskDumpSource>>,
+    session_manager: Option<aether_control::SessionManager>,
     health: HealthProvider,
     security: Arc<dyn crate::security_level::SecurityProbe>,
 }
@@ -124,6 +127,7 @@ impl DiagnosticsControlBackend {
             space: Arc::new(crate::backup_control::NativeSpaceProbe),
             logs: deps.logs,
             task_dumps: deps.task_dumps,
+            session_manager: deps.session_manager,
             health: deps.health,
             security: deps
                 .security
@@ -388,6 +392,30 @@ impl DiagnosticsControlBackend {
             }
         };
 
+        // M7-03/ADR-017 附录 A-3：暂停统计（暂停次数/恢复次数/当前暂停会话数；
+        // `paused_sessions` 以 `sessions.status='paused'` 为事实源——重启后可读）。
+        let session_pause = match self.session_manager.clone() {
+            Some(manager) => match self.call(async move {
+                manager.pause_stats().await.map_err(|error| {
+                    IpcError::internal(format!("暂停统计读取失败（pause_stats）：{error}"))
+                })
+            }) {
+                Ok(stats) => json!({
+                    "total_pauses": stats.total_pauses,
+                    "total_resumes": stats.total_resumes,
+                    "paused_sessions": stats.paused_sessions,
+                }),
+                Err(error) => {
+                    notes.push(format!("暂停统计不可用：{error}"));
+                    Value::Null
+                }
+            },
+            None => {
+                notes.push("会话管理器未接线：session_pause 段省略".to_owned());
+                Value::Null
+            }
+        };
+
         // M5-02/ADR-020 A-3：自动备份运行状态（最近结果/连续失败数/下次排期/补备标记/
         // 耗时与体积指标），经内层备份后端的内部状态投影。
         let backup_auto = match self.inner.backup_auto_status() {
@@ -456,6 +484,7 @@ impl DiagnosticsControlBackend {
             "config": { "settings": settings },
             "logs": logs,
             "task_dumps": task_dumps,
+            "session_pause": session_pause,
             "notes": notes,
         });
         Ok((bundle, notes))
@@ -579,6 +608,7 @@ impl IpcBackend for DiagnosticsControlBackend {
             "config",
             "logs",
             "task_dumps",
+            "session_pause",
         ]
         .into_iter()
         .filter(|section| redacted.get(*section).is_some_and(|value| !value.is_null()))
