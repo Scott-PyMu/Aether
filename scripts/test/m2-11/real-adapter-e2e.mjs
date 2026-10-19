@@ -1,4 +1,4 @@
-/**
+﻿/**
  * M2-11 真实运行时适配器 E2E 驱动（ADR-008 §6）：
  * 直接 spawn 编译后的适配器单文件，经 Aether 线协议（D6）驱动真实运行时
  * （Codex CLI / DSH ACP），完成初始化、流式、Mode R 恢复、中断与 N 次回归。
@@ -35,6 +35,9 @@ if (!args.adapter) {
 }
 const runs = Number(args.runs ?? 1);
 const timeoutMs = Number(args["timeout-ms"] ?? 180_000);
+// M7-05：回归轮次间隔（默认 0，保持 M2-11 口径；上游网关对突发并发限流时可用
+// `--interval-ms <n>` 平滑节奏——仅为测试节拍，不改变完成率/终态断言）。
+const intervalMs = Number(args["interval-ms"] ?? 0);
 const baselinePrompt =
   "Output exactly the following three lines and nothing else. Do not add quotes, markdown or comments.\n" +
   "Aether M2-11 real adapter baseline line 1\n" +
@@ -468,6 +471,8 @@ async function main() {
         console.log(
           `[real ${runtime}] run ${index + 1}/${runs}: ${terminal?.type ?? "none"}（${text.length} 字符，${frames} delta）`,
         );
+        // M7-05：可选轮次间隔（默认 0；规避上游突发限流导致的假挂起）。
+        if (intervalMs > 0 && index < runs - 1) await sleep(intervalMs);
       }
       const rate = completedCount / runs;
       const lossRate =

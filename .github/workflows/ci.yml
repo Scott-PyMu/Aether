@@ -1277,3 +1277,62 @@ jobs:
           name: sbom-spdx
           path: sbom.spdx.json
           retention-days: 30
+
+  # M7-05（ADR-008）：三运行时一致性回归门禁（bun 构建四适配器 bundle + 一致性
+  # 测试包全量（三运行时 + Mock，REQUIRE=1 强制产物在用）+ 协议面回归（热插拔/
+  # 路由/闸门/暂停 + 四适配器 TS 全量）+ fixture 用例）。真实冒烟为 opt-in
+  # （缺凭证由 verify 输出显式 SKIP 行；详见 docs/M7-05-证据.md）。
+  m7-05-consistency:
+    name: Three-runtime consistency (M7-05)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: M7-05 三运行时一致性回归门禁
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/test/m7-05/verify-m7-05.mjs 2>&1 | tee m7-05-verify.log
+      - name: 失败诊断（公开 annotation）
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "### M7-05 verify 失败（摘要 + tail 30）"
+            echo '```text'
+            grep -E "^FAIL|panicked|assertion|Test Files|Tests |error\[" m7-05-verify.log 2>/dev/null | tail -20 || true
+            echo '--- tail 30 ---'
+            tail -30 m7-05-verify.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -E "^FAIL " m7-05-verify.log 2>/dev/null | tail -8 | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m7-05-summary::$line"
+          done
+          tail -4 m7-05-verify.log 2>/dev/null | sed 's/%/%25/g; s/\r$//' | while IFS= read -r line; do
+            echo "::error title=m7-05-tail::$line"
+          done
+      - name: 归档 M7-05 证据（一致性包 + 协议面回归输出）
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: m7-05-evidence
+          path: |
+            scripts/test/.tmp/m7-05/evidence-*/
+            m7-05-verify.log
+          if-no-files-found: warn
+          retention-days: 30

@@ -587,6 +587,8 @@ fn disable_confirmation_closes_in_flight_runs_and_retry_replays() {
     );
 
     // 被禁用运行时不可创建会话（既有 disabled 语义）。
+    // M7-05 门禁修复（设计驱动，留痕）：M7-02 会话创建路径的禁用文案强化为
+    // 「已被用户禁用（enabled=0）」；断言改锚定语义稳定子串（"禁用" + "enabled=0"）。
     let error = backend
         .session_create(&SessionCreateRequest {
             runtime_id: Some("mock".to_owned()),
@@ -598,7 +600,7 @@ fn disable_confirmation_closes_in_flight_runs_and_retry_replays() {
         })
         .expect_err("disabled 运行时不得创建会话");
     assert!(
-        error.message.contains("已禁用"),
+        error.message.contains("禁用") && error.message.contains("enabled=0"),
         "错误必须说明禁用：{}",
         error.message
     );
