@@ -153,8 +153,15 @@ impl PathGuard {
         // 词法上落在工作区内的候选先于 FS 访问收口——否则设备名（如 `CON`）在
         // 不同会话/环境下的打开错误会抢先返回 `path_canonicalize_failed`
         // （CI run 39239472009 实测：本机走找不到分支、CI 服务会话走打开失败分支）。
+        // 根为 canonical（Windows 含 `\\?\` 前缀），绝对 target 为 plain 文本：
+        // 两种形态分别做词法包含判定（相对 target 经根拼接天然为 canonical 形态）。
         if self.contains(&candidate) {
             check_component_specials(&relative_tail(&self.root, &candidate))?;
+        } else {
+            let plain_root = strip_windows_extended_prefix(&self.root);
+            if contains_under(&plain_root, &candidate, self.case_insensitive) {
+                check_component_specials(&relative_tail(&plain_root, &candidate))?;
+            }
         }
         let resolved = canonicalize_with_nonexistent_tail(&candidate).map_err(|error| {
             PathViolation::CanonicalizeFailed {
@@ -189,8 +196,15 @@ impl PathGuard {
         // 打开错误会抢先返回 `path_canonicalize_failed`（CI run 39239472009 实测）。
         // 仅限「词法已在根内」：候选与根形态不一致（如短名文本 vs canonical 根）时
         // 以 canonicalize 后的判定为准（m2_10 短名夹具回归实测），区外检查保持原序。
+        // 根为 canonical（Windows 含 `\\?\` 前缀），绝对 target 为 plain 文本：
+        // 两种形态分别做词法包含判定（相对 target 经根拼接天然为 canonical 形态）。
         if self.contains(&candidate) {
             check_component_specials(&relative_tail(&self.root, &candidate))?;
+        } else {
+            let plain_root = strip_windows_extended_prefix(&self.root);
+            if contains_under(&plain_root, &candidate, self.case_insensitive) {
+                check_component_specials(&relative_tail(&plain_root, &candidate))?;
+            }
         }
         let resolved = canonicalize_with_nonexistent_tail(&candidate).map_err(|error| {
             PathViolation::CanonicalizeFailed {
@@ -214,23 +228,7 @@ impl PathGuard {
 
     /// 是否位于工作区内（含根自身）。
     pub fn contains(&self, path: &Path) -> bool {
-        if path == self.root {
-            return true;
-        }
-        let path_components: Vec<Component<'_>> = path.components().collect();
-        let root_components: Vec<Component<'_>> = self.root.components().collect();
-        if path_components.len() < root_components.len() {
-            return false;
-        }
-        if path_components.len() == root_components.len() {
-            return self.case_insensitive && eq_ignore_case(path, &self.root);
-        }
-        for (expected, actual) in root_components.iter().zip(path_components.iter()) {
-            if !component_eq(expected, actual, self.case_insensitive) {
-                return false;
-            }
-        }
-        true
+        contains_under(&self.root, path, self.case_insensitive)
     }
 
     /// 原始 target 是否为记忆文件白名单命中（仅文件名 | 大小写不敏感）。
@@ -256,6 +254,27 @@ impl PathGuard {
         };
         lexical_normalize(&joined)
     }
+}
+
+/// 词法组件包含判定（任意根；含根自身；Windows/macOS 大小写不敏感）。
+fn contains_under(root: &Path, path: &Path, case_insensitive: bool) -> bool {
+    if path == root {
+        return true;
+    }
+    let path_components: Vec<Component<'_>> = path.components().collect();
+    let root_components: Vec<Component<'_>> = root.components().collect();
+    if path_components.len() < root_components.len() {
+        return false;
+    }
+    if path_components.len() == root_components.len() {
+        return case_insensitive && eq_ignore_case(path, root);
+    }
+    for (expected, actual) in root_components.iter().zip(path_components.iter()) {
+        if !component_eq(expected, actual, case_insensitive) {
+            return false;
+        }
+    }
+    true
 }
 
 fn component_eq(expected: &Component<'_>, actual: &Component<'_>, case_insensitive: bool) -> bool {

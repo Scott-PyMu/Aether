@@ -289,12 +289,19 @@ async fn supervisor_injects_artifacts_dir_env_and_creates_per_runtime_dir() {
         "Mock 必须把附件写入监督器注入的目录: {}",
         attachment.display()
     );
-    assert_eq!(
-        std::fs::metadata(&attachment)
-            .map(|meta| meta.len())
-            .unwrap_or(0),
-        2048,
-        "附件字节数必须与引用帧声明一致"
+    // 文件出现与写入完成存在竞态（先创建后写入；CI 夜跑 run 39249722207 实测偶发
+    // 读到大小时该文件未写完）→ 以有界等待判定最终大小，断言口径不变。
+    assert!(
+        common::wait_until(
+            || std::fs::metadata(&attachment)
+                .map(|meta| meta.len())
+                .unwrap_or(0)
+                == 2048,
+            Duration::from_secs(10)
+        )
+        .await,
+        "附件字节数必须与引用帧声明一致: {}",
+        attachment.display()
     );
     let _ = run_id;
     let report = supervisor.shutdown().await;
