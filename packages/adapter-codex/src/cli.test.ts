@@ -1,6 +1,17 @@
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
-import { buildCodexArgs, normalizeCommand } from "./codex-cli";
+import {
+  buildCodexArgs,
+  CODEX_CONFIG_MARKER,
+  codexSandbox,
+  materializeCodexProviderConfig,
+  normalizeCommand,
+  renderCodexProviderConfig,
+} from "./codex-cli";
 import { parseArgs } from "./cli";
 
 const config = {
@@ -44,6 +55,67 @@ describe("buildCodexArgs", () => {
   it("extraArgs 前置（node 脚本注入顺序）", () => {
     const args = buildCodexArgs({ ...config, extraArgs: ["cli.mjs"] }, { prompt: "hi", timeoutMs: 1 });
     expect(args[0]).toBe("cli.mjs");
+  });
+});
+
+describe("M7-06 档位投影与供应商消费映射（ADR-024）", () => {
+  it("三档映射：read_only→read-only / workspace_write→workspace-write / danger_full_access→danger-full-access", () => {
+    expect(codexSandbox("read_only")).toBe("read-only");
+    expect(codexSandbox("workspace_write")).toBe("workspace-write");
+    expect(codexSandbox("danger_full_access")).toBe("danger-full-access");
+    expect(codexSandbox("unknown")).toBeUndefined();
+  });
+
+  it("投影值进入 --sandbox / resume -c sandbox_mode（逐档断言）", () => {
+    for (const [mode, expected] of [
+      ["read_only", "read-only"],
+      ["workspace_write", "workspace-write"],
+      ["danger_full_access", "danger-full-access"],
+    ] as const) {
+      const sandbox = codexSandbox(mode);
+      const fresh = buildCodexArgs({ ...config, sandbox: sandbox ?? config.sandbox }, { prompt: "hi", timeoutMs: 1 });
+      const flag = fresh.indexOf("--sandbox");
+      expect(flag).toBeGreaterThanOrEqual(0);
+      expect(fresh[flag + 1]).toBe(expected);
+      const resume = buildCodexArgs(
+        { ...config, sandbox: sandbox ?? config.sandbox },
+        { threadId: "thr_1", prompt: "hi", timeoutMs: 1 },
+      );
+      expect(resume).toContain(`sandbox_mode=${expected}`);
+    }
+  });
+
+  it("config.toml 物化：只含 base_url 与 env 键名（不写密钥值）；非本适配器文件拒绝覆盖", () => {
+    const home = mkdtempSync(join(tmpdir(), "aether-codex-home-"));
+    const path = materializeCodexProviderConfig(
+      home,
+      "provider-1",
+      "https://gateway.example.com/v1",
+      "OPENAI_API_KEY",
+    );
+    expect(path).toBe(join(home, "config.toml"));
+    const text = readFileSync(path, "utf8");
+    expect(text.startsWith(CODEX_CONFIG_MARKER)).toBe(true);
+    expect(text).toContain('model_provider = "provider-1"');
+    expect(text).toContain("[model_providers.provider-1]");
+    expect(text).toContain('base_url = "https://gateway.example.com/v1"');
+    expect(text).toContain('env_key = "OPENAI_API_KEY"');
+    expect(text).not.toContain("sk-");
+    expect(text).not.toContain("api_key");
+    // 幂等重复物化（同一标记）成功。
+    expect(() =>
+      materializeCodexProviderConfig(home, "provider-1", "https://gateway.example.com/v1", "OPENAI_API_KEY"),
+    ).not.toThrow();
+    // 用户已有非 Aether 配置 → 拒绝覆盖。
+    writeFileSync(path, "model = \"user-config\"\n", "utf8");
+    expect(() =>
+      materializeCodexProviderConfig(home, "provider-1", "https://gateway.example.com/v1", "OPENAI_API_KEY"),
+    ).toThrow(/拒绝覆盖/);
+  });
+
+  it("renderCodexProviderConfig 拒绝非法 provider id / env 键名", () => {
+    expect(() => renderCodexProviderConfig("bad id", "https://x", "OPENAI_API_KEY")).toThrow();
+    expect(() => renderCodexProviderConfig("p", "https://x", "bad-key")).toThrow();
   });
 });
 

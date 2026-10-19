@@ -1,4 +1,4 @@
-/**
+﻿/**
  * M2-11 DSH 夹具（确定性，无网络）：复刻 `dsh --profile acp` 的官方 ACP 协议面
  * （JSON-RPC 2.0 over stdio；`session/*`、`session/update`、`session/request_permission`），
  * 并模拟自研插件把原始 provider 增量写入带外通道（`AETHER_DSH_DELTA_FILE`）。
@@ -41,10 +41,64 @@ const REASONING_VALUES = (
 const CONFIG_FILE = process.env.FAKE_DSH_CONFIG_FILE || "";
 /** 各会话当前 reasoning_effort（`""` = provider 默认）。 */
 const reasoningSelections = new Map();
+/** M7-06：模型选项 provider 组名（默认 `aether-unit`；真实 DSH 为 `aether-<provider id>`）。 */
+const MODEL_PROVIDER = process.env.FAKE_DSH_MODEL_PROVIDER || "aether-unit";
+/** M7-06：模型选项清单（`["provider","model"]` 对的 JSON 字符串 value；对齐真实 DSH 实测）。 */
+const MODEL_VALUES = (() => {
+  const raw = process.env.FAKE_DSH_MODEL_VALUES;
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter((pair) => Array.isArray(pair) && pair.length === 2)
+          .map((pair) => JSON.stringify(pair));
+      }
+    } catch {
+      /* 非法 → 默认 */
+    }
+  }
+  return [
+    JSON.stringify([MODEL_PROVIDER, "fake-model"]),
+    JSON.stringify([MODEL_PROVIDER, "fake-model-2"]),
+  ];
+})();
+/** 各会话当前模型选项 value。 */
+const modelSelections = new Map();
+
+function modelConfigOptions(sessionId) {
+  const current = modelSelections.get(sessionId) ?? MODEL_VALUES[0] ?? "";
+  return [
+    {
+      id: "model",
+      name: "Model",
+      category: "model",
+      type: "select",
+      currentValue: current,
+      options: [
+        {
+          group: MODEL_PROVIDER,
+          name: MODEL_PROVIDER,
+          options: MODEL_VALUES.map((value) => {
+            let name = value;
+            try {
+              const parsed = JSON.parse(value);
+              if (Array.isArray(parsed) && typeof parsed[1] === "string") name = parsed[1];
+            } catch {
+              /* 保持原值 */
+            }
+            return { value, name };
+          }),
+        },
+      ],
+    },
+  ];
+}
 
 function reasoningConfigOptions(sessionId) {
   const current = reasoningSelections.get(sessionId) ?? "";
   return [
+    ...modelConfigOptions(sessionId),
     {
       id: "reasoning_effort",
       name: "Reasoning effort",
@@ -357,11 +411,22 @@ function handleMessage(message) {
     }
     case "session/set_config_option": {
       // M3-10：`reasoning_effort` 设置（值必须在广告列表内；`""` = provider 默认）。
+      // M7-06：`model` 设置（value = `["provider","model"]` JSON 字符串；须在广告列表内）。
       const sessionId = message.params?.sessionId;
       const configId = message.params?.configId;
       const value = message.params?.value;
       if (!sessions.sessions[sessionId]) {
         replyError(message.id, -32002, `session not found: ${sessionId}`);
+        return;
+      }
+      if (configId === "model") {
+        if (typeof value !== "string" || !MODEL_VALUES.includes(value)) {
+          replyError(message.id, -32602, `unknown model option: ${String(value)}`);
+          return;
+        }
+        modelSelections.set(sessionId, value);
+        recordConfigSet({ sessionId, configId, value });
+        reply(message.id, { configOptions: reasoningConfigOptions(sessionId) });
         return;
       }
       if (configId !== "reasoning_effort" || typeof value !== "string" || !REASONING_VALUES.includes(value)) {
@@ -376,6 +441,7 @@ function handleMessage(message) {
     case "session/close": {
       delete sessions.sessions[message.params?.sessionId];
       reasoningSelections.delete(message.params?.sessionId);
+      modelSelections.delete(message.params?.sessionId);
       saveSessions();
       reply(message.id, { ok: true });
       return;

@@ -244,6 +244,12 @@ export interface MessagesPageInput {
   limit?: number;
 }
 
+/** 随消息附带的文件引用（M7-06/ADR-024：D6 `session.send.references` 载荷形态）。 */
+export interface SessionReference {
+  path: string;
+  kind: "file" | "directory";
+}
+
 /**
  * 工作台使用的会话命令面（可注入替身；生产 = Tauri invoke）。
  *
@@ -260,6 +266,8 @@ export interface SessionIpc {
     client_msg_id: string;
     /** M3-10/ADR-010：本次 run 思考深度覆盖（0–4；缺省 = 会话级值）。 */
     thinking_depth?: number;
+    /** M7-06/ADR-024：随消息附带的文件引用（≤32；引用 ≠ 预授权）。 */
+    references?: SessionReference[];
   }): Promise<SessionSendResult>;
   interruptSession(sessionId: string): Promise<SessionInterruptReport>;
   /** M7-03/ADR-017：暂停会话（受控中断 + `paused`；`pause_resume` 能力门）。 */

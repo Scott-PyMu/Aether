@@ -627,3 +627,76 @@ describe("DshAdapter：思考深度（M3-10 / ADR-010，ACP reasoning_effort）"
     }
   });
 });
+
+describe("DshAdapter：按会话选模型与供应商消费映射（M7-06 / ADR-024）", () => {
+  it("session.create.model → ACP set_config_option（model=[provider,model]）；未知模型不设置", { timeout: 60_000 }, async () => {
+    const configFile = join(mkdtempSync(join(tmpdir(), "fake-dsh-model-")), "config.jsonl");
+    const previous = process.env.FAKE_DSH_CONFIG_FILE;
+    process.env.FAKE_DSH_CONFIG_FILE = configFile;
+    try {
+      const { harness } = await initializedHarness();
+      // 明确指定第二个广告模型（value = ["aether-unit","fake-model-2"]）。
+      const created = await harness.requestResult("session.create", { model: "fake-model-2" });
+      expect(created.model).toBe("fake-model-2");
+      const plain = await harness.requestResult("session.create", { model: "unknown-model" });
+      expect(plain.model).toBe("unknown-model");
+
+      const records = readFileSync(configFile, "utf8")
+        .trim()
+        .split(/\r?\n/)
+        .filter((line) => line.length > 0)
+        .map((line) => JSON.parse(line) as { configId: string; value: string });
+      const modelSets = records.filter((record) => record.configId === "model");
+      expect(modelSets).toHaveLength(1);
+      expect(modelSets[0]?.value).toBe('["aether-unit","fake-model-2"]');
+      // 无匹配 → 不产生设置调用（保持 provider 默认）。
+      expect(
+        harness.stderr.some((line) => line.includes("不在可用模型选项内")),
+      ).toBe(true);
+      await harness.shutdown();
+    } finally {
+      if (previous === undefined) delete process.env.FAKE_DSH_CONFIG_FILE;
+      else process.env.FAKE_DSH_CONFIG_FILE = previous;
+    }
+  });
+
+  it("消费映射 env → overlay patch 含 provider 分层配置（apiKeyEnv 引用；无密钥值）", { timeout: 60_000 }, async () => {
+    const home = mkdtempSync(join(tmpdir(), "fake-dsh-provider-"));
+    const keys = [
+      "AETHER_PROVIDER_BASE_URL",
+      "AETHER_PROVIDER_ID",
+      "AETHER_PROVIDER_ENV_KEY",
+      "AETHER_PROVIDER_MODELS",
+      "AETHER_PROVIDER_MODEL",
+    ] as const;
+    const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]])) as Record<
+      (typeof keys)[number],
+      string | undefined
+    >;
+    process.env.AETHER_PROVIDER_BASE_URL = "https://gateway.example.com/open/v1";
+    process.env.AETHER_PROVIDER_ID = "01J00000000000000000000P03";
+    process.env.AETHER_PROVIDER_ENV_KEY = "DEEPSEEK_API_KEY";
+    process.env.AETHER_PROVIDER_MODEL = "prov-model";
+    process.env.AETHER_PROVIDER_MODELS = JSON.stringify([{ id: "prov-model", name: "prov-model" }]);
+    try {
+      const harness = new Harness({}, home);
+      await harness.start();
+      await harness.requestResult("initialize", {});
+      const patch = readFileSync(join(home, "aether-dsh-acp.patch.yml"), "utf8");
+      expect(patch).toContain("provider: aether-01J00000000000000000000P03");
+      // 实测：acp 行缺省模型缺失时 DSH 不注册 provider 模型选项 → 必须写入 model。
+      expect(patch).toContain("model: prov-model");
+      expect(patch).toContain('"apiKeyEnv":"DEEPSEEK_API_KEY"');
+      expect(patch).toContain('"baseURL":"https://gateway.example.com/open/v1"');
+      expect(patch).toContain('"prov-model"');
+      expect(patch).not.toContain("sk-");
+      await harness.shutdown();
+    } finally {
+      for (const key of keys) {
+        const value = previous[key];
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+});

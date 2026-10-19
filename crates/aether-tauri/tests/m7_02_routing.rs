@@ -1,4 +1,4 @@
-//! M7-02：能力路由（ADR-022；DoD1/2/5）。
+﻿//! M7-02：能力路由（ADR-022；DoD1/2/5）。
 //!
 //! 覆盖：
 //! - 路由矩阵（命令层）：固定优先级常量（claude-code=10 / codex=20 / mock=100）、
@@ -387,6 +387,7 @@ fn ten_concurrent_sessions_do_not_queue_at_default_limit() {
                 text: "hi".to_owned(),
                 client_msg_id: format!("01J0000000000000000000{:04}", index),
                 thinking_depth: None,
+            references: Vec::new(),
             })
             .expect("发送");
         assert!(

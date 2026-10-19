@@ -275,8 +275,9 @@ impl ForwardState {
             adapter_run.to_owned(),
             (core_session.clone(), core_run.clone()),
         );
-        // 取出该 run 的缓冲事件（未命中即空集合——非错误路径）。
-        std::mem::take(self.pending.entry(adapter_run.to_owned()).or_default())
+        // 取出该 run 的缓冲事件（未命中即空集合——非错误路径）；取出即摘除表项
+        // （M7-06 修复：`mem::take` 会残留空 Vec 表项，`pending` 永不收缩）。
+        self.pending.remove(adapter_run).unwrap_or_default()
     }
 
     /// 处理一条适配器事件：可映射 → 返回 `(核心会话, 核心 run, 事件)`；否则入缓冲。
@@ -556,13 +557,16 @@ impl AdapterRunExecutor {
         // M3-08/D14：工作区记忆注入随 `session.create` 下发（`sessions.system_prompt`
         // 由会话创建路径写入；旧适配器忽略未知字段，ADR-003 兼容）。
         // M3-10/ADR-010：`thinking_depth` 仅在运行时声明能力时透传。
+        // M7-06/ADR-024：`permission_mode` 档位随 `session.create` 下发（适配器投影为
+        // 运行时启动参数；仅新会话生效——在途会话判定参数不受后续档位变更影响）。
         let created = client
-            .create_session_with_prompt(
+            .create_session_with_options(
                 Some(&session.title),
                 native_id.as_deref(),
                 session.model.as_deref(),
                 session.system_prompt.as_deref(),
                 thinking_depth,
+                Some(session.permission_mode.as_str()),
             )
             .await
             .map_err(|error| error_info(ADAPTER_REQUEST_FAILED_CODE, error.to_string()))?;
@@ -679,11 +683,12 @@ impl AdapterRunExecutor {
         // 在到达适配器之前去重（ADR-005 持久化支撑），因此以 run id 为键不丢失去重语义，
         // 且避免重放复用输入消息 id 时被适配器幂等命中而返回旧 run。
         let ack = client
-            .send_with_thinking_depth(
+            .send_with_references(
                 &adapter_session,
                 request.run_id.as_str(),
                 &request.text,
                 send_override,
+                &request.references,
             )
             .await
             .map_err(|error| error_info(ADAPTER_REQUEST_FAILED_CODE, error.to_string()))?;

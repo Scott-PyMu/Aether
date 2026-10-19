@@ -16,6 +16,7 @@ pub mod backoff;
 pub mod clock;
 pub mod heartbeat;
 pub mod ledger;
+pub mod provider_env;
 pub mod resources;
 pub mod runtime;
 pub mod state;
@@ -35,6 +36,7 @@ pub use ledger::{
     LedgerError, LedgerRecord, LedgerVerdict, ProcessFacts, ProcessProbe, SysinfoProbe, TreeKiller,
     LEDGER_FILE_NAME, LEDGER_RELATIVE_PATH,
 };
+pub use provider_env::{SpawnEnvFuture, SpawnEnvSource};
 pub use resources::{
     ResourceConfig, ResourceMonitor, ResourceObservation, ResourceSample, SysinfoSampler,
     ENV_CPU_THRESHOLD_PCT, ENV_RSS_THRESHOLD_MB, ENV_SUSTAIN_SECS, RESOURCE_BREACH_SUSTAIN,

@@ -67,6 +67,7 @@ import {
   type RunQueuePosition,
   type RuntimeInfo,
   type SessionIpc,
+  type SessionReference,
   type SessionSummary,
   type SessionWarning,
 } from "./session";
@@ -149,6 +150,23 @@ function mergeMessages(previous: MessageRow[], incoming: MessageRow[]): MessageR
   return [...merged.values()].sort((left, right) => left.created_at - right.created_at);
 }
 
+/** 单次发送引用条数上限（M7-06/ADR-024 §2.1-5：≤32 条；核心命令层同值校验）。 */
+export const MAX_SESSION_REFERENCES = 32;
+
+/**
+ * 拖拽路径 → 引用类型（拖拽事件只携带路径，无类型信息）。
+ *
+ * 启发式：基名含 `.`（且非尾点）视为文件，否则视为目录；仅影响引用块呈现文本，
+ * 路径可访问性与 canonicalize 由核心命令层裁决（`artifact_path_rejected`）。
+ */
+export function kindForPath(path: string): SessionReference["kind"] {
+  const base = path.split(/[\\/]/).pop() ?? "";
+  if (base.length === 0) {
+    return "file";
+  }
+  return base.includes(".") && !base.endsWith(".") ? "file" : "directory";
+}
+
 export function SessionWorkbench({
   store = appEventStore,
   ipc = sessionIpc,
@@ -189,6 +207,12 @@ export function SessionWorkbench({
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const [titleDraft, setTitleDraft] = useState("");
   const [draft, setDraft] = useState("");
+  /**
+   * M7-06/ADR-024：随消息附带的文件引用（待发送；`@` 入口 + 拖拽添加，≤32 条；
+   * 发送成功后清空；**引用 ≠ 预授权**——Agent 读取仍走 `fs.read` 权限门）。
+   */
+  const [pendingReferences, setPendingReferences] = useState<SessionReference[]>([]);
+  const composerRef = useRef<HTMLDivElement | null>(null);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** 结构化错误码（UI-UX §7.3 通用行：错误元素补 `data-code`；无码为 `null`）。 */
@@ -654,9 +678,13 @@ export function SessionWorkbench({
         client_msg_id: generateUlid(),
         // M3-10/ADR-010：本次 run 覆盖（仅本次 run，不回写会话级值）。
         thinking_depth: thinkingDepth,
+        // M7-06/ADR-024：随消息附带的文件引用（空数组省略字段）。
+        ...(pendingReferences.length > 0 ? { references: pendingReferences } : {}),
       });
       setThinkingWarning(thinkingWarningOf(ack.warnings));
       setDraft("");
+      // M7-06：引用为一次性上下文（不落库、不跨 run；发送成功后清空）。
+      setPendingReferences([]);
       setLastAck({
         runId: ack.run_id,
         duplicate: ack.duplicate,
@@ -690,10 +718,96 @@ export function SessionWorkbench({
     clearError,
     draft,
     ipc,
+    pendingReferences,
     refreshSessions,
     reportError,
     thinkingDepth,
   ]);
+
+  /** M7-06/ADR-024：添加引用（去重；上限 32 条，与核心命令层同值）。 */
+  const addReference = useCallback((path: string, kind: SessionReference["kind"]) => {
+    const trimmed = path.trim();
+    if (trimmed.length === 0) {
+      return;
+    }
+    setPendingReferences((previous) => {
+      if (previous.length >= MAX_SESSION_REFERENCES) {
+        return previous;
+      }
+      if (previous.some((reference) => reference.path === trimmed)) {
+        return previous;
+      }
+      return [...previous, { path: trimmed, kind }];
+    });
+  }, []);
+
+  const removeReference = useCallback((path: string) => {
+    setPendingReferences((previous) =>
+      previous.filter((reference) => reference.path !== path),
+    );
+  }, []);
+
+  /**
+   * M7-06/ADR-024：`@` 入口（空输入框按 `@` → 系统文件选择器 → 添加引用）。
+   * 输入框非空时 `@` 按普通字符输入（不劫持）。
+   */
+  const onPickReference = useCallback(async () => {
+    try {
+      const picked = await artifactsIpcProp.pick("file");
+      if (picked) {
+        addReference(picked, "file");
+      }
+    } catch (failure) {
+      reportError(failure);
+    }
+  }, [addReference, artifactsIpcProp, reportError]);
+
+  /**
+   * M7-06/ADR-024：拖拽注入（Tauri OS 级拖放事件；命中输入区 bounds 才接收）。
+   * 非 Tauri 环境（vitest/jsdom）静默跳过（动态导入失败/调用抛错均忽略）。
+   */
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void (async () => {
+      try {
+        const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+        const off = await getCurrentWebview().onDragDropEvent((event) => {
+          if (event.payload.type !== "drop") {
+            return;
+          }
+          const paths = event.payload.paths ?? [];
+          if (paths.length === 0) {
+            return;
+          }
+          const container = composerRef.current;
+          if (container) {
+            const rect = container.getBoundingClientRect();
+            const scale = window.devicePixelRatio || 1;
+            const x = event.payload.position.x / scale;
+            const y = event.payload.position.y / scale;
+            if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
+              return;
+            }
+          }
+          for (const path of paths) {
+            addReference(path, kindForPath(path));
+          }
+        });
+        if (disposed) {
+          off();
+        } else {
+          unlisten = off;
+        }
+      } catch {
+        /* 非 Tauri 环境（测试/浏览器）无拖放通道 */
+      }
+    })();
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [addReference]);
 
   const onInterrupt = useCallback(async () => {
     if (!activeSessionId) {
@@ -1133,7 +1247,46 @@ export function SessionWorkbench({
             </p>
           ) : null}
 
-          <div className="composer" data-testid="composer">
+          <div className="composer" data-testid="composer" ref={composerRef}>
+            {/* M7-06/ADR-024 A-3：随消息附带的文件引用（拖拽 / `@` 入口；锚点
+                `file-reference`）。**引用 ≠ 预授权**：Agent 读取仍走 fs.read 权限门。 */}
+            <div
+              className="composer-references"
+              data-testid="file-reference"
+              data-count={pendingReferences.length}
+            >
+              {pendingReferences.length === 0 ? (
+                <span className="composer-references-hint">
+                  引用：拖入文件，或在空输入框按 @ 选择
+                </span>
+              ) : (
+                <ul className="composer-reference-list">
+                  {pendingReferences.map((reference) => (
+                    <li
+                      key={reference.path}
+                      className="composer-reference-chip"
+                      data-testid="file-reference-chip"
+                      data-path={reference.path}
+                      data-kind={reference.kind}
+                    >
+                      <span className="composer-reference-name">
+                        {reference.path.split(/[\\/]/).pop() ?? reference.path}
+                      </span>
+                      <button
+                        type="button"
+                        data-testid="file-reference-remove"
+                        data-path={reference.path}
+                        disabled={sending}
+                        onClick={() => removeReference(reference.path)}
+                        aria-label={`移除引用 ${reference.path}`}
+                      >
+                        ×
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
             {/* M3-10/ADR-010：思考深度 5 档滑块（关闭/低/高/极高/最大，默认高）；
                 运行时未声明 `thinking_depth` 能力时滑块置灰 + tooltip。 */}
             <div className="thinking-control">
@@ -1219,6 +1372,12 @@ export function SessionWorkbench({
                 if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
                   event.preventDefault();
                   void onSend();
+                  return;
+                }
+                // M7-06/ADR-024：`@` 入口（空输入框按 @ → 文件选择器；非空不劫持）。
+                if (event.key === "@" && draft.length === 0 && !event.ctrlKey && !event.metaKey) {
+                  event.preventDefault();
+                  void onPickReference();
                 }
               }}
             />

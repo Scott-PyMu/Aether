@@ -534,3 +534,79 @@ describe("ClaudeCodeAdapter：思考深度（M3-10 / ADR-010）", () => {
     }
   });
 });
+
+describe("ClaudeCodeAdapter：档位投影与引用注入（M7-06 / ADR-024）", () => {
+  it("session.create.permission_mode 投影为 --permission-mode（三档逐条）", { timeout: 60_000 }, async () => {
+    const invocationFile = join(mkdtempSync(join(tmpdir(), "fake-claude-m706-")), "invocations.jsonl");
+    const previous = process.env.FAKE_CLAUDE_INVOCATION_FILE;
+    process.env.FAKE_CLAUDE_INVOCATION_FILE = invocationFile;
+    try {
+      const harness = new Harness();
+      await harness.start();
+      const modes: Array<[string, string]> = [
+        ["read_only", "plan"],
+        ["workspace_write", "acceptEdits"],
+        ["danger_full_access", "bypassPermissions"],
+      ];
+      for (const [mode] of modes) {
+        const created = await harness.createSession({ permission_mode: mode });
+        const runId = await harness.sendMessage(String(created["session_id"]), "chat");
+        expect(await harness.waitTerminal(runId)).toBe("run.completed");
+      }
+      const records = readFileSync(invocationFile, "utf8")
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => JSON.parse(line) as { argv: string[] });
+      expect(records).toHaveLength(3);
+      for (const [index, [mode, expected]] of modes.entries()) {
+        const argv = records[index]?.argv ?? [];
+        const flag = argv.indexOf("--permission-mode");
+        expect(flag, "argv 必须携带 --permission-mode（mode=%s）").toBeGreaterThanOrEqual(0);
+        expect(argv[flag + 1], `档位 ${mode} 投影`).toBe(expected);
+      }
+    } finally {
+      if (previous === undefined) delete process.env.FAKE_CLAUDE_INVOCATION_FILE;
+      else process.env.FAKE_CLAUDE_INVOCATION_FILE = previous;
+    }
+  });
+
+  it("session.send.references → 提示词前缀引用块（逐字形态）", { timeout: 40_000 }, async () => {
+    const invocationFile = join(mkdtempSync(join(tmpdir(), "fake-claude-ref-")), "invocations.jsonl");
+    const previous = process.env.FAKE_CLAUDE_INVOCATION_FILE;
+    process.env.FAKE_CLAUDE_INVOCATION_FILE = invocationFile;
+    try {
+      const harness = new Harness();
+      await harness.start();
+      const created = await harness.createSession();
+      const ack = await harness.requestResult("session.send", {
+        session_id: String(created["session_id"]),
+        client_msg_id: "m7-06-ref-1",
+        text: "读一下引用文件",
+        references: [
+          { path: "/ws/a.txt", kind: "file" },
+          { path: "/ws/dir", kind: "directory" },
+        ],
+      });
+      expect(await harness.waitTerminal(String(ack["run_id"]))).toBe("run.completed");
+      const records = readFileSync(invocationFile, "utf8")
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => JSON.parse(line) as { prompt: string });
+      expect(records).toHaveLength(1);
+      expect(records[0]?.prompt).toBe(
+        [
+          "<aether-references>",
+          "- file: /ws/a.txt",
+          "- directory: /ws/dir",
+          "以上为随消息附带的文件引用，按需读取",
+          "</aether-references>",
+          "",
+          "读一下引用文件",
+        ].join("\n"),
+      );
+    } finally {
+      if (previous === undefined) delete process.env.FAKE_CLAUDE_INVOCATION_FILE;
+      else process.env.FAKE_CLAUDE_INVOCATION_FILE = previous;
+    }
+  });
+});

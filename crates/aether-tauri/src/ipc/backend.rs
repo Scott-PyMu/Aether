@@ -13,7 +13,8 @@ use super::dto::{
     ArtifactsListRequest, AuditExportRequest, AuditQueryRequest, BackupCreateRequest,
     BackupRestoreRequest, ExportDiagnosticsRequest, MessagesPageRequest, PermissionResolveRequest,
     PermissionsPendingRequest, ProviderCreateRequest, ProviderDeleteRequest, ProviderModelAddRequest,
-    ProviderModelToggleRequest, ProviderToggleRequest, ProviderUpdateRequest, ProvidersListRequest,
+    ProviderModelToggleRequest, ProviderModelsFetchRequest, ProviderTestRequest, ProviderToggleRequest,
+    ProviderUpdateRequest, ProvidersListRequest,
     RuleAddRequest, RuleDeleteRequest, RuleToggleRequest, RuleUpdateRequest, RunRetryRequest,
     RuntimeDisableRequest, RuntimeEnableRequest, RuntimeRetryRequest, SessionCreateRequest,
     SessionExportRequest,
@@ -248,6 +249,20 @@ pub trait IpcBackend: Send + Sync + 'static {
         _request: &ProviderModelToggleRequest,
     ) -> Result<Value, IpcError> {
         Err(IpcError::not_implemented("provider_model_toggle"))
+    }
+
+    /// M7-06/ADR-024：供应商连通性测试（真实网络请求；总超时 10s / 连接 5s；
+    /// 五路径错误映射见 ADR-024 §2.1-3）。
+    fn provider_test(&self, _request: &ProviderTestRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("provider_test"))
+    }
+
+    /// M7-06/ADR-024：从供应商获取模型列表（归一化 + 幂等 upsert）。
+    fn provider_models_fetch(
+        &self,
+        _request: &ProviderModelsFetchRequest,
+    ) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("provider_models_fetch"))
     }
 
     fn export_diagnostics(

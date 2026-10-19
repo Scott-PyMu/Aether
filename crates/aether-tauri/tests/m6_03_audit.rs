@@ -1,4 +1,4 @@
-//! M6-03 集成测试：完整审计查询与导出（设计 D9/SE-03、ADR-023、ADR-018）。
+﻿//! M6-03 集成测试：完整审计查询与导出（设计 D9/SE-03、ADR-023、ADR-018）。
 //!
 //! 覆盖：
 //! - DoD1 记录完备性：工具调用终态（`tool.call_completed` / `tool.call_failed`）经真实
@@ -908,6 +908,7 @@ fn protocol_reported_tool_calls_are_fully_audited_end_to_end() {
                 text: text.to_owned(),
                 client_msg_id: ulid::Ulid::new().to_string(),
                 thinking_depth: None,
+            references: Vec::new(),
             })
             .expect("session_send");
         let run_id = ack["run_id"].as_str().expect("run_id").to_owned();

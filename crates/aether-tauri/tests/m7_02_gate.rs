@@ -1,4 +1,4 @@
-//! M7-02：并发闸门（ADR-022 附录 A-5/A-6；DoD3/DoD4）。
+﻿//! M7-02：并发闸门（ADR-022 附录 A-5/A-6；DoD3/DoD4）。
 //!
 //! 覆盖：
 //! - 参数注入：`clamp(floor(free_ram_gb/1.5), 2, 10)`（8GB 模拟 = 7.0 → 4；16GB → 10）；
@@ -214,7 +214,8 @@ fn send_message(h: &Harness, session_id: &str, client_id: &str) -> Value {
             text: "hi".to_owned(),
             client_msg_id: client_id.to_owned(),
             thinking_depth: None,
-        })
+        references: Vec::new(),
+            })
         .expect("发送")
 }
 
@@ -376,7 +377,8 @@ fn waiting_slot_and_queued_interrupt_follow_a6_matrix() {
             text: "third".to_owned(),
             client_msg_id: client_id(103),
             thinking_depth: None,
-        })
+        references: Vec::new(),
+            })
         .expect_err("等待槽已满");
     assert!(error.message.contains("session_busy"), "{}", error.message);
 

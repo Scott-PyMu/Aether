@@ -22,7 +22,7 @@ import {
   ClaudeCodeAdapter,
   DEFAULT_RUN_TIMEOUT_MS,
 } from "./claude-adapter";
-import type { ClaudeCliConfig } from "./claude-cli";
+import { ensureIsolatedSettings, type ClaudeCliConfig } from "./claude-cli";
 
 /** D5 spawn 注入形式（单参数 `--launch-token=<ULID>`）。 */
 export const LAUNCH_TOKEN_FLAG = "--launch-token=";
@@ -139,6 +139,15 @@ export async function runCli(streams: CliStreams): Promise<void> {
   }
 
   announceLaunchToken(options.launchToken, streams.stderr);
+
+  // M7-06/ADR-024：消费映射生效时隔离用户级 settings（其 env 会覆盖注入的 base URL）。
+  const isolated = ensureIsolatedSettings(options.cli, process.env);
+  if (isolated !== undefined && options.cli.settingsFile === undefined) {
+    options.cli.settingsFile = isolated;
+    streams.stderr(
+      `[claude] 供应商消费映射生效：已启用隔离 settings（${isolated}；不含密钥值）`,
+    );
+  }
 
   const adapter = new ClaudeCodeAdapter({
     lines: streams.lines,

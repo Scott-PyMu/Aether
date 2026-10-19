@@ -61,6 +61,8 @@ interface FakeProviders {
   toggle: ReturnType<typeof vi.fn>;
   addModel: ReturnType<typeof vi.fn>;
   toggleModel: ReturnType<typeof vi.fn>;
+  test: ReturnType<typeof vi.fn>;
+  fetchModels: ReturnType<typeof vi.fn>;
 }
 
 /** 供应商存储替身（列表可变；各命令为 spy 供断言）。 */
@@ -138,8 +140,26 @@ function fakeProvidersIpc(seed: ProviderEntry[] = []): FakeProviders {
     }
     return { provider_id: providerId, model_id: modelId, enabled };
   });
+  // M7-06/ADR-024：真实连通性测试与模型获取（测试按需 mockResolvedValue/mockRejectedValue）。
+  const test = vi.fn(async (providerId: string) => ({
+    provider_id: providerId,
+    ok: true,
+    status: 200,
+    latency_ms: 42,
+    models_count: 2,
+  }));
+  const fetchModels = vi.fn(async (providerId: string) => ({
+    provider_id: providerId,
+    ok: true,
+    status: 200,
+    latency_ms: 42,
+    fetched: 2,
+    added: 1,
+    refreshed: 1,
+    models: ["m-1", "m-2"],
+  }));
   return {
-    ipc: { list, create, update, remove, toggle, addModel, toggleModel } as ProvidersIpc,
+    ipc: { list, create, update, remove, toggle, addModel, toggleModel, test, fetchModels },
     store,
     list,
     create,
@@ -148,6 +168,8 @@ function fakeProvidersIpc(seed: ProviderEntry[] = []): FakeProviders {
     toggle,
     addModel,
     toggleModel,
+    test,
+    fetchModels,
   };
 }
 
@@ -278,25 +300,65 @@ describe("ProvidersPage（M3-11 DoD3/4/5）", () => {
     expect(providers.update.mock.calls[2]?.[0]?.api_key).toBe("");
   });
 
-  it("DoD5：测试连接仅 toast，无 IPC 调用、无网络请求", async () => {
+  // M7-06/ADR-024 设计变更驱动（原 M3-11 DoD5 断言：测试连接仅 toast、无 IPC）：
+  // `provider_test` 已实做（真实网络调用）；本用例改为断言真实命令调用与三态锚点。
+  it("M7-06：测试连接真实调用 provider_test（成功 → provider-test-result/ok）", async () => {
     const providers = fakeProvidersIpc([providerEntry()]);
-    const fetchSpy = vi.fn();
-    vi.stubGlobal("fetch", fetchSpy);
-    try {
-      render(<ProvidersPage ipc={providers.ipc} />);
+    render(<ProvidersPage ipc={providers.ipc} />);
+    await screen.findAllByTestId("provider-card", {}, WAIT);
+    fireEvent.click(screen.getByTestId("provider-edit"));
+    fireEvent.click(await screen.findByTestId("provider-test", {}, WAIT));
+    const result = await screen.findByTestId("provider-test-result", {}, WAIT);
+    expect(result.getAttribute("data-status")).toBe("ok");
+    expect(result.textContent).toContain("连通性测试通过");
+    expect(providers.test).toHaveBeenCalledWith(PROVIDER_A);
+    // 旧 toast 锚点已废止（ADR-014 附录 F-2）。
+    expect(screen.queryByTestId("provider-test-notice")).toBeNull();
+  });
+
+  it("M7-06：测试连接三态（auth_failed / unreachable / timeout）按 data-status 呈现", async () => {
+    for (const [code, message, expected] of [
+      ["provider_auth_failed", "API Key 无效或被拒绝：服务端返回 401", "auth_failed"],
+      ["provider_unreachable", "无法连接供应商（检查网络或 Base URL）：连接失败", "unreachable"],
+      ["provider_unreachable", "无法连接供应商（检查网络或 Base URL）：请求超时（总超时 10s / 连接 5s）", "timeout"],
+    ] as const) {
+      const providers = fakeProvidersIpc([providerEntry()]);
+      providers.test.mockRejectedValueOnce({ code, message });
+      const view = render(<ProvidersPage ipc={providers.ipc} />);
       await screen.findAllByTestId("provider-card", {}, WAIT);
       fireEvent.click(screen.getByTestId("provider-edit"));
-      const listCallsBefore = providers.list.mock.calls.length;
       fireEvent.click(await screen.findByTestId("provider-test", {}, WAIT));
-      const notice = await screen.findByTestId("provider-test-notice", {}, WAIT);
-      expect(notice.textContent).toContain("连通性测试将在 P1 开放");
-      expect(providers.list.mock.calls.length).toBe(listCallsBefore);
-      expect(providers.create).not.toHaveBeenCalled();
-      expect(providers.update).not.toHaveBeenCalled();
-      expect(fetchSpy).not.toHaveBeenCalled();
-    } finally {
-      vi.unstubAllGlobals();
+      const result = await screen.findByTestId("provider-test-result", {}, WAIT);
+      expect(result.getAttribute("data-status")).toBe(expected);
+      view.unmount();
     }
+  });
+
+  it("M7-06：provider_error 等其余错误走错误块（data-code），不渲染三态锚点", async () => {
+    const providers = fakeProvidersIpc([providerEntry()]);
+    providers.test.mockRejectedValueOnce({
+      code: "provider_error",
+      message: "供应商返回错误（500）：供应商端点拒绝或异常",
+    });
+    render(<ProvidersPage ipc={providers.ipc} />);
+    await screen.findAllByTestId("provider-card", {}, WAIT);
+    fireEvent.click(screen.getByTestId("provider-edit"));
+    fireEvent.click(await screen.findByTestId("provider-test", {}, WAIT));
+    const error = await screen.findByTestId("provider-error", {}, WAIT);
+    expect(error.getAttribute("data-code")).toBe("provider_error");
+    expect(screen.queryByTestId("provider-test-result")).toBeNull();
+  });
+
+  it("M7-06：从供应商获取模型 → provider_models_fetch + 回执 + 表单模型刷新", async () => {
+    const providers = fakeProvidersIpc([providerEntry()]);
+    render(<ProvidersPage ipc={providers.ipc} />);
+    await screen.findAllByTestId("provider-card", {}, WAIT);
+    fireEvent.click(screen.getByTestId("provider-edit"));
+    await screen.findAllByTestId("provider-model-item", {}, WAIT);
+    fireEvent.click(await screen.findByTestId("provider-models-fetch", {}, WAIT));
+    const notice = await screen.findByTestId("provider-models-notice", {}, WAIT);
+    expect(notice.textContent).toContain("已获取 2 个模型");
+    expect(providers.fetchModels).toHaveBeenCalledWith(PROVIDER_A);
   });
 
   it("DoD6（供应商面）：模型添加与启停走命令面", async () => {
@@ -408,6 +470,8 @@ describe("ModelSelector（M3-11 DoD6）", () => {
     expect(typeof productionProvidersIpc.toggle).toBe("function");
     expect(typeof productionProvidersIpc.addModel).toBe("function");
     expect(typeof productionProvidersIpc.toggleModel).toBe("function");
+    expect(typeof productionProvidersIpc.test).toBe("function");
+    expect(typeof productionProvidersIpc.fetchModels).toBe("function");
   });
 });
 

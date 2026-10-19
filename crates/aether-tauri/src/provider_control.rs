@@ -28,12 +28,17 @@ use serde_json::{json, Value};
 
 use crate::ipc::dto::{
     ProviderCreateRequest, ProviderDeleteRequest, ProviderModelAddRequest,
-    ProviderModelToggleRequest, ProviderToggleRequest, ProviderUpdateRequest, ProvidersListRequest,
+    ProviderModelToggleRequest, ProviderModelsFetchRequest, ProviderTestRequest,
+    ProviderToggleRequest, ProviderUpdateRequest, ProvidersListRequest,
 };
 use crate::ipc::error::IpcError;
+use crate::provider_connectivity;
 
 /// 供应商命令硬超时（本地存储写 + keyring 调用；无网络路径）。
 pub const PROVIDER_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
+/// 网络类供应商命令硬超时（M7-06：HTTP 总超时 10s + 前置读取/落库余量；
+/// 超时值按常量级调参登记，AGENTS §3）。
+pub const PROVIDER_NETWORK_COMMAND_TIMEOUT: Duration = Duration::from_secs(25);
 
 /// 降级加密文件路径（A3；正常路径不创建：仅 keyring 不可用且提供口令时挂载）。
 pub const SECRETS_FILE_NAME: &str = "secrets.enc";
@@ -89,6 +94,9 @@ pub struct ProviderControl {
     secrets: Option<Arc<dyn SecretStore>>,
     handle: tokio::runtime::Handle,
     timeout: Duration,
+    /// 连通性测试超时（连接/总；缺省 = ADR-024 A-5 常量；测试可注入短超时）。
+    network_connect_timeout: Duration,
+    network_total_timeout: Duration,
 }
 
 impl ProviderControl {
@@ -104,6 +112,8 @@ impl ProviderControl {
             secrets,
             handle,
             timeout: PROVIDER_COMMAND_TIMEOUT,
+            network_connect_timeout: provider_connectivity::PROVIDER_HTTP_CONNECT_TIMEOUT,
+            network_total_timeout: provider_connectivity::PROVIDER_HTTP_TOTAL_TIMEOUT,
         }
     }
 
@@ -114,8 +124,30 @@ impl ProviderControl {
         self
     }
 
+    /// 覆盖连通性测试超时（测试/故障注入；生产常量见 ADR-024 A-5）。
+    #[must_use]
+    pub fn with_network_timeouts(mut self, connect: Duration, total: Duration) -> Self {
+        self.network_connect_timeout = connect;
+        self.network_total_timeout = total;
+        self
+    }
+
+    /// 网络类命令的桥接超时（HTTP 总超时 + 前置读取/落库余量）。
+    fn network_command_timeout(&self) -> Duration {
+        self.network_total_timeout + Duration::from_secs(15)
+    }
+
     /// 同步桥接：spawn 到核心运行时并等待（与 `SessionBackend::call` 同口径）。
     fn call<T, F>(&self, future: F) -> Result<T, IpcError>
+    where
+        T: Send + 'static,
+        F: Future<Output = Result<T, IpcError>> + Send + 'static,
+    {
+        self.call_with_timeout(self.timeout, future)
+    }
+
+    /// 带显式超时的同步桥接（M7-06：网络命令用 [`PROVIDER_NETWORK_COMMAND_TIMEOUT`]）。
+    fn call_with_timeout<T, F>(&self, timeout: Duration, future: F) -> Result<T, IpcError>
     where
         T: Send + 'static,
         F: Future<Output = Result<T, IpcError>> + Send + 'static,
@@ -124,12 +156,9 @@ impl ProviderControl {
         self.handle.spawn(async move {
             let _ = sender.send(future.await);
         });
-        receiver.recv_timeout(self.timeout).map_err(|_| {
-            IpcError::internal(format!(
-                "供应商命令超时（>{:?}，核心未在预算内返回）",
-                self.timeout
-            ))
-        })?
+        receiver
+            .recv_timeout(timeout)
+            .map_err(|_| IpcError::internal(format!("供应商命令超时（>{timeout:?}，核心未在预算内返回）")))?
     }
 
     /// `providers_list`：供应商 + 模型清单（按 `created_at` 升序）。
@@ -357,7 +386,8 @@ impl ProviderControl {
         })
     }
 
-    /// `provider_model_add`：新增模型（默认启用；重复 → `invalid_value`）。
+    /// `provider_model_add`：新增模型（默认启用）；M7-06/ADR-024 §2.1-4 起**幂等
+    /// upsert**——已存在 `(provider_id, model_id)` 仅刷新 `display_name`（不重复报错）。
     pub fn provider_model_add(&self, request: &ProviderModelAddRequest) -> Result<Value, IpcError> {
         let reads = self.reads.clone();
         let write = self.write.clone();
@@ -370,6 +400,36 @@ impl ProviderControl {
                 .await
                 .map_err(|error| IpcError::internal(format!("供应商读取失败：{error}")))?
                 .ok_or_else(|| IpcError::provider_not_found(&provider_id))?;
+            // 幂等 upsert 已存在分支（ADR-024 DoD7「`provider_model_add` 幂等」）：
+            // 仅刷新 display_name（enabled/created_at 不变）。
+            if let Some(existing) = reads
+                .provider_model(&provider_id, &model_id)
+                .await
+                .map_err(|error| IpcError::internal(format!("供应商模型读取失败：{error}")))?
+            {
+                if existing.display_name != display_name {
+                    let outcome = write
+                        .execute(StoreCommand::RefreshProviderModelDisplayName {
+                            provider_id: provider_id.clone(),
+                            model_id: model_id.clone(),
+                            display_name: display_name.clone(),
+                        })
+                        .await
+                        .map_err(|error| IpcError::internal(format!("模型刷新落库失败：{error}")))?;
+                    if let StoreOutcome::Applied { affected } = outcome {
+                        if affected == 0 {
+                            return Err(IpcError::internal("模型刷新未影响任何行（不变量破坏）"));
+                        }
+                    }
+                }
+                return Ok(json!({
+                    "id": existing.id,
+                    "model_id": model_id,
+                    "display_name": display_name,
+                    "enabled": existing.enabled,
+                    "refreshed": true,
+                }));
+            }
             let model = ProviderModelRecord {
                 id: ulid::Ulid::new().to_string(),
                 provider_id: provider_id.clone(),
@@ -384,16 +444,22 @@ impl ProviderControl {
                 })
                 .await;
             match outcome {
-                Ok(StoreOutcome::Applied { affected }) if affected > 0 => Ok(model_json(&model)),
+                Ok(StoreOutcome::Applied { affected }) if affected > 0 => Ok(json!({
+                    "id": model.id,
+                    "model_id": model.model_id,
+                    "display_name": model.display_name,
+                    "enabled": model.enabled,
+                    "refreshed": false,
+                })),
                 Ok(other) => Err(IpcError::internal(format!(
                     "供应商模型落库返回了非预期结果：{other:?}"
                 ))),
-                Err(StoreError::DuplicateProviderModel {
-                    provider_id,
-                    model_id,
-                }) => Err(IpcError::invalid_value(format!(
-                    "模型已存在（provider_id={provider_id}, model_id={model_id}）；不重复添加"
-                ))),
+                // 并发竞争（读后写窗口）：独立写入者已插入 → 退化为刷新分支（幂等）。
+                Err(StoreError::DuplicateProviderModel { .. }) => Ok(json!({
+                    "model_id": model_id,
+                    "display_name": model.display_name,
+                    "refreshed": true,
+                })),
                 Err(error) => Err(IpcError::internal(format!("供应商模型落库失败：{error}"))),
             }
         })
@@ -440,6 +506,201 @@ impl ProviderControl {
             }))
         })
     }
+
+    /// `provider_test`（M7-06/ADR-024 §2.1-3）：真实连通性测试。
+    ///
+    /// 前置：`api_key_ref` 存在且可读（缺失/不可读 → `invalid_value`，field=`api_key_ref`，
+    /// **不发任何请求**）；请求经 [`crate::provider_connectivity`]（总超时 10s / 连接 5s）。
+    pub fn provider_test(&self, request: &ProviderTestRequest) -> Result<Value, IpcError> {
+        let reads = self.reads.clone();
+        let secrets = self.secrets.clone();
+        let provider_id = request.provider_id.clone();
+        let connect_timeout = self.network_connect_timeout;
+        let total_timeout = self.network_total_timeout;
+        self.call_with_timeout(self.network_command_timeout(), async move {
+            let context = resolve_network_context(&reads, &secrets, &provider_id).await?;
+            let outcome = run_connectivity(context, connect_timeout, total_timeout).await?;
+            Ok(json!({
+                "provider_id": provider_id,
+                "ok": true,
+                "status": outcome.status,
+                "latency_ms": outcome.latency_ms,
+                "models_count": outcome.models.len(),
+            }))
+        })
+    }
+
+    /// `provider_models_fetch`（M7-06/ADR-024 §2.1-4）：从供应商获取模型并幂等 upsert。
+    ///
+    /// 归一化：`trim` / 空串剔除 / 去重（保序）/ 长度 ≤128（超限与重复计入 `skipped`）；
+    /// 已存在 `(provider_id, model_id)` 仅刷新 `display_name`（`enabled` 不变）。
+    pub fn provider_models_fetch(
+        &self,
+        request: &ProviderModelsFetchRequest,
+    ) -> Result<Value, IpcError> {
+        let reads = self.reads.clone();
+        let write = self.write.clone();
+        let secrets = self.secrets.clone();
+        let provider_id = request.provider_id.clone();
+        let connect_timeout = self.network_connect_timeout;
+        let total_timeout = self.network_total_timeout;
+        self.call_with_timeout(self.network_command_timeout(), async move {
+            let context = resolve_network_context(&reads, &secrets, &provider_id).await?;
+            let outcome = run_connectivity(context, connect_timeout, total_timeout).await?;
+            let fetched = outcome.models;
+            let existing: std::collections::HashMap<String, ProviderModelRecord> = reads
+                .provider_models()
+                .await
+                .map_err(|error| IpcError::internal(format!("供应商模型读取失败：{error}")))?
+                .into_iter()
+                .filter(|model| model.provider_id == provider_id)
+                .map(|model| (model.model_id.clone(), model))
+                .collect();
+            let mut added = 0usize;
+            let mut refreshed = 0usize;
+            for model_id in &fetched {
+                if let Some(record) = existing.get(model_id) {
+                    if record.display_name != *model_id {
+                        let outcome = write
+                            .execute(StoreCommand::RefreshProviderModelDisplayName {
+                                provider_id: provider_id.clone(),
+                                model_id: model_id.clone(),
+                                display_name: model_id.clone(),
+                            })
+                            .await
+                            .map_err(|error| {
+                                IpcError::internal(format!("模型刷新落库失败：{error}"))
+                            })?;
+                        if let StoreOutcome::Applied { affected } = outcome {
+                            if affected == 0 {
+                                return Err(IpcError::internal(
+                                    "模型刷新未影响任何行（不变量破坏）",
+                                ));
+                            }
+                        }
+                    }
+                    refreshed += 1;
+                    continue;
+                }
+                let model = ProviderModelRecord {
+                    id: ulid::Ulid::new().to_string(),
+                    provider_id: provider_id.clone(),
+                    model_id: model_id.clone(),
+                    display_name: model_id.clone(),
+                    enabled: true,
+                    created_at: now_ms(),
+                };
+                match write
+                    .execute(StoreCommand::InsertProviderModel { model })
+                    .await
+                {
+                    Ok(StoreOutcome::Applied { affected }) if affected > 0 => added += 1,
+                    Ok(other) => {
+                        return Err(IpcError::internal(format!(
+                            "模型落库返回了非预期结果：{other:?}"
+                        )))
+                    }
+                    // 并发竞争：独立写入者已插入 → 计刷新（幂等）。
+                    Err(StoreError::DuplicateProviderModel { .. }) => refreshed += 1,
+                    Err(error) => {
+                        return Err(IpcError::internal(format!("模型落库失败：{error}")))
+                    }
+                }
+            }
+            Ok(json!({
+                "provider_id": provider_id,
+                "ok": true,
+                "status": outcome.status,
+                "latency_ms": outcome.latency_ms,
+                "fetched": fetched.len(),
+                "added": added,
+                "refreshed": refreshed,
+                "models": fetched,
+            }))
+        })
+    }
+}
+
+/// 网络命令上下文（已解析密钥值；只驻留本次调用内存，不落盘/不日志）。
+struct NetworkContext {
+    provider_type: String,
+    base_url: Option<String>,
+    api_key: String,
+}
+
+/// 前置解析：供应商 → `api_key_ref`（存在且可读）→ 密钥值（阻塞读取走 `spawn_blocking`）。
+///
+/// 缺失/不可读 → `invalid_value`（field=`api_key_ref`；**不发任何请求**，ADR-024 §2.1-2）。
+async fn resolve_network_context(
+    reads: &ReadPool,
+    secrets: &Option<Arc<dyn SecretStore>>,
+    provider_id: &str,
+) -> Result<NetworkContext, IpcError> {
+    let provider = reads
+        .provider(provider_id)
+        .await
+        .map_err(|error| IpcError::internal(format!("供应商读取失败：{error}")))?
+        .ok_or_else(|| IpcError::provider_not_found(provider_id))?;
+    let api_key_ref = provider
+        .api_key_ref
+        .clone()
+        .filter(|reference| !reference.is_empty())
+        .ok_or_else(|| {
+            IpcError::at_field(
+                crate::ipc::error::IpcErrorCode::InvalidValue,
+                "api_key_ref",
+                format!("供应商 {provider_id} 未配置密钥；请先配置 API Key 后重试（不发任何请求）"),
+            )
+        })?;
+    let reference = KeychainRef::parse(&api_key_ref).map_err(|error| {
+        IpcError::at_field(
+            crate::ipc::error::IpcErrorCode::InvalidValue,
+            "api_key_ref",
+            format!("密钥引用不可用（{error}）；请重新配置 API Key"),
+        )
+    })?;
+    let store = secrets.clone().ok_or_else(|| {
+        IpcError::at_field(
+            crate::ipc::error::IpcErrorCode::InvalidValue,
+            "api_key_ref",
+            secrets_unavailable().message,
+        )
+    })?;
+    // 密钥读取为阻塞调用（OS 凭据库 / 加密文件）→ spawn_blocking；错误不回显引用细节。
+    let api_key = tokio::task::spawn_blocking(move || store.get(&reference))
+        .await
+        .map_err(|error| IpcError::internal(format!("密钥读取任务失败：{error}")))?
+        .map_err(|_| {
+            IpcError::at_field(
+                crate::ipc::error::IpcErrorCode::InvalidValue,
+                "api_key_ref",
+                "密钥不可读（凭据库条目缺失或不可用）；请重新配置 API Key",
+            )
+        })?;
+    Ok(NetworkContext {
+        provider_type: provider.provider_type,
+        base_url: provider.base_url,
+        api_key: api_key.expose().to_owned(),
+    })
+}
+
+/// 发起连通性测试（HTTP 为阻塞调用 → `spawn_blocking`；密钥值只驻留本任务内存）。
+async fn run_connectivity(
+    context: NetworkContext,
+    connect_timeout: Duration,
+    total_timeout: Duration,
+) -> Result<provider_connectivity::ConnectivityOutcome, IpcError> {
+    tokio::task::spawn_blocking(move || {
+        provider_connectivity::test_connection_with_timeouts(
+            &context.provider_type,
+            context.base_url.as_deref(),
+            &context.api_key,
+            connect_timeout,
+            total_timeout,
+        )
+    })
+    .await
+    .map_err(|error| IpcError::internal(format!("连通性测试任务失败：{error}")))?
 }
 
 /// 供应商类型枚举 → 落库字符串（snake_case，与 ADR-010 附录 A 注释一致）。

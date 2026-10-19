@@ -1,4 +1,4 @@
-//! M3-02：会话命令与消息分页后端集成测试。
+﻿//! M3-02：会话命令与消息分页后端集成测试。
 //!
 //! 覆盖：
 //! - `messages_page`：按 `last_seq` 分页（升序、`complete` 判定，含
@@ -426,7 +426,8 @@ fn session_create_persists_model_and_send_interrupt_dispose_are_wired() {
             text: "hello workbench".to_owned(),
             client_msg_id: "01J8ZQ5R0N7W9Y8X6V4T2S0K1N".to_owned(),
             thinking_depth: None,
-        })
+        references: Vec::new(),
+            })
         .expect("session_send");
     let run_id = ack["run_id"].as_str().expect("run_id").to_owned();
     assert_eq!(ack["queued"], false);

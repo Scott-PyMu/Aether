@@ -1,4 +1,4 @@
-//! M7-03：`session_pause` / `session_resume` 命令层与真实夹具进程（ADR-017；DoD1–DoD3）。
+﻿//! M7-03：`session_pause` / `session_resume` 命令层与真实夹具进程（ADR-017；DoD1–DoD3）。
 //!
 //! 环境：`AETHER_FIXTURE_BIN=<aether-adapter-fixture>`（缺省 → SKIP；`AETHER_REQUIRE_FIXTURE=1`
 //! 时缺失视为失败——经 `pnpm verify:m7-03` 构建并注入）。
@@ -195,7 +195,8 @@ fn send(h: &Harness, session_id: &str, text: &str, client_msg_id: &str) -> Value
             text: text.to_owned(),
             client_msg_id: client_msg_id.to_owned(),
             thinking_depth: None,
-        })
+        references: Vec::new(),
+            })
         .expect("发送消息")
 }
 
@@ -338,7 +339,8 @@ fn pause_interrupts_and_resume_replays_through_fixture() {
             text: "暂停中".to_owned(),
             client_msg_id: "01J8ZQ5R0N7W9Y8X6V4T2S0K31".to_owned(),
             thinking_depth: None,
-        })
+        references: Vec::new(),
+            })
         .expect_err("paused 态发送必须拒绝");
     assert_eq!(error.code.as_str(), "invalid_value");
     assert!(error.message.contains("session_paused"));

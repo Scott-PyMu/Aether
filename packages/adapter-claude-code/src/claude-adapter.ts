@@ -20,7 +20,9 @@ import {
   Adapter,
   ERROR_CODES,
   RpcError,
+  composePromptWithReferences,
   isUlid,
+  parseReferences,
   ulid,
   type AdapterRuntimeInfo,
   type EnvelopeContext,
@@ -29,6 +31,7 @@ import { randomUUID } from "node:crypto";
 
 import {
   ClaudeCliRun,
+  claudePermissionMode,
   thinkingBudgetForDepth,
   type ClaudeCliConfig,
   type KillTreeFn,
@@ -134,6 +137,11 @@ interface ClaudeSession {
   model?: string;
   /** M3-10/ADR-010：会话级思考深度（0–4；override 优先，仅本次 run）。 */
   thinkingDepth?: number;
+  /**
+   * M7-06/ADR-024 附录 A-4：档位投影后的 CLI 权限模式（仅新会话生效；
+   * 在途会话保持创建时的投影参数——`session.create` 时一次判定）。
+   */
+  permissionMode?: string;
   lastInit: ClaudeInitEvent | null;
   clientMsgIds: Map<string, string>;
   runs: Map<string, ClaudeRunState>;
@@ -257,6 +265,7 @@ export class ClaudeCodeAdapter {
       model?: unknown;
       native_id?: unknown;
       thinking_depth?: unknown;
+      permission_mode?: unknown;
     };
     const requested = input.native_id;
     if (requested !== undefined && !isUuid(requested)) {
@@ -268,6 +277,8 @@ export class ClaudeCodeAdapter {
     const nativeId = isUuid(requested) ? requested : randomUUID();
     const model = typeof input.model === "string" && input.model.length > 0 ? input.model : undefined;
     const thinkingDepth = parseThinkingDepth(input.thinking_depth);
+    // M7-06/ADR-024 A-4：档位 → `--permission-mode` 投影（仅新会话生效；未知档位忽略）。
+    const permissionMode = claudePermissionMode(input.permission_mode);
     const session: ClaudeSession = {
       id: nativeId,
       nativeId,
@@ -275,6 +286,7 @@ export class ClaudeCodeAdapter {
       nativeCreated: isUuid(requested),
       ...(model !== undefined ? { model } : {}),
       ...(thinkingDepth !== undefined ? { thinkingDepth } : {}),
+      ...(permissionMode !== undefined ? { permissionMode } : {}),
       lastInit: null,
       clientMsgIds: new Map(),
       runs: new Map(),
@@ -297,6 +309,7 @@ export class ClaudeCodeAdapter {
       text?: unknown;
       run_id?: unknown;
       thinking_depth?: unknown;
+      references?: unknown;
     };
     const sessionId = typeof input.session_id === "string" ? input.session_id : "";
     const session = this.sessions.get(sessionId);
@@ -333,12 +346,20 @@ export class ClaudeCodeAdapter {
     // 否则会话级值；未声明档位时不注入预算（CLI 默认）。
     const thinkingDepth = parseThinkingDepth(input.thinking_depth) ?? session.thinkingDepth;
     const thinkingBudget = thinkingBudgetForDepth(thinkingDepth);
+    // M7-06/ADR-024 A-3：统一映射 = 消息前缀引用块（核心不读内容；引用 ≠ 预授权）。
+    const prompt = composePromptWithReferences(input.text, parseReferences(input.references));
     run.cli = new ClaudeCliRun({
-      config: { ...this.options.cli, ...(session.model ? { model: session.model } : {}) },
+      config: {
+        ...this.options.cli,
+        ...(session.model ? { model: session.model } : {}),
+        ...(session.permissionMode !== undefined
+          ? { permissionMode: session.permissionMode }
+          : {}),
+      },
       spec: {
         nativeId: session.nativeId,
         resume: session.resumed || session.nativeCreated,
-        prompt: input.text,
+        prompt,
         timeoutMs: this.runTimeoutMs,
         ...(thinkingBudget !== undefined ? { thinkingBudget } : {}),
       },

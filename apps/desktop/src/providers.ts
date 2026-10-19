@@ -55,6 +55,27 @@ export interface ProviderUpdateInput {
   enabled: boolean;
 }
 
+/** 连通性测试回执（M7-06/ADR-024：成功回执含延迟与模型数）。 */
+export interface ProviderTestResult {
+  provider_id: string;
+  ok: boolean;
+  status: number;
+  latency_ms: number;
+  models_count: number;
+}
+
+/** 模型获取回执（M7-06/ADR-024：归一化 + 幂等 upsert）。 */
+export interface ProviderModelsFetchResult {
+  provider_id: string;
+  ok: boolean;
+  status: number;
+  latency_ms: number;
+  fetched: number;
+  added: number;
+  refreshed: number;
+  models: string[];
+}
+
 export interface ProvidersIpc {
   list(): Promise<ProviderEntry[]>;
   create(input: ProviderCreateInput): Promise<ProviderEntry>;
@@ -67,6 +88,10 @@ export interface ProvidersIpc {
     modelId: string,
     enabled: boolean,
   ): Promise<{ provider_id: string; model_id: string; enabled: boolean }>;
+  /** M7-06/ADR-024：真实连通性测试（网络请求；五路径错误码）。 */
+  test(providerId: string): Promise<ProviderTestResult>;
+  /** M7-06/ADR-024：从供应商获取模型（归一化 + 幂等 upsert）。 */
+  fetchModels(providerId: string): Promise<ProviderModelsFetchResult>;
 }
 
 /** 生产实现（Tauri IPC；命令入参统一 `payload` 包装，与生成绑定一致）。 */
@@ -102,6 +127,16 @@ export const providersIpc: ProvidersIpc = {
       "provider_model_toggle",
       { payload: { provider_id: providerId, model_id: modelId, enabled } },
     );
+  },
+  async test(providerId) {
+    return invoke<ProviderTestResult>("provider_test", {
+      payload: { provider_id: providerId },
+    });
+  },
+  async fetchModels(providerId) {
+    return invoke<ProviderModelsFetchResult>("provider_models_fetch", {
+      payload: { provider_id: providerId },
+    });
   },
 };
 

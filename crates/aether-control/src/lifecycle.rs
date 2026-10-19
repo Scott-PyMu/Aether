@@ -39,10 +39,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use aether_core::{
-    session_status_is_terminal, ErrorInfo, EventPayload, Message, MessageId, MessageRole,
-    MessageSummary, Run, RunCancelledPayload, RunCompletedPayload, RunFailedPayload, RunId,
-    RunStartedPayload, Runtime, RuntimeId, Session, SessionClosedPayload, SessionCreatedPayload,
-    SessionId, SessionStatus, SessionStatusChangedPayload, SessionSummary, TokenUsage, WorkspaceId,
+    session_status_is_terminal, ErrorInfo, EventPayload, Message, MessageId, MessageReference,
+    MessageRole, MessageSummary, Run, RunCancelledPayload, RunCompletedPayload, RunFailedPayload,
+    RunId, RunStartedPayload, Runtime, RuntimeId, Session, SessionClosedPayload,
+    SessionCreatedPayload, SessionId, SessionStatus, SessionStatusChangedPayload, SessionSummary,
+    TokenUsage, WorkspaceId,
     ENVELOPE_FIELDS, EVENT_ENVELOPE_VERSION,
 };
 use aether_store::{
@@ -149,6 +150,9 @@ pub struct RunRequest {
     /// `true` = 来自 `session_send` 显式覆盖（透传 `session.send`，仅本次 run）；
     /// `false` = 会话级值（透传 `session.create`，`session.send` 不带字段）。
     pub thinking_override: bool,
+    /// 随消息附带的文件引用（M7-06/ADR-024：透传 `session.send.references`；内存态，
+    /// 不落库——重放（`run_retry`/暂停恢复）不带引用，见任务证据）。
+    pub references: Vec<MessageReference>,
     /// 中断令牌（超时/降级/人工中断置位；执行器应尽快返回）。
     pub cancel: RunCancelToken,
 }
@@ -502,6 +506,8 @@ struct ActiveRun {
     thinking_depth: u8,
     /// `true` = `session_send` 显式覆盖（透传 `session.send`）。
     thinking_override: bool,
+    /// 随消息附带的文件引用（M7-06/ADR-024；内存态，不落库）。
+    references: Vec<MessageReference>,
     last_activity_ms: i64,
     cancel: RunCancelToken,
     /// `true` = 已派发执行（占全局闸门槽位）；`false` = 闸门排队（占「当前 run 位」，
@@ -516,6 +522,7 @@ struct QueuedRun {
     text: String,
     thinking_depth: u8,
     thinking_override: bool,
+    references: Vec<MessageReference>,
 }
 
 struct SessionState {
@@ -1032,6 +1039,8 @@ impl SessionManager {
                     text: input_message.content.clone(),
                     thinking_depth,
                     thinking_override: false,
+                    // M7-06/ADR-024：引用为内存态不落库——重放不带引用（任务证据登记）。
+                    references: Vec::new(),
                     last_activity_ms: now,
                     cancel,
                     // M7-02/ADR-022：闸门前置于 run 启动（`run_retry` 同 `session_send`）。
@@ -1054,6 +1063,7 @@ impl SessionManager {
                     text: input_message.content.clone(),
                     thinking_depth,
                     thinking_override: false,
+                    references: Vec::new(),
                 });
                 (true, false)
             }
@@ -1343,6 +1353,8 @@ impl SessionManager {
                 text: input_message.content.clone(),
                 thinking_depth,
                 thinking_override: false,
+                // M7-06/ADR-024：暂停重放不带引用（内存态；任务证据登记）。
+                references: Vec::new(),
                 last_activity_ms: now,
                 cancel,
                 dispatched: has_slot,
@@ -1561,6 +1573,20 @@ impl SessionManager {
         client_msg_id: &str,
         thinking_override: Option<u8>,
     ) -> Result<SendAck, LifecycleError> {
+        self.send_with_references(session_id, text, client_msg_id, thinking_override, Vec::new())
+            .await
+    }
+
+    /// `session_send` + 可选文件引用（M7-06/ADR-024：`references` 随 `session.send`
+    /// 透传适配器；≤32 条与 canonicalize 校验在命令层完成；引用不落库、不预授权）。
+    pub async fn send_with_references(
+        &self,
+        session_id: &SessionId,
+        text: &str,
+        client_msg_id: &str,
+        thinking_override: Option<u8>,
+        references: Vec<MessageReference>,
+    ) -> Result<SendAck, LifecycleError> {
         self.inner
             .pipeline
             .admission()
@@ -1690,6 +1716,7 @@ impl SessionManager {
                     text: text.to_owned(),
                     thinking_depth: requested_thinking_depth,
                     thinking_override: thinking_is_override,
+                    references: references.clone(),
                     last_activity_ms: now,
                     cancel,
                     dispatched: has_slot,
@@ -1713,6 +1740,7 @@ impl SessionManager {
                     text: text.to_owned(),
                     thinking_depth: requested_thinking_depth,
                     thinking_override: thinking_is_override,
+                    references,
                 });
                 (true, None)
             }
@@ -2740,6 +2768,7 @@ async fn take_run_start(
         text: active.text.clone(),
         thinking_depth: active.thinking_depth,
         thinking_override: active.thinking_override,
+        references: active.references.clone(),
         cancel: active.cancel.clone(),
     }))
 }
@@ -2751,6 +2780,7 @@ struct RunStart {
     text: String,
     thinking_depth: u8,
     thinking_override: bool,
+    references: Vec<MessageReference>,
     cancel: RunCancelToken,
 }
 
@@ -2767,6 +2797,7 @@ async fn dispatch_and_finalize(
         text: start.text.clone(),
         thinking_depth: start.thinking_depth,
         thinking_override: start.thinking_override,
+        references: start.references.clone(),
         cancel: start.cancel.clone(),
     };
     // queued → running（行）→ run.started（事件）→ 会话 running。
@@ -2860,6 +2891,7 @@ async fn detach_and_prepare(
                     text: queued.text,
                     thinking_depth: queued.thinking_depth,
                     thinking_override: queued.thinking_override,
+                    references: queued.references,
                     // M2-05：提升的 run 亦为会话取消树子节点。
                     cancel: RunCancelToken::child_of(&session.cancel),
                 });
@@ -2871,6 +2903,7 @@ async fn detach_and_prepare(
                         text: start.text.clone(),
                         thinking_depth: start.thinking_depth,
                         thinking_override: start.thinking_override,
+                        references: start.references.clone(),
                         last_activity_ms: inner.clock.now_ms(),
                         cancel: start.cancel.clone(),
                         dispatched: false,
@@ -3507,6 +3540,7 @@ fn promote_waiting_locked(
         text: queued.text,
         thinking_depth: queued.thinking_depth,
         thinking_override: queued.thinking_override,
+        references: queued.references,
         last_activity_ms: inner.clock.now_ms(),
         cancel,
         dispatched: has_slot,

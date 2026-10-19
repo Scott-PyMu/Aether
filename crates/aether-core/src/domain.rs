@@ -255,6 +255,41 @@ impl PermissionMode {
     }
 }
 
+/// 引用条目类型（D6 `session.send.references` 的 `kind`；ADR-024 附录 A-3）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReferenceKind {
+    File,
+    Directory,
+}
+
+impl ReferenceKind {
+    pub const ALL: [Self; 2] = [Self::File, Self::Directory];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::File => "file",
+            Self::Directory => "directory",
+        }
+    }
+
+    /// 解析 `kind` 码（未知值 → `None`，由调用方按 `invalid_enum` 处理）。
+    pub fn from_code(code: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.as_str() == code)
+    }
+}
+
+/// 随消息附带的文件引用（D6 `session.send.references`；ADR-024 附录 A-3）。
+///
+/// `path` = 命令层 canonicalize 后的绝对路径（失败 `artifact_path_rejected`）；
+/// **引用 ≠ 预授权**：Agent 读取仍经 `fs.read` 权限门（D9 不变）；核心不读取引用文件
+/// 内容（仅把路径清单映射为提示词前缀块，由适配器承担，ADR-024 §2.1-5）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessageReference {
+    pub path: String,
+    pub kind: ReferenceKind,
+}
+
 /// 日志级别（`log` 事件 payload，附录 B）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

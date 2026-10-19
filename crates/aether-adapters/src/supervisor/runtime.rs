@@ -18,6 +18,7 @@ use super::admission::{AdmissionDecision, AdmissionPolicy, RuntimeManifest};
 use super::backoff::{CrashDecision, RestartPolicy, CRASH_WINDOW};
 use super::clock::{SharedClock, SystemTimeSource};
 use super::heartbeat::{HeartbeatConfig, HeartbeatMonitor, HeartbeatVerdict};
+use super::provider_env::SpawnEnvSource;
 use super::ledger::{
     cmdline_hash, AdapterLedger, CleanupReport, LedgerRecord, LedgerVerdict, ProcessProbe,
     TreeKiller,
@@ -70,7 +71,7 @@ impl Default for SupervisorConfig {
 }
 
 /// 运行时静态描述（manifest + 本次启动令牌 + 附件目录）。
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RuntimeSpec {
     pub manifest: RuntimeManifest,
     pub launch_token: String,
@@ -80,6 +81,23 @@ pub struct RuntimeSpec {
     /// 进程环境；`None` = 未启用附件外置（适配器不得上报引用帧——消费侧校验器无根目录
     /// 时一律拒绝）。
     pub artifacts_dir: Option<std::path::PathBuf>,
+    /// 供应商消费映射的 spawn 环境注入点（M7-06/ADR-024：密钥仅经 env 一次性注入；
+    /// `None` = 不注入，适配器按各自官方默认运行）。
+    pub env_source: Option<Arc<dyn SpawnEnvSource>>,
+}
+
+impl std::fmt::Debug for RuntimeSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RuntimeSpec")
+            .field("manifest", &self.manifest)
+            .field("launch_token", &self.launch_token)
+            .field("artifacts_dir", &self.artifacts_dir)
+            .field(
+                "env_source",
+                &self.env_source.as_ref().map(|_| "<SpawnEnvSource>"),
+            )
+            .finish()
+    }
 }
 
 impl RuntimeSpec {
@@ -88,6 +106,7 @@ impl RuntimeSpec {
             manifest,
             launch_token: launch_token.into(),
             artifacts_dir: None,
+            env_source: None,
         }
     }
 
@@ -97,12 +116,19 @@ impl RuntimeSpec {
             manifest,
             launch_token: new_launch_token(),
             artifacts_dir: None,
+            env_source: None,
         }
     }
 
     /// 附加附件目录（D6 附件外置；环境注入见 [`RuntimeSupervisor::start`]）。
     pub fn with_artifacts_dir(mut self, artifacts_dir: impl Into<std::path::PathBuf>) -> Self {
         self.artifacts_dir = Some(artifacts_dir.into());
+        self
+    }
+
+    /// 附加供应商消费映射的 spawn 环境注入点（M7-06/ADR-024；每次 spawn 现取）。
+    pub fn with_env_source(mut self, env_source: Arc<dyn SpawnEnvSource>) -> Self {
+        self.env_source = Some(env_source);
         self
     }
 }
@@ -422,6 +448,17 @@ impl RuntimeSupervisor {
                 std::ffi::OsString::from(ENV_ARTIFACTS_DIR),
                 per_runtime.as_os_str().to_os_string(),
             ));
+        }
+        // M7-06/ADR-024：供应商消费映射——spawn 前现取环境变量（密钥经 env 一次性注入；
+        // 失败隔离由来源实现承担，返回空集合即不注入，不阻断启动）。
+        if let Some(source) = self.spec.env_source.as_ref() {
+            let extra = source.spawn_env(self.runtime_id.as_str()).await;
+            envs.extend(extra.into_iter().map(|(key, value)| {
+                (
+                    std::ffi::OsString::from(key),
+                    std::ffi::OsString::from(value),
+                )
+            }));
         }
         let mut process =
             match AdapterProcess::spawn_with_env(&self.spec.manifest.program, args, envs).await {

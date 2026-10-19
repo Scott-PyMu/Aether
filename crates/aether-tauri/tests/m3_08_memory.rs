@@ -1,4 +1,4 @@
-//! M3-08 集成测试：工作区记忆（设计 D14/D9；ADR-004 决策 3；v1.18 网关接线追记）。
+﻿//! M3-08 集成测试：工作区记忆（设计 D14/D9；ADR-004 决策 3；v1.18 网关接线追记）。
 //!
 //! 覆盖（实施计划 v1.18 §4 M3-08 七项 DoD 的集成面）：
 //! - DoD1：`workspace_set` 绑定 → 新会话按工作区注入记忆（优先级 + 32KB 上限文本由
@@ -272,6 +272,7 @@ impl Harness {
                 text: text.to_owned(),
                 client_msg_id: client_msg_id.to_owned(),
                 thinking_depth: None,
+            references: Vec::new(),
             })
             .expect("session_send");
         ack["run_id"].as_str().expect("run_id").to_owned()

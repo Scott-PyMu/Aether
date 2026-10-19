@@ -1,4 +1,4 @@
-//! M3-12 生产组合路径集成 E2E：会话等待态写入（ADR-011 / D9）。
+﻿//! M3-12 生产组合路径集成 E2E：会话等待态写入（ADR-011 / D9）。
 //!
 //! 矩阵口径由 ADR-014 设计变更驱动（M6-01）：缺省档 `workspace_write` 区内写
 //! 免审批，制造 pending 的样本一律改用区外写（ask）。
@@ -260,6 +260,7 @@ impl Harness {
                 text: text.to_owned(),
                 client_msg_id: client_msg_id.to_owned(),
                 thinking_depth: None,
+            references: Vec::new(),
             })
             .expect("session_send");
         ack["run_id"].as_str().expect("run_id").to_owned()

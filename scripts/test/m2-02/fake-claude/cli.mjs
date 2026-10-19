@@ -253,7 +253,10 @@ async function main() {
     }
   }
   // M3-10：调用观测（仅当显式设置记录文件时；argv + MAX_THINKING_TOKENS 环境）。
+  // M7-06：追加 `prompt`（stdin 全文）——引用块注入（`<aether-references>`）观测口径。
   const invocationFile = process.env.FAKE_CLAUDE_INVOCATION_FILE;
+
+  const prompt = (await readPrompt()).trim();
   if (invocationFile && invocationFile.length > 0) {
     try {
       appendFileSync(
@@ -261,6 +264,7 @@ async function main() {
         `${JSON.stringify({
           argv: process.argv.slice(2),
           max_thinking_tokens: process.env.MAX_THINKING_TOKENS ?? null,
+          prompt,
         })}\n`,
         "utf8",
       );
@@ -268,8 +272,6 @@ async function main() {
       /* 观测文件可选 */
     }
   }
-
-  const prompt = (await readPrompt()).trim();
   const sessionId = parsed.sessionId;
   const existing = loadSession(sessionId);
 

@@ -84,3 +84,13 @@ export {
   type AtomicWriteOptions,
   type MemoryFileSnapshot,
 } from "./memory";
+export {
+  composePromptWithReferences,
+  MAX_SESSION_REFERENCES,
+  parseReferences,
+  REFERENCE_BLOCK_CLOSE,
+  REFERENCE_BLOCK_INSTRUCTION,
+  REFERENCE_BLOCK_OPEN,
+  renderReferenceBlock,
+  type SessionReference,
+} from "./references";

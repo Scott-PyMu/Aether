@@ -453,7 +453,8 @@ fn disable_confirmation_closes_in_flight_runs_and_retry_replays() {
             text: "long".to_owned(),
             client_msg_id: "01J8ZQ5R0N7W9Y8X6V4T2S0K11".to_owned(),
             thinking_depth: None,
-        })
+        references: Vec::new(),
+            })
         .expect("session_send(long)");
     let active_run = RunId::new(active["run_id"].as_str().unwrap().to_owned()).unwrap();
     assert!(
@@ -492,7 +493,8 @@ fn disable_confirmation_closes_in_flight_runs_and_retry_replays() {
             text: "queued".to_owned(),
             client_msg_id: "01J8ZQ5R0N7W9Y8X6V4T2S0K12".to_owned(),
             thinking_depth: None,
-        })
+        references: Vec::new(),
+            })
         .expect("session_send(queued)");
     assert_eq!(queued["queued"], true, "第二条消息必须排队");
     let queued_run = RunId::new(queued["run_id"].as_str().unwrap().to_owned()).unwrap();

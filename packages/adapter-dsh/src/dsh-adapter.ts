@@ -15,6 +15,8 @@ import {
   Adapter,
   ERROR_CODES,
   RpcError,
+  composePromptWithReferences,
+  parseReferences,
   ulid,
   type AdapterRuntimeInfo,
   type EnvelopeContext,
@@ -24,6 +26,15 @@ import { join } from "node:path";
 
 import { DshAcpClient, AcpError, type AcpUpdateParams } from "./dsh-acp-client";
 import { DeltaChannel, DeltaReconciler, type DeltaFrame } from "./dsh-delta";
+import {
+  DSH_MODEL_CONFIG_ID,
+  MODEL_SET_TIMEOUT_MS,
+  dshProviderKey,
+  modelOptionEntriesFrom,
+  providerFromEnv,
+  resolveModelOption,
+  type DshModelOptionEntry,
+} from "./dsh-model";
 import {
   checkVersionLatch,
   materializePlugin,
@@ -273,6 +284,10 @@ interface DshSession {
   reasoningValues?: string[];
   /** ACP 侧当前已生效的 `reasoning_effort`（同值跳过；未设置过为 undefined）。 */
   appliedReasoningValue?: string;
+  /** M7-06/ADR-024 DoD4：`session/new|resume` 广告的模型选项（provider×model）。 */
+  modelOptionEntries?: DshModelOptionEntry[];
+  /** ACP 侧当前已生效的模型选项 value（同值跳过；未设置过为 undefined）。 */
+  appliedModelValue?: string;
   clientMsgIds: Map<string, string>;
   runs: Map<string, DshRunState>;
   observedTools: Set<string>;
@@ -405,6 +420,22 @@ export class DshAdapter {
     mkdirSync(deltaDir, { recursive: true });
     const deltaFile = join(deltaDir, `delta-${process.pid}-${Date.now()}.jsonl`);
 
+    // M7-06/ADR-024 §2.1-1：供应商消费映射——核心注入 `AETHER_PROVIDER_BASE_URL` 等
+    // env 时，物化为 profile 分层配置（llm-pi-ai composition base + acp 行 provider）；
+    // 注入优先于 CLI 标志（`--dsh-provider*` 仅用于测试/调试）。密钥值不落盘
+    // （provider 条目只写 `apiKeyEnv` 名，DSH 从进程环境读取）。
+    const envProvider = providerFromEnv(process.env as Record<string, string | undefined>);
+    if (envProvider !== null) {
+      this.options.stderr?.(
+        `[dsh] 供应商消费映射（env）：provider=${envProvider.provider}（apiKeyEnv 由环境提供，不含密钥值）`,
+      );
+    }
+    const effectiveProvider = envProvider?.provider ?? cli.provider;
+    const effectiveProviderConfig = envProvider?.providerConfig ?? cli.providerConfig;
+    // 实测（M7-06 证据）：acp 行缺省模型缺失时 DSH 不注册该 provider 的模型选项；
+    // 消费映射下以 `AETHER_PROVIDER_MODEL`（enabled 模型首个）作为缺省。
+    const effectiveModel = envProvider?.defaultModel ?? cli.model;
+
     // DoD2：插件落盘（独立包名 + 无 BOM 字节断言）与 overlay 生成。
     try {
       materializePlugin(profileDir);
@@ -417,9 +448,11 @@ export class DshAdapter {
     const patchPath =
       cli.patchPath ??
       writePatchFile(cli.home, cli.profile, {
-        ...(cli.provider !== undefined ? { provider: cli.provider } : {}),
-        ...(cli.model !== undefined ? { model: cli.model } : {}),
-        ...(cli.providerConfig !== undefined ? { providerConfig: cli.providerConfig } : {}),
+        ...(effectiveProvider !== undefined ? { provider: effectiveProvider } : {}),
+        ...(effectiveModel !== undefined ? { model: effectiveModel } : {}),
+        ...(effectiveProviderConfig !== undefined
+          ? { providerConfig: effectiveProviderConfig }
+          : {}),
       });
 
     // DoD1：版本门闩（pin 精确匹配 + 插件契约帧）。
@@ -584,6 +617,8 @@ export class DshAdapter {
       throw error;
     }
     const reasoningValues = dshReasoningValuesFrom(configOptions);
+    // M7-06/ADR-024 DoD4：`session/new|resume` 广告的模型选项（provider×model）。
+    const modelOptionEntries = modelOptionEntriesFrom(configOptions);
     const session: DshSession = {
       id: sessionId,
       nativeId: sessionId,
@@ -591,16 +626,21 @@ export class DshAdapter {
       ...(model !== undefined ? { model } : {}),
       ...(thinkingDepth !== undefined ? { thinkingDepth } : {}),
       ...(reasoningValues.length > 0 ? { reasoningValues } : {}),
+      ...(modelOptionEntries.length > 0 ? { modelOptionEntries } : {}),
       clientMsgIds: new Map(),
       runs: new Map(),
       observedTools: new Set(),
       disposed: false,
     };
+    this.sessions.set(sessionId, session);
     // M3-10/ADR-010：`session/new|resume` 的 configOptions 广告 `reasoning_effort`
     // （category=thought_level）。声明能力后按会话级档位设置；失败仅诊断不阻断
     // （模型级不支持时保持 provider 默认）。
-    await this.applyReasoning(session, thinkingDepth, "session.create");
-    this.sessions.set(sessionId, session);
+    await this.applyReasoning(session, thinkingDepth, "session.create");    // M7-06/ADR-024 DoD4：按会话选模型（`session.create.model` → ACP `model` 配置项；
+    // 实测 value = `["provider","model"]` JSON 字符串）。失败仅诊断不阻断。
+    if (model !== undefined) {
+      await this.applySessionModel(session, model, "session.create");
+    }
     return {
       session_id: session.id,
       native_id: session.nativeId,
@@ -608,6 +648,60 @@ export class DshAdapter {
       model: model ?? this.options.cli.model ?? null,
       created_at: Date.now(),
     };
+  }
+
+  /**
+   * 应用会话模型（M7-06/ADR-024 DoD4）。
+   *
+   * 选择规则：优先消费映射注入的 provider（`AETHER_PROVIDER_ID` → `aether-<id>` 键）
+   * 命中项，否则按 configOptions 出现顺序取首个 `model` 匹配项；无匹配 → 保持 provider
+   * 默认并写诊断（不阻断）。同值跳过（会话级有状态设置）。
+   */
+  private async applySessionModel(
+    session: DshSession,
+    model: string,
+    source: string,
+  ): Promise<void> {
+    const envProviderId = process.env.AETHER_PROVIDER_ID;
+    const preferredProvider =
+      envProviderId !== undefined && envProviderId.length > 0
+        ? dshProviderKey(envProviderId)
+        : undefined;
+    const entry = resolveModelOption(session.modelOptionEntries ?? [], model, preferredProvider);
+    if (entry === undefined) {
+      this.options.stderr?.(
+        `[dsh] ${source}: 模型 ${model} 不在可用模型选项内（保持 provider 默认；ADR-024 DoD4）`,
+      );
+      return;
+    }
+    if (entry.value === session.appliedModelValue) return;
+    if (await this.setModelOption(session.id, entry.value, source)) {
+      session.appliedModelValue = entry.value;
+    }
+  }
+
+  /** `session/set_config_option`（M7-06：`model`；失败仅诊断，不阻断 run）。 */
+  private async setModelOption(
+    sessionId: string,
+    value: string,
+    source: string,
+  ): Promise<boolean> {
+    const server = this.server;
+    if (!server || server.isClosed) return false;
+    try {
+      await server.request(
+        "session/set_config_option",
+        { sessionId, configId: DSH_MODEL_CONFIG_ID, value },
+        MODEL_SET_TIMEOUT_MS,
+      );
+      return true;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.options.stderr?.(
+        `[dsh-acp] ${source}: model=${value} 设置失败（继续，保持 provider 默认）：${detail}`,
+      );
+      return false;
+    }
   }
 
   /**
@@ -700,6 +794,7 @@ export class DshAdapter {
       text?: unknown;
       run_id?: unknown;
       thinking_depth?: unknown;
+      references?: unknown;
     };
     const sessionId = typeof input.session_id === "string" ? input.session_id : "";
     const session = this.sessions.get(sessionId);
@@ -743,7 +838,9 @@ export class DshAdapter {
     void this.enqueue(run, async () => {
       await this.emit(run, "run.started", { run_id: runId });
     });
-    void this.drivePrompt(session, run, input.text, parseThinkingDepth(input.thinking_depth));
+    // M7-06/ADR-024 A-3：统一映射 = 消息前缀引用块（核心不读内容；引用 ≠ 预授权）。
+    const prompt = composePromptWithReferences(input.text, parseReferences(input.references));
+    void this.drivePrompt(session, run, prompt, parseThinkingDepth(input.thinking_depth));
     return { accepted: true, run_id: runId };
   }
 

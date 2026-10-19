@@ -1,6 +1,14 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
-import { buildClaudeArgs, normalizeCommand, type ClaudeCliConfig } from "./claude-cli";
+import {
+  buildClaudeArgs,
+  claudePermissionMode,
+  ensureIsolatedSettings,
+  normalizeCommand,
+  type ClaudeCliConfig,
+} from "./claude-cli";
 import { parseArgs, parseLaunchToken } from "./cli";
 
 const VALID_TOKEN = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -75,8 +83,53 @@ describe("buildClaudeArgs（接入笔记固定参数形状）", () => {
   });
 });
 
-describe("normalizeCommand（Windows shim 归一化）", () => {
-  it("win32 下 claude/.cmd 经 cmd.exe；其余平台/路径原样", () => {
+describe("M7-06 档位投影（ADR-024 附录 A-4）", () => {
+  it("消费映射生效时隔离用户级 settings（空文件）；未生效/已显式配置不触发", () => {
+    // 触发：注入 ANTHROPIC_BASE_URL（消费映射）。
+    const file = ensureIsolatedSettings({}, { ANTHROPIC_BASE_URL: "http://127.0.0.1:1/v1" });
+    expect(file).toBeTruthy();
+    expect(readFileSync(String(file), "utf8")).toBe("{}\n");
+    const aether = ensureIsolatedSettings({}, { AETHER_PROVIDER_BASE_URL: "https://x" });
+    expect(aether).toBeTruthy();
+    // 未触发。
+    expect(ensureIsolatedSettings({}, {})).toBeUndefined();
+    // 已显式配置 settings-file → 不覆盖。
+    expect(
+      ensureIsolatedSettings({ settingsFile: "/tmp/custom.json" }, { ANTHROPIC_BASE_URL: "x" }),
+    ).toBeUndefined();
+  });
+  it("三档映射：read_only→plan / workspace_write→acceptEdits / danger_full_access→bypassPermissions", () => {
+    expect(claudePermissionMode("read_only")).toBe("plan");
+    expect(claudePermissionMode("workspace_write")).toBe("acceptEdits");
+    expect(claudePermissionMode("danger_full_access")).toBe("bypassPermissions");
+    expect(claudePermissionMode("unknown")).toBeUndefined();
+    expect(claudePermissionMode(undefined)).toBeUndefined();
+    expect(claudePermissionMode(3)).toBeUndefined();
+  });
+
+  it("投影值进入 --permission-mode（逐档断言）", () => {
+    for (const [mode, expected] of [
+      ["read_only", "plan"],
+      ["workspace_write", "acceptEdits"],
+      ["danger_full_access", "bypassPermissions"],
+    ] as const) {
+      const args = buildClaudeArgs(
+        baseConfig({ permissionMode: claudePermissionMode(mode) }),
+        {
+          nativeId: "11111111-2222-3333-4444-555555555555",
+          resume: false,
+          prompt: "hi",
+          timeoutMs: 1,
+        },
+      );
+      const index = args.indexOf("--permission-mode");
+      expect(index).toBeGreaterThanOrEqual(0);
+      expect(args[index + 1]).toBe(expected);
+    }
+  });
+});
+
+describe("normalizeCommand（Windows shim 归一化）", () => {  it("win32 下 claude/.cmd 经 cmd.exe；其余平台/路径原样", () => {
     expect(normalizeCommand("claude", ["-p"], "win32", "cmd.exe")).toEqual({
       command: "cmd.exe",
       args: ["/d", "/s", "/c", "claude", "-p"],

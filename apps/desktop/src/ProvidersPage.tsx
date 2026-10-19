@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 模型与供应商配置页（M3-11；ADR-010 决策 3/4；S-05 设置覆盖层内页面）。
  *
  * - 供应商列表：卡片（图标/名称/描述「N 个模型已启用」）+ 启用开关
@@ -8,8 +8,9 @@
  * - 表单：名称 / Base URL（请求路径预览）/ API Key（明文输入、掩码 + 显示/隐藏；
  *   仅传输，核心写 keyring 后只存引用）/ 启用开关 / 模型管理（启用/停用 + 手动添加）；
  *   编辑态显示 `api_key_ref` 只读 + 可选覆盖输入；
- * - `测试连接`：P0 无命令——点击显示 toast「连通性测试将在 P1 开放」（无 IPC、无网络）；
- * - `从供应商获取`：P0 不提供入口（P1）。
+ * - M7-06/ADR-024：`测试连接` = 真实调用（`provider_test`；三态 + 超时；锚点
+ *   `provider-test-result`，`data-status` = ok / unreachable / auth_failed / timeout）；
+ *   `从供应商获取` = 真实调用（`provider_models_fetch`；归一化 + 幂等 upsert）。
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -26,8 +27,8 @@ import {
 } from "./providers";
 import { describeIpcError, ipcErrorCode } from "./startup";
 
-/** 测试连接提示（P0 口径；ADR-010 决策 3/§5-7）。 */
-export const PROVIDER_TEST_NOTICE = "连通性测试将在 P1 开放";
+/** 连通性测试展示态（UI-UX §7.3 `provider-test-result` 的 `data-status` 取值域）。 */
+export type TestStatus = "ok" | "unreachable" | "auth_failed" | "timeout";
 
 type FormMode = "official" | "custom";
 
@@ -56,7 +57,10 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
   const [error, setError] = useState<string | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
+  /** M7-06/ADR-024：连通性测试三态/超时回执（锚点 provider-test-result）。 */
+  const [testResult, setTestResult] = useState<{ status: TestStatus; text: string } | null>(null);
+  /** M7-06/ADR-024：模型获取回执（锚点 provider-models-notice）。 */
+  const [modelsNotice, setModelsNotice] = useState<string | null>(null);
 
   const reportError = useCallback((failure: unknown) => {
     setError(describeIpcError(failure));
@@ -94,7 +98,8 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
     setFormMode(mode);
     setConfirmDeleteId(null);
     setNotice(null);
-    setToast(null);
+    setTestResult(null);
+    setModelsNotice(null);
     setError(null);
     setErrorCode(null);
     setApiKeyTouched(false);
@@ -130,7 +135,8 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
     setModelNameDraft("");
     setConfirmDeleteId(null);
     setNotice(null);
-    setToast(null);
+    setTestResult(null);
+    setModelsNotice(null);
     setError(null);
     setErrorCode(null);
     setView("form");
@@ -140,7 +146,8 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
     setView("list");
     setEditing(null);
     setConfirmDeleteId(null);
-    setToast(null);
+    setTestResult(null);
+    setModelsNotice(null);
     clearError();
     void refresh();
   }, [clearError, refresh]);
@@ -169,7 +176,8 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
     }
     setBusy(true);
     clearError();
-    setToast(null);
+    setTestResult(null);
+    setModelsNotice(null);
     try {
       if (editing) {
         const input: Parameters<ProvidersIpc["update"]>[0] = {
@@ -304,6 +312,59 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
     [clearError, editing, ipc, refresh, reportError],
   );
 
+  /** M7-06/ADR-024：真实连通性测试（成功/不可达/凭据无效/超时；其余走错误块）。 */
+  const onTest = useCallback(async () => {
+    if (!editing) {
+      return;
+    }
+    setBusy(true);
+    clearError();
+    setTestResult(null);
+    try {
+      const result = await ipc.test(editing.id);
+      setTestResult({
+        status: "ok",
+        text: `连通性测试通过（${result.latency_ms}ms，${result.models_count} 个模型）`,
+      });
+    } catch (failure) {
+      const code = ipcErrorCode(failure);
+      const message = describeIpcError(failure);
+      if (code === "provider_auth_failed") {
+        setTestResult({ status: "auth_failed", text: message });
+      } else if (code === "provider_unreachable") {
+        setTestResult({
+          status: message.includes("超时") ? "timeout" : "unreachable",
+          text: message,
+        });
+      } else {
+        reportError(failure);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }, [clearError, editing, ipc, reportError]);
+
+  /** M7-06/ADR-024：从供应商获取模型（归一化 + 幂等 upsert；刷新表单模型列表）。 */
+  const onFetchModels = useCallback(async () => {
+    if (!editing) {
+      return;
+    }
+    setBusy(true);
+    clearError();
+    setModelsNotice(null);
+    try {
+      const result = await ipc.fetchModels(editing.id);
+      setModelsNotice(
+        `已获取 ${result.fetched} 个模型（新增 ${result.added} / 刷新 ${result.refreshed}）`,
+      );
+      await refresh(editing.id);
+    } catch (failure) {
+      reportError(failure);
+    } finally {
+      setBusy(false);
+    }
+  }, [clearError, editing, ipc, refresh, reportError]);
+
   const previewPath = useMemo(() => {
     if (formMode === "official" && formType !== "custom") {
       return OFFICIAL_PROVIDER_PRESETS[formType].preview;
@@ -385,8 +446,9 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
               <button
                 type="button"
                 data-testid="provider-test"
-                disabled={busy}
-                onClick={() => setToast(PROVIDER_TEST_NOTICE)}
+                disabled={busy || !editing}
+                title={editing ? "发起真实连通性测试（10s 超时）" : "创建保存后可测试连接"}
+                onClick={() => void onTest()}
               >
                 测试连接
               </button>
@@ -489,15 +551,34 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
                 >
                   ＋ 添加模型
                 </button>
+                <button
+                  type="button"
+                  data-testid="provider-models-fetch"
+                  disabled={busy}
+                  title="从供应商获取模型列表（归一化 + 幂等写入）"
+                  onClick={() => void onFetchModels()}
+                >
+                  从供应商获取
+                </button>
               </div>
+              {modelsNotice ? (
+                <p className="provider-notice" data-testid="provider-models-notice" role="status">
+                  {modelsNotice}
+                </p>
+              ) : null}
             </section>
           ) : (
             <p className="provider-models-hint">创建保存后可管理模型</p>
           )}
 
-          {toast ? (
-            <p className="provider-notice" data-testid="provider-test-notice" role="status">
-              {toast}
+          {testResult ? (
+            <p
+              className="provider-notice"
+              data-testid="provider-test-result"
+              data-status={testResult.status}
+              role="status"
+            >
+              {testResult.text}
             </p>
           ) : null}
           {error ? (

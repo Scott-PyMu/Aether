@@ -75,6 +75,11 @@ struct Args {
     /// M7-03 会话夹具：不声明 `pause_resume` 能力（`pause_unsupported` 负向夹具；
     /// 口径同 Mock `--no-pause-resume`）。
     pause_resume_unsupported: bool,
+    /// M7-06 夹具：启动时将指定环境变量写入报告文件（JSON 行；
+    /// 用于断言 spawn env 注入点，见 `supervisor::provider_env`）。
+    env_report: Option<std::path::PathBuf>,
+    /// M7-06 夹具：报告的环境变量名（缺省 `AETHER_M7_06_PROBE`）。
+    env_name: Option<String>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -90,6 +95,8 @@ fn parse_args() -> Result<Args, String> {
         mb_cycle_file: None,
         session_log: None,
         pause_resume_unsupported: false,
+        env_report: None,
+        env_name: None,
     };
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let mut index = 0;
@@ -127,6 +134,8 @@ fn parse_args() -> Result<Args, String> {
             "--mb-cycle-file" => args.mb_cycle_file = Some(value()?.into()),
             "--session-log" => args.session_log = Some(value()?.into()),
             "--no-pause-resume" => args.pause_resume_unsupported = true,
+            "--env-report" => args.env_report = Some(value()?.into()),
+            "--env-name" => args.env_name = Some(value()?),
             "--survive-eof" => args.survive_eof = true,
             "--launch-token" => args.launch_token = Some(value()?),
             other if other.starts_with("--launch-token=") => {
@@ -148,6 +157,10 @@ fn main() -> ExitCode {
             return ExitCode::from(EXIT_USAGE);
         }
     };
+    // M7-06：spawn env 注入点报告（`--env-report <path>`；键缺省 `AETHER_M7_06_PROBE`）。
+    if let Some(path) = args.env_report.as_ref() {
+        report_env(path, args.env_name.as_deref().unwrap_or("AETHER_M7_06_PROBE"));
+    }
     match run(&args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(detail) => {
@@ -209,9 +222,22 @@ fn log_session_call(args: &Args, payload: serde_json::Value) {
     }
 }
 
+/// M7-06：把指定环境变量写入报告文件（单行 JSON；`present` + `value`）。
+///
+/// 报告值原样写入——仅用于非密钥探针变量（测试夹具，D10 不涉密钥材料）。
+fn report_env(path: &std::path::Path, name: &str) {
+    let line = match std::env::var(name) {
+        Ok(value) => serde_json::json!({"name": name, "present": true, "value": value}),
+        Err(_) => serde_json::json!({"name": name, "present": false}),
+    };
+    if let Ok(mut file) = std::fs::File::create(path) {
+        let _ = writeln!(file, "{line}");
+        let _ = file.flush();
+    }
+}
+
 /// 写一行 JSON-RPC 帧（响应/通知共用）。
-fn write_frame(frame: &serde_json::Value) -> Result<(), String> {
-    let stdout = std::io::stdout();
+fn write_frame(frame: &serde_json::Value) -> Result<(), String> {    let stdout = std::io::stdout();
     let mut handle = stdout.lock();
     let text = serde_json::to_string(frame).map_err(|error| format!("序列化：{error}"))?;
     writeln!(handle, "{text}").map_err(|error| format!("写帧：{error}"))?;

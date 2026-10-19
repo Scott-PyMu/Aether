@@ -14,10 +14,10 @@ pub mod ids;
 pub mod session_state;
 
 pub use domain::{
-    LogLevel, Message, MessageRole, PermissionDecision, PermissionMode, PermissionScope,
-    PermissionStatus, Run, RunStatus, Runtime, RuntimeStatus, Session, SessionStatus, TokenUsage,
-    Workspace, PAUSE_RESUME_CAPABILITY, THINKING_DEPTH_CAPABILITY, THINKING_DEPTH_DEFAULT,
-    THINKING_DEPTH_MAX, THINKING_DEPTH_MIN,
+    LogLevel, Message, MessageReference, MessageRole, PermissionDecision, PermissionMode,
+    PermissionScope, PermissionStatus, ReferenceKind, Run, RunStatus, Runtime, RuntimeStatus,
+    Session, SessionStatus, TokenUsage, Workspace, PAUSE_RESUME_CAPABILITY,
+    THINKING_DEPTH_CAPABILITY, THINKING_DEPTH_DEFAULT, THINKING_DEPTH_MAX, THINKING_DEPTH_MIN,
 };
 pub use error::{EnvelopeError, UnknownValue};
 pub use event::{

@@ -10,6 +10,9 @@
  */
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 /** 适配器 CLI 配置（`--claude-bin` 等，见 `cli.ts`）。 */
 export interface ClaudeCliConfig {
@@ -65,6 +68,54 @@ export function thinkingBudgetForDepth(depth: unknown): number | undefined {
   if (typeof depth !== "number" || !Number.isInteger(depth)) return undefined;
   if (depth < 0 || depth >= CLAUDE_THINKING_TOKEN_BUDGET.length) return undefined;
   return CLAUDE_THINKING_TOKEN_BUDGET[depth];
+}
+
+/**
+ * 档位投影表（M7-06/ADR-024 附录 A-4；ADR-014 附录 C-3）。
+ *
+ * `read_only` → `--permission-mode plan`；`workspace_write` → `acceptEdits`；
+ * `danger_full_access` → `bypassPermissions`。未知档位 → `undefined`（不覆盖 CLI 缺省）。
+ */
+export const CLAUDE_PERMISSION_MODE_BY_AETHER: Readonly<Record<string, string>> = {
+  read_only: "plan",
+  workspace_write: "acceptEdits",
+  danger_full_access: "bypassPermissions",
+};
+
+/** Aether 档位 → Claude `--permission-mode`（未知/非字符串 → `undefined`）。 */
+export function claudePermissionMode(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  return CLAUDE_PERMISSION_MODE_BY_AETHER[value];
+}
+
+/**
+ * 消费映射生效时确保隔离 settings（M7-06/ADR-024；M2-02 spike 机制）：
+ * 用户级 `~/.claude/settings.json` 的 `env`（ANTHROPIC_BASE_URL/AUTH_TOKEN 等）
+ * **优先于进程环境变量**，会覆盖核心注入的消费映射。检测到核心注入
+ * （`AETHER_PROVIDER_BASE_URL` 或 `ANTHROPIC_BASE_URL`）且未显式配置 `--settings-file`
+ * 时，物化一份**空** settings 文件并经 `--setting-sources local --settings` 隔离
+ * （不含任何密钥；密钥仍只经 env）。
+ *
+ * 返回物化文件路径（未触发隔离 → `undefined`）。
+ */
+export function ensureIsolatedSettings(
+  cli: string | { settingsFile?: string },
+  env: Record<string, string | undefined>,
+): string | undefined {
+  const config = typeof cli === "string" ? null : cli;
+  if (config?.settingsFile !== undefined) {
+    return undefined;
+  }
+  const consumptionActive =
+    (env["AETHER_PROVIDER_BASE_URL"] ?? "").length > 0 ||
+    (env["ANTHROPIC_BASE_URL"] ?? "").length > 0;
+  if (!consumptionActive) {
+    return undefined;
+  }
+  const dir = mkdtempSync(join(tmpdir(), "aether-claude-settings-"));
+  const file = join(dir, "settings.json");
+  writeFileSync(file, "{}\n", "utf8");
+  return file;
 }
 
 /** 依据接入笔记固定参数形状构造 CLI 参数。 */

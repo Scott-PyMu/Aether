@@ -500,3 +500,107 @@ describe("CodexAdapter：思考深度（M3-10 / ADR-010）", () => {
     }
   });
 });
+
+describe("CodexAdapter：档位投影、引用注入与供应商消费映射（M7-06 / ADR-024）", () => {
+  it("session.create.permission_mode → --sandbox / resume -c sandbox_mode（逐档）", { timeout: 60_000 }, async () => {
+    const invocationFile = join(mkdtempSync(join(tmpdir(), "fake-codex-m706-")), "invocations.jsonl");
+    const previous = process.env.FAKE_CODEX_INVOCATION_FILE;
+    process.env.FAKE_CODEX_INVOCATION_FILE = invocationFile;
+    try {
+      const harness = new Harness();
+      await harness.start();
+      const cases: Array<[string, string]> = [
+        ["read_only", "read-only"],
+        ["workspace_write", "workspace-write"],
+        ["danger_full_access", "danger-full-access"],
+      ];
+      for (const [mode] of cases) {
+        const session = await harness.requestResult("session.create", { permission_mode: mode });
+        const ack = await send(harness, String(session.session_id), "chat", `m7-06-${mode}`);
+        expect(await harness.waitTerminal(String(ack.run_id))).toBe("run.completed");
+      }
+      const records = readFileSync(invocationFile, "utf8")
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => JSON.parse(line) as { argv: string[] });
+      expect(records).toHaveLength(3);
+      for (const [index, [mode, expected]] of cases.entries()) {
+        const argv = records[index]?.argv ?? [];
+        const flag = argv.indexOf("--sandbox");
+        expect(flag, `--sandbox 缺失（mode=${mode}）`).toBeGreaterThanOrEqual(0);
+        expect(argv[flag + 1], `档位 ${mode} 投影`).toBe(expected);
+      }
+    } finally {
+      if (previous === undefined) delete process.env.FAKE_CODEX_INVOCATION_FILE;
+      else process.env.FAKE_CODEX_INVOCATION_FILE = previous;
+    }
+  });
+
+  it("session.send.references → 提示词前缀引用块（逐字形态）", { timeout: 40_000 }, async () => {
+    const invocationFile = join(mkdtempSync(join(tmpdir(), "fake-codex-ref-")), "invocations.jsonl");
+    const previous = process.env.FAKE_CODEX_INVOCATION_FILE;
+    process.env.FAKE_CODEX_INVOCATION_FILE = invocationFile;
+    try {
+      const harness = new Harness();
+      await harness.start();
+      const session = await createSession(harness);
+      const ack = await harness.requestResult("session.send", {
+        session_id: String(session.session_id),
+        client_msg_id: "m7-06-ref-1",
+        text: "读一下引用文件",
+        references: [{ path: "C:\\ws\\a.txt", kind: "file" }],
+      });
+      expect(await harness.waitTerminal(String(ack["run_id"]))).toBe("run.completed");
+      const records = readFileSync(invocationFile, "utf8")
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => JSON.parse(line) as { prompt: string });
+      expect(records[0]?.prompt.trimEnd()).toBe(
+        [
+          "<aether-references>",
+          "- file: C:\\ws\\a.txt",
+          "以上为随消息附带的文件引用，按需读取",
+          "</aether-references>",
+          "",
+          "读一下引用文件",
+        ].join("\n"),
+      );
+    } finally {
+      if (previous === undefined) delete process.env.FAKE_CODEX_INVOCATION_FILE;
+      else process.env.FAKE_CODEX_INVOCATION_FILE = previous;
+    }
+  });
+
+  it("供应商消费映射 env → initialize 物化隔离 config.toml（幂等；不含密钥值）", { timeout: 30_000 }, async () => {
+    const home = mkdtempSync(join(tmpdir(), "fake-codex-provider-"));
+    const previous = {
+      base: process.env.AETHER_PROVIDER_BASE_URL,
+      id: process.env.AETHER_PROVIDER_ID,
+      key: process.env.AETHER_PROVIDER_ENV_KEY,
+    };
+    process.env.AETHER_PROVIDER_BASE_URL = "https://gateway.example.com/v1";
+    process.env.AETHER_PROVIDER_ID = "01J00000000000000000000P01";
+    process.env.AETHER_PROVIDER_ENV_KEY = "OPENAI_API_KEY";
+    try {
+      const harness = new Harness({}, home);
+      await harness.start();
+      await harness.requestResult("initialize", {});
+      const configPath = join(home, "config.toml");
+      const text = readFileSync(configPath, "utf8");
+      expect(text).toContain('model_provider = "01J00000000000000000000P01"');
+      expect(text).toContain('base_url = "https://gateway.example.com/v1"');
+      expect(text).toContain('env_key = "OPENAI_API_KEY"');
+      expect(text).not.toContain("sk-");
+      // 重复 initialize 幂等（同标记覆盖）。
+      await harness.requestResult("initialize", {});
+      expect(readFileSync(configPath, "utf8")).toBe(text);
+    } finally {
+      if (previous.base === undefined) delete process.env.AETHER_PROVIDER_BASE_URL;
+      else process.env.AETHER_PROVIDER_BASE_URL = previous.base;
+      if (previous.id === undefined) delete process.env.AETHER_PROVIDER_ID;
+      else process.env.AETHER_PROVIDER_ID = previous.id;
+      if (previous.key === undefined) delete process.env.AETHER_PROVIDER_ENV_KEY;
+      else process.env.AETHER_PROVIDER_ENV_KEY = previous.key;
+    }
+  });
+});

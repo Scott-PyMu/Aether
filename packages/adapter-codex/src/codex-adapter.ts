@@ -16,7 +16,9 @@ import {
   Adapter,
   ERROR_CODES,
   RpcError,
+  composePromptWithReferences,
   isUlid,
+  parseReferences,
   ulid,
   type AdapterRuntimeInfo,
   type EnvelopeContext,
@@ -27,6 +29,8 @@ import { join } from "node:path";
 
 import {
   CodexCliRun,
+  codexSandbox,
+  materializeCodexProviderConfig,
   type CodexCliConfig,
   type KillTreeFn,
   type SpawnFn,
@@ -134,6 +138,11 @@ interface CodexSession {
   model?: string;
   /** M3-10/ADR-010：会话级思考深度（0–4；override 优先，仅本次 run）。 */
   thinkingDepth?: number;
+  /**
+   * M7-06/ADR-024 A-4：档位投影后的 Codex 沙箱模式（仅新会话生效；
+   * `session.create` 时一次判定）。
+   */
+  sandbox?: string;
   clientMsgIds: Map<string, string>;
   runs: Map<string, CodexRunState>;
   observedTools: Set<string>;
@@ -210,11 +219,18 @@ export class CodexAdapter {
 
   private registerHandlers(): void {
     this.adapter
-      .handle("initialize", () => ({
-        capabilities: this.runtime.capabilities,
-        protocol: "1.0",
-        acknowledged: true,
-      }))
+      .handle("initialize", () => {
+        // M7-06/ADR-024 §2.1-1：供应商消费映射物化——核心注入
+        // `AETHER_PROVIDER_BASE_URL`（+ `AETHER_PROVIDER_ID`/`AETHER_PROVIDER_ENV_KEY`）
+        // 时，向隔离 `CODEX_HOME` 写 `config.toml`（只含 base_url/env 键名，**不含密钥值**）。
+        // 物化失败 → 拒绝 initialize（不静默按官方默认运行）；未注入 → 官方默认路径。
+        this.materializeProviderConfigFromEnv();
+        return {
+          capabilities: this.runtime.capabilities,
+          protocol: "1.0",
+          acknowledged: true,
+        };
+      })
       .handle("session.create", (params) => this.onCreateSession(params))
       .handle("session.send", (params) => this.onSend(params))
       .handle("session.interrupt", (params) => this.onInterrupt(params))
@@ -261,6 +277,7 @@ export class CodexAdapter {
       model?: unknown;
       native_id?: unknown;
       thinking_depth?: unknown;
+      permission_mode?: unknown;
     };
     const requested = input.native_id;
     if (requested !== undefined && !isAliasId(requested)) {
@@ -271,6 +288,8 @@ export class CodexAdapter {
     }
     const model = typeof input.model === "string" && input.model.length > 0 ? input.model : undefined;
     const thinkingDepth = parseThinkingDepth(input.thinking_depth);
+    // M7-06/ADR-024 A-4：档位 → `sandbox_mode` 投影（仅新会话生效；未知档位忽略）。
+    const sandbox = codexSandbox(input.permission_mode);
     const alias = isAliasId(requested) ? requested : ulid();
     const threadId = isAliasId(requested) ? this.store.lookup(requested) : null;
     const session: CodexSession = {
@@ -280,6 +299,7 @@ export class CodexAdapter {
       resumed: isAliasId(requested) && threadId !== null,
       ...(model !== undefined ? { model } : {}),
       ...(thinkingDepth !== undefined ? { thinkingDepth } : {}),
+      ...(sandbox !== undefined ? { sandbox } : {}),
       clientMsgIds: new Map(),
       runs: new Map(),
       observedTools: new Set(),
@@ -302,6 +322,7 @@ export class CodexAdapter {
       text?: unknown;
       run_id?: unknown;
       thinking_depth?: unknown;
+      references?: unknown;
     };
     const sessionId = typeof input.session_id === "string" ? input.session_id : "";
     const session = this.sessions.get(sessionId);
@@ -339,15 +360,19 @@ export class CodexAdapter {
     // 适配器 CLI 配置的默认强度）。
     const thinkingDepth = parseThinkingDepth(input.thinking_depth) ?? session.thinkingDepth;
     const reasoning = reasoningForThinkingDepth(thinkingDepth);
+    // M7-06/ADR-024 A-3：统一映射 = 消息前缀引用块（核心不读内容；引用 ≠ 预授权）。
+    const prompt = composePromptWithReferences(input.text, parseReferences(input.references));
     run.cli = new CodexCliRun({
       config: {
         ...this.options.cli,
         ...(session.model ? { model: session.model } : {}),
         ...(reasoning !== undefined ? { reasoning } : {}),
+        // M7-06/ADR-024 A-4：会话创建的档位投影覆盖 CLI 缺省沙箱（仅新会话生效）。
+        ...(session.sandbox !== undefined ? { sandbox: session.sandbox } : {}),
       },
       spec: {
         threadId: session.threadId,
-        prompt: input.text,
+        prompt,
         timeoutMs: this.runTimeoutMs,
       },
       env: this.cliEnv(),
@@ -428,6 +453,40 @@ export class CodexAdapter {
       env.CODEX_HOME = this.options.cli.home;
     }
     return env;
+  }
+
+  /**
+   * M7-06/ADR-024 §2.1-1：从核心注入的消费映射 env 物化隔离 `CODEX_HOME/config.toml`。
+   *
+   * 触发条件：`AETHER_PROVIDER_BASE_URL` 存在（核心只在匹配 provider 时注入）。
+   * 目标 home：`--codex-home`（cli.home）> `CODEX_HOME`（核心注入的隔离目录）；
+   * 二者皆无 → 拒绝（消费映射必须有隔离 home，避免污染用户级 `~/.codex`）。
+   * 失败抛 `RpcError`（start_failed；不静默降级到官方默认）。
+   */
+  private materializeProviderConfigFromEnv(): void {
+    const env = process.env;
+    const baseUrl = env.AETHER_PROVIDER_BASE_URL;
+    if (baseUrl === undefined || baseUrl.length === 0) {
+      return;
+    }
+    const providerId = env.AETHER_PROVIDER_ID ?? "aether";
+    const envKey = env.AETHER_PROVIDER_ENV_KEY ?? "OPENAI_API_KEY";
+    const home = this.options.cli.home ?? env.CODEX_HOME;
+    if (home === undefined || home.length === 0) {
+      throw new RpcError(
+        ERROR_CODES.INTERNAL_ERROR,
+        "供应商消费映射需要隔离 CODEX_HOME（核心未注入且未配置 --codex-home）",
+      );
+    }
+    try {
+      const path = materializeCodexProviderConfig(home, providerId, baseUrl, envKey);
+      this.options.stderr?.(`[codex] 供应商消费映射已物化：${path}（不含密钥值）`);
+    } catch (error) {
+      throw new RpcError(
+        ERROR_CODES.INTERNAL_ERROR,
+        `供应商消费映射物化失败：${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   private onCliEvent(session: CodexSession, run: CodexRunState, event: unknown): void {

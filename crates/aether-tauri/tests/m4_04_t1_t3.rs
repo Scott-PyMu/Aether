@@ -1,4 +1,4 @@
-//! M4-04：T1/T2/T3 验收运行器（设计附录 D）。
+﻿//! M4-04：T1/T2/T3 验收运行器（设计附录 D）。
 //!
 //! - T1 会话创建时延：预热后连续创建 50 次；**P50 < 500ms（主指标）、P95 < 2s**；
 //! - T2 事件回显时延：Mock 适配器 10 个并发会话（每会话 1 run）× 100 delta；
@@ -303,7 +303,8 @@ fn t2_t3_echo_latency_and_control_events_zero_loss() {
                         text: format!("T2 负载 {index}"),
                         client_msg_id: format!("01J8ZQ5R0N7W9Y8X6V4T2S{index:05}"),
                         thinking_depth: None,
-                    })
+                    references: Vec::new(),
+            })
                     .expect("session_send");
                 let run_id = ack["run_id"].as_str().expect("run_id").to_owned();
                 (session_id.clone(), run_id)

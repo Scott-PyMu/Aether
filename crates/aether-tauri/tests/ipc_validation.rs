@@ -19,7 +19,8 @@ use aether_tauri::ipc::dto::{
     ArtifactsListRequest, AuditExportRequest, AuditQueryRequest, BackupCreateRequest,
     BackupRestoreRequest, ExportDiagnosticsRequest, MessagesPageRequest, PermissionResolveRequest,
     PermissionsPendingRequest, ProviderCreateRequest, ProviderDeleteRequest, ProviderModelAddRequest,
-    ProviderModelToggleRequest, ProviderToggleRequest, ProviderUpdateRequest, ProvidersListRequest,
+    ProviderModelToggleRequest, ProviderModelsFetchRequest, ProviderTestRequest, ProviderToggleRequest,
+    ProviderUpdateRequest, ProvidersListRequest,
     RunRetryRequest, RuntimeDisableRequest, RuntimeEnableRequest, RuntimeRetryRequest,
     SessionCreateRequest, SessionExportRequest, SessionIdRequest, SessionListRequest,
     SessionSendRequest, SettingsGetRequest, SettingsSetRequest, WorkspaceSetRequest,
@@ -214,6 +215,17 @@ impl IpcBackend for RecordingBackend {
         _request: &ProviderModelToggleRequest,
     ) -> Result<Value, IpcError> {
         self.record("provider_model_toggle")
+    }
+
+    fn provider_test(&self, _request: &ProviderTestRequest) -> Result<Value, IpcError> {
+        self.record("provider_test")
+    }
+
+    fn provider_models_fetch(
+        &self,
+        _request: &ProviderModelsFetchRequest,
+    ) -> Result<Value, IpcError> {
+        self.record("provider_models_fetch")
     }
 
     fn export_diagnostics(
@@ -434,6 +446,78 @@ fn malformed_samples_return_structured_errors_and_do_not_reach_backend() {
             json!({ "session_id": ULID, "text": "bad\u{0}text", "client_msg_id": CLIENT_MSG_ID }),
             "invalid_format",
             Some("text"),
+        ),
+        // M7-06/ADR-024：`session_send.references` 矩阵（条数/类型/路径校验；
+        // 路径失败统一 `artifact_path_rejected`）。
+        (
+            "session_send",
+            json!({
+                "session_id": ULID,
+                "text": "hi",
+                "client_msg_id": CLIENT_MSG_ID,
+                "references": (0..33).map(|index| json!({ "path": format!("C:/tmp/m7-06-{index}.txt"), "kind": "file" })).collect::<Vec<_>>(),
+            }),
+            "too_large",
+            Some("references"),
+        ),
+        (
+            "session_send",
+            json!({
+                "session_id": ULID,
+                "text": "hi",
+                "client_msg_id": CLIENT_MSG_ID,
+                "references": [{ "path": "C:/tmp/a.txt", "kind": "socket" }],
+            }),
+            "invalid_enum",
+            Some("references[].kind"),
+        ),
+        (
+            "session_send",
+            json!({
+                "session_id": ULID,
+                "text": "hi",
+                "client_msg_id": CLIENT_MSG_ID,
+                "references": [{ "path": "C:/tmp/a.txt", "kind": "file", "extra": 1 }],
+            }),
+            "unknown_field",
+            Some("extra"),
+        ),
+        (
+            "session_send",
+            json!({
+                "session_id": ULID,
+                "text": "hi",
+                "client_msg_id": CLIENT_MSG_ID,
+                "references": [{ "path": "relative/path.txt", "kind": "file" }],
+            }),
+            "artifact_path_rejected",
+            None,
+        ),
+        // M7-06/ADR-024：连通性测试与模型获取命令矩阵（`{ provider_id }` 严格解析）。
+        ("provider_test", json!({}), "missing_field", Some("provider_id")),
+        (
+            "provider_test",
+            json!({ "provider_id": "not-a-ulid" }),
+            "invalid_format",
+            Some("provider_id"),
+        ),
+        (
+            "provider_test",
+            json!({ "provider_id": ULID, "extra": true }),
+            "unknown_field",
+            Some("extra"),
+        ),
+        (
+            "provider_models_fetch",
+            json!({ "provider_id": 42 }),
+            "invalid_type",
+            None,
+        ),
+        (
+            "provider_models_fetch",
+            json!({}),
+            "missing_field",
+            Some("provider_id"),
         ),
         (
             "session_create",
@@ -1037,6 +1121,17 @@ fn valid_requests_reach_backend_exactly_once() {
             json!({ "session_id": ULID, "text": "你好", "client_msg_id": CLIENT_MSG_ID }),
             "session_send",
         ),
+        // M7-06/ADR-024：合法引用形态（canonicalize + 可访问性通过）到达后端。
+        (
+            "session_send",
+            json!({
+                "session_id": ULID,
+                "text": "带引用",
+                "client_msg_id": CLIENT_MSG_ID,
+                "references": [{ "path": reference_file, "kind": "file" }],
+            }),
+            "session_send",
+        ),
         (
             "session_interrupt",
             json!({ "session_id": ULID }),
@@ -1169,6 +1264,17 @@ fn valid_requests_reach_backend_exactly_once() {
             json!({ "provider_id": ULID, "model_id": "deepseek-v4-pro", "enabled": false }),
             "provider_model_toggle",
         ),
+        // M7-06/ADR-024：连通性测试与模型获取（合法形态到达后端；网络在后端，不触达）。
+        (
+            "provider_test",
+            json!({ "provider_id": ULID }),
+            "provider_test",
+        ),
+        (
+            "provider_models_fetch",
+            json!({ "provider_id": ULID }),
+            "provider_models_fetch",
+        ),
         (
             "export_diagnostics",
             json!({ "target_dir": inside }),
@@ -1267,6 +1373,7 @@ fn valid_requests_reach_backend_exactly_once() {
         "session_list",
         "session_create",
         "session_send",
+        "session_send",
         "session_interrupt",
         "session_pause",
         "session_resume",
@@ -1299,6 +1406,8 @@ fn valid_requests_reach_backend_exactly_once() {
         "provider_toggle",
         "provider_model_add",
         "provider_model_toggle",
+        "provider_test",
+        "provider_models_fetch",
         "export_diagnostics",
         "export_diagnostics",
         "settings_get",

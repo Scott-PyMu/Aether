@@ -1029,3 +1029,45 @@ describe("Mock 适配器：暂停/恢复能力与观测（M7-03 / ADR-017）", (
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("Mock 适配器：引用注入观测（M7-06 / ADR-024 A-3）", () => {
+  it("session.send.references 原样记入 session-log（含 path/kind；缺省为空 + has=false）", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "aether-m7-06-mock-ref-"));
+    const logPath = path.join(dir, "session-log.jsonl");
+    const harness = new Harness({ sessionLog: logPath, streamDeltas: 1, streamIntervalMs: 1 });
+    await harness.start();
+    const sessionId = await harness.createSession();
+    await harness.requestResult("session.send", {
+      session_id: sessionId,
+      client_msg_id: "m7-06-ref-1",
+      text: "读一下",
+      references: [
+        { path: "/ws/a.txt", kind: "file" },
+        { path: "/ws/dir", kind: "directory" },
+      ],
+    });
+    await harness.sendMessage(sessionId, "hello");
+    await harness.waitForFrame(() => {
+      const text = readFileSync(logPath, "utf8");
+      return text.includes("m7-06-ref-1") && text.includes("has_references");
+    }, "session-log（含 references 观测）");
+    const records = readFileSync(logPath, "utf8")
+      .split("\n")
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const withRefs = records.find((record) => record.client_msg_id === "m7-06-ref-1");
+    expect(withRefs).toMatchObject({
+      method: "session.send",
+      has_references: true,
+      references: [
+        { path: "/ws/a.txt", kind: "file" },
+        { path: "/ws/dir", kind: "directory" },
+      ],
+    });
+    const withoutRefs = records.find(
+      (record) => record.method === "session.send" && record.client_msg_id !== "m7-06-ref-1",
+    );
+    expect(withoutRefs).toMatchObject({ has_references: false, references: [] });
+    rmSync(dir, { recursive: true, force: true });
+  });
+});

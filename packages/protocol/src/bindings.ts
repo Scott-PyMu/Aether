@@ -112,6 +112,10 @@ export const commands = {
 	providerModelAdd: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("provider_model_add", { payload })),
 	/**  ADR-010/M3-11：模型启用/停用（不存在 → `provider_model_not_found`）。 */
 	providerModelToggle: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("provider_model_toggle", { payload })),
+	/**  M7-06/ADR-024：供应商连通性测试（真实网络请求；五路径错误映射；无密钥不发请求）。 */
+	providerTest: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("provider_test", { payload })),
+	/**  M7-06/ADR-024：从供应商获取模型列表（归一化 + 幂等 upsert）。 */
+	providerModelsFetch: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("provider_models_fetch", { payload })),
 	exportDiagnostics: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("export_diagnostics", { payload })),
 	/**
 	 *  M5-05/ADR-018：单会话 JSONL 导出（缺省 = 应用 `archives/` 目录；
@@ -367,7 +371,13 @@ export type IpcErrorCode =
  *  （M7-03/ADR-017/ADR-006 附录 B：不产生假暂停，不做任何状态转移；
  *  UI 暂停按钮置灰 + 提示）。
  */
-"pause_unsupported";
+"pause_unsupported" | 
+/**  供应商端点不可达 / 连通性测试超时（M7-06/ADR-024：总超时 10s、连接 5s）。 */
+"provider_unreachable" | 
+/**  供应商凭据无效或被拒（M7-06/ADR-024：401/403 类响应）。 */
+"provider_auth_failed" | 
+/**  供应商返回非授权类错误（M7-06/ADR-024：其余 4xx/5xx；message 含状态码）。 */
+"provider_error";
 
 /**  IPC 命令错误的线上形态：`{ "code": "...", "message": "...", "field": "..." }`。 */
 export type IpcError_Deserialize = {
@@ -471,6 +481,13 @@ export type RefPickKind = "file" | "directory";
  */
 export type RefPickRequest = {
 	kind: RefPickKind,
+};
+
+/**  引用条目（D6 `session.send.references` 载荷形态；ADR-024 附录 A-3）。 */
+export type ReferenceEntry = {
+	path: string,
+	/**  `file` / `directory`（未知值 → `invalid_enum`）。 */
+	kind: string,
 };
 
 /**  M6-01/ADR-019：`rule_add` 参数（`{ name, resource, action, target_kind, target?, decision, priority? }`）。 */
@@ -592,6 +609,11 @@ export type SessionSendRequest = {
 	 *  仅本次 run，不回写会话级）。
 	 */
 	thinking_depth?: number | null,
+	/**
+	 *  随消息附带的文件引用（M7-06/ADR-024：≤32 条；canonicalize + 可访问性校验，
+	 *  失败 `artifact_path_rejected`；**引用 ≠ 预授权**，读取仍走 `fs.read` 权限门）。
+	 */
+	references?: ReferenceEntry[],
 };
 
 /**  会话状态过滤（与附录 C `sessions.status` CHECK 枚举一一对应）。 */

@@ -74,6 +74,24 @@ sysinfo = { version = "0.30.13", default-features = false }
 # M3-04：备份/审计行的 ULID 生成（ADR-007 决策 3：生成/解析统一经 `ulid` crate；
 # 版本 =1.1.3 与 aether-control 一致，已在 Cargo.lock，MIT）。
 ulid = "=1.1.3"
+# M7-06/ADR-024：供应商连通性测试（`provider_test`/`provider_models_fetch`）的 HTTPS
+# 客户端。选择 ureq（MIT OR Apache-2.0，deny.toml 允许清单内）而非 reqwest：阻塞式 +
+# 纯 Rust TLS（rustls，Apache-2.0/ISC/MIT），无 OpenSSL 系统依赖（Linux CI 免装）、
+# crate 面更小；阻塞调用经 `spawn_blocking` 执行，不阻塞核心异步运行时。
+# 根证书走**平台验证器**（OS 信任库；`rustls-platform-verifier`，Apache-2.0 OR MIT），
+# 不引入 `webpki-roots`（CDLA-Permissive-2.0，不在 deny.toml 允许清单）。
+ureq = { version = "3", default-features = false, features = [
+    "rustls-no-provider",
+    "_ring",
+    "platform-verifier",
+] }
+# 供应商连通性测试的 rustls 加密提供者（ring；Apache-2.0 AND ISC，拒绝清单外许可）。
+rustls = { version = "0.23", default-features = false, features = [
+    "logging",
+    "std",
+    "tls12",
+    "ring",
+] }
 
 # A4 ③：HKCU\Software\Microsoft\OneDrive\Accounts\* 的 UserFolder 比对（winreg 安全封装，
 # 工作区 lint 禁止 unsafe FFI；winreg 0.55 已是依赖图成员）。

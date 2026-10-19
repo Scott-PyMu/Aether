@@ -38,7 +38,8 @@ use crate::ipc::dto::{
     ArtifactsListRequest, AuditExportRequest, AuditQueryRequest, BackupCreateRequest,
     BackupRestoreRequest, ExportDiagnosticsRequest, MessagesPageRequest, PermissionResolveRequest,
     PermissionsPendingRequest, ProviderCreateRequest, ProviderDeleteRequest, ProviderModelAddRequest,
-    ProviderModelToggleRequest, ProviderToggleRequest, ProviderUpdateRequest, ProvidersListRequest,
+    ProviderModelToggleRequest, ProviderModelsFetchRequest, ProviderTestRequest,
+    ProviderToggleRequest, ProviderUpdateRequest, ProvidersListRequest,
     RunRetryRequest, RuntimeEnableRequest, RuntimeRetryRequest, SessionCreateRequest,
     SessionExportRequest, SessionIdRequest, SessionListRequest, SessionSendRequest,
     SettingsGetRequest, SettingsSetRequest, WorkspaceSetRequest,
@@ -631,6 +632,17 @@ impl IpcBackend for ArchiveControlBackend {
         request: &ProviderModelToggleRequest,
     ) -> Result<Value, IpcError> {
         self.inner.provider_model_toggle(request)
+    }
+
+    fn provider_test(&self, request: &ProviderTestRequest) -> Result<Value, IpcError> {
+        self.inner.provider_test(request)
+    }
+
+    fn provider_models_fetch(
+        &self,
+        request: &ProviderModelsFetchRequest,
+    ) -> Result<Value, IpcError> {
+        self.inner.provider_models_fetch(request)
     }
 
     fn export_diagnostics(

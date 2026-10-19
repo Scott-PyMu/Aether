@@ -239,6 +239,28 @@ impl AdapterSessionClient {
         system_prompt: Option<&str>,
         thinking_depth: Option<u8>,
     ) -> Result<CreatedSession, SessionClientError> {
+        self.create_session_with_options(
+            title,
+            native_id,
+            model,
+            system_prompt,
+            thinking_depth,
+            None,
+        )
+        .await
+    }
+
+    /// `session.create` 全量可选参数（M7-06/ADR-024：`permission_mode` 档位投影由
+    /// 适配器映射为运行时启动参数；`None` = 不透传，适配器按各自缺省）。
+    pub async fn create_session_with_options(
+        &self,
+        title: Option<&str>,
+        native_id: Option<&str>,
+        model: Option<&str>,
+        system_prompt: Option<&str>,
+        thinking_depth: Option<u8>,
+        permission_mode: Option<&str>,
+    ) -> Result<CreatedSession, SessionClientError> {
         let mut params = json!({});
         if let Some(title) = title {
             params["title"] = Value::String(title.to_owned());
@@ -254,6 +276,9 @@ impl AdapterSessionClient {
         }
         if let Some(thinking_depth) = thinking_depth {
             params["thinking_depth"] = json!(thinking_depth);
+        }
+        if let Some(permission_mode) = permission_mode {
+            params["permission_mode"] = Value::String(permission_mode.to_owned());
         }
         let response = self
             .connection
@@ -292,6 +317,20 @@ impl AdapterSessionClient {
         text: &str,
         thinking_depth: Option<u8>,
     ) -> Result<SendAck, SessionClientError> {
+        self.send_with_references(session_id, client_msg_id, text, thinking_depth, &[])
+            .await
+    }
+
+    /// `session.send` + 可选 `references`（M7-06/ADR-024：文件引用上下文注入；
+    /// `[{ path, kind }]`，≤32 条由命令层校验；空集 = 不带字段）。
+    pub async fn send_with_references(
+        &self,
+        session_id: &str,
+        client_msg_id: &str,
+        text: &str,
+        thinking_depth: Option<u8>,
+        references: &[aether_core::MessageReference],
+    ) -> Result<SendAck, SessionClientError> {
         let mut params = json!({
             "session_id": session_id,
             "client_msg_id": client_msg_id,
@@ -299,6 +338,11 @@ impl AdapterSessionClient {
         });
         if let Some(thinking_depth) = thinking_depth {
             params["thinking_depth"] = json!(thinking_depth);
+        }
+        if !references.is_empty() {
+            params["references"] = serde_json::to_value(references).map_err(|error| {
+                SessionClientError::Protocol(format!("references 序列化失败：{error}"))
+            })?;
         }
         let response = self
             .connection

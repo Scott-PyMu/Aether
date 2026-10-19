@@ -575,7 +575,9 @@ fn dod2_command_matrix_structured_errors_without_persistence() {
         codes.push(error.code.as_str());
     }
 
-    // 后端层：重复 `(provider_id, model_id)` → invalid_value 且不新增行。
+    // M7-06/ADR-024 §2.1-4 设计变更驱动（原 M3-11 断言：重复 `(provider_id, model_id)`
+    // → invalid_value）：`provider_model_add` 改为**幂等 upsert**——已存在仅刷新
+    // `display_name`（enabled/created_at 不变），不新增行、不报错（驱动来源：ADR-024 DoD7）。
     let created = h
         .create(
             "重复模型",
@@ -586,12 +588,15 @@ fn dod2_command_matrix_structured_errors_without_persistence() {
         )
         .unwrap();
     let provider_id = created["id"].as_str().unwrap().to_owned();
-    h.model_add(&provider_id, "deepseek-v4-pro", "DeepSeek V4 Pro")
+    let first = h
+        .model_add(&provider_id, "deepseek-v4-pro", "DeepSeek V4 Pro")
         .expect("首次添加");
+    assert_eq!(first["refreshed"], false, "{first}");
     let duplicate = h
-        .model_add(&provider_id, "deepseek-v4-pro", "重名")
-        .expect_err("重复模型必须拒绝");
-    assert_eq!(duplicate.code, IpcErrorCode::InvalidValue, "{duplicate}");
+        .model_add(&provider_id, "deepseek-v4-pro", "刷新显示名")
+        .expect("重复添加必须幂等（ADR-024 §2.1-4）");
+    assert_eq!(duplicate["refreshed"], true, "{duplicate}");
+    assert_eq!(duplicate["display_name"], "刷新显示名", "{duplicate}");
     let list = h.list().unwrap();
     let provider = list["providers"]
         .as_array()
@@ -604,6 +609,10 @@ fn dod2_command_matrix_structured_errors_without_persistence() {
         Some(1),
         "重复添加不得新增模型行"
     );
+    assert_eq!(
+        provider["models"][0]["display_name"], "刷新显示名",
+        "幂等 upsert 必须刷新 display_name"
+    );
 
     assert_eq!(
         h.list().unwrap()["providers"].as_array().map(Vec::len),
@@ -615,7 +624,7 @@ fn dod2_command_matrix_structured_errors_without_persistence() {
         "dod2_command_matrix",
         &json!({
             "dto_error_codes": codes,
-            "duplicate_model_code": duplicate.code.as_str(),
+            "duplicate_model_code": "idempotent_upsert（ADR-024 驱动变更）",
             "model_count_after_duplicate": 1,
         }),
     );

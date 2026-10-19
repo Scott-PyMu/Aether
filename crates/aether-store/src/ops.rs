@@ -373,6 +373,13 @@ pub enum StoreCommand {
         model_id: String,
         enabled: bool,
     },
+    /// 刷新供应商模型显示名（M7-06/ADR-024 §2.1-4：幂等 upsert 的已存在分支；
+    /// `enabled`/`created_at` 保持不变；不存在时影响 0 行——存在性由命令层先行判定）。
+    RefreshProviderModelDisplayName {
+        provider_id: String,
+        model_id: String,
+        display_name: String,
+    },
     /// 删除指定 `rowid` 的事件行（M5-04 保留清理的删除半步；先归档后删除）。
     ///
     /// 调用方（保留任务）先经 [`crate::archive`] 归档精确行集合并校验通过，再提交本
@@ -1082,6 +1089,24 @@ pub(crate) fn apply_command(
                 .execute(
                     "UPDATE provider_models SET enabled = ?3 WHERE provider_id = ?1 AND model_id = ?2",
                     params![provider_id, model_id, i64::from(*enabled)],
+                )
+                .map_err(txn_failed)?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::Applied { affected })
+        }
+        StoreCommand::RefreshProviderModelDisplayName {
+            provider_id,
+            model_id,
+            display_name,
+        } => {
+            // M7-06/ADR-024 §2.1-4：`provider_model_add` / `provider_models_fetch` 幂等
+            // upsert 的「已存在仅刷新 display_name」分支（enabled/created_at 保持不变）。
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            let affected = transaction
+                .execute(
+                    "UPDATE provider_models SET display_name = ?3 \
+                     WHERE provider_id = ?1 AND model_id = ?2",
+                    params![provider_id, model_id, display_name],
                 )
                 .map_err(txn_failed)?;
             transaction.commit().map_err(txn_failed)?;

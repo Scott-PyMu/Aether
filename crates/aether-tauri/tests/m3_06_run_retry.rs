@@ -1,4 +1,4 @@
-//! M3-06 集成测试：`run_retry` IPC 接线与 Mode R/N 重放（设计 D5/D7、ADR-004/ADR-005）。
+﻿//! M3-06 集成测试：`run_retry` IPC 接线与 Mode R/N 重放（设计 D5/D7、ADR-004/ADR-005）。
 //!
 //! 宿主：`aether-adapter-fixture --mode session`（最小 D6 会话面；`session.create`
 //! 携带 `native_id` → `resumed=true`），调用记录写入 `--session-log` 供断言：
@@ -209,7 +209,8 @@ fn run_retry_uses_terminal_guard_and_replays_per_mode_r_and_n() {
             text: "hello".to_owned(),
             client_msg_id: "01J8ZQ5R0N7W9Y8X6V4T2S0K01".to_owned(),
             thinking_depth: None,
-        })
+        references: Vec::new(),
+            })
         .expect("session_send");
     let first_run = RunId::new(first["run_id"].as_str().expect("run_id").to_owned()).unwrap();
     assert!(
@@ -236,7 +237,8 @@ fn run_retry_uses_terminal_guard_and_replays_per_mode_r_and_n() {
             text: "fail-once".to_owned(),
             client_msg_id: "01J8ZQ5R0N7W9Y8X6V4T2S0K02".to_owned(),
             thinking_depth: None,
-        })
+        references: Vec::new(),
+            })
         .expect("session_send(fail)");
     let failing_run = RunId::new(failing["run_id"].as_str().unwrap().to_owned()).unwrap();
     assert!(
@@ -303,7 +305,8 @@ fn run_retry_uses_terminal_guard_and_replays_per_mode_r_and_n() {
             text: "again".to_owned(),
             client_msg_id: "01J8ZQ5R0N7W9Y8X6V4T2S0K03".to_owned(),
             thinking_depth: None,
-        })
+        references: Vec::new(),
+            })
         .expect("session_send(again)");
     let resumed_run = RunId::new(resumed["run_id"].as_str().unwrap().to_owned()).unwrap();
     assert!(
@@ -347,7 +350,8 @@ fn run_retry_uses_terminal_guard_and_replays_per_mode_r_and_n() {
             text: "long".to_owned(),
             client_msg_id: "01J8ZQ5R0N7W9Y8X6V4T2S0K04".to_owned(),
             thinking_depth: None,
-        })
+        references: Vec::new(),
+            })
         .expect("session_send(long)");
     let long_run = RunId::new(long["run_id"].as_str().unwrap().to_owned()).unwrap();
     assert!(

@@ -1,4 +1,4 @@
-//! D7 命令面（MVP 全集）：每个命令都走「严格解析 → 语义校验 → 后端」，
+﻿//! D7 命令面（MVP 全集）：每个命令都走「严格解析 → 语义校验 → 后端」，
 //! 校验失败返回结构化错误且不调用后端（不落库、不透传下游）。
 //!
 //! M1-08 只建立框架与命令面；真实实现由 [`crate::ipc::IpcBackend`] 的后续实现提供。
@@ -12,7 +12,8 @@ use super::dto::{
     BackupCreateRequest, BackupListRequest, BackupRestoreRequest, ExportDiagnosticsRequest,
     HealthRequest, MessagesPageRequest, PermissionResolveRequest, PermissionsPendingRequest,
     ProviderCreateRequest, ProviderDeleteRequest, ProviderModelAddRequest, ProviderModelToggleRequest,
-    ProviderToggleRequest, ProviderUpdateRequest, ProvidersListRequest, RefPickKind, RefPickRequest,
+    ProviderModelsFetchRequest, ProviderTestRequest, ProviderToggleRequest, ProviderUpdateRequest,
+    ProvidersListRequest, RefPickKind, RefPickRequest,
     RuleAddRequest, RuleDeleteRequest, RuleToggleRequest, RuleUpdateRequest, RulesListRequest,
     RunRetryRequest, RuntimeDisableRequest, RuntimeEnableRequest, RuntimeRetryRequest,
     SessionCreateRequest, SessionExportRequest, SessionIdRequest, SessionListRequest,
@@ -695,6 +696,34 @@ pub(crate) fn provider_model_toggle(
         .map(JsonPayload)
 }
 
+/// M7-06/ADR-024：供应商连通性测试（真实网络请求；五路径错误映射；无密钥不发请求）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn provider_test(
+    state: tauri::State<'_, IpcState>,
+    payload: JsonPayload,
+) -> Result<JsonPayload, IpcError> {
+    let request: ProviderTestRequest = parse_strict(payload.into_value())?;
+    state
+        .backend_ready()?
+        .provider_test(&request)
+        .map(JsonPayload)
+}
+
+/// M7-06/ADR-024：从供应商获取模型列表（归一化 + 幂等 upsert）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn provider_models_fetch(
+    state: tauri::State<'_, IpcState>,
+    payload: JsonPayload,
+) -> Result<JsonPayload, IpcError> {
+    let request: ProviderModelsFetchRequest = parse_strict(payload.into_value())?;
+    state
+        .backend_ready()?
+        .provider_models_fetch(&request)
+        .map(JsonPayload)
+}
+
 /// M1-06：启动门快照（拒绝启动时仍可达；UI 据此渲染门界面）。
 /// ADR-006：无参数命令；缺省载荷等价空对象，任何成员都会被严格模式拒绝。
 #[tauri::command]
@@ -830,6 +859,8 @@ pub fn collected<R: tauri::Runtime>() -> tauri_specta::Commands<R> {
         provider_toggle,
         provider_model_add,
         provider_model_toggle,
+        provider_test,
+        provider_models_fetch,
         export_diagnostics,
         session_export,
         archive_export,
@@ -890,6 +921,8 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         provider_toggle,
         provider_model_add,
         provider_model_toggle,
+        provider_test,
+        provider_models_fetch,
         export_diagnostics,
         session_export,
         archive_export,
@@ -951,6 +984,8 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         provider_toggle,
         provider_model_add,
         provider_model_toggle,
+        provider_test,
+        provider_models_fetch,
         export_diagnostics,
         session_export,
         archive_export,

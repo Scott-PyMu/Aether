@@ -478,6 +478,7 @@ export class MockAdapter {
           client_msg_id?: string;
           text?: string;
           thinking_depth?: number;
+          references?: unknown;
         };
         const session = this.session(input.session_id);
         if (!session) {
@@ -494,7 +495,10 @@ export class MockAdapter {
         const runId = ulid();
         session.clientMsgIds.set(clientMsgId, runId);
         // M3-10：`session.send` 思考深度覆盖观测（仅本次 run；缺省 = 不带字段）。
+        // M7-06/ADR-024：引用注入观测——原样记录 `references`（≤32 条；含 path/kind），
+        // 供核心侧 Mock 观测断言（`AETHER_MOCK_SESSION_LOG` 读取）。
         // `run_id` 为适配器侧 id；`client_msg_id` 为请求携带的核心 run id（生产口径）。
+        const references = Array.isArray(input.references) ? input.references : [];
         this.logSessionCall({
           method: "session.send",
           session_id: session.id,
@@ -502,6 +506,8 @@ export class MockAdapter {
           client_msg_id: clientMsgId,
           thinking_depth: typeof input.thinking_depth === "number" ? input.thinking_depth : null,
           has_thinking_depth: typeof input.thinking_depth === "number",
+          references,
+          has_references: references.length > 0,
         });
         void this.streamRun(session, runId, input.text ?? "");
         return { accepted: true, run_id: runId };

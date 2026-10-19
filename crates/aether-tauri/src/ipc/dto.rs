@@ -184,12 +184,53 @@ pub struct SessionSendRequest {
     /// 仅本次 run，不回写会话级）。
     #[serde(default)]
     pub thinking_depth: Option<i64>,
+    /// 随消息附带的文件引用（M7-06/ADR-024：≤32 条；canonicalize + 可访问性校验，
+    /// 失败 `artifact_path_rejected`；**引用 ≠ 预授权**，读取仍走 `fs.read` 权限门）。
+    #[serde(default)]
+    pub references: Vec<ReferenceEntry>,
 }
+
+/// 引用条目（D6 `session.send.references` 载荷形态；ADR-024 附录 A-3）。
+#[derive(Debug, Clone, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct ReferenceEntry {
+    pub path: String,
+    /// `file` / `directory`（未知值 → `invalid_enum`）。
+    pub kind: String,
+}
+
+/// 单次 `session.send` 引用条数上限（ADR-024 §2.1-5：≤32 条）。
+pub const MAX_SESSION_REFERENCES: usize = 32;
 
 impl SessionSendRequest {
     /// 请求的思考深度覆盖（已校验）；`None` = 缺省（应用会话级值）。
     pub fn thinking_depth_value(&self) -> Result<Option<u8>, IpcError> {
         thinking_depth_value(self.thinking_depth)
+    }
+
+    /// 解析引用条目为内核形态（canonicalize 后再取一次；与 `validate` 同口径）。
+    ///
+    /// 返回的顺序与请求一致；`kind` 使用请求声明的值（探测到的文件/目录形态仅作
+    /// 可访问性校验，不覆盖用户声明语义）。
+    pub fn resolved_references(&self) -> Result<Vec<aether_core::MessageReference>, IpcError> {
+        let mut resolved = Vec::with_capacity(self.references.len());
+        for entry in &self.references {
+            let artifact = path::validate_artifact_path(&entry.path)?;
+            let kind = aether_core::ReferenceKind::from_code(&entry.kind).ok_or_else(|| {
+                IpcError::invalid_enum(
+                    "references[].kind",
+                    format!(
+                        "引用类型非法（{}）；合法值：file / directory",
+                        entry.kind
+                    ),
+                )
+            })?;
+            resolved.push(aether_core::MessageReference {
+                path: artifact.canonical.to_string_lossy().into_owned(),
+                kind,
+            });
+        }
+        Ok(resolved)
     }
 }
 
@@ -208,6 +249,30 @@ impl CommandRequest for SessionSendRequest {
         }
         if let Some(thinking_depth) = self.thinking_depth {
             validate::validate_thinking_depth(thinking_depth, "thinking_depth")?;
+        }
+        if self.references.len() > MAX_SESSION_REFERENCES {
+            return Err(IpcError::too_large(
+                "references",
+                format!(
+                    "引用条数超过上限 {MAX_SESSION_REFERENCES}（当前 {}）",
+                    self.references.len()
+                ),
+            ));
+        }
+        for entry in &self.references {
+            if entry.kind.is_empty()
+                || aether_core::ReferenceKind::from_code(&entry.kind).is_none()
+            {
+                return Err(IpcError::invalid_enum(
+                    "references[].kind",
+                    format!(
+                        "引用类型非法（{}）；合法值：file / directory",
+                        entry.kind
+                    ),
+                ));
+            }
+            // 路径 canonicalize + 可访问性校验（失败 `artifact_path_rejected`）。
+            path::validate_artifact_path(&entry.path)?;
         }
         Ok(())
     }
@@ -508,6 +573,40 @@ fn validate_provider_name(name: &str) -> Result<(), IpcError> {
     ensure_not_empty(name, "name")?;
     ensure_max_chars(name, "name", MAX_PROVIDER_NAME_CHARS)?;
     reject_control_chars(name, "name", false)
+}
+
+/// M7-06/ADR-024：供应商连通性测试（`provider_test`；`{ provider_id }`）。
+///
+/// 网络请求参数（超时/端点/错误码）在命令后端实现；本层只做参数校验。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderTestRequest {
+    pub provider_id: String,
+}
+
+impl CommandRequest for ProviderTestRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.provider_id) {
+            return Err(IpcError::invalid_format("provider_id", "必须是 26 位 ULID"));
+        }
+        Ok(())
+    }
+}
+
+/// M7-06/ADR-024：从供应商获取模型列表（`provider_models_fetch`；`{ provider_id }`）。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderModelsFetchRequest {
+    pub provider_id: String,
+}
+
+impl CommandRequest for ProviderModelsFetchRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.provider_id) {
+            return Err(IpcError::invalid_format("provider_id", "必须是 26 位 ULID"));
+        }
+        Ok(())
+    }
 }
 
 /// Base URL 格式（ADR-010 附录 B.1：`https?://` 前缀、≤2048 字符）。

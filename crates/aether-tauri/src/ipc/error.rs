@@ -67,6 +67,12 @@ pub enum IpcErrorCode {
     /// （M7-03/ADR-017/ADR-006 附录 B：不产生假暂停，不做任何状态转移；
     /// UI 暂停按钮置灰 + 提示）。
     PauseUnsupported,
+    /// 供应商端点不可达 / 连通性测试超时（M7-06/ADR-024：总超时 10s、连接 5s）。
+    ProviderUnreachable,
+    /// 供应商凭据无效或被拒（M7-06/ADR-024：401/403 类响应）。
+    ProviderAuthFailed,
+    /// 供应商返回非授权类错误（M7-06/ADR-024：其余 4xx/5xx；message 含状态码）。
+    ProviderError,
 }
 
 impl IpcErrorCode {
@@ -96,6 +102,9 @@ impl IpcErrorCode {
             Self::RuntimeBusy => "runtime_busy",
             Self::NoCandidateRuntime => "no_candidate_runtime",
             Self::PauseUnsupported => "pause_unsupported",
+            Self::ProviderUnreachable => "provider_unreachable",
+            Self::ProviderAuthFailed => "provider_auth_failed",
+            Self::ProviderError => "provider_error",
         }
     }
 }
@@ -267,6 +276,37 @@ impl IpcError {
                 "当前运行时不支持暂停/恢复（需原生会话恢复能力）：{runtime_id}（{reason}）；\
                  会话状态未改变"
             ),
+        )
+    }
+
+    /// M7-06/ADR-024：供应商端点不可达 / 连通性测试超时（UI-UX §5 文案
+    /// 「无法连接供应商（检查网络或 Base URL）」）。
+    pub fn provider_unreachable(detail: &str) -> Self {
+        Self::new(
+            IpcErrorCode::ProviderUnreachable,
+            format!("无法连接供应商（检查网络或 Base URL）：{detail}"),
+        )
+    }
+
+    /// M7-06/ADR-024：供应商凭据无效或被拒（401/403；UI-UX §5 文案
+    /// 「API Key 无效或被拒绝」）。
+    pub fn provider_auth_failed(detail: &str) -> Self {
+        Self::new(
+            IpcErrorCode::ProviderAuthFailed,
+            format!("API Key 无效或被拒绝：{detail}"),
+        )
+    }
+
+    /// M7-06/ADR-024：供应商返回非授权类错误（其余 4xx/5xx；message 含供应商状态码；
+    /// UI-UX §5 文案「供应商返回错误（{status}）」）。
+    pub fn provider_error(status: Option<u16>, detail: &str) -> Self {
+        let status_text = match status {
+            Some(status) => status.to_string(),
+            None => "未知".to_owned(),
+        };
+        Self::new(
+            IpcErrorCode::ProviderError,
+            format!("供应商返回错误（{status_text}）：{detail}"),
         )
     }
 

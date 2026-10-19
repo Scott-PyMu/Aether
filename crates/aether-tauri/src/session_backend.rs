@@ -48,7 +48,8 @@ use crate::ipc::dto::{
     ArtifactAddRequest, ArtifactRemoveRequest, ArtifactsListRequest, MessagesPageRequest,
     PermissionResolveRequest, PermissionsPendingRequest, ProviderCreateRequest,
     ProviderDeleteRequest, ProviderModelAddRequest, ProviderModelToggleRequest,
-    ProviderToggleRequest, ProviderUpdateRequest, ProvidersListRequest, RuleAddRequest,
+    ProviderModelsFetchRequest, ProviderTestRequest, ProviderToggleRequest, ProviderUpdateRequest,
+    ProvidersListRequest, RuleAddRequest,
     RuleDeleteRequest, RuleToggleRequest, RuleUpdateRequest, SessionCreateRequest,
     SessionIdRequest, SessionListRequest, SessionPermissionModeSetRequest, SessionSendRequest,
 };
@@ -1035,6 +1036,19 @@ impl IpcBackend for SessionBackend {
         self.providers_required()?.provider_model_toggle(request)
     }
 
+    // M7-06/ADR-024：连通性测试与模型获取（薄转发；网络/错误码/upsert 语义在
+    // provider_control，本层不复刻）。
+    fn provider_test(&self, request: &ProviderTestRequest) -> Result<Value, IpcError> {
+        self.providers_required()?.provider_test(request)
+    }
+
+    fn provider_models_fetch(
+        &self,
+        request: &ProviderModelsFetchRequest,
+    ) -> Result<Value, IpcError> {
+        self.providers_required()?.provider_models_fetch(request)
+    }
+
     fn session_send(&self, request: &SessionSendRequest) -> Result<Value, IpcError> {
         let manager = self.manager_required()?.clone();
         let reads = self.reads.clone();
@@ -1043,6 +1057,9 @@ impl IpcBackend for SessionBackend {
         let text = request.text.clone();
         let client_msg_id = request.client_msg_id.clone();
         let thinking_override = request.thinking_depth_value()?;
+        // M7-06/ADR-024：引用在命令层已校验（canonicalize + 可访问性）；此处解析为
+        // 内核形态（canonical 路径 + kind）随 `session.send` 透传。
+        let references = request.resolved_references()?;
         self.call(async move {
             let session_id = parse_session_id(&session_id)?;
             // M3-10/ADR-010 能力门（同步判定路径，尽力而为）：run 执行前的 runtime
@@ -1079,7 +1096,13 @@ impl IpcBackend for SessionBackend {
                 _ => None,
             };
             let ack = manager
-                .send_with_thinking_depth(&session_id, &text, &client_msg_id, thinking_override)
+                .send_with_references(
+                    &session_id,
+                    &text,
+                    &client_msg_id,
+                    thinking_override,
+                    references,
+                )
                 .await
                 .map_err(map_lifecycle_error)?;
             let mut response = json!({

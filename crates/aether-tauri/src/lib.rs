@@ -31,7 +31,9 @@ pub mod logging;
 pub mod nav;
 pub mod permission_loop;
 pub mod picker;
+pub mod provider_connectivity;
 pub mod provider_control;
+pub mod provider_env;
 pub mod registry_identity;
 pub mod retention;
 pub mod runtime_control;
@@ -242,6 +244,9 @@ fn build_backend(
     // M4-05：安装产物内置只读注册清单（`resource_dir()/runtime-bundle/runtimes.json`；
     // ADR-015 §2.2 schema）→ 官方运行时注册；缺失/条目被拒不阻塞启动（空注册表告警）。
     let deferred_audit_observer = std::sync::Arc::new(audit_bridge::DeferredObserver::new());
+    // M7-06/ADR-024：供应商消费映射 spawn 环境注入点（存储/密钥存储就绪后接线；
+    // 每次 spawn 现取——无匹配 provider / 读取失败 → 不注入，不阻断启动）。
+    let provider_env_hook = provider_env::ProviderEnvHook::new(data_dir.clone());
     let registry = runtime_registry::resolve_registry_dir(app)
         .as_deref()
         .map(runtime_registry::load_registry)
@@ -260,9 +265,13 @@ fn build_backend(
         manifest_present = registry.manifest_present,
         "运行时注册清单加载完成"
     );
+    let mut specs = registry.specs;
+    for spec in &mut specs {
+        spec.env_source = Some(provider_env_hook.clone());
+    }
     let supervisor: Option<std::sync::Arc<aether_adapters::supervisor::Supervisor>> =
         match runtime_control::boot_supervisor_with_observer(
-            registry.specs,
+            specs,
             None,
             deferred_audit_observer.clone(),
         ) {
@@ -618,6 +627,11 @@ fn build_backend(
     } else {
         None
     };
+    // M7-06/ADR-024：消费映射注入点接线（存储/密钥存储均就绪；降级启动时
+    // secrets = None → 不注入）。
+    if let Some(reads) = reads.as_ref() {
+        provider_env_hook.wire(reads.clone(), boot_secrets.clone());
+    }
     let inner: std::sync::Arc<dyn ipc::IpcBackend> = match backup_deps {
         Some((reads, write)) => {
             let backend = std::sync::Arc::new(backup_control::BackupControlBackend::new(
