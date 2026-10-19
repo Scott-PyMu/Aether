@@ -233,7 +233,7 @@ fn dead_pid_record_is_removed_without_kill() {
     assert_eq!(report.actions[0].verdict, LedgerVerdict::Stale);
     assert!(!report.actions[0].killed);
     assert_eq!(killer.calls.load(Ordering::SeqCst), 0);
-    let mut ledger = AdapterLedger::load(&ledger_path).unwrap();
+    let ledger = AdapterLedger::load(&ledger_path).unwrap();
     assert!(ledger.get("mock").is_none(), "陈旧记录必须移除");
 }
 
