@@ -30,8 +30,42 @@ crates/aether-tauri     桌面壳与 IPC 命令层（薄）
 pnpm install --frozen-lockfile
 pnpm -r build            # 前端与包构建
 cargo build --workspace  # Rust 构建
-pnpm --filter @aether/desktop dev   # 前端热更（配合 cargo tauri dev）
 ```
+
+### 调试模式（开发者模式）
+
+`tauri dev` 为 Debug 构建：DevTools 可用（窗口内右键 / `F12`），并注册 E2E 探针命令
+（`#[cfg(debug_assertions)]`；release 构建不包含）。
+
+```powershell
+$env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
+pnpm --filter @aether/desktop tauri dev
+```
+
+- 首次编译需数分钟；前端 `http://localhost:5173` 热更新。
+- 默认注册表为空（运行时选择器无条目）。需在调试中真实启动运行时，先构建运行时包并在
+  **编译前**注入（`build.rs` 会内嵌清单/程序摘要；更换目录后需重新构建）：
+
+```powershell
+node scripts/ci/build-runtime-bundles.mjs        # 三官方运行时；AETHER_BUNDLE_MOCK=1 另含 Mock
+$env:AETHER_RUNTIME_BUNDLE_DIR="$PWD\crates\aether-tauri\runtime-bundle"
+$env:AETHER_RUNTIME_REGISTRY_DIR="$PWD\crates\aether-tauri\runtime-bundle"
+pnpm --filter @aether/desktop tauri dev
+```
+
+- 建议隔离调试数据目录（A4：必须本地磁盘，勿放 OneDrive / 网络盘）：
+
+```powershell
+$env:AETHER_DATA_DIR="$env:TEMP\aether-dev-data"
+```
+
+- OS 凭据库不可用时会走 A3 降级加密文件，需提供口令（调试/演练专用）：
+
+```powershell
+$env:AETHER_SECRETS_PASSPHRASE="dev-pass"
+```
+
+- 仅 UI 调试（浏览器打开 `http://localhost:5173`，无 Rust/IPC）：`pnpm --filter @aether/desktop dev`。
 
 ## 验证与门禁
 
