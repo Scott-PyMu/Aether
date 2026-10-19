@@ -112,7 +112,20 @@ function samplePem(armor) {
   writeFileSync(path.join(outDir, "cargo-test.txt"), combined);
   const ok = tests.exit === 0 && combined.includes("test result: ok");
   if (ok) pass("DoD1/2/3 cargo test -p aether-security 全绿（含 0 命中扫描断言）");
-  else fail("cargo test -p aether-security", `exit=${tests.exit}`);
+  else {
+    fail("cargo test -p aether-security", `exit=${tests.exit}`);
+    // 公开失败诊断：失败测试名与 panic 摘要（完整输出见 evidence/cargo-test.txt）。
+    const lines = combined.split(/\r?\n/);
+    const hits = lines.filter((line) => /FAILED|panicked|error\[/.test(line));
+    console.error(
+      [
+        "----- cargo test -p aether-security 失败诊断 -----",
+        ...hits,
+        "--- tail 40 ---",
+        ...lines.slice(-40),
+      ].join("\n"),
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------

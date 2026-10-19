@@ -240,7 +240,14 @@ mod tests {
             std::process::id()
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        dir
+        // Windows CI 的 TEMP 常带 8.3 短名（如 RUNNER~1）；策略引擎拒绝短名目标，
+        // 而 T7 样本注入区外路径时 `..` 消不掉用户段短名 → 统一取长名形态。
+        let canonical = std::fs::canonicalize(&dir).unwrap();
+        #[cfg(windows)]
+        if let Some(stripped) = canonical.to_string_lossy().strip_prefix(r"\\?\") {
+            return PathBuf::from(stripped);
+        }
+        canonical
     }
 
     #[test]

@@ -183,6 +183,7 @@ jobs:
           name: m4-docs-evidence
           path: |
             scripts/test/.tmp/m4-06/evidence-*/
+            scripts/test/.tmp/m1-07/**
             docs/evidence/m4-06/
             m4-06.log
           if-no-files-found: warn

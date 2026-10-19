@@ -148,7 +148,6 @@ record(
     [permissionRs, "fn set_pending_observer", "组合根装配入口"],
     [permissionRs, "fn cleared_session_after_removal", "票据摘除唯一仲裁点判定"],
     [lib, "set_pending_observer", "组合根接线（两阶段装配）"],
-    [sessionState, "assert_eq!(legal.len(), 19", "19 边状态机冻结（单测锁定）"],
     // DoD5：分组锚点契约与既有锚点。
     [workbench, 'data-testid="session-group"', "分组容器锚点"],
     [workbench, "data-group={group}", "分组 data-group"],
@@ -174,6 +173,12 @@ record(
   ];
   for (const [source, needle, label] of required) {
     if (!source.includes(needle)) problems.push(`${label}: 缺少 ${needle}`);
+  }
+
+  // 22 边状态机冻结（单测锁定；M7-03/ADR-017 §2.1-2：19→22）：断言经 rustfmt
+  // 多行排版，做空白归一化后匹配「assert_eq!( legal.len(), 22」。
+  if (!sessionState.replace(/\s+/g, " ").includes("assert_eq!( legal.len(), 22,")) {
+    problems.push("22 边状态机冻结（单测 legal.len(), 22 断言）缺失");
   }
 
   // 固定组序字面量（顺序断言）。

@@ -143,6 +143,8 @@ record(
     "provider_toggle",
     "provider_model_add",
     "provider_model_toggle",
+    "provider_test",
+    "provider_models_fetch",
   ];
   for (const name of commandNames) {
     if (!commands.includes(`pub(crate) fn ${name}`)) {
@@ -240,7 +242,9 @@ record(
     "providers-add-custom",
     "provider-empty",
     "provider-error",
-    "provider-test-notice",
+    "provider-test-result",
+    "provider-models-fetch",
+    "provider-models-notice",
     "providers-notice",
     "provider-type-select",
     "provider-form",
@@ -276,9 +280,16 @@ record(
     }
   }
 
-  // 「从供应商获取」P0 不提供入口（ADR-010 §5-7）：检查 JSX 文本入口（注释不构成入口）。
-  if (/>\s*从供应商获取/.test(providersPage)) {
-    problems.push("P0 不得提供「从供应商获取」入口（ADR-010 §5-7）");
+  // 「从供应商获取」/「测试连接」：M7-06/ADR-024 已升为 P1 真实入口（替代 ADR-010
+  // §5-7「P0 不提供入口」口径）：入口 + 命令接线必须同时在场，禁止死入口。
+  if (!providersPage.includes("从供应商获取")) {
+    problems.push("P1 必须提供「从供应商获取」真实入口（M7-06/ADR-024 F-2）");
+  }
+  if (!providersTs.includes('"provider_models_fetch"')) {
+    problems.push("「从供应商获取」必须接线 provider_models_fetch（M7-06）");
+  }
+  if (!providersPage.includes('data-testid="provider-test-result"') || !providersTs.includes('"provider_test"')) {
+    problems.push("「测试连接」必须真实调用 provider_test 并暴露三态锚点（M7-06/ADR-024）");
   }
 
   if (problems.length > 0) console.error(problems.join("\n"));

@@ -238,7 +238,7 @@ if (existsSync(designDoc)) {
     // 执行器：能力门判定与字段不透传。
     [executor, "connection_supports_thinking_depth", "能力门判定（hello capabilities）"],
     [executor, "THINKING_DEPTH_CAPABILITY", "执行器能力项引用"],
-    [executor, "send_with_thinking_depth", "覆盖透传 session.send"],
+    [executor, "send_with_references", "覆盖透传 session.send（M7-06/ADR-024：references 扩展形）"],
     [executor, "UpdateSessionThinkingDepth", "延迟判定会话改写（ADR-010）"],
     // IPC：请求字段/校验/警告码。
     [dto, "pub thinking_depth: Option<i64>", "session_create/session_send 可选字段"],

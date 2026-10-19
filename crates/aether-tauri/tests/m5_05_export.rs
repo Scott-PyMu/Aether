@@ -48,6 +48,19 @@ fn new_runtime() -> tokio::runtime::Runtime {
         .expect("构建 tokio 运行时")
 }
 
+/// Windows CI 的 TEMP 常带 8.3 短名（如 `RUNNER~1`），而导出目标校验拒绝短名形态
+/// （ADR-018/D13 守卫）。测试夹具统一走 canonicalize 后剥离 `\\?\` 的长名形态，
+/// 与 m5_02/m5_03/m5_04 等 m5 测试的 `long_path` 口径一致。
+fn long_path(path: &Path) -> String {
+    let canonical = std::fs::canonicalize(path).expect("canonicalize 夹具路径");
+    let text = canonical.to_string_lossy().to_string();
+    #[cfg(windows)]
+    if let Some(stripped) = text.strip_prefix(r"\\?\") {
+        return stripped.to_string();
+    }
+    text
+}
+
 /// 种子数据：1 会话 + 2 消息 + 事件（控制/白名单混合，seq 连续）+ 1 run + 1 供应商引用。
 fn seed_database(path: &Path) {
     let store = Store::open(path).expect("打开/迁移数据库");
@@ -188,7 +201,7 @@ impl Fixture {
     fn export_session(&self, target: Option<&Path>) -> Value {
         let request = SessionExportRequest {
             session_id: SESSION_ID.to_owned(),
-            target_dir: target.map(|path| path.to_string_lossy().to_string()),
+            target_dir: target.map(long_path),
         };
         let canonical = request.canonical_target_dir().expect("目标校验");
         self.archive
@@ -198,7 +211,7 @@ impl Fixture {
 
     fn export_all(&self, target: Option<&Path>) -> Value {
         let request = ArchiveExportRequest {
-            target_dir: target.map(|path| path.to_string_lossy().to_string()),
+            target_dir: target.map(long_path),
         };
         let canonical = request.canonical_target_dir().expect("目标校验");
         self.archive
@@ -667,12 +680,13 @@ fn external_target_and_space_guards() {
     let response = fixture.export_all(Some(&external));
     assert_eq!(response["export"]["source"], ARCHIVE_SOURCE_ARCHIVE_EXPORT);
     let path = PathBuf::from(response["export"]["path"].as_str().expect("路径"));
-    assert_eq!(path.parent(), Some(external.as_path()));
+    let expected_dir = PathBuf::from(long_path(&external));
+    assert_eq!(path.parent(), Some(expected_dir.as_path()));
 
     // 不可写 → archive_target_not_writable。
     probe.writable.store(false, Ordering::SeqCst);
     let request = ArchiveExportRequest {
-        target_dir: Some(external.to_string_lossy().to_string()),
+        target_dir: Some(long_path(&external)),
     };
     let canonical = request.canonical_target_dir().expect("目标校验");
     let error = fixture

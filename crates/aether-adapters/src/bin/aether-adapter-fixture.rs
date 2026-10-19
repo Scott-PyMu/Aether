@@ -159,7 +159,10 @@ fn main() -> ExitCode {
     };
     // M7-06：spawn env 注入点报告（`--env-report <path>`；键缺省 `AETHER_M7_06_PROBE`）。
     if let Some(path) = args.env_report.as_ref() {
-        report_env(path, args.env_name.as_deref().unwrap_or("AETHER_M7_06_PROBE"));
+        report_env(
+            path,
+            args.env_name.as_deref().unwrap_or("AETHER_M7_06_PROBE"),
+        );
     }
     match run(&args) {
         Ok(()) => ExitCode::SUCCESS,
@@ -237,7 +240,8 @@ fn report_env(path: &std::path::Path, name: &str) {
 }
 
 /// 写一行 JSON-RPC 帧（响应/通知共用）。
-fn write_frame(frame: &serde_json::Value) -> Result<(), String> {    let stdout = std::io::stdout();
+fn write_frame(frame: &serde_json::Value) -> Result<(), String> {
+    let stdout = std::io::stdout();
     let mut handle = stdout.lock();
     let text = serde_json::to_string(frame).map_err(|error| format!("序列化：{error}"))?;
     writeln!(handle, "{text}").map_err(|error| format!("写帧：{error}"))?;

@@ -7,8 +7,11 @@
  *   3) 验收报告产出：每项附证据链接与失败重跑记录（本脚本输出 acceptance.json，
  *      报告 `docs/M4-04-验收报告.md` 引用；失败项记录 rerun 命令）；
  *   4) 命令面完整性：命令全集（P0 36 + M5-05 导出 2 + M6-01 权限模式/规则 6 +
- *      M6-03 审计查询/导出 2 = 46；bindings ↔ collect_commands ↔ generate_handler 三方一致）
- *      + 错误码全集 21 个分支覆盖扫描（M6-01 新增 `rule_not_found`）+ 警告码
+ *      M6-03 审计查询/导出 2 + M7-01 runtime_disable 1 + M7-03 暂停/恢复 2 +
+ *      M7-06 连通性 2 = 51；bindings ↔ collect_commands ↔ generate_handler 三方一致）
+ *      + 错误码全集 27 个分支覆盖扫描（M6-01 `rule_not_found`；M7-01 `runtime_busy`/
+ *      `no_candidate_runtime`；M7-03 `pause_unsupported`；M7-06 `provider_unreachable`/
+ *      `provider_auth_failed`/`provider_error`）+ 警告码
  *      `thinking_depth_unsupported` 分支验证。
  *
  * 参数：--skip-coverage（跳过 T15 重负载），--skip-e2e（非 Windows 本地调试）。
@@ -41,6 +44,8 @@ const EXPECTED_COMMANDS = [
   "session_create",
   "session_send",
   "session_interrupt",
+  "session_pause",
+  "session_resume",
   "session_dispose",
   "messages_page",
   "permissions_pending",
@@ -60,6 +65,7 @@ const EXPECTED_COMMANDS = [
   "run_retry",
   "runtime_retry",
   "runtime_enable",
+  "runtime_disable",
   "workspace_set",
   "ref_pick",
   "artifacts_list",
@@ -72,6 +78,8 @@ const EXPECTED_COMMANDS = [
   "provider_toggle",
   "provider_model_add",
   "provider_model_toggle",
+  "provider_test",
+  "provider_models_fetch",
   "export_diagnostics",
   "session_export",
   "archive_export",
@@ -106,6 +114,12 @@ const EXPECTED_ERROR_CODES = [
   "provider_not_found",
   "provider_model_not_found",
   "rule_not_found",
+  "runtime_busy",
+  "no_candidate_runtime",
+  "pause_unsupported",
+  "provider_unreachable",
+  "provider_auth_failed",
+  "provider_error",
 ];
 
 const results = [];
@@ -520,7 +534,7 @@ if (selected("T15")) {
   }
 }
 
-// ===== DoD4：命令面完整性（35 条目 / 36 命令、20 错误码、1 警告码）=====
+// ===== DoD4：命令面完整性（51 命令、27 错误码、1 警告码）=====
 
 if (selected("DoD4")) {
   const commandsSource = readFileSync(

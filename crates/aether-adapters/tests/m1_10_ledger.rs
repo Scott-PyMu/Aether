@@ -212,11 +212,28 @@ fn dead_pid_record_is_removed_without_kill() {
     }
 
     let probe = SysinfoProbe::new();
-    let mut ledger = AdapterLedger::load(&ledger_path).unwrap();
-    let report = ledger.cleanup(&probe, &killer).unwrap();
+    // Windows CI（run 39227417828）实测：已终止进程的 pid 在 OS 视图里可能短暂
+    // 仍被枚举、或窗口期内被其它夹具进程复用 → 单次判定偶发 StartTimeMismatch。
+    // 死进程记录最终必须收口为 Stale 并移除：以有界重试等待 OS 进程视图收敛
+    // （每次重试都断言绝不触发 kill，不得放宽「移除」口径）。
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let report = loop {
+        let mut ledger = AdapterLedger::load(&ledger_path).unwrap();
+        let current = ledger.cleanup(&probe, &killer).unwrap();
+        if !current.actions.is_empty() && current.actions[0].verdict == LedgerVerdict::Stale {
+            break current;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "死进程记录必须在窗口内收口为 Stale（停留：{:?}）",
+            current.actions
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
     assert_eq!(report.actions[0].verdict, LedgerVerdict::Stale);
     assert!(!report.actions[0].killed);
     assert_eq!(killer.calls.load(Ordering::SeqCst), 0);
+    let mut ledger = AdapterLedger::load(&ledger_path).unwrap();
     assert!(ledger.get("mock").is_none(), "陈旧记录必须移除");
 }
 

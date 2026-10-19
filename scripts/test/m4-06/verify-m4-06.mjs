@@ -4,7 +4,7 @@
  * 覆盖 DoD：
  *   1) 文档齐备：README、适配器接入指南、失败场景处置手册（30 场景→操作步骤）、隐私说明；
  *   2) 新成员演练：按文档在干净环境接入 Mock 适配器并跑通（记录时长）；
- *   3) SBOM 归档；IPC 参数校验全量复查清单（36 命令）签核；密钥脱敏扫描 0 命中。
+ *   3) SBOM 归档；IPC 参数校验全量复查清单（51 命令）签核；密钥脱敏扫描 0 命中。
  *
  * 用法：node scripts/test/m4-06/verify-m4-06.mjs
  */
@@ -117,7 +117,7 @@ mkdirSync(evidenceDir, { recursive: true });
   );
 }
 
-// ===== 4. IPC 参数校验全量复查清单（36 命令）=====
+// ===== 4. IPC 参数校验全量复查清单（51 命令）=====
 
 {
   const checklistPath = path.join(repoRoot, "docs", "M4-06-IPC参数校验复查清单.md");
@@ -131,13 +131,13 @@ mkdirSync(evidenceDir, { recursive: true });
   );
   const uncovered = commands.filter((command) => !checklist.includes(`\`${command}\``));
   record(
-    "IPC 参数校验全量复查清单：36/36 命令逐条登记",
-    commands.length === 36 && uncovered.length === 0,
-    uncovered.length === 0 ? `36/36` : `缺失=${uncovered.join(",")}`,
+    "IPC 参数校验全量复查清单：51/51 命令逐条登记",
+    commands.length === 51 && uncovered.length === 0,
+    uncovered.length === 0 ? `51/51` : `缺失=${uncovered.join(",")}`,
   );
   record(
-    "错误码全集与警告码子表在清单登记（20 + thinking_depth_unsupported）",
-    checklist.includes("错误码全集（20）") && checklist.includes("thinking_depth_unsupported"),
+    "错误码全集与警告码子表在清单登记（27 + thinking_depth_unsupported）",
+    checklist.includes("错误码全集（27）") && checklist.includes("thinking_depth_unsupported"),
   );
 }
 

@@ -551,11 +551,21 @@ mod tests {
             Some("\\\\server\\share\\x")
         )
         .is_err());
-        // 系统生成的 canonical 形态（`\\?\` 前缀）幂等接受（更新旧规则的再规范化路径）。
+        // 系统生成的 canonical 形态幂等接受（更新旧规则的再规范化路径）。
+        // Windows 系统形态为 `\\?\` 扩展前缀 + 盘符；盘符语义仅 Windows 成立，
+        // 非 Windows 以同前缀的 POSIX 绝对路径验证剥离后的接受路径。
+        #[cfg(windows)]
         assert!(normalize_rule_target(
             PermissionResource::FsRead,
             RuleTargetKind::Path,
             Some("\\\\?\\C:\\x")
+        )
+        .is_ok());
+        #[cfg(not(windows))]
+        assert!(normalize_rule_target(
+            PermissionResource::FsRead,
+            RuleTargetKind::Path,
+            Some("//?//tmp/aether-extended-form")
         )
         .is_ok());
     }
