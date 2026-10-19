@@ -149,6 +149,13 @@ impl PathGuard {
     pub fn resolve(&self, raw: &str) -> Result<PathBuf, PathViolation> {
         check_input_form(raw)?;
         let candidate = self.absolute_candidate(raw);
+        // ADR-019 稳定错误码：组件形态（保留设备名/8.3/尾点空格）是纯词法判定，
+        // 词法上落在工作区内的候选先于 FS 访问收口——否则设备名（如 `CON`）在
+        // 不同会话/环境下的打开错误会抢先返回 `path_canonicalize_failed`
+        // （CI run 39239472009 实测：本机走找不到分支、CI 服务会话走打开失败分支）。
+        if self.contains(&candidate) {
+            check_component_specials(&relative_tail(&self.root, &candidate))?;
+        }
         let resolved = canonicalize_with_nonexistent_tail(&candidate).map_err(|error| {
             PathViolation::CanonicalizeFailed {
                 path: candidate.clone(),
@@ -177,6 +184,14 @@ impl PathGuard {
     pub fn resolve_any(&self, raw: &str) -> Result<ResolvedTarget, PathViolation> {
         check_input_form(raw)?;
         let candidate = self.absolute_candidate(raw);
+        // ADR-019 稳定错误码：词法上已在工作区内的候选，其组件形态（保留设备名/8.3/
+        // 尾点空格）先于 FS 访问收口——否则设备名（如 `CON`）在不同会话/环境下的
+        // 打开错误会抢先返回 `path_canonicalize_failed`（CI run 39239472009 实测）。
+        // 仅限「词法已在根内」：候选与根形态不一致（如短名文本 vs canonical 根）时
+        // 以 canonicalize 后的判定为准（m2_10 短名夹具回归实测），区外检查保持原序。
+        if self.contains(&candidate) {
+            check_component_specials(&relative_tail(&self.root, &candidate))?;
+        }
         let resolved = canonicalize_with_nonexistent_tail(&candidate).map_err(|error| {
             PathViolation::CanonicalizeFailed {
                 path: candidate.clone(),

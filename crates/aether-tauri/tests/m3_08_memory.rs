@@ -230,15 +230,17 @@ fn harness(binary: &Path) -> Harness {
 
 impl Harness {
     fn bind(&self, root: &Path) -> Value {
-        // 与命令层同口径：canonicalize + 同步盘拒绝 + verbatim 剥离（`validate_workspace_root`）。
+        // 工作区根校验：canonicalize + 存在检查 + verbatim 剥离（validate_workspace_root）
+        // ——夹具走长名形态（同 outside_target 口径，规避 CI 临时目录 8.3 短名误伤）。
+        let root_text = plain(&std::fs::canonicalize(root).expect("canonicalize 工作区根"));
         let canonical =
-            aether_tauri::ipc::path::validate_workspace_root(root.to_string_lossy().as_ref())
+            aether_tauri::ipc::path::validate_workspace_root(root_text.as_str())
                 .expect("工作区根校验");
         self.backend
             .workspace_set(
                 &WorkspaceSetRequest {
                     workspace_id: None,
-                    root_path: Some(root.to_string_lossy().to_string()),
+                    root_path: Some(root_text),
                 },
                 Some(&canonical),
             )
@@ -371,7 +373,7 @@ fn workspace_set_injects_memory_and_swaps_permission_root() {
     let bound = h.bind(h.workspace.path());
     let workspace_id = bound["workspace_id"].as_str().unwrap().to_owned();
     let expected_root = aether_tauri::ipc::path::validate_workspace_root(
-        h.workspace.path().to_string_lossy().as_ref(),
+        plain(&h.workspace.path().canonicalize().unwrap()).as_str(),
     )
     .unwrap();
     assert_eq!(

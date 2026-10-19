@@ -53,6 +53,19 @@ fn new_runtime() -> tokio::runtime::Runtime {
         .expect("构建 tokio 运行时")
 }
 
+/// Windows CI 的 TEMP 常带 8.3 短名（如 `RUNNER~1`），而导出目标校验拒绝短名形态
+/// （ADR-018/D13 守卫）。测试夹具统一走 canonicalize 后剥离 `\\?\` 的长名形态，
+/// 与 m5_02/m5_03/m5_04/m5_05 的 `long_path` 口径一致。
+fn long_path(path: &Path) -> String {
+    let canonical = std::fs::canonicalize(path).expect("canonicalize 夹具路径");
+    let text = canonical.to_string_lossy().to_string();
+    #[cfg(windows)]
+    if let Some(stripped) = text.strip_prefix(r"\\?\") {
+        return stripped.to_string();
+    }
+    text
+}
+
 fn mock_binary() -> Option<PathBuf> {
     match std::env::var_os("AETHER_MOCK_ADAPTER") {
         Some(path) => Some(PathBuf::from(path)),
@@ -456,12 +469,13 @@ fn audit_export_external_target_guards() {
 
     // 可写 + 空间充足：产物落在外部目录。
     let request = AuditExportRequest {
-        target_dir: Some(external.to_string_lossy().to_string()),
+        target_dir: Some(long_path(&external)),
         ..AuditExportRequest::default()
     };
     let response = fixture.export(&request, Some(&external));
     let path = PathBuf::from(response["export"]["path"].as_str().expect("路径"));
-    assert_eq!(path.parent(), Some(external.as_path()));
+    let expected_dir = PathBuf::from(long_path(&external));
+    assert_eq!(path.parent(), Some(expected_dir.as_path()));
 
     // 不可写 → archive_target_not_writable（不产生新产物）。
     probe.writable.store(false, Ordering::SeqCst);
