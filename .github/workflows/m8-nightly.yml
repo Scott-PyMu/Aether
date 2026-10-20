@@ -1,0 +1,85 @@
+name: m8-nightly
+
+# M8-01 P1 故障注入与夜跑（P1 计划 §5 DoD1–DoD3；ADR-012/ADR-013）：
+# 9 个 P1 新机制故障场景（触发 → 自动应对 → 恢复三段证据）
+# + P0 30 场景回归（M4-01/02/03 全量）
+# + 连续 3 轮全绿（同一执行期；不构成日历门槛）。
+# 触发：
+#   - 每日定时（UTC 17:00）；
+#   - 手动 workflow_dispatch；
+#   - main 上 M8-01/M4 演练/夜跑路径变更——保证故障注入变更即时回归归档。
+
+on:
+  schedule:
+    - cron: "0 17 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/m8-nightly.yml"
+      - "scripts/test/m8-01/**"
+      - "scripts/test/m4/**"
+      - "scripts/test/m4-*/**"
+      - "docs/M8-01-*"
+
+concurrency:
+  group: m8-nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # M8-01：9 场景 + P0 30 场景 × 3 轮（Windows runner：Job Object/真实 WebView E2E 平台断言）。
+  m8-nightly:
+    name: M8-01 P1 fault injection + 3 rounds
+    runs-on: windows-2022
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: M8-01 夜跑（9 场景 + P0 30 场景 × 3 轮）
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/test/m8-01/verify-m8-01.mjs --rounds 3 2>&1 | tee m8-01-nightly.log
+
+      - name: 失败诊断（公开 annotation）
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "### M8-01 夜跑失败（摘要 + tail 30）"
+            echo '```text'
+            grep -E "^FAIL|失败|failure_reason|panicked|assertion|场景|P0 m4|DoD[123]" m8-01-nightly.log 2>/dev/null | tail -30 || true
+            echo '--- tail 30 ---'
+            tail -30 m8-01-nightly.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 归档夜跑证据（场景三段证据 + P0 回归摘要 + flake 台账）
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: m8-01-nightly-evidence
+          path: |
+            scripts/test/.tmp/m8-01/**
+            scripts/test/.tmp/m4-0*/evidence-*/
+            m8-01-nightly.log
+          if-no-files-found: warn
+          retention-days: 30

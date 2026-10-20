@@ -38,10 +38,13 @@ cargo build --workspace  # Rust 构建
 （`#[cfg(debug_assertions)]`；release 构建不包含）。
 
 ```powershell
-$env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
-pnpm --filter @aether/desktop tauri dev
+pnpm dev:desktop
 ```
 
+- 等价于在 `crates/aether-tauri` 下执行 `tauri dev`（`tauri.conf.json` 位于该目录；Tauri CLI
+  只按当前目录识别应用，`--config` 不改变识别结果）。经 `scripts/ci/dev-desktop.mjs` 启动，
+  自动补齐 `cargo` / `pnpm` 的 PATH，无需手工改 `$env:Path`；额外参数经 `--` 透传
+  （如 `pnpm dev:desktop -- --no-watch`）。
 - 首次编译需数分钟；前端 `http://localhost:5173` 热更新。
 - 默认注册表为空（运行时选择器无条目）。需在调试中真实启动运行时，先构建运行时包并在
   **编译前**注入（`build.rs` 会内嵌清单/程序摘要；更换目录后需重新构建）：
@@ -50,7 +53,7 @@ pnpm --filter @aether/desktop tauri dev
 node scripts/ci/build-runtime-bundles.mjs        # 三官方运行时；AETHER_BUNDLE_MOCK=1 另含 Mock
 $env:AETHER_RUNTIME_BUNDLE_DIR="$PWD\crates\aether-tauri\runtime-bundle"
 $env:AETHER_RUNTIME_REGISTRY_DIR="$PWD\crates\aether-tauri\runtime-bundle"
-pnpm --filter @aether/desktop tauri dev
+pnpm dev:desktop
 ```
 
 - 建议隔离调试数据目录（A4：必须本地磁盘，勿放 OneDrive / 网络盘）：

@@ -3,9 +3,9 @@
   "productName": "Aether",
   "identifier": "dev.aether.desktop",
   "build": {
-    "beforeDevCommand": "pnpm --dir ../.. --filter @aether/desktop dev",
+    "beforeDevCommand": "pnpm --filter @aether/desktop dev",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "pnpm --dir ../.. --filter @aether/desktop build",
+    "beforeBuildCommand": "pnpm --filter @aether/desktop build",
     "frontendDist": "../../apps/desktop/dist"
   },
   "app": {

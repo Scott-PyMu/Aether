@@ -30,19 +30,20 @@ export function stampNow() {
  * @param {object} options
  * @param {string} options.task      任务 ID（如 "M4-01"）
  * @param {string} options.title     标题
+ * @param {string} [options.evidenceDir] 证据目录（显式指定；M8-01 多轮次使用
+ *   `run-<stamp>/round-<n>/scenarios`。缺省 `scripts/test/.tmp/<task>/evidence-<stamp>`）
  * @param {string} [options.evidenceBase] 证据根目录（默认 scripts/test/.tmp/<task>/）
  */
 export function createDrill(options) {
   const { task, title } = options;
   const stamp = stampNow();
-  const evidenceDir = path.join(
-    repoRoot,
-    "scripts",
-    "test",
-    ".tmp",
-    task.toLowerCase(),
-    `evidence-${stamp}`,
-  );
+  const evidenceDir = options.evidenceDir
+    ? path.resolve(options.evidenceDir)
+    : path.join(
+        options.evidenceBase ??
+          path.join(repoRoot, "scripts", "test", ".tmp", task.toLowerCase()),
+        `evidence-${stamp}`,
+      );
   const scenarios = [];
   const scenarioResults = [];
 
