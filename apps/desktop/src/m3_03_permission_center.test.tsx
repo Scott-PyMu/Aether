@@ -97,6 +97,13 @@ function emptyPage(): MessagesPageResult {
 function fakeSessionIpc(overrides: Partial<SessionIpc> = {}): SessionIpc {
   return {
     listRuntimes: vi.fn(async () => [runtime()]),
+    searchSessions: vi.fn(async () => []),
+    renameSession: vi.fn(async (sessionId: string, title: string) => ({
+      session_id: sessionId,
+      title,
+      updated_at: 0,
+    })),
+    deleteSession: vi.fn(async (sessionId: string) => ({ session_id: sessionId, deleted: true })),
     listSessions: vi.fn(async () => [sessionSummary()]),
     createSession: vi.fn(async () => sessionSummary()),
     sendMessage: vi.fn(async () => ({

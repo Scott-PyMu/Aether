@@ -24,7 +24,8 @@ use aether_tauri::ipc::dto::{
     ProviderUpdateRequest, ProvidersListRequest,
     RunRetryRequest, RuntimeDisableRequest, RuntimeEnableRequest, RuntimeRetryRequest,
     SessionCreateRequest, SessionExportRequest, SessionIdRequest, SessionListRequest,
-    SessionSendRequest, SessionWorkspaceAssignRequest, SettingsGetRequest, SettingsSetRequest,
+    SessionSendRequest, SessionWorkspaceAssignRequest, SessionDeleteRequest, SessionRenameRequest,
+    SessionSearchRequest, SettingsGetRequest, SettingsSetRequest,
     WorkspaceCreateRequest, WorkspaceDeleteRequest, WorkspaceSetRequest, WorkspaceUpdateRequest,
     WorkspacesListRequest,
 };
@@ -74,6 +75,18 @@ impl IpcBackend for RecordingBackend {
 
     fn session_list(&self, _request: &SessionListRequest) -> Result<Value, IpcError> {
         self.record("session_list")
+    }
+
+    fn session_search(&self, _request: &SessionSearchRequest) -> Result<Value, IpcError> {
+        self.record("session_search")
+    }
+
+    fn session_rename(&self, _request: &SessionRenameRequest) -> Result<Value, IpcError> {
+        self.record("session_rename")
+    }
+
+    fn session_delete(&self, _request: &SessionDeleteRequest) -> Result<Value, IpcError> {
+        self.record("session_delete")
     }
 
     fn session_create(&self, _request: &SessionCreateRequest) -> Result<Value, IpcError> {
@@ -588,6 +601,66 @@ fn malformed_samples_return_structured_errors_and_do_not_reach_backend() {
             json!({ "status": "zombie" }),
             "invalid_enum",
             None,
+        ),
+        (
+            "session_search",
+            json!({ "query": "   " }),
+            "invalid_value",
+            None,
+        ),
+        (
+            "session_search",
+            json!({ "query": long_title }),
+            "too_large",
+            Some("query"),
+        ),
+        (
+            "session_search",
+            json!({ "query": "ok", "limit": 0 }),
+            "out_of_range",
+            Some("limit"),
+        ),
+        (
+            "session_search",
+            json!({ "query": "ok", "limit": 101 }),
+            "out_of_range",
+            Some("limit"),
+        ),
+        (
+            "session_search",
+            json!({ "query": "ok", "extra": 1 }),
+            "unknown_field",
+            Some("extra"),
+        ),
+        (
+            "session_rename",
+            json!({ "session_id": "short", "title": "ok" }),
+            "invalid_format",
+            Some("session_id"),
+        ),
+        (
+            "session_rename",
+            json!({ "session_id": ULID, "title": "   " }),
+            "invalid_value",
+            None,
+        ),
+        (
+            "session_rename",
+            json!({ "session_id": ULID, "title": long_title }),
+            "too_large",
+            Some("title"),
+        ),
+        (
+            "session_delete",
+            json!({ "session_id": "short" }),
+            "invalid_format",
+            Some("session_id"),
+        ),
+        (
+            "session_delete",
+            json!({ "session_id": ULID, "extra": 1 }),
+            "unknown_field",
+            Some("extra"),
         ),
         (
             "messages_page",
@@ -1243,6 +1316,17 @@ fn valid_requests_reach_backend_exactly_once() {
         ("runtimes_list", Value::Null, "runtimes_list"),
         ("session_list", json!({ "limit": 50 }), "session_list"),
         (
+            "session_search",
+            json!({ "query": "会话", "limit": 20, "offset": 0 }),
+            "session_search",
+        ),
+        (
+            "session_rename",
+            json!({ "session_id": ULID, "title": "新标题" }),
+            "session_rename",
+        ),
+        ("session_delete", json!({ "session_id": ULID }), "session_delete"),
+        (
             "session_create",
             json!({ "runtime_id": "mock", "title": "会话", "model": "deepseek/deepseek-chat" }),
             "session_create",
@@ -1525,6 +1609,9 @@ fn valid_requests_reach_backend_exactly_once() {
     let expected_calls: Vec<String> = [
         "runtimes_list",
         "session_list",
+        "session_search",
+        "session_rename",
+        "session_delete",
         "session_create",
         "session_send",
         "session_send",

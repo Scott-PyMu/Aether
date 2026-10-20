@@ -244,6 +244,32 @@ export interface SessionListFilter {
   limit?: number;
 }
 
+/** M7-07/ADR-025 §2.1-2：会话搜索入参（query ≤256；limit ≤100 缺省 20）。 */
+export interface SessionSearchInput {
+  query: string;
+  limit?: number;
+  offset?: number;
+}
+
+/** M7-07/ADR-025 §2.1-2：搜索命中（会话摘要 + snippet + 命中来源）。 */
+export interface SessionSearchHit extends SessionSummary {
+  snippet: string;
+  source: "title" | "message";
+}
+
+/** M7-07/ADR-025 §2.1-3：改名回执。 */
+export interface SessionRenameResult {
+  session_id: string;
+  title: string;
+  updated_at: number;
+}
+
+/** M7-07/ADR-025 §2.1-4：硬删除回执。 */
+export interface SessionDeleteResult {
+  session_id: string;
+  deleted: boolean;
+}
+
 export interface MessagesPageInput {
   session_id: string;
   last_seq?: number;
@@ -265,6 +291,12 @@ export interface SessionReference {
 export interface SessionIpc {
   listRuntimes(): Promise<RuntimeInfo[]>;
   listSessions(filter?: SessionListFilter): Promise<SessionSummary[]>;
+  /** M7-07/ADR-025：会话全文检索（标题 + 消息正文）。 */
+  searchSessions(input: SessionSearchInput): Promise<SessionSearchHit[]>;
+  /** M7-07/ADR-025：会话改名（单写队列；`session.updated`）。 */
+  renameSession(sessionId: string, title: string): Promise<SessionRenameResult>;
+  /** M7-07/ADR-025：硬删除会话（不可恢复；在途/待审批 → `session_busy`）。 */
+  deleteSession(sessionId: string): Promise<SessionDeleteResult>;
   createSession(input: SessionCreateInput): Promise<SessionSummary>;
   sendMessage(input: {
     session_id: string;
@@ -302,6 +334,19 @@ export const sessionIpc: SessionIpc = {
   },
   async listSessions(filter = {}) {
     return invoke<SessionSummary[]>("session_list", { payload: filter });
+  },
+  async searchSessions(input) {
+    return invoke<SessionSearchHit[]>("session_search", { payload: input });
+  },
+  async renameSession(sessionId, title) {
+    return invoke<SessionRenameResult>("session_rename", {
+      payload: { session_id: sessionId, title },
+    });
+  },
+  async deleteSession(sessionId) {
+    return invoke<SessionDeleteResult>("session_delete", {
+      payload: { session_id: sessionId },
+    });
   },
   async createSession(input) {
     return invoke<SessionSummary>("session_create", { payload: input });

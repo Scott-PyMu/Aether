@@ -88,7 +88,7 @@ async fn migration_0007_creates_presets_seeds_builtins_and_adds_session_column()
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("aether.db");
 
-    // 历史库路径：先应用到 0006，再升级到 0007。
+    // 历史库路径：先应用到 0006，再升级到最新（0007 + M7-07 的 0008）。
     {
         let mut connection = Connection::open(&db).unwrap();
         let before: Vec<_> = EMBEDDED_MIGRATIONS
@@ -100,8 +100,8 @@ async fn migration_0007_creates_presets_seeds_builtins_and_adds_session_column()
         let applied = migrate_with(&mut connection, EMBEDDED_MIGRATIONS).unwrap();
         assert_eq!(
             applied.iter().map(|item| item.version).collect::<Vec<_>>(),
-            vec![7],
-            "仅 0007 增量应用"
+            vec![7, 8],
+            "增量应用 0007（本任务）与 0008（M7-07 FTS5）"
         );
 
         // presets 表列清单（ADR-026 §2.2-1）。
@@ -192,12 +192,12 @@ async fn migration_0007_creates_presets_seeds_builtins_and_adds_session_column()
         assert!(again.is_empty());
     }
 
-    // 新库路径：一次性迁移到最新（含 0007）。
+    // 新库路径：一次性迁移到最新（含 0007；M7-07 起为 0008）。
     let fresh = dir.path().join("fresh.db");
     {
         let mut connection = Connection::open(&fresh).unwrap();
         let applied = migrate(&mut connection).unwrap();
-        assert_eq!(applied.last().map(|item| item.version), Some(7));
+        assert_eq!(applied.last().map(|item| item.version), Some(8));
         let count: i64 = connection
             .query_row("SELECT COUNT(*) FROM presets", [], |row| row.get(0))
             .unwrap();

@@ -75,7 +75,7 @@ async fn migration_0006_adds_runtime_enabled_with_default_and_is_idempotent() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("aether.db");
 
-    // 旧库路径：先应用到 0005（模拟历史库），再升级到最新（0006 + M7-09 的 0007）。
+    // 旧库路径：先应用到 0005（模拟历史库），再升级到最新（0006 + M7-09 的 0007 + M7-07 的 0008）。
     {
         let mut connection = Connection::open(&db).unwrap();
         let before: Vec<_> = EMBEDDED_MIGRATIONS
@@ -95,8 +95,8 @@ async fn migration_0006_adds_runtime_enabled_with_default_and_is_idempotent() {
         let applied = migrate_with(&mut connection, EMBEDDED_MIGRATIONS).unwrap();
         assert_eq!(
             applied.iter().map(|item| item.version).collect::<Vec<_>>(),
-            vec![6, 7],
-            "增量应用 0006（本任务）与 0007（M7-09 presets）"
+            vec![6, 7, 8],
+            "增量应用 0006（本任务）、0007（M7-09 presets）与 0008（M7-07 FTS5）"
         );
         // 列断言：NOT NULL DEFAULT 1。
         let (notnull, default, kind): (i64, Option<String>, String) = connection
@@ -122,15 +122,15 @@ async fn migration_0006_adds_runtime_enabled_with_default_and_is_idempotent() {
         assert!(again.is_empty());
     }
 
-    // 新库路径：一次性迁移到最新（含 0006；M7-09 起为 0007）。
+    // 新库路径：一次性迁移到最新（含 0006；M7-09 起为 0007，M7-07 起为 0008）。
     let fresh = dir.path().join("fresh.db");
     {
         let mut connection = Connection::open(&fresh).unwrap();
         let applied = migrate(&mut connection).unwrap();
         assert_eq!(
             applied.last().map(|item| item.version),
-            Some(7),
-            "新库应用到最新（0007）"
+            Some(8),
+            "新库应用到最新（0008）"
         );
     }
 }

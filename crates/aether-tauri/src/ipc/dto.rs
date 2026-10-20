@@ -181,6 +181,105 @@ impl CommandRequest for SessionListRequest {
     }
 }
 
+/// 会话搜索查询上限（ADR-025 §2.1-2：≤256 字符；超限 `too_large`）。
+pub const MAX_SESSION_SEARCH_CHARS: usize = 256;
+/// 会话搜索分页上限（ADR-025 §2.1-2：`limit` ≤100，缺省 20）。
+pub const SESSION_SEARCH_MAX_LIMIT: u32 = 100;
+/// 会话搜索缺省分页（ADR-025 §2.1-2）。
+pub const SESSION_SEARCH_DEFAULT_LIMIT: u32 = 20;
+
+/// `session_search`（M7-07/ADR-025 §2.1-2）：标题 + 消息正文 FTS5 检索。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct SessionSearchRequest {
+    pub query: String,
+    #[serde(default)]
+    pub limit: Option<u32>,
+    #[serde(default)]
+    pub offset: Option<u64>,
+}
+
+impl SessionSearchRequest {
+    /// 校验后的 limit（缺省 20；1..=100）。
+    pub fn limit_value(&self) -> Result<u32, IpcError> {
+        let limit = self.limit.unwrap_or(SESSION_SEARCH_DEFAULT_LIMIT);
+        if limit == 0 {
+            return Err(IpcError::out_of_range(
+                "limit",
+                "必须在 1..=100 之间（ADR-025）",
+            ));
+        }
+        if limit > SESSION_SEARCH_MAX_LIMIT {
+            return Err(IpcError::out_of_range(
+                "limit",
+                format!("会话搜索分页上限 {SESSION_SEARCH_MAX_LIMIT}（ADR-025）"),
+            ));
+        }
+        Ok(limit)
+    }
+
+    /// FTS5 短语查询文本（用户输入按短语处理；不直接拼接 FTS 语法）。
+    pub fn phrase(&self) -> String {
+        format!("\"{}\"", self.query.trim().replace('"', "\"\""))
+    }
+}
+
+impl CommandRequest for SessionSearchRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        let query = self.query.trim();
+        if query.is_empty() {
+            return Err(IpcError::invalid_value("搜索关键词不能为空或纯空白"));
+        }
+        if query.chars().count() > MAX_SESSION_SEARCH_CHARS {
+            return Err(IpcError::too_large(
+                "query",
+                format!("搜索关键词上限 {MAX_SESSION_SEARCH_CHARS} 字符（ADR-025）"),
+            ));
+        }
+        self.limit_value()?;
+        Ok(())
+    }
+}
+
+/// `session_rename`（M7-07/ADR-025 §2.1-3）：会话改名。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct SessionRenameRequest {
+    pub session_id: String,
+    pub title: String,
+}
+
+impl CommandRequest for SessionRenameRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.session_id) {
+            return Err(IpcError::invalid_format("session_id", "必须是 26 位 ULID"));
+        }
+        validate::ensure_not_empty(&self.title, "title")?;
+        if self.title.trim().is_empty() {
+            return Err(IpcError::invalid_value("标题不能为空或纯空白"));
+        }
+        ensure_max_chars(&self.title, "title", MAX_TITLE_CHARS)?;
+        reject_control_chars(&self.title, "title", false)?;
+        Ok(())
+    }
+}
+
+/// `session_delete`（M7-07/ADR-025 §2.1-4）：硬删除会话（UI 二次确认 + 不可恢复提示）。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct SessionDeleteRequest {
+    pub session_id: String,
+}
+
+impl CommandRequest for SessionDeleteRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.session_id) {
+            return Err(IpcError::invalid_format("session_id", "必须是 26 位 ULID"));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Deserialize, specta::Type)]
 #[serde(deny_unknown_fields)]
 pub struct SessionSendRequest {

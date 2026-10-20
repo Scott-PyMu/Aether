@@ -19,6 +19,7 @@ use super::dto::{
     RunRetryRequest, RuntimeDisableRequest, RuntimeEnableRequest, RuntimeRetryRequest,
     SessionCreateRequest, SessionExportRequest, SessionIdRequest, SessionListRequest,
     SessionPermissionModeSetRequest, SessionSendRequest, SessionWorkspaceAssignRequest,
+    SessionDeleteRequest, SessionRenameRequest, SessionSearchRequest,
     SettingsGetRequest, SettingsSetRequest,
     StartupGetRequest,
     StartupMigrateRequest, StartupPickTargetRequest, WorkspaceCreateRequest,
@@ -58,6 +59,48 @@ pub(crate) fn session_create(
     state
         .backend_ready()?
         .session_create(&request)
+        .map(JsonPayload)
+}
+
+/// M7-07/ADR-025 §2.1-2：会话全文检索（标题 + 消息正文；分页上限 100）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn session_search(
+    state: tauri::State<'_, IpcState>,
+    payload: JsonPayload,
+) -> Result<JsonPayload, IpcError> {
+    let request: SessionSearchRequest = parse_strict(payload.into_value())?;
+    state
+        .backend_ready()?
+        .session_search(&request)
+        .map(JsonPayload)
+}
+
+/// M7-07/ADR-025 §2.1-3：会话改名（单写队列；`session.updated` + 审计）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn session_rename(
+    state: tauri::State<'_, IpcState>,
+    payload: JsonPayload,
+) -> Result<JsonPayload, IpcError> {
+    let request: SessionRenameRequest = parse_strict(payload.into_value())?;
+    state
+        .backend_ready()?
+        .session_rename(&request)
+        .map(JsonPayload)
+}
+
+/// M7-07/ADR-025 §2.1-4：硬删除会话（在途/待审批 → `session_busy`；`events` 不级联）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn session_delete(
+    state: tauri::State<'_, IpcState>,
+    payload: JsonPayload,
+) -> Result<JsonPayload, IpcError> {
+    let request: SessionDeleteRequest = parse_strict(payload.into_value())?;
+    state
+        .backend_ready()?
+        .session_delete(&request)
         .map(JsonPayload)
 }
 
@@ -956,6 +999,9 @@ pub fn collected<R: tauri::Runtime>() -> tauri_specta::Commands<R> {
         runtimes_list,
         session_list,
         session_create,
+        session_search,
+        session_rename,
+        session_delete,
         session_send,
         session_interrupt,
         session_pause,
@@ -1027,6 +1073,9 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         runtimes_list,
         session_list,
         session_create,
+        session_search,
+        session_rename,
+        session_delete,
         session_send,
         session_interrupt,
         session_pause,
@@ -1099,6 +1148,9 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         runtimes_list,
         session_list,
         session_create,
+        session_search,
+        session_rename,
+        session_delete,
         session_send,
         session_interrupt,
         session_pause,

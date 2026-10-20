@@ -392,6 +392,124 @@ body {
   font-size: 0.85rem;
 }
 
+/* M7-07/ADR-025：会话搜索 / 改名 / 删除（锚点见 UI-UX §7.3）。 */
+.session-search {
+  display: flex;
+  gap: 0.35rem;
+  margin-bottom: 0.35rem;
+}
+
+.session-search input {
+  flex: 1;
+  min-width: 0;
+  background-color: #1d2026;
+  border: 1px solid #3a3f47;
+  border-radius: 4px;
+  color: inherit;
+  padding: 0.35rem 0.5rem;
+}
+
+.session-search button,
+.session-item-actions button,
+.session-rename-form button,
+.session-delete-confirm-box button {
+  background-color: #262b33;
+  border: 1px solid #3a3f47;
+  border-radius: 4px;
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.78rem;
+  padding: 0.25rem 0.45rem;
+}
+
+.session-search button:hover,
+.session-item-actions button:hover,
+.session-rename-form button:hover,
+.session-delete-confirm-box button:hover {
+  border-color: #6f9dd8;
+}
+
+.session-search-loading,
+.session-search-snippet,
+.session-search-source,
+.session-delete-warning {
+  color: #9aa0a6;
+  font-size: 0.78rem;
+}
+
+.session-search-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.session-search-result {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  width: 100%;
+  text-align: left;
+  background-color: #1d2026;
+  border: 1px solid #3a3f47;
+  border-radius: 4px;
+  color: inherit;
+  cursor: pointer;
+  padding: 0.5rem 0.65rem;
+}
+
+.session-search-result.active {
+  border-color: #6f9dd8;
+  background-color: #1f2733;
+}
+
+.session-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.session-item-actions {
+  display: flex;
+  gap: 0.35rem;
+  justify-content: flex-end;
+}
+
+.session-rename-form,
+.session-delete-confirm-box {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+  background-color: #1d2026;
+  border: 1px solid #3a3f47;
+  border-radius: 4px;
+  padding: 0.4rem 0.5rem;
+}
+
+.session-rename-form input {
+  flex: 1;
+  min-width: 8rem;
+  background-color: #15181d;
+  border: 1px solid #3a3f47;
+  border-radius: 4px;
+  color: inherit;
+  padding: 0.3rem 0.45rem;
+}
+
+.session-manage-error {
+  color: #d66f6f;
+  font-size: 0.8rem;
+  margin-bottom: 0.35rem;
+}
+
+.session-delete-warning {
+  flex-basis: 100%;
+  color: #d6a84f;
+}
+
 .runtime-selector {
   display: flex;
   flex-direction: column;

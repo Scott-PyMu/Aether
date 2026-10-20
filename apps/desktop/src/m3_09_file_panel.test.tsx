@@ -215,6 +215,13 @@ function fakeSessionIpc(): SessionIpc {
   return {
     listRuntimes: vi.fn(async () => []),
     listSessions: vi.fn(async () => [sessionSummary()]),
+    searchSessions: vi.fn(async () => []),
+    renameSession: vi.fn(async (sessionId: string, title: string) => ({
+      session_id: sessionId,
+      title,
+      updated_at: 0,
+    })),
+    deleteSession: vi.fn(async (sessionId: string) => ({ session_id: sessionId, deleted: true })),
     createSession: vi.fn(async () => sessionSummary()),
     sendMessage: vi.fn(async () => ({
       session_id: SESSION_A,

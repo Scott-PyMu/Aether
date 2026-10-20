@@ -426,6 +426,6 @@ fn idle_pause_resume_cycle_and_illegal_state_matrix() {
     let error = pause(&h, &session_id).expect_err("终态暂停拒绝");
     assert_eq!(error.code.as_str(), "invalid_value");
     let error = pause(&h, "01J00000000000000000000MISS").expect_err("不存在的会话");
-    assert_eq!(error.code.as_str(), "invalid_value");
-    assert!(error.message.contains("session_not_found"));
+    assert_eq!(error.code.as_str(), "session_not_found");
+    assert!(error.message.contains("会话不存在"));
 }

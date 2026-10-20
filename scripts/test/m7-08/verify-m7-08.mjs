@@ -171,7 +171,7 @@ try {
   const sessionBackend = read("crates/aether-tauri/src/session_backend.rs");
   for (const token of [
     "persist_session_baseline",
-    "session_workspace_assigned",
+    "session.workspace_assigned",
     "replace_workspace_memory_block",
     "workspace_in_use",
     "disk_untouched",

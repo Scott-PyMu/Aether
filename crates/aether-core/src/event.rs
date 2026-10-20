@@ -235,11 +235,17 @@ pub struct SessionCreatedPayload {
 }
 
 /// `session.updated` payload（附录 B：变更字段）。
+///
+/// M7-07/ADR-025 附录 A-3：改名发射点启用；`changed_fields` 为既有契约字段
+/// （ADR 文本的 `changed` 即此字段），`title` 为可选新值（允许新增可选字段）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionUpdatedPayload {
     pub session_id: SessionId,
     pub changed_fields: Vec<String>,
+    /// 变更后的标题（仅 `changed_fields` 含 `title` 时出现）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 /// `session.status_changed` payload（附录 B：from/to）。
@@ -252,11 +258,15 @@ pub struct SessionStatusChangedPayload {
 }
 
 /// `session.closed` payload（附录 B：摘要/关闭时点）。
+///
+/// M7-07/ADR-025 附录 A-3：删除发射点启用；`reason="deleted"` 为可选字段。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionClosedPayload {
     pub session_id: SessionId,
     pub closed_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// `run.started` payload（附录 B：runId）。

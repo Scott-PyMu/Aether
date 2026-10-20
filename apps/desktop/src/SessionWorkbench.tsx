@@ -69,6 +69,7 @@ import {
   type RuntimeInfo,
   type SessionIpc,
   type SessionReference,
+  type SessionSearchHit,
   type SessionSummary,
   type SessionWarning,
 } from "./session";
@@ -208,6 +209,23 @@ export function SessionWorkbench({
 }: SessionWorkbenchProps) {
   const [runtimes, setRuntimes] = useState<RuntimeInfo[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  /**
+   * M7-07/ADR-025：会话检索（Ctrl+K 聚焦；标题 + 正文 FTS）。
+   * `searchHits === null` = 未检索（显示常规分组列表）；空数组 = 无命中。
+   */
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchHits, setSearchHits] = useState<SessionSearchHit[] | null>(null);
+  const [searchBusy, setSearchBusy] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  /** M7-07：改名/删除的进行中与错误态（锚点 `session-rename*` / `session-delete*`）。 */
+  const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+  const [renameBusy, setRenameBusy] = useState(false);
+  const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [manageError, setManageError] = useState<{ code: string | null; message: string } | null>(
+    null,
+  );
   /**
    * M7-04（UI-01 完整）：工作台多视图布局（标签页/分屏/聚焦窗格）。
    *
@@ -459,6 +477,115 @@ export function SessionWorkbench({
       reportError(failure);
     }
   }, [ipc, reportError]);
+
+  // M7-07/ADR-025 §2.1-2：搜索防抖（250ms）；空查询回到常规分组列表。
+  useEffect(() => {
+    const query = searchQuery.trim();
+    if (!query) {
+      setSearchHits(null);
+      setSearchBusy(false);
+      return;
+    }
+    let cancelled = false;
+    setSearchBusy(true);
+    const timer = window.setTimeout(() => {
+      void ipc
+        .searchSessions({ query, limit: 20 })
+        .then((hits) => {
+          if (!cancelled) {
+            setSearchHits(hits);
+            setManageError(null);
+          }
+        })
+        .catch((failure: unknown) => {
+          if (!cancelled) {
+            setSearchHits([]);
+            setManageError({
+              code: ipcErrorCode(failure),
+              message: describeIpcError(failure),
+            });
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setSearchBusy(false);
+          }
+        });
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [ipc, searchQuery]);
+
+  // M7-07（UI-UX §9）：Ctrl+K / Cmd+K 聚焦会话搜索。
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        searchInputRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  const refreshActiveSearch = useCallback(async () => {
+    const query = searchQuery.trim();
+    if (!query) return;
+    try {
+      const hits = await ipc.searchSessions({ query, limit: 20 });
+      setSearchHits(hits);
+    } catch (failure) {
+      setManageError({
+        code: ipcErrorCode(failure),
+        message: describeIpcError(failure),
+      });
+    }
+  }, [ipc, searchQuery]);
+
+  const submitRename = useCallback(async () => {
+    if (!renamingSessionId || renameBusy) return;
+    const title = renameDraft.trim();
+    if (!title) {
+      setManageError({ code: "invalid_value", message: "标题不能为空或纯空白" });
+      return;
+    }
+    setRenameBusy(true);
+    try {
+      await ipc.renameSession(renamingSessionId, title);
+      setRenamingSessionId(null);
+      setManageError(null);
+      await refreshSessions();
+      await refreshActiveSearch();
+    } catch (failure) {
+      setManageError({
+        code: ipcErrorCode(failure),
+        message: describeIpcError(failure),
+      });
+    } finally {
+      setRenameBusy(false);
+    }
+  }, [ipc, refreshActiveSearch, refreshSessions, renameBusy, renameDraft, renamingSessionId]);
+
+  const confirmDelete = useCallback(async () => {
+    if (!deletingSessionId || deleteBusy) return;
+    setDeleteBusy(true);
+    try {
+      await ipc.deleteSession(deletingSessionId);
+      setDeletingSessionId(null);
+      setManageError(null);
+      await refreshSessions();
+      await refreshActiveSearch();
+    } catch (failure) {
+      setManageError({
+        code: ipcErrorCode(failure),
+        message: describeIpcError(failure),
+      });
+    } finally {
+      setDeleteBusy(false);
+    }
+  }, [deleteBusy, deletingSessionId, ipc, refreshActiveSearch, refreshSessions]);
 
   /**
    * M7-04：显式布局操作（打开/切换/关闭/分屏）→ 状态更新 + 立即持久化
@@ -1013,52 +1140,206 @@ export function SessionWorkbench({
             }}
           />
           <h2 className="workbench-title">会话</h2>
-          <ul className="session-list" data-testid="session-list">
-            {sessionGroups.map(({ group, sessions: groupedSessions }) => (
-              <li
-                key={group}
-                className={`session-group session-group-${group}`}
-                data-testid="session-group"
-                data-group={group}
+          {/* M7-07/ADR-025 §2.1-2：会话搜索（Ctrl+K；锚点 `session-search` /
+              `session-search-result`）。空查询显示常规分组列表。 */}
+          <div className="session-search">
+            <input
+              ref={searchInputRef}
+              type="search"
+              data-testid="session-search"
+              aria-label="搜索会话"
+              placeholder="搜索会话（Ctrl+K）"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+            />
+            {searchQuery ? (
+              <button
+                type="button"
+                data-testid="session-search-clear"
+                onClick={() => setSearchQuery("")}
               >
-                <span className="session-group-title" data-testid="session-group-title">
-                  {SESSION_GROUP_TITLES[group]}
-                </span>
-                <ul className="session-group-items">
-                  {groupedSessions.map((session) => (
-                    <li key={session.id}>
-                      <button
-                        type="button"
-                        data-testid="session-item"
-                        data-session-id={session.id}
-                        data-active={String(session.id === activeSessionId)}
-                        data-status={session.status}
-                        className={
-                          session.id === activeSessionId ? "session-item active" : "session-item"
-                        }
-                        onClick={() => openSessionView(session.id)}
-                      >
-                        <span className="session-item-title">{session.title}</span>
-                        <span className="session-item-status" data-testid="session-item-status">
-                          {SESSION_STATUS_LABELS[session.status]}
-                        </span>
-                        {session.model ? (
-                          <span className="session-item-model" data-testid="session-item-model">
-                            {session.model}
-                          </span>
-                        ) : null}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </li>
-            ))}
-            {sessions.length === 0 ? (
-              <li className="session-empty" data-testid="session-list-empty">
-                暂无会话
-              </li>
+                清除
+              </button>
             ) : null}
-          </ul>
+          </div>
+          {searchBusy ? (
+            <div className="session-search-loading" data-testid="session-search-loading">
+              搜索中…
+            </div>
+          ) : null}
+          {manageError ? (
+            <div
+              className="session-manage-error"
+              data-testid="session-manage-error"
+              data-code={manageError.code ?? ""}
+            >
+              {manageError.message}
+            </div>
+          ) : null}
+          {searchHits !== null ? (
+            <ul className="session-search-results" data-testid="session-search-results">
+              {searchHits.map((hit) => (
+                <li key={hit.id}>
+                  <button
+                    type="button"
+                    data-testid="session-search-result"
+                    data-session-id={hit.id}
+                    data-source={hit.source}
+                    className={
+                      hit.id === activeSessionId
+                        ? "session-search-result active"
+                        : "session-search-result"
+                    }
+                    onClick={() => openSessionView(hit.id)}
+                  >
+                    <span className="session-item-title">{hit.title}</span>
+                    <span className="session-search-snippet">{hit.snippet}</span>
+                    <span className="session-search-source">
+                      {hit.source === "title" ? "标题命中" : "正文命中"}
+                    </span>
+                  </button>
+                </li>
+              ))}
+              {searchHits.length === 0 ? (
+                <li className="session-empty" data-testid="session-search-empty">
+                  无匹配会话
+                </li>
+              ) : null}
+            </ul>
+          ) : (
+            <ul className="session-list" data-testid="session-list">
+              {sessionGroups.map(({ group, sessions: groupedSessions }) => (
+                <li
+                  key={group}
+                  className={`session-group session-group-${group}`}
+                  data-testid="session-group"
+                  data-group={group}
+                >
+                  <span className="session-group-title" data-testid="session-group-title">
+                    {SESSION_GROUP_TITLES[group]}
+                  </span>
+                  <ul className="session-group-items">
+                    {groupedSessions.map((session) => (
+                      <li key={session.id} className="session-row">
+                        {renamingSessionId === session.id ? (
+                          <div className="session-rename-form" data-testid="session-rename-form">
+                            <input
+                              data-testid="session-rename-input"
+                              aria-label="会话新标题"
+                              value={renameDraft}
+                              autoFocus
+                              onChange={(event) => setRenameDraft(event.target.value)}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  event.preventDefault();
+                                  void submitRename();
+                                }
+                                if (event.key === "Escape") {
+                                  setRenamingSessionId(null);
+                                }
+                              }}
+                            />
+                            <button
+                              type="button"
+                              data-testid="session-rename-save"
+                              disabled={renameBusy}
+                              onClick={() => void submitRename()}
+                            >
+                              保存
+                            </button>
+                            <button
+                              type="button"
+                              data-testid="session-rename-cancel"
+                              onClick={() => setRenamingSessionId(null)}
+                            >
+                              取消
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            data-testid="session-item"
+                            data-session-id={session.id}
+                            data-active={String(session.id === activeSessionId)}
+                            data-status={session.status}
+                            className={
+                              session.id === activeSessionId ? "session-item active" : "session-item"
+                            }
+                            onClick={() => openSessionView(session.id)}
+                          >
+                            <span className="session-item-title">{session.title}</span>
+                            <span className="session-item-status" data-testid="session-item-status">
+                              {SESSION_STATUS_LABELS[session.status]}
+                            </span>
+                            {session.model ? (
+                              <span className="session-item-model" data-testid="session-item-model">
+                                {session.model}
+                              </span>
+                            ) : null}
+                          </button>
+                        )}
+                        <div className="session-item-actions">
+                          <button
+                            type="button"
+                            data-testid="session-rename"
+                            data-session-id={session.id}
+                            onClick={() => {
+                              setDeletingSessionId(null);
+                              setRenamingSessionId(session.id);
+                              setRenameDraft(session.title);
+                            }}
+                          >
+                            改名
+                          </button>
+                          <button
+                            type="button"
+                            data-testid="session-delete"
+                            data-session-id={session.id}
+                            onClick={() => {
+                              setRenamingSessionId(null);
+                              setDeletingSessionId(session.id);
+                            }}
+                          >
+                            删除
+                          </button>
+                        </div>
+                        {deletingSessionId === session.id ? (
+                          <div
+                            className="session-delete-confirm-box"
+                            data-testid="session-delete-confirm-box"
+                          >
+                            <span className="session-delete-warning">
+                              删除后不可恢复：消息/运行/引用/审批记录将级联删除。
+                            </span>
+                            <button
+                              type="button"
+                              data-testid="session-delete-confirm"
+                              disabled={deleteBusy}
+                              onClick={() => void confirmDelete()}
+                            >
+                              确认删除
+                            </button>
+                            <button
+                              type="button"
+                              data-testid="session-delete-cancel"
+                              onClick={() => setDeletingSessionId(null)}
+                            >
+                              取消
+                            </button>
+                          </div>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                </li>
+              ))}
+              {sessions.length === 0 ? (
+                <li className="session-empty" data-testid="session-list-empty">
+                  暂无会话
+                </li>
+              ) : null}
+            </ul>
+          )}
 
           <h2 className="workbench-title">运行时</h2>
           {/* M7-02/ADR-022：自动路由开关（缺省关闭 = 手动指定优先；开启后新建会话

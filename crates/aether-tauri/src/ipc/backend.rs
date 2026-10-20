@@ -20,6 +20,7 @@ use super::dto::{
     RuntimeDisableRequest, RuntimeEnableRequest, RuntimeRetryRequest, SessionCreateRequest,
     SessionExportRequest,
     SessionIdRequest, SessionListRequest, SessionPermissionModeSetRequest, SessionSendRequest,
+    SessionDeleteRequest, SessionRenameRequest, SessionSearchRequest,
     SessionWorkspaceAssignRequest, SettingsGetRequest, SettingsSetRequest, WorkspaceCreateRequest,
     WorkspaceDeleteRequest, WorkspaceSetRequest, WorkspaceUpdateRequest, WorkspacesListRequest,
 };
@@ -42,6 +43,21 @@ pub trait IpcBackend: Send + Sync + 'static {
 
     fn session_list(&self, _request: &SessionListRequest) -> Result<Value, IpcError> {
         Err(IpcError::not_implemented("session_list"))
+    }
+
+    /// M7-07/ADR-025 §2.1-2：会话全文检索（标题 + 消息正文；FTS5 短语查询）。
+    fn session_search(&self, _request: &SessionSearchRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("session_search"))
+    }
+
+    /// M7-07/ADR-025 §2.1-3：会话改名（单写队列 + `session.updated`）。
+    fn session_rename(&self, _request: &SessionRenameRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("session_rename"))
+    }
+
+    /// M7-07/ADR-025 §2.1-4：硬删除会话（在途/待审批 → `session_busy`）。
+    fn session_delete(&self, _request: &SessionDeleteRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("session_delete"))
     }
 
     fn session_create(&self, _request: &SessionCreateRequest) -> Result<Value, IpcError> {

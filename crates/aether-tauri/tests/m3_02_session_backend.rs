@@ -21,7 +21,10 @@ use aether_control::{
     ExecutorFuture, ExecutorOutcome, LifecycleConfig, RunExecutor, RunRequest, SessionManager,
     SystemClock,
 };
-use aether_core::{Message, MessageId, MessageRole, SessionId};
+use aether_core::{
+    Message, MessageId, MessageRole, PermissionMode, RuntimeId, Session, SessionId, SessionStatus,
+    TokenUsage, THINKING_DEPTH_DEFAULT,
+};
 use aether_store::{ReadPool, StoreCommand, WriteQueue};
 use aether_tauri::core_health::{boot_core_full, CoreBoot, StaticRuntimeSummaries};
 use aether_tauri::ipc::backend::{IpcBackend, NotImplementedBackend};
@@ -187,6 +190,31 @@ fn session_create(backend: &dyn IpcBackend, title: &str, model: Option<&str>) ->
     backend.session_create(&request).expect("session_create")
 }
 
+/// 直接插入会话行（不产生事件/消息）：用于 `messages_page` 空值形状断言。
+fn insert_empty_session(h: &Harness, session_id: &str) {
+    let session = Session {
+        id: SessionId::new(session_id).unwrap(),
+        runtime_id: RuntimeId::new("mock").unwrap(),
+        workspace_id: None,
+        parent_session_id: None,
+        title: "M3-02 空会话".to_owned(),
+        status: SessionStatus::Idle,
+        model: None,
+        thinking_depth: THINKING_DEPTH_DEFAULT,
+        permission_mode: PermissionMode::default(),
+        preset_id: None,
+        system_prompt: None,
+        config: json!({}),
+        token_usage: TokenUsage::default(),
+        created_at: 1,
+        updated_at: 1,
+        closed_at: None,
+    };
+    h.runtime
+        .block_on(h.write.execute(StoreCommand::InsertSession { session }))
+        .expect("插入空会话");
+}
+
 /// 最近一页（`last_seq` 缺省）。
 fn latest_page(h: &Harness, session_id: &str, limit: u32) -> Value {
     h.backend
@@ -212,6 +240,8 @@ fn message_seqs(page: &Value) -> Vec<u64> {
 fn messages_page_pages_backfill_latest_and_guards_gap() {
     let h = harness();
     let session = "01J8ZQ5R0N7W9Y8X6V4T2S0K1M";
+    let _seed = session_create(h.backend.as_ref(), "M3-02 运行时种子", None);
+    insert_empty_session(&h, session);
     for index in 1..=5 {
         h.runtime
             .block_on(h.pipeline.submit(event(index, session)))
@@ -312,8 +342,11 @@ fn messages_page_latest_returns_tail_ascending_and_option_shape() {
     let h = harness();
 
     // 空值口径：最近一页无消息 → `messages` 字段存在且为 `[]`（`Some([])`）。
-    // 以无事件、无消息的会话 id 覆盖完整形状（`max_seq=null`）。
-    let empty = latest_page(&h, "01J8ZQ5R0N7W9Y8X6V4T2S0K9Z", 2);
+    // 以无事件、无消息的真实会话行覆盖完整形状（`max_seq=null`）。
+    let _seed = session_create(h.backend.as_ref(), "M3-02 运行时种子", None);
+    let empty_id = "01J8ZQ5R0N7W9Y8X6V4T2S0K9Z";
+    insert_empty_session(&h, empty_id);
+    let empty = latest_page(&h, empty_id, 2);
     assert!(
         empty.get("messages").is_some(),
         "最近一页必须返回 messages 字段（空为 []）：{empty}"

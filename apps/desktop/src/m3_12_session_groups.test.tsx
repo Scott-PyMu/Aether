@@ -90,6 +90,13 @@ describe("SessionWorkbench 会话分组（M3-12 / ADR-011）", () => {
     const ipc: SessionIpc = {
       listRuntimes: vi.fn(async () => runtimes),
       listSessions: vi.fn(async () => sessions),
+      searchSessions: vi.fn(async () => []),
+      renameSession: vi.fn(async (sessionId: string, title: string) => ({
+        session_id: sessionId,
+        title,
+        updated_at: 0,
+      })),
+      deleteSession: vi.fn(async (sessionId: string) => ({ session_id: sessionId, deleted: true })),
       createSession: vi.fn(async (input) =>
         summary("01J8ZQ5R0N7W9Y8X6V4T2S0K1E", "idle", 50, input.title),
       ),

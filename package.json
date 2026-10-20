@@ -72,8 +72,11 @@
     "verify:m7-04": "node scripts/test/m7-04/verify-m7-04.mjs",
     "verify:m7-05": "node scripts/test/m7-05/verify-m7-05.mjs",
     "verify:m7-06": "node scripts/test/m7-06/verify-m7-06.mjs",
+    "verify:m7-07": "node scripts/test/m7-07/verify-m7-07.mjs",
     "verify:m7-08": "node scripts/test/m7-08/verify-m7-08.mjs",
     "verify:m7-09": "node scripts/test/m7-09/verify-m7-09.mjs",
+    "verify:m8-01": "node scripts/test/m8-01/verify-m8-01.mjs",
+    "dev:desktop": "node scripts/ci/dev-desktop.mjs",
     "smoke": "node scripts/test/smoke-desktop.mjs",
     "ci:local": "node scripts/test/ci-local.mjs"
   },

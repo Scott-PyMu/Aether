@@ -20,6 +20,7 @@ const APPENDIX_C_TABLES: &[&str] = &[
     "events",
     "memories",
     "messages",
+    "messages_fts",
     "node_runs",
     "permission_rules",
     "permissions",
@@ -30,6 +31,7 @@ const APPENDIX_C_TABLES: &[&str] = &[
     "runtimes",
     "schema_migrations",
     "sessions",
+    "sessions_fts",
     "settings",
     "tasks",
     "workflow_runs",
@@ -49,7 +51,7 @@ fn table_names(conn: &Connection) -> Vec<String> {
     let mut statement = conn
         .prepare(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' \
-             ORDER BY name",
+             AND name NOT LIKE '%\\_fts\\_%' ESCAPE '\\' ORDER BY name",
         )
         .unwrap();
     let rows = statement

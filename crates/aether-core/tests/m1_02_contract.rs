@@ -1079,6 +1079,7 @@ fn typed_payload_constructors_roundtrip_through_json() {
         EventPayload::SessionUpdated(SessionUpdatedPayload {
             session_id: SessionId::new("sess-1").unwrap(),
             changed_fields: vec!["title".to_string()],
+            title: Some("新标题".to_owned()),
         }),
         EventPayload::SessionStatusChanged(SessionStatusChangedPayload {
             session_id: SessionId::new("sess-1").unwrap(),
@@ -1088,6 +1089,7 @@ fn typed_payload_constructors_roundtrip_through_json() {
         EventPayload::SessionClosed(SessionClosedPayload {
             session_id: SessionId::new("sess-1").unwrap(),
             closed_at: 4,
+            reason: Some("deleted".to_owned()),
         }),
         EventPayload::RunStarted(RunStartedPayload {
             run_id: RunId::new("run-1").unwrap(),

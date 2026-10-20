@@ -231,6 +231,13 @@ describe("M7-09 新建会话入口（session-preset-select）", () => {
     return {
       listRuntimes: vi.fn(async () => [runtime()]),
       listSessions: vi.fn(async () => []),
+      searchSessions: vi.fn(async () => []),
+      renameSession: vi.fn(async (sessionId: string, title: string) => ({
+        session_id: sessionId,
+        title,
+        updated_at: 0,
+      })),
+      deleteSession: vi.fn(async (sessionId: string) => ({ session_id: sessionId, deleted: true })),
       createSession,
       sendMessage: vi.fn(),
       interruptSession: vi.fn(),

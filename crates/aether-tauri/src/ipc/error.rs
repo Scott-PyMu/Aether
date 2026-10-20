@@ -85,6 +85,9 @@ pub enum IpcErrorCode {
     /// 删除工作区时存在会话引用（M7-08/ADR-026 §2.1-1：**不级联、不改派**；
     /// message 含引用计数，UI 提示「仍有 N 个会话引用」）。
     WorkspaceInUse,
+    /// 会话不存在（M7-07/ADR-025 附录 A-2：`session_search` 引用层 / `session_rename` /
+    /// `session_delete` / `messages_page` 按 id 查无；UI「会话不存在，已刷新列表」）。
+    SessionNotFound,
 }
 
 impl IpcErrorCode {
@@ -121,6 +124,7 @@ impl IpcErrorCode {
             Self::BuiltinPresetUndeletable => "builtin_preset_undeletable",
             Self::WorkspaceNotFound => "workspace_not_found",
             Self::WorkspaceInUse => "workspace_in_use",
+            Self::SessionNotFound => "session_not_found",
         }
     }
 }
@@ -364,6 +368,15 @@ impl IpcError {
                 "仍有 {sessions} 个会话引用该工作区（{workspace_id}）；请先改派会话再删除\
                  （不级联、不自动改派）"
             ),
+        )
+    }
+
+    /// M7-07/ADR-025 附录 A-2：会话不存在（按 id 查无；UI-UX §5 文案
+    /// 「会话不存在，已刷新列表」）。
+    pub fn session_not_found(session_id: &str) -> Self {
+        Self::new(
+            IpcErrorCode::SessionNotFound,
+            format!("会话不存在（{session_id}）；已刷新会话列表"),
         )
     }
 

@@ -55,6 +55,7 @@ use crate::ipc::dto::{
     ProvidersListRequest, RuleAddRequest,
     RuleDeleteRequest, RuleToggleRequest, RuleUpdateRequest, SessionCreateRequest,
     SessionIdRequest, SessionListRequest, SessionPermissionModeSetRequest, SessionSendRequest,
+    SessionDeleteRequest, SessionRenameRequest, SessionSearchRequest,
     SessionWorkspaceAssignRequest, WorkspaceCreateRequest, WorkspaceDeleteRequest,
     WorkspaceUpdateRequest, WorkspacesListRequest,
 };
@@ -660,6 +661,67 @@ impl IpcBackend for SessionBackend {
                 .collect::<Result<Vec<_>, IpcError>>()?;
             serde_json::to_value(summaries)
                 .map_err(|error| IpcError::internal(format!("会话列表序列化失败：{error}")))
+        })
+    }
+
+    /// M7-07/ADR-025 §2.1-2：会话全文检索（标题 + 消息正文；`snippet` + 命中来源）。
+    fn session_search(&self, request: &SessionSearchRequest) -> Result<Value, IpcError> {
+        let reads = self.reads_required()?.clone();
+        let phrase = request.phrase();
+        let limit = request.limit_value()?;
+        let offset = request.offset.unwrap_or(0);
+        self.call(async move {
+            let hits = reads
+                .search_sessions(&phrase, limit, offset)
+                .await
+                .map_err(|error| IpcError::internal(format!("会话检索失败：{error}")))?;
+            let mut items = Vec::with_capacity(hits.len());
+            for hit in hits {
+                let summary = SessionSummary::from_session(&hit.session, None)?;
+                let mut value = serde_json::to_value(summary)
+                    .map_err(|error| IpcError::internal(format!("会话检索序列化失败：{error}")))?;
+                if let Some(object) = value.as_object_mut() {
+                    object.insert("snippet".to_owned(), Value::from(hit.snippet));
+                    object.insert("source".to_owned(), Value::from(hit.source));
+                }
+                items.push(value);
+            }
+            Ok(Value::Array(items))
+        })
+    }
+
+    /// M7-07/ADR-025 §2.1-3：会话改名（单写队列；`session.updated` + 审计）。
+    fn session_rename(&self, request: &SessionRenameRequest) -> Result<Value, IpcError> {
+        let manager = self.manager_required()?.clone();
+        let session_id = parse_session_id(&request.session_id)?;
+        let title = request.title.clone();
+        self.call(async move {
+            let session = manager
+                .rename_session(&session_id, &title)
+                .await
+                .map_err(map_lifecycle_error)?;
+            Ok(json!({
+                "session_id": session.id.as_str(),
+                "title": session.title,
+                "updated_at": session.updated_at,
+            }))
+        })
+    }
+
+    /// M7-07/ADR-025 §2.1-4：硬删除会话（在途/待审批 → `session_busy`；
+    /// `events` 不级联，R7）。
+    fn session_delete(&self, request: &SessionDeleteRequest) -> Result<Value, IpcError> {
+        let manager = self.manager_required()?.clone();
+        let session_id = parse_session_id(&request.session_id)?;
+        self.call(async move {
+            manager
+                .delete_session(&session_id)
+                .await
+                .map_err(map_lifecycle_error)?;
+            Ok(json!({
+                "session_id": session_id.as_str(),
+                "deleted": true,
+            }))
         })
     }
 
@@ -1790,6 +1852,16 @@ impl IpcBackend for SessionBackend {
         let gap_limit = self.gap_limit;
         self.call(async move {
             let session_id = parse_session_id(&session_id)?;
+            // M7-07/ADR-025 §2.1-4：删除后 `messages_page`/补读 → `session_not_found`
+            // （events 不级联，但会话行已不存在；不得把孤立事件当作有效补读页）。
+            if reads
+                .session(&session_id)
+                .await
+                .map_err(|error| IpcError::internal(format!("会话读取失败：{error}")))?
+                .is_none()
+            {
+                return Err(IpcError::session_not_found(session_id.as_str()));
+            }
             let max_seq = reads
                 .max_seq(&session_id)
                 .await
@@ -2719,8 +2791,10 @@ pub fn map_lifecycle_error(error: LifecycleError) -> IpcError {
         LifecycleError::Storage { .. } | LifecycleError::Pipeline { .. } => {
             IpcError::internal(error.to_string())
         }
-        LifecycleError::SessionNotFound { .. }
-        | LifecycleError::SessionBusy { .. }
+        LifecycleError::SessionNotFound { session_id } => {
+            IpcError::session_not_found(session_id.as_str())
+        }
+        LifecycleError::SessionBusy { .. }
         | LifecycleError::SessionClosed { .. }
         | LifecycleError::InvalidTransition { .. }
         | LifecycleError::RunNotFound { .. }

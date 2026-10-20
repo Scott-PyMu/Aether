@@ -43,7 +43,7 @@ use aether_core::{
     MessageRole, MessageSummary, Run, RunCancelledPayload, RunCompletedPayload, RunFailedPayload,
     RunId, RunStartedPayload, Runtime, RuntimeId, Session, SessionClosedPayload,
     SessionCreatedPayload, SessionId, SessionStatus, SessionStatusChangedPayload, SessionSummary,
-    TokenUsage, WorkspaceId,
+    SessionUpdatedPayload, TokenUsage, WorkspaceId,
     ENVELOPE_FIELDS, EVENT_ENVELOPE_VERSION,
 };
 use aether_store::{
@@ -1908,6 +1908,165 @@ impl SessionManager {
         })
     }
 
+    /// 会话改名（M7-07/ADR-025 §2.1-3：`session_rename`）。
+    ///
+    /// 单写队列更新 `sessions.title`（FTS 触发器自动同步）→ 审计 `session.renamed`
+    /// → 先日志后广播 `session.updated`（`changed_fields=["title"]` + 新标题）。
+    pub async fn rename_session(
+        &self,
+        session_id: &SessionId,
+        title: &str,
+    ) -> Result<Session, LifecycleError> {
+        let now = self.inner.clock.now_ms();
+        let mut session = self
+            .inner
+            .reads
+            .session(session_id)
+            .await?
+            .ok_or_else(|| LifecycleError::SessionNotFound {
+                session_id: session_id.clone(),
+            })?;
+        let outcome = self
+            .inner
+            .write
+            .execute(StoreCommand::RenameSession {
+                id: session_id.clone(),
+                title: title.to_owned(),
+                updated_at: now,
+            })
+            .await?;
+        match outcome {
+            StoreOutcome::Applied { affected } if affected > 0 => {}
+            StoreOutcome::Applied { .. } => {
+                return Err(LifecycleError::SessionNotFound {
+                    session_id: session_id.clone(),
+                });
+            }
+            other => {
+                return Err(LifecycleError::Internal {
+                    reason: format!("session_rename 非预期存储结果：{other:?}"),
+                });
+            }
+        }
+        self.insert_audit(
+            session_id,
+            "user",
+            "session.renamed",
+            "renamed",
+            json!({
+                "title": title,
+                "previous_title": session.title.clone(),
+            }),
+        )
+        .await?;
+        self.emit(
+            session_id,
+            None,
+            &session.runtime_id,
+            EventPayload::SessionUpdated(SessionUpdatedPayload {
+                session_id: session_id.clone(),
+                changed_fields: vec!["title".to_owned()],
+                title: Some(title.to_owned()),
+            }),
+        )
+        .await?;
+        session.title = title.to_owned();
+        session.updated_at = now;
+        Ok(session)
+    }
+
+    /// 硬删除会话（M7-07/ADR-025 §2.1-4：`session_delete`）。
+    ///
+    /// 前置：无在途 run（`queued`/`running`）、无 `waiting_permission`/pending 票据
+    /// （否则 [`LifecycleError::SessionBusy`]）；存储层在同一事务内复核。
+    /// 删除 `sessions` 行（FK 级联 `messages`/`runs`/`artifacts`/`permissions`；
+    /// `events` 不级联，R7）→ 审计 `session.deleted`（级联行数摘要）→
+    /// 广播 `session.closed(reason="deleted")`。
+    pub async fn delete_session(&self, session_id: &SessionId) -> Result<(), LifecycleError> {
+        {
+            let state = lock_state(&self.inner).await;
+            if let Some(session) = state.sessions.get(session_id) {
+                if session.active.is_some() || session.waiting.is_some() {
+                    return Err(LifecycleError::SessionBusy {
+                        session_id: session_id.clone(),
+                    });
+                }
+            }
+        }
+        let session = self
+            .inner
+            .reads
+            .session(session_id)
+            .await?
+            .ok_or_else(|| LifecycleError::SessionNotFound {
+                session_id: session_id.clone(),
+            })?;
+        let outcome = self
+            .inner
+            .write
+            .execute(StoreCommand::DeleteSession {
+                id: session_id.clone(),
+            })
+            .await?;
+        let (messages, runs, artifacts, permissions, events_retained) = match outcome {
+            StoreOutcome::SessionDeleted {
+                messages,
+                runs,
+                artifacts,
+                permissions,
+                events_retained,
+            } => (messages, runs, artifacts, permissions, events_retained),
+            StoreOutcome::SessionBusy { .. } => {
+                return Err(LifecycleError::SessionBusy {
+                    session_id: session_id.clone(),
+                });
+            }
+            StoreOutcome::SessionNotFound => {
+                return Err(LifecycleError::SessionNotFound {
+                    session_id: session_id.clone(),
+                });
+            }
+            other => {
+                return Err(LifecycleError::Internal {
+                    reason: format!("session_delete 非预期存储结果：{other:?}"),
+                });
+            }
+        };
+        let now = self.inner.clock.now_ms();
+        {
+            let mut state = lock_state(&self.inner).await;
+            state.sessions.remove(session_id);
+        }
+        self.inner.cancel_tree.cancel_session(session_id);
+        self.insert_audit(
+            session_id,
+            "user",
+            "session.deleted",
+            "deleted",
+            json!({
+                "messages": messages,
+                "runs": runs,
+                "artifacts": artifacts,
+                "permissions": permissions,
+                "events_retained": events_retained,
+                "events_cascaded": false,
+            }),
+        )
+        .await?;
+        self.emit(
+            session_id,
+            None,
+            &session.runtime_id,
+            EventPayload::SessionClosed(SessionClosedPayload {
+                session_id: session_id.clone(),
+                closed_at: now,
+                reason: Some("deleted".to_owned()),
+            }),
+        )
+        .await?;
+        Ok(())
+    }
+
     /// 关闭会话（取消树根动作）：取消会话节点（级联全部 run 子节点与权限等待）→
     /// 取消在途 run；**子会话按 `parent_session_id` 递归关闭**（D8 父取消级联）；
     /// 空闲会话置 `completed`，有在途 run 置 `cancelled`；广播 `session.closed`
@@ -1984,6 +2143,7 @@ impl SessionManager {
             EventPayload::SessionClosed(SessionClosedPayload {
                 session_id: session_id.clone(),
                 closed_at: now,
+                reason: None,
             }),
         )
         .await?;

@@ -65,6 +65,12 @@ pub const EMBEDDED_MIGRATIONS: &[MigrationFile] = &[
         name: "0007_presets.sql",
         bytes: include_bytes!("../../../migrations/0007_presets.sql"),
     },
+    // M7-07/ADR-025：会话检索 FTS5（sessions_fts/messages_fts + 同步触发器）。
+    MigrationFile {
+        version: 8,
+        name: "0008_session_search_fts.sql",
+        bytes: include_bytes!("../../../migrations/0008_session_search_fts.sql"),
+    },
 ];
 
 /// 迁移文件 sha256（小写十六进制）。

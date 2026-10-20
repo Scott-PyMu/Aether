@@ -8,6 +8,12 @@ export const commands = {
 	runtimesList: () => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("runtimes_list")),
 	sessionList: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("session_list", { payload })),
 	sessionCreate: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("session_create", { payload })),
+	/**  M7-07/ADR-025 §2.1-2：会话全文检索（标题 + 消息正文；分页上限 100）。 */
+	sessionSearch: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("session_search", { payload })),
+	/**  M7-07/ADR-025 §2.1-3：会话改名（单写队列；`session.updated` + 审计）。 */
+	sessionRename: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("session_rename", { payload })),
+	/**  M7-07/ADR-025 §2.1-4：硬删除会话（在途/待审批 → `session_busy`；`events` 不级联）。 */
+	sessionDelete: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("session_delete", { payload })),
 	sessionSend: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("session_send", { payload })),
 	sessionInterrupt: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("session_interrupt", { payload })),
 	/**
@@ -427,7 +433,12 @@ export type IpcErrorCode =
  *  删除工作区时存在会话引用（M7-08/ADR-026 §2.1-1：**不级联、不改派**；
  *  message 含引用计数，UI 提示「仍有 N 个会话引用」）。
  */
-"workspace_in_use";
+"workspace_in_use" | 
+/**
+ *  会话不存在（M7-07/ADR-025 附录 A-2：`session_search` 引用层 / `session_rename` /
+ *  `session_delete` / `messages_page` 按 id 查无；UI「会话不存在，已刷新列表」）。
+ */
+"session_not_found";
 
 /**  IPC 命令错误的线上形态：`{ "code": "...", "message": "...", "field": "..." }`。 */
 export type IpcError_Deserialize = {
@@ -665,6 +676,11 @@ export type SessionCreateRequest = {
 	preset_id?: string | null,
 };
 
+/**  `session_delete`（M7-07/ADR-025 §2.1-4）：硬删除会话（UI 二次确认 + 不可恢复提示）。 */
+export type SessionDeleteRequest = {
+	session_id: string,
+};
+
 export type SessionIdRequest = {
 	session_id: string,
 };
@@ -679,6 +695,19 @@ export type SessionListRequest = {
 export type SessionPermissionModeSetRequest = {
 	session_id: string,
 	permission_mode: string,
+};
+
+/**  `session_rename`（M7-07/ADR-025 §2.1-3）：会话改名。 */
+export type SessionRenameRequest = {
+	session_id: string,
+	title: string,
+};
+
+/**  `session_search`（M7-07/ADR-025 §2.1-2）：标题 + 消息正文 FTS5 检索。 */
+export type SessionSearchRequest = {
+	query: string,
+	limit?: number | null,
+	offset?: number | null,
 };
 
 export type SessionSendRequest = {

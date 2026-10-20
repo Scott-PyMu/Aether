@@ -26,6 +26,7 @@ use crate::ipc::dto::{
     RulesListRequest, RunRetryRequest, RuntimeDisableRequest, RuntimeEnableRequest,
     RuntimeRetryRequest, SessionCreateRequest, SessionIdRequest, SessionListRequest,
     SessionPermissionModeSetRequest, SessionSendRequest, SessionStatus,
+    SessionDeleteRequest, SessionRenameRequest, SessionSearchRequest,
     SessionWorkspaceAssignRequest, SettingsGetRequest,
     SettingsSetRequest, StartupGetRequest,
     StartupMigrateRequest, StartupPickTargetRequest, WorkspaceCreateRequest,
@@ -89,6 +90,9 @@ pub fn builder<R: tauri::Runtime>() -> Builder<R> {
         .typ::<IpcError>()
         .typ::<SessionCreateRequest>()
         .typ::<SessionListRequest>()
+        .typ::<SessionSearchRequest>()
+        .typ::<SessionRenameRequest>()
+        .typ::<SessionDeleteRequest>()
         .typ::<SessionSendRequest>()
         .typ::<SessionIdRequest>()
         .typ::<MessagesPageRequest>()

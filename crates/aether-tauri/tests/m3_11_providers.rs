@@ -446,8 +446,8 @@ fn dod1_builtin_seed_list_shape_and_write_queue() {
     let summary = h.runtime.block_on(h.reads.store_summary()).expect("库摘要");
     assert_eq!(
         summary.schema_version,
-        Some(7),
-        "迁移必须到 0007（M7-09/ADR-026 presets）"
+        Some(8),
+        "迁移必须到 0008（M7-07/ADR-025 FTS5）"
     );
 
     let list = h.list().expect("供应商清单");

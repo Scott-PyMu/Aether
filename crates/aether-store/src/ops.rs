@@ -190,6 +190,16 @@ pub struct WorkspaceSessionCounts {
     pub unassigned: WorkspaceSessionCount,
 }
 
+/// `session_search` 命中（ADR-025 §2.1-2）：会话摘要 + FTS `snippet()` + 命中来源。
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionSearchHit {
+    pub session: Session,
+    /// `snippet()` 摘要（命中词以 `[]` 包裹；最多 32 token）。
+    pub snippet: String,
+    /// `title` | `message`（标题命中权重高于正文）。
+    pub source: String,
+}
+
 /// 审计过滤条件 → `WHERE` 子句与命名参数（等值 + 闭区间时间）。
 pub(crate) fn audit_filter_sql(query: &AuditQuery) -> (String, Vec<rusqlite::types::Value>) {
     let mut clauses: Vec<&str> = Vec::new();
@@ -436,6 +446,21 @@ pub enum StoreCommand {
         model_id: String,
         display_name: String,
     },
+    /// 会话改名（M7-07/ADR-025 §2.1-3：`session_rename`；FTS 触发器自动同步）。
+    ///
+    /// 不存在时影响 0 行——存在性由控制层先行判定（最终由命令层返回 `session_not_found`）。
+    RenameSession {
+        id: SessionId,
+        title: String,
+        updated_at: i64,
+    },
+    /// 硬删除会话（M7-07/ADR-025 §2.1-4：`session_delete`）。
+    ///
+    /// **同一事务内**复核：会话存在；无 `queued`/`running` run、无 `waiting_permission`/
+    /// pending 票据（否则 [`StoreOutcome::SessionBusy`]）。删除 `sessions` 行，经 FK
+    /// `ON DELETE CASCADE` 连带 `messages`/`runs`/`artifacts`/`permissions`；
+    /// **`events` 不级联**（R7，保留至 M5-04 保留策略）。FTS 触发器同步清理索引。
+    DeleteSession { id: SessionId },
     /// 删除指定 `rowid` 的事件行（M5-04 保留清理的删除半步；先归档后删除）。
     ///
     /// 调用方（保留任务）先经 [`crate::archive`] 归档精确行集合并校验通过，再提交本
@@ -472,6 +497,25 @@ pub enum StoreOutcome {
     WorkspaceInUse {
         /// 引用该工作区的会话数（UI 文案「仍有 N 个会话引用」）。
         sessions: u64,
+    },
+    /// [`StoreCommand::DeleteSession`] 结果：会话不存在（事务内复核）。
+    SessionNotFound,
+    /// [`StoreCommand::DeleteSession`] 结果：存在在途 run / 等待审批 / pending 票据，
+    /// **未删除**（ADR-025 §2.1-4：`session_busy`）。
+    SessionBusy {
+        /// `queued`/`running` run 数。
+        active_runs: u64,
+        /// `status='pending'` 权限票据数。
+        pending_permissions: u64,
+    },
+    /// [`StoreCommand::DeleteSession`] 结果：已硬删除，并给出级联行数摘要
+    /// （审计 detail；`events` 不级联，单列保留计数）。
+    SessionDeleted {
+        messages: u64,
+        runs: u64,
+        artifacts: u64,
+        permissions: u64,
+        events_retained: u64,
     },
 }
 
@@ -1057,6 +1101,110 @@ pub(crate) fn apply_command(
             transaction.commit().map_err(txn_failed)?;
             Ok(StoreOutcome::Applied { affected })
         }
+        StoreCommand::RenameSession {
+            id,
+            title,
+            updated_at,
+        } => {
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            let affected = transaction
+                .execute(
+                    "UPDATE sessions SET title = ?2, updated_at = ?3 WHERE id = ?1",
+                    params![id.as_str(), title, updated_at],
+                )
+                .map_err(txn_failed)?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::Applied { affected })
+        }
+        StoreCommand::DeleteSession { id } => {
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            // ADR-025 §2.1-4：前置检查与删除同一事务（防「检查后新 run/审批」竞态）。
+            let status: Option<String> = transaction
+                .query_row(
+                    "SELECT status FROM sessions WHERE id = ?1",
+                    [id.as_str()],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(txn_failed)?;
+            let Some(status) = status else {
+                return Ok(StoreOutcome::SessionNotFound);
+            };
+            let active_runs: i64 = transaction
+                .query_row(
+                    "SELECT COUNT(*) FROM runs WHERE session_id = ?1 AND status IN ('queued','running')",
+                    [id.as_str()],
+                    |row| row.get(0),
+                )
+                .map_err(txn_failed)?;
+            let pending_permissions: i64 = transaction
+                .query_row(
+                    "SELECT COUNT(*) FROM permissions WHERE session_id = ?1 AND status = 'pending'",
+                    [id.as_str()],
+                    |row| row.get(0),
+                )
+                .map_err(txn_failed)?;
+            if status == "waiting_permission"
+                || status == "creating"
+                || status == "running"
+                || active_runs > 0
+                || pending_permissions > 0
+            {
+                return Ok(StoreOutcome::SessionBusy {
+                    active_runs: u64::try_from(active_runs).unwrap_or(u64::MAX),
+                    pending_permissions: u64::try_from(pending_permissions).unwrap_or(u64::MAX),
+                });
+            }
+            let messages: i64 = transaction
+                .query_row(
+                    "SELECT COUNT(*) FROM messages WHERE session_id = ?1",
+                    [id.as_str()],
+                    |row| row.get(0),
+                )
+                .map_err(txn_failed)?;
+            let runs: i64 = transaction
+                .query_row(
+                    "SELECT COUNT(*) FROM runs WHERE session_id = ?1",
+                    [id.as_str()],
+                    |row| row.get(0),
+                )
+                .map_err(txn_failed)?;
+            let artifacts: i64 = transaction
+                .query_row(
+                    "SELECT COUNT(*) FROM artifacts WHERE session_id = ?1",
+                    [id.as_str()],
+                    |row| row.get(0),
+                )
+                .map_err(txn_failed)?;
+            let permissions: i64 = transaction
+                .query_row(
+                    "SELECT COUNT(*) FROM permissions WHERE session_id = ?1",
+                    [id.as_str()],
+                    |row| row.get(0),
+                )
+                .map_err(txn_failed)?;
+            let events_retained: i64 = transaction
+                .query_row(
+                    "SELECT COUNT(*) FROM events WHERE session_id = ?1",
+                    [id.as_str()],
+                    |row| row.get(0),
+                )
+                .map_err(txn_failed)?;
+            let affected = transaction
+                .execute("DELETE FROM sessions WHERE id = ?1", [id.as_str()])
+                .map_err(txn_failed)?;
+            if affected == 0 {
+                return Ok(StoreOutcome::SessionNotFound);
+            }
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::SessionDeleted {
+                messages: u64::try_from(messages).unwrap_or(u64::MAX),
+                runs: u64::try_from(runs).unwrap_or(u64::MAX),
+                artifacts: u64::try_from(artifacts).unwrap_or(u64::MAX),
+                permissions: u64::try_from(permissions).unwrap_or(u64::MAX),
+                events_retained: u64::try_from(events_retained).unwrap_or(u64::MAX),
+            })
+        }
         StoreCommand::InsertPreset { preset } => {
             let transaction = connection.transaction().map_err(txn_failed)?;
             let affected = transaction
@@ -1500,6 +1648,73 @@ impl ReadPool {
                 sessions.push(row?);
             }
             Ok(sessions)
+        })
+        .await
+    }
+
+    /// 会话全文检索（M7-07/ADR-025 §2.1-2：`session_search`）。
+    ///
+    /// - 标题与消息正文双 FTS5 命中；标题权重 ×5（`bm25` 越低越好）；
+    /// - 同一会话多命中取最优一条（`ROW_NUMBER`），返回 `snippet` + `source`；
+    /// - `query` 由调用方做长度/空值校验；本层按 FTS5 **短语查询**转义，
+    ///   不把用户输入当 FTS 语法执行（防注入）。
+    pub async fn search_sessions(
+        &self,
+        query: &str,
+        limit: u32,
+        offset: u64,
+    ) -> Result<Vec<SessionSearchHit>, StoreError> {
+        let phrase = format!("\"{}\"", query.replace('"', "\"\""));
+        let limit = i64::from(limit);
+        let offset = i64::try_from(offset).unwrap_or(i64::MAX);
+        self.with_connection(move |connection| {
+            let mut statement = connection.prepare(
+                "WITH hits AS ( \
+                   SELECT s.id AS session_id, \
+                          snippet(sessions_fts, 0, '[', ']', '…', 32) AS snippet, \
+                          bm25(sessions_fts) * 5.0 AS rank, \
+                          'title' AS source \
+                     FROM sessions_fts \
+                     JOIN sessions s ON s.rowid = sessions_fts.rowid \
+                    WHERE sessions_fts MATCH ?1 \
+                   UNION ALL \
+                   SELECT s.id, \
+                          snippet(messages_fts, 0, '[', ']', '…', 32), \
+                          bm25(messages_fts), \
+                          'message' \
+                     FROM messages_fts \
+                     JOIN messages m ON m.rowid = messages_fts.rowid \
+                     JOIN sessions s ON s.id = m.session_id \
+                    WHERE messages_fts MATCH ?1 \
+                 ), ranked AS ( \
+                   SELECT session_id, snippet, source, rank, \
+                          ROW_NUMBER() OVER ( \
+                            PARTITION BY session_id ORDER BY rank ASC, source ASC \
+                          ) AS rn \
+                     FROM hits \
+                 ) \
+                 SELECT s.id, s.runtime_id, s.workspace_id, s.parent_session_id, s.title, \
+                        s.status, s.model, s.system_prompt, s.config, s.token_usage, \
+                        s.created_at, s.updated_at, s.closed_at, s.thinking_depth, \
+                        s.permission_mode, s.preset_id, r.snippet, r.source \
+                   FROM ranked r \
+                   JOIN sessions s ON s.id = r.session_id \
+                  WHERE r.rn = 1 \
+                  ORDER BY r.rank ASC, s.updated_at DESC, s.id DESC \
+                  LIMIT ?2 OFFSET ?3",
+            )?;
+            let rows = statement.query_map(params![phrase, limit, offset], |row| {
+                Ok(SessionSearchHit {
+                    session: read_session_row(row)?,
+                    snippet: row.get(16)?,
+                    source: row.get(17)?,
+                })
+            })?;
+            let mut hits = Vec::new();
+            for row in rows {
+                hits.push(row?);
+            }
+            Ok(hits)
         })
         .await
     }

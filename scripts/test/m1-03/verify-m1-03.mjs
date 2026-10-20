@@ -80,6 +80,12 @@ function splitStatements(sql) {
     if (char === "(") depth += 1;
     if (char === ")") depth -= 1;
     if (char === ";" && depth === 0) {
+      // CREATE TRIGGER 的 BEGIN…END 体内也有分号：仅在 END 之后的分号收口
+      // （ADR-025 §2.1 触发器模板；无 CASE…END 嵌套）。
+      if (/^\s*CREATE\s+TRIGGER\b/i.test(current) && !/\bEND\s*$/i.test(current)) {
+        current += char;
+        continue;
+      }
       if (current.trim()) statements.push(current.trim());
       current = "";
       continue;
@@ -175,10 +181,42 @@ function parseTable(name, body) {
   return { name, columns, foreignKeys, uniques };
 }
 
+/**
+ * FTS5 虚拟表（ADR-025 附录 A-1）：列名为 fts5 参数中的裸列（其余 `key=value`
+ * 为 content/content_rowid 等选项）；`PRAGMA table_info` 对 FTS 列返回空类型、
+ * NOT NULL=0、无默认值、非主键。
+ */
+function parseVirtualTable(name, body) {
+  const columns = [];
+  for (const rawPart of splitTopLevel(body)) {
+    const part = rawPart.trim();
+    if (!part) continue;
+    if (/^[A-Za-z_]\w*\s*=/i.test(part)) continue;
+    if (!/^[A-Za-z_]\w*$/.test(part)) {
+      throw new Error(`虚拟表 ${name}：无法解析 fts5 参数「${part}」`);
+    }
+    columns.push({
+      name: part,
+      type: "",
+      notnull: 0,
+      dflt_value: null,
+      pk: 0,
+    });
+  }
+  return { name, columns, foreignKeys: [], uniques: [] };
+}
+
 /** 解析 SQL 片段为 { tables, indexes }（容忍 ALTER/DROP，供迁移集有效 schema 使用）。 */
 function applyDdl(model, sql, source) {
   for (const statement of ddlStatements(sql)) {
-    let match = /^CREATE TABLE\s+(\w+)\s*\(([\s\S]*)\)$/i.exec(statement);
+    let match = /^CREATE VIRTUAL TABLE\s+(\w+)\s+USING\s+\w+\s*\(([\s\S]*)\)$/i.exec(statement);
+    if (match) {
+      model.tables.set(match[1], parseVirtualTable(match[1], match[2]));
+      continue;
+    }
+    // ADR-025 附录 A-1：同步触发器不改变表/索引模型（行为由 store 测试断言）。
+    if (/^CREATE TRIGGER\b/i.test(statement)) continue;
+    match = /^CREATE TABLE\s+(\w+)\s*\(([\s\S]*)\)$/i.exec(statement);
     if (match) {
       model.tables.set(match[1], parseTable(match[1], match[2]));
       continue;
@@ -388,7 +426,7 @@ function compareModels(actual, expected, label, options = {}) {
   }
 
   console.log(
-    `[live] 失败 schema 逐项一致：${expected.tables.size} 表 / ${columnCount} 列 / ` +
+    `[schema] 一致：${expected.tables.size} 表 / ${columnCount} 列 / ` +
       `${foreignKeyCount} 外键 / ${uniqueCount} UNIQUE 约束 / ` +
       `${actualIndexes.filter((index) => !index.unique).length} 显式索引`,
   );
@@ -402,8 +440,12 @@ function checkMigrationHygiene() {
     if (/^\s*PRAGMA\b/im.test(stripped)) {
       throw new Error(`${file.name}: 迁移文件不得包含 PRAGMA（D3：连接打开时执行）`);
     }
-    if (/\b(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|DEFERRED)\b/i.test(stripped)) {
-      throw new Error(`${file.name}: 迁移文件不得包含事务控制（单事务由迁移框架包裹）`);
+    for (const statement of splitStatements(stripped)) {
+      // CREATE TRIGGER 的 BEGIN…END 是 DDL 语法，不是事务控制（ADR-025 附录 A-1）。
+      if (/^CREATE\s+TRIGGER\b/i.test(statement)) continue;
+      if (/\b(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|DEFERRED)\b/i.test(statement)) {
+        throw new Error(`${file.name}: 迁移文件不得包含事务控制（单事务由迁移框架包裹）`);
+      }
     }
     if (/INSERT\s+INTO\s+schema_migrations/i.test(stripped)) {
       throw new Error(`${file.name}: 迁移文件不得写 schema_migrations`);

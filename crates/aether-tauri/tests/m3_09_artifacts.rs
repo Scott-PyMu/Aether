@@ -209,8 +209,8 @@ fn dod1_migration_0003_is_applied() {
     let summary = h.runtime.block_on(h.reads.store_summary()).expect("库摘要");
     assert_eq!(
         summary.schema_version,
-        Some(7),
-        "迁移必须到 0007（M7-09/ADR-026 presets）"
+        Some(8),
+        "迁移必须到 0008（M7-07/ADR-025 FTS5）"
     );
     evidence(
         "dod1_migration_0003",

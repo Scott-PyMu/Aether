@@ -8,12 +8,12 @@
  *      报告 `docs/M4-04-验收报告.md` 引用；失败项记录 rerun 命令）；
  *   4) 命令面完整性：命令全集（P0 36 + M5-05 导出 2 + M6-01 权限模式/规则 6 +
  *      M6-03 审计查询/导出 2 + M7-01 runtime_disable 1 + M7-03 暂停/恢复 2 +
- *      M7-06 连通性 2 + M7-09 预设 4 + M7-08 工作区管理 5 = 60；
- *      bindings ↔ collect_commands ↔ generate_handler 三方一致）+ 错误码全集 31 个
+ *      M7-06 连通性 2 + M7-09 预设 4 + M7-08 工作区管理 5 + M7-07 会话检索/改名/删除 3 = 63；
+ *      bindings ↔ collect_commands ↔ generate_handler 三方一致）+ 错误码全集 32 个
  *      分支覆盖扫描（M6-01 `rule_not_found`；M7-01
  *      `runtime_busy`/`no_candidate_runtime`；M7-03 `pause_unsupported`；M7-06
  *      `provider_unreachable`/`provider_auth_failed`/`provider_error`；M7-08
- *      `workspace_not_found`/`workspace_in_use`；M7-09
+ *      `workspace_not_found`/`workspace_in_use`；M7-07 `session_not_found`；M7-09
  *      `preset_not_found`/`builtin_preset_undeletable`）+ 警告码
  *      `thinking_depth_unsupported` 分支验证。
  *
@@ -44,6 +44,9 @@ mkdirSync(evidenceDir, { recursive: true });
 const EXPECTED_COMMANDS = [
   "runtimes_list",
   "session_list",
+  "session_search",
+  "session_rename",
+  "session_delete",
   "session_create",
   "session_send",
   "session_interrupt",
@@ -134,6 +137,7 @@ const EXPECTED_ERROR_CODES = [
   "provider_error",
   "workspace_not_found",
   "workspace_in_use",
+  "session_not_found",
   "preset_not_found",
   "builtin_preset_undeletable",
 ];
@@ -552,7 +556,7 @@ if (selected("T15")) {
   }
 }
 
-// ===== DoD4：命令面完整性（60 命令、31 错误码、1 警告码）=====
+// ===== DoD4：命令面完整性（63 命令、32 错误码、1 警告码）=====
 
 if (selected("DoD4")) {
   const commandsSource = readFileSync(
