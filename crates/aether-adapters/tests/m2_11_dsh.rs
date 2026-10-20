@@ -63,7 +63,7 @@ async fn initialize_reports_version_and_plugin_contract_with_injection_artifacts
         .await
         .expect("initialize");
     assert_eq!(initialized["acknowledged"], true);
-    assert_eq!(initialized["dsh_version"], "0.1.5-rc.2");
+    assert_eq!(initialized["dsh_version"], "0.2.1-rc.2");
     assert_eq!(initialized["plugin_contract"], "aether-dsh-stream@1");
 
     // DoD2：插件包落盘 + package.json 无 BOM + overlay insert 行。
@@ -593,7 +593,7 @@ async fn version_latch_mismatch_disables_with_version_mismatch() {
         StartOutcome::Failed { reason, detail, .. } => {
             assert_eq!(*reason, DisabledReason::VersionMismatch);
             assert!(
-                detail.contains("0.1.5-rc.2"),
+                detail.contains("0.2.1-rc.2"),
                 "升级提示必须含 pin：{detail}"
             );
         }

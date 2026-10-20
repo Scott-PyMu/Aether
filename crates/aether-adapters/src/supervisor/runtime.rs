@@ -1460,7 +1460,7 @@ mod tests {
     fn initialize_failure_classification_maps_version_mismatch_only() {
         let version_mismatch = RequestError::Rpc(crate::connection::RpcError {
             code: code::VERSION_MISMATCH,
-            message: "DSH 版本门闩失败：pin 0.1.5-rc.2，实际 0.1.1-rc.2".to_owned(),
+            message: "DSH 版本门闩失败：pin 0.2.1-rc.2，实际 0.1.1-rc.2".to_owned(),
             data: None,
         });
         assert_eq!(

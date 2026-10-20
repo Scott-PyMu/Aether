@@ -912,7 +912,7 @@ impl DshHarness {
             "--dsh-model".to_owned(),
             "fake-model".to_owned(),
             "--dsh-version".to_owned(),
-            "0.1.5-rc.2".to_owned(),
+            "0.2.1-rc.2".to_owned(),
             "--workspace".to_owned(),
             workspace.to_string_lossy().into_owned(),
         ];
