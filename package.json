@@ -76,6 +76,7 @@
     "verify:m7-08": "node scripts/test/m7-08/verify-m7-08.mjs",
     "verify:m7-09": "node scripts/test/m7-09/verify-m7-09.mjs",
     "verify:m8-01": "node scripts/test/m8-01/verify-m8-01.mjs",
+    "verify:m8-03": "node scripts/test/m8-03/verify-m8-03.mjs",
     "dev:desktop": "node scripts/ci/dev-desktop.mjs",
     "smoke": "node scripts/test/smoke-desktop.mjs",
     "ci:local": "node scripts/test/ci-local.mjs"
