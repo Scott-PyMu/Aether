@@ -31,6 +31,7 @@ pub mod logging;
 pub mod nav;
 pub mod permission_loop;
 pub mod picker;
+pub mod preset_control;
 pub mod provider_connectivity;
 pub mod provider_control;
 pub mod provider_env;
@@ -693,6 +694,8 @@ fn build_backend(
     if let Some(service) = permission_service {
         session_backend = session_backend.with_permissions(service);
     }
+    // M7-08/ADR-026 §2.1-1：`workspaces_list` 合成组「默认（数据目录）」的根路径展示。
+    session_backend = session_backend.with_data_dir(data_dir.clone());
     // M3-08：工作区写路径接线（`workspace_set` 落库）与启动恢复（最近绑定工作区 →
     // 新会话记忆注入 + 权限基准同源；旧会话不迁移）。
     if let Some(write) = write_slot.clone() {
@@ -701,6 +704,15 @@ fn build_backend(
     // M3-11（ADR-010 决策 3/D10）：模型与供应商配置命令面接线。密钥存储启动选择：
     // keyring 自检通过 → OS 凭据库；否则 A3 降级加密文件（口令环境钩子，测试/演练）；
     // 两者皆不可用 → 密钥字段命令回诊断错误（不落明文）。M5-03：与备份共用同一实例。
+    // M7-09（ADR-026 §2.2）：Agent 预设命令面接线（`presets_list` / `preset_*`；
+    // 校验/内置保护/审计语义在 `preset_control`，本层仅注入读写句柄）。
+    if let (Some(reads), Some(write)) = (reads.clone(), write_slot.clone()) {
+        session_backend = session_backend.with_presets(preset_control::PresetControl::new(
+            reads,
+            write,
+            handle.clone(),
+        ));
+    }
     if let (Some(reads), Some(write)) = (reads, write_slot) {
         session_backend = session_backend.with_providers(provider_control::ProviderControl::new(
             reads,

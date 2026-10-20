@@ -1,16 +1,25 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
 import {
   buildPatchText,
   checkVersionLatch,
+  clearPromptDir,
   DEFAULT_DSH_VERSION_PIN,
   materializePlugin,
+  materializePromptPlugin,
   PLUGIN_CONTRACT,
   PLUGIN_INDEX_JS,
+  promptFilePath,
+  PROMPT_DIR_ENV,
+  PROMPT_PLUGIN_INDEX_JS,
+  PROMPT_PLUGIN_PACKAGE_NAME,
+  PROMPT_SECTION_NAME,
+  PROMPT_SECTION_ORDER,
   resolveDshVersion,
   validateProviderConfig,
   writePatchFile,
@@ -112,5 +121,126 @@ describe("插件落盘与 overlay（DoD2）", () => {
     const path = writePatchFile(home, "acp", { model: "m" });
     expect(path).toBe(join(home, "aether-dsh-acp.patch.yml"));
     expect(readFileSync(path, "utf8")).toContain("name: aether-dsh-stream");
+  });
+});
+
+describe("M7-09/ADR-027 系统提示词注入插件", () => {
+  it("侧信道文件名经 URL 编码（防御 native_id 路径分隔符）", () => {
+    const dir = join(tmpdir(), "dsh-prompt-path");
+    expect(promptFilePath(dir, "a/b\\c")).toBe(join(dir, "a%2Fb%5Cc.md"));
+    expect(promptFilePath(dir, "..")).toBe(join(dir, "...md"));
+  });
+
+  it("启动清理仅删除 .md 侧信道文件（保留其他文件）", () => {
+    const dir = mkdtempSync(join(tmpdir(), "dsh-prompt-clear-"));
+    writeFileSync(join(dir, "a.md"), "x", "utf8");
+    writeFileSync(join(dir, "b.md"), "y", "utf8");
+    writeFileSync(join(dir, "keep.json"), "{}", "utf8");
+    expect(clearPromptDir(dir)).toBe(2);
+    expect(existsSync(join(dir, "a.md"))).toBe(false);
+    expect(existsSync(join(dir, "b.md"))).toBe(false);
+    expect(existsSync(join(dir, "keep.json"))).toBe(true);
+  });
+
+  it("插件包落盘（无 BOM）且 overlay 同时 insert 两个插件", () => {
+    const home = mkdtempSync(join(tmpdir(), "dsh-prompt-plugin-"));
+    const materialized = materializePromptPlugin(join(home, "profiles", "acp"));
+    expect(materialized.dir).toContain(
+      join("profiles", "acp", "node_modules", PROMPT_PLUGIN_PACKAGE_NAME),
+    );
+    const bytes = readFileSync(materialized.packageJsonPath);
+    expect([bytes[0], bytes[1], bytes[2]]).not.toEqual([0xef, 0xbb, 0xbf]);
+    const pkg = JSON.parse(bytes.toString("utf8")) as { name: string; type: string };
+    expect(pkg.name).toBe(PROMPT_PLUGIN_PACKAGE_NAME);
+    expect(pkg.type).toBe("module");
+    expect(readFileSync(materialized.indexPath, "utf8")).toBe(PROMPT_PLUGIN_INDEX_JS);
+    expect(PROMPT_PLUGIN_INDEX_JS).toContain('inject = ["systemPrompt"]');
+    expect(PROMPT_PLUGIN_INDEX_JS).toContain('ctx.on("agent/created"');
+    expect(PROMPT_PLUGIN_INDEX_JS).toContain("agent.ctx.systemPrompt.section");
+    expect(PROMPT_PLUGIN_INDEX_JS).toContain(PROMPT_SECTION_NAME);
+    expect(PROMPT_PLUGIN_INDEX_JS).toContain(String(PROMPT_SECTION_ORDER));
+    expect(PROMPT_PLUGIN_INDEX_JS).toContain(PROMPT_DIR_ENV);
+
+    const patch = buildPatchText({});
+    expect(patch).toContain("name: aether-dsh-stream");
+    expect(patch).toContain(`name: ${PROMPT_PLUGIN_PACKAGE_NAME}`);
+    expect(patch.match(/- id: /g)).toHaveLength(2);
+  });
+
+  it("运行时行为：agent/created 注册 agent 作用域 section；按会话 id 读文件；缺失返回空串", async () => {
+    const home = mkdtempSync(join(tmpdir(), "dsh-prompt-run-"));
+    const promptDir = join(home, "prompts");
+    mkdirSync(promptDir, { recursive: true });
+    const materialized = materializePromptPlugin(join(home, "profiles", "acp"));
+    const sessionId = "acp-test-session";
+    const prompt = "<!-- aether:preset:01J00000000000000000000P02 -->\n你是资深软件工程师\n\n# 工作区约定\n来源：AGENTS.md\n\n约定";
+    writeFileSync(promptFilePath(promptDir, sessionId), prompt, "utf8");
+
+    const previous = process.env[PROMPT_DIR_ENV];
+    process.env[PROMPT_DIR_ENV] = promptDir;
+    try {
+      // 环境变量在模块加载时读取：以查询串绕过模块缓存。
+      const moduleUrl = `${pathToFileURL(materialized.indexPath).href}?v=${Date.now()}`;
+      const plugin = (await import(moduleUrl)) as {
+        name: string;
+        inject: string[];
+        apply: (ctx: unknown) => void;
+      };
+      expect(plugin.name).toBe(PROMPT_PLUGIN_PACKAGE_NAME);
+      expect(plugin.inject).toEqual(["systemPrompt"]);
+
+      const handlers: Array<(payload: { agent: unknown }) => void> = [];
+      const ctx = {
+        on: (event: string, listener: (payload: { agent: unknown }) => void) => {
+          if (event === "agent/created") handlers.push(listener);
+          return () => undefined;
+        },
+      };
+      plugin.apply(ctx);
+      expect(handlers).toHaveLength(1);
+
+      const sections: Array<{
+        name: string;
+        order: number;
+        text: () => string;
+        interpolate?: boolean;
+      }> = [];
+      const agent = {
+        id: sessionId,
+        ctx: {
+          systemPrompt: {
+            section: (section: { name: string; order: number; text: () => string }) => {
+              sections.push(section);
+              return () => undefined;
+            },
+          },
+        },
+      };
+      handlers[0]?.({ agent });
+      expect(sections).toHaveLength(1);
+      expect(sections[0]?.name).toBe(PROMPT_SECTION_NAME);
+      expect(sections[0]?.order).toBe(PROMPT_SECTION_ORDER);
+      expect(sections[0]?.text()).toBe(prompt);
+      // 用户提示词含 `{{...}}` 时必须按原文注入，不能被 DSH 变量插值破坏。
+      expect(sections[0]?.interpolate).toBe(false);
+
+      // 另一会话/缺失文件 → 空串（不注入）。
+      const other = {
+        id: "acp-missing",
+        ctx: {
+          systemPrompt: {
+            section: (section: { name: string; order: number; text: () => string }) => {
+              sections.push(section);
+              return () => undefined;
+            },
+          },
+        },
+      };
+      handlers[0]?.({ agent: other });
+      expect(sections[1]?.text()).toBe("");
+    } finally {
+      if (previous === undefined) delete process.env[PROMPT_DIR_ENV];
+      else process.env[PROMPT_DIR_ENV] = previous;
+    }
   });
 });

@@ -19,7 +19,7 @@ describe("parseArgs（DSH CLI）", () => {
         "--dsh-model",
         "deepseek-v4-pro",
         "--dsh-version",
-        "0.1.5-rc.2",
+        "0.2.1-rc.2",
         "--dsh-provider-config",
         '{"providers":{"streamax":{"api":"openai-completions","baseURL":"https://x/open/v1"}}}',
       ],

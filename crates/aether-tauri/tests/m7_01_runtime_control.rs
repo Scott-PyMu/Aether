@@ -73,6 +73,7 @@ fn session_row(id: &str) -> Session {
         model: None,
         thinking_depth: aether_core::THINKING_DEPTH_DEFAULT,
         permission_mode: aether_core::PermissionMode::default(),
+        preset_id: None,
         system_prompt: None,
         config: serde_json::json!({}),
         token_usage: TokenUsage::default(),

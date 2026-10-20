@@ -1,4 +1,4 @@
-﻿//! M7-01 DoD7：迁移 `0006`（`runtimes.enabled`）的列/约束断言、增量迁移幂等、
+//! M7-01 DoD7：迁移 `0006`（`runtimes.enabled`）的列/约束断言、增量迁移幂等、
 //! 既有行不受影响（历史库升级后缺省 `enabled=1`）；以及偏好写路径与读路径
 //! （`runtime_preferences` / `active_work_counts`）的存储行为（ADR-015 决策 5）。
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -46,6 +46,7 @@ fn session_row(id: &str, status: SessionStatus) -> Session {
         model: None,
         thinking_depth: aether_core::THINKING_DEPTH_DEFAULT,
         permission_mode: aether_core::PermissionMode::default(),
+        preset_id: None,
         system_prompt: None,
         config: serde_json::json!({}),
         token_usage: TokenUsage::default(),
@@ -74,7 +75,7 @@ async fn migration_0006_adds_runtime_enabled_with_default_and_is_idempotent() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("aether.db");
 
-    // 旧库路径：先应用到 0005（模拟历史库），再升级到最新（0006）。
+    // 旧库路径：先应用到 0005（模拟历史库），再升级到最新（0006 + M7-09 的 0007）。
     {
         let mut connection = Connection::open(&db).unwrap();
         let before: Vec<_> = EMBEDDED_MIGRATIONS
@@ -94,8 +95,8 @@ async fn migration_0006_adds_runtime_enabled_with_default_and_is_idempotent() {
         let applied = migrate_with(&mut connection, EMBEDDED_MIGRATIONS).unwrap();
         assert_eq!(
             applied.iter().map(|item| item.version).collect::<Vec<_>>(),
-            vec![6],
-            "仅 0006 增量应用"
+            vec![6, 7],
+            "增量应用 0006（本任务）与 0007（M7-09 presets）"
         );
         // 列断言：NOT NULL DEFAULT 1。
         let (notnull, default, kind): (i64, Option<String>, String) = connection
@@ -121,15 +122,15 @@ async fn migration_0006_adds_runtime_enabled_with_default_and_is_idempotent() {
         assert!(again.is_empty());
     }
 
-    // 新库路径：一次性迁移到最新（含 0006）。
+    // 新库路径：一次性迁移到最新（含 0006；M7-09 起为 0007）。
     let fresh = dir.path().join("fresh.db");
     {
         let mut connection = Connection::open(&fresh).unwrap();
         let applied = migrate(&mut connection).unwrap();
         assert_eq!(
             applied.last().map(|item| item.version),
-            Some(6),
-            "新库应用到 0006"
+            Some(7),
+            "新库应用到最新（0007）"
         );
     }
 }

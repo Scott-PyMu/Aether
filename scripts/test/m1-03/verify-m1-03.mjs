@@ -191,6 +191,20 @@ function applyDdl(model, sql, source) {
         throw new Error(`${source}: 列已存在「${match[1]}.${match[2]}」`);
       }
       table.columns.push(parseColumn(match[2], match[3], match[4]));
+      // 增量列可携带外键（如 M7-09 `sessions.preset_id REFERENCES presets(id)`
+      // ON DELETE SET NULL）：与 CREATE TABLE 同口径进入 schema 模型（live 比对一致）。
+      const reference = /\bREFERENCES\s+(\w+)\s*\(\s*(\w+)\s*\)([\s\S]*)$/i.exec(match[4]);
+      if (reference) {
+        const onDelete = /\bON DELETE (SET NULL|CASCADE|SET DEFAULT|RESTRICT|NO ACTION)\b/i.exec(
+          reference[3],
+        );
+        table.foreignKeys.push({
+          from: match[2],
+          table: reference[1],
+          to: reference[2],
+          on_delete: onDelete ? onDelete[1].toUpperCase() : "NO ACTION",
+        });
+      }
       continue;
     }
     match = /^DROP INDEX\s+(\w+)$/i.exec(statement);

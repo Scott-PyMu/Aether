@@ -33,8 +33,8 @@ use aether_core::{
 };
 use aether_security::{
     canonicalize_free_path, evaluate_rules, ApprovalQueue, ApprovalTicket, PathViolation,
-    PermissionResource, PermissionRule, PolicyDecision, PolicyEngine, PolicyRequest, RuleDecision,
-    RuleOutcome, RuleTargetKind, APPROVAL_TIMEOUT_MS,
+    PermissionResource, PermissionRule, PolicyDecision, PolicyEngine, PolicyRequest, PolicyVerdict,
+    RuleDecision, RuleOutcome, RuleTargetKind, APPROVAL_TIMEOUT_MS,
 };
 use aether_store::{
     AuditLogRecord, PermissionRecord, PermissionRuleRecord, ReadPool, StoreCommand, StoreError,
@@ -217,6 +217,106 @@ struct GrantKey {
     canonical_target: String,
 }
 
+/// 会话权限基准绑定（M7-08 / ADR-014 附录 B 不变量 11 / R15）。
+///
+/// 基准在**会话创建时固定**：`Root` = 创建时 `sessions.workspace_id` 对应工作区根；
+/// `DataDir` = `workspace_id IS NULL` 的数据目录基准。`workspace_set` 换根与
+/// `session_workspace_assign` 改派**均不重算**既有会话的绑定（防改派放大权限）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BaselineBinding {
+    /// 数据目录基准（不可变的初始策略引擎）。
+    DataDir,
+    /// 创建时工作区根（canonical 路径）。
+    Root(std::path::PathBuf),
+}
+
+/// 会话配置（`sessions.config`）中的权限基准快照段与键名（M7-08 实现级登记）。
+///
+/// 存储落点：`sessions.config.aether.workspace_baseline_root`（JSON；`null` = 数据目录，
+/// 字符串 = 创建时工作区根，**键缺失** = 未登记（升级前/非命令路径创建的会话，
+/// 沿用 P0 缺省基准以保持兼容）。核心自有键空间以 `aether` 段与适配器私有键隔离
+/// （键空间登记见 `docs/M7-08-证据.md` §实现级记录；不新增迁移/列，ADR-026 A-1
+/// 未为 M7-08 预分配迁移位）。
+pub const SESSION_CONFIG_BASELINE_SECTION: &str = "aether";
+/// 基准键（见 [`SESSION_CONFIG_BASELINE_SECTION`]）。
+pub const SESSION_CONFIG_BASELINE_KEY: &str = "workspace_baseline_root";
+
+/// 读取 `sessions.config` 中的权限基准快照。
+///
+/// 返回 `None` = 未登记（无键，调用方按 P0 缺省基准兼容）；`Some(None)` = 数据目录；
+/// `Some(Some(path))` = 创建时工作区根。形态非法（非字符串/空串）按未登记处理并告警
+/// （fail-safe：不把未知内容当作基准）。
+pub fn session_baseline_from_config(
+    config: &serde_json::Value,
+) -> Option<Option<std::path::PathBuf>> {
+    let section = config
+        .get(SESSION_CONFIG_BASELINE_SECTION)
+        .and_then(serde_json::Value::as_object)?;
+    let value = section.get(SESSION_CONFIG_BASELINE_KEY)?;
+    match value {
+        serde_json::Value::Null => Some(None),
+        serde_json::Value::String(root) if !root.is_empty() => {
+            Some(Some(std::path::PathBuf::from(root)))
+        }
+        other => {
+            tracing::warn!(
+                value = %other,
+                "sessions.config 的权限基准快照形态非法，按未登记处理（fail-safe）"
+            );
+            None
+        }
+    }
+}
+
+/// 把权限基准快照写入会话配置副本（保持既有适配器键不变）。
+///
+/// `root = None` → 写入 JSON `null`（数据目录基准；与「键缺失 = 未登记」区分）。
+pub fn config_with_session_baseline(
+    config: &serde_json::Value,
+    root: Option<&std::path::Path>,
+) -> serde_json::Value {
+    let mut updated = match config {
+        serde_json::Value::Object(object) => serde_json::Value::Object(object.clone()),
+        _ => serde_json::json!({}),
+    };
+    let Some(object) = updated.as_object_mut() else {
+        return updated;
+    };
+    let section = object
+        .entry(SESSION_CONFIG_BASELINE_SECTION.to_owned())
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+    if !section.is_object() {
+        *section = serde_json::Value::Object(serde_json::Map::new());
+    }
+    if let Some(section) = section.as_object_mut() {
+        section.insert(
+            SESSION_CONFIG_BASELINE_KEY.to_owned(),
+            match root {
+                Some(root) => serde_json::Value::String(root.to_string_lossy().to_string()),
+                None => serde_json::Value::Null,
+            },
+        );
+    }
+    updated
+}
+
+/// 一次权限评估的会话上下文（M7-08：档位 + 固定基准）。
+#[derive(Debug, Clone)]
+struct SessionPolicyContext {
+    permission_mode: PermissionMode,
+    /// `None` = 未登记基准（P0 兼容：使用缺省引擎）。
+    baseline: Option<BaselineBinding>,
+}
+
+impl SessionPolicyContext {
+    fn default_context() -> Self {
+        Self {
+            permission_mode: PermissionMode::default(),
+            baseline: None,
+        }
+    }
+}
+
 #[derive(Default)]
 struct PermissionInner {
     /// 待审批台账（启动时从 `permissions` 表恢复）。
@@ -232,9 +332,16 @@ struct PermissionInner {
 struct ServiceInner {
     config: PermissionConfig,
     clock: SharedClock,
-    /// 策略引擎（M3-08：工作区绑定换根经 [`PermissionService::set_workspace_root`]，
-    /// 请求评估时取锁读取——单锁粒度覆盖一次同步评估，不跨 await 持有）。
-    policy: Mutex<PolicyEngine>,
+    /// 缺省策略引擎（M7-08/R15：当前工作区绑定或数据目录；供**未登记基准**的会话
+    /// 与无会话请求使用。`workspace_set` 换根仅更新本引擎——既有会话的基准由
+    /// [`ServiceInner::session_baselines`] 固定，不随换根漂移）。
+    default_policy: Mutex<Arc<PolicyEngine>>,
+    /// 数据目录基准引擎（不可变；`workspace_id IS NULL` 会话的基准）。
+    base_policy: Arc<PolicyEngine>,
+    /// 会话 → 创建时基准（进程内缓存；启动后按 `sessions.config` 快照懒加载）。
+    session_baselines: Mutex<HashMap<String, BaselineBinding>>,
+    /// 基准根 → 策略引擎缓存（同一根共享；canonicalize 失败 → fail-closed deny）。
+    baseline_engines: Mutex<HashMap<std::path::PathBuf, Arc<PolicyEngine>>>,
     write: WriteQueue,
     reads: ReadPool,
     pipeline: EventPipeline,
@@ -259,11 +366,15 @@ impl PermissionService {
         reads: ReadPool,
         pipeline: EventPipeline,
     ) -> Self {
+        let base_policy = Arc::new(policy);
         Self {
             inner: Arc::new(ServiceInner {
                 config,
                 clock,
-                policy: Mutex::new(policy),
+                default_policy: Mutex::new(Arc::clone(&base_policy)),
+                base_policy,
+                session_baselines: Mutex::new(HashMap::new()),
+                baseline_engines: Mutex::new(HashMap::new()),
                 write,
                 reads,
                 pipeline,
@@ -286,23 +397,56 @@ impl PermissionService {
         *lock_observer(&self.inner) = Some(observer);
     }
 
-    /// 当前策略引擎绑定的工作区根（canonical；D14 权限基准目录）。
+    /// 当前**缺省**策略引擎绑定的工作区根（canonical；新会话的缺省基准）。
+    ///
+    /// M7-08/R15：既有会话的权限基准按其创建时快照（[`Self::session_baseline_root`]），
+    /// 不随本值变化（`workspace_set` 换根仅对新会话生效）。
     pub fn workspace_root_path(&self) -> std::path::PathBuf {
-        lock_policy(&self.inner).workspace_root().to_path_buf()
+        lock_default_policy(&self.inner)
+            .workspace_root()
+            .to_path_buf()
     }
 
-    /// 换绑工作区根（M3-08 `workspace_set`；ADR-004 决策 3：P0 仅对新会话生效）。
+    /// 换绑**缺省**工作区根（M3-08 `workspace_set`；ADR-004 决策 3 + ADR-026 / R15）。
     ///
-    /// 同步重建 [`PolicyEngine`]（路径守卫 canonicalize 必须成功）；后续权限评估
-    /// （含执行器回环）立即使用新基准目录。P0 单工作区模型下全局生效；已有会话的
-    /// `sessions.workspace_id` 不迁移（迁移属 P1）。
+    /// `workspace_set` 换根仅对新会话生效：同步重建缺省 [`PolicyEngine`]（路径守卫
+    /// canonicalize 必须成功）；**仅影响后续新建会话**（其基准在创建时由
+    /// [`Self::set_session_baseline`] 固定）与未登记基准的会话；既有会话保持创建时
+    /// 基准，不因换根而漂移（R15：防既有会话静默切到新基准）。
     pub fn set_workspace_root(
         &self,
         root: &std::path::Path,
     ) -> Result<(), aether_security::PathGuardError> {
-        let policy = PolicyEngine::new(root)?;
-        *lock_policy(&self.inner) = policy;
+        let policy = Arc::new(PolicyEngine::new(root)?);
+        *lock_default_policy(&self.inner) = policy;
         Ok(())
+    }
+
+    /// 固定会话权限基准（M7-08/R15；会话创建与改派路径调用）。
+    ///
+    /// `root = None` → 数据目录基准（创建时 `workspace_id IS NULL`）。写入进程内
+    /// 缓存后，该会话的权限评估立即使用此基准；调用方同时把同一基准持久化到
+    /// `sessions.config.aether.workspace_baseline_root`（见
+    /// [`config_with_session_baseline`]），使跨重启语义不变。
+    pub fn set_session_baseline(&self, session_id: &SessionId, root: Option<&std::path::Path>) {
+        let binding = match root {
+            Some(root) => BaselineBinding::Root(root.to_path_buf()),
+            None => BaselineBinding::DataDir,
+        };
+        lock_session_baselines(&self.inner).insert(session_id.as_str().to_owned(), binding);
+    }
+
+    /// 会话已登记的权限基准根（诊断/测试；`None` = 数据目录或未登记）。
+    pub fn session_baseline_root(&self, session_id: &SessionId) -> Option<std::path::PathBuf> {
+        match lock_session_baselines(&self.inner).get(session_id.as_str()) {
+            Some(BaselineBinding::Root(root)) => Some(root.clone()),
+            _ => None,
+        }
+    }
+
+    /// 会话是否已登记权限基准（诊断/测试；区分「数据目录基准」与「未登记」）。
+    pub fn has_session_baseline(&self, session_id: &SessionId) -> bool {
+        lock_session_baselines(&self.inner).contains_key(session_id.as_str())
     }
 
     /// 启动时恢复待审批（DoD3：核心重启后 pending 恢复）。
@@ -455,17 +599,32 @@ impl PermissionService {
                 resource: request.resource.clone(),
             }
         })?;
-        // 档位按会话解析（ADR-014 决策 3：判定权威入参；仅影响后续工具调用决策）。
-        let permission_mode = self.session_permission_mode(&request).await;
+        // 档位与权限基准按会话解析（ADR-014 决策 3 + M7-08/R15：基准在创建时固定；
+        // 未登记基准的会话沿用缺省引擎以保持 P0 兼容）。
+        let context = self.session_policy_context(&request).await;
         let policy_request = PolicyRequest {
             resource,
             action: &request.action,
             target: request.target.as_deref(),
             content_bytes: request.content_bytes,
-            permission_mode,
+            permission_mode: context.permission_mode,
         };
-        // 同步评估期间取策略锁（不跨 await 持有）；换绑后立即生效。
-        let verdict = lock_policy(&self.inner).evaluate(&policy_request);
+        // 同步评估（不跨 await 持有锁）：会话基准引擎 / 缺省引擎。
+        let verdict = match context.baseline.as_ref() {
+            Some(binding) => match self.baseline_policy(binding) {
+                Ok(policy) => policy.evaluate(&policy_request),
+                Err(reason) => PolicyVerdict {
+                    decision: PolicyDecision::Deny,
+                    requested_target: request.target.clone(),
+                    canonical_target: None,
+                    reason: format!(
+                        "会话权限基准根不可用（{reason}）；fail-closed deny（R15：基准固定，\
+                         不回退到换根后的缺省基准）"
+                    ),
+                },
+            },
+            None => lock_default_policy(&self.inner).evaluate(&policy_request),
+        };
         let requested_target = request.target.clone();
         let canonical_target = verdict
             .canonical_target
@@ -1192,23 +1351,76 @@ impl PermissionService {
         Ok(())
     }
 
-    /// 按会话解析权限档位（M6-01/ADR-014 决策 3：判定权威入参）。
+    /// 按会话解析策略上下文：档位（M6-01/ADR-014 决策 3：判定权威入参）与
+    /// 权限基准（M7-08/R15：创建时固定，改派/换根不重算）。
     ///
-    /// 会话不存在（回环竞态）或读取失败 → 缺省档 `workspace_write`（与 DDL 缺省一致）。
-    async fn session_permission_mode(&self, request: &PermissionRequest) -> PermissionMode {
+    /// 解析顺序：
+    /// 1. 进程内基准缓存（会话创建 / 改派路径已同步登记）→ 只读会话取档位；
+    /// 2. 缓存未命中 → 读会话行（一次），从 `sessions.config` 快照恢复基准并回填缓存
+    ///    （跨重启语义不变）；
+    /// 3. 快照**键缺失**（升级前/非命令路径创建的会话）→ 返回 `baseline=None`，
+    ///    调用方沿用缺省引擎（P0 兼容；不静默切到某个新基准）。
+    ///
+    /// 会话不存在（回环竞态）或读取失败 → 缺省档 + 未登记基准（失败安全）。
+    async fn session_policy_context(&self, request: &PermissionRequest) -> SessionPolicyContext {
         let Some(session_id) = request.session_id.as_ref() else {
-            return PermissionMode::default();
+            // 无会话归属（回环探针/系统请求）：沿用缺省引擎与缺省档。
+            return SessionPolicyContext::default_context();
         };
+        let cached = lock_session_baselines(&self.inner)
+            .get(session_id.as_str())
+            .cloned();
         match self.inner.reads.session(session_id).await {
-            Ok(Some(session)) => session.permission_mode,
-            Ok(None) => PermissionMode::default(),
+            Ok(Some(session)) => {
+                let baseline = match cached {
+                    Some(binding) => Some(binding),
+                    None => {
+                        let resolved =
+                            session_baseline_from_config(&session.config).map(|root| match root {
+                                Some(root) => BaselineBinding::Root(root),
+                                None => BaselineBinding::DataDir,
+                            });
+                        if let Some(binding) = &resolved {
+                            lock_session_baselines(&self.inner)
+                                .insert(session_id.as_str().to_owned(), binding.clone());
+                        }
+                        resolved
+                    }
+                };
+                SessionPolicyContext {
+                    permission_mode: session.permission_mode,
+                    baseline,
+                }
+            }
+            Ok(None) => {
+                tracing::warn!(
+                    session_id = session_id.as_str(),
+                    "会话不存在（回环竞态）：按缺省档 + 未登记基准判定"
+                );
+                SessionPolicyContext::default_context()
+            }
             Err(error) => {
                 tracing::warn!(
                     session_id = session_id.as_str(),
                     error = error.to_string().as_str(),
                     "会话档位读取失败，按缺省档 workspace_write 判定"
                 );
-                PermissionMode::default()
+                SessionPolicyContext::default_context()
+            }
+        }
+    }
+
+    /// 会话基准 → 策略引擎（数据目录基准复用不可变引擎；工作区根按根缓存）。
+    fn baseline_policy(&self, binding: &BaselineBinding) -> Result<Arc<PolicyEngine>, String> {
+        match binding {
+            BaselineBinding::DataDir => Ok(Arc::clone(&self.inner.base_policy)),
+            BaselineBinding::Root(root) => {
+                if let Some(engine) = lock_baseline_engines(&self.inner).get(root).cloned() {
+                    return Ok(engine);
+                }
+                let engine = Arc::new(PolicyEngine::new(root).map_err(|error| error.to_string())?);
+                lock_baseline_engines(&self.inner).insert(root.clone(), Arc::clone(&engine));
+                Ok(engine)
             }
         }
     }
@@ -1375,8 +1587,26 @@ fn lock_inner(inner: &Arc<ServiceInner>) -> std::sync::MutexGuard<'_, Permission
     }
 }
 
-fn lock_policy(inner: &Arc<ServiceInner>) -> std::sync::MutexGuard<'_, PolicyEngine> {
-    match inner.policy.lock() {
+fn lock_default_policy(inner: &Arc<ServiceInner>) -> std::sync::MutexGuard<'_, Arc<PolicyEngine>> {
+    match inner.default_policy.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+fn lock_session_baselines(
+    inner: &Arc<ServiceInner>,
+) -> std::sync::MutexGuard<'_, HashMap<String, BaselineBinding>> {
+    match inner.session_baselines.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+fn lock_baseline_engines(
+    inner: &Arc<ServiceInner>,
+) -> std::sync::MutexGuard<'_, HashMap<std::path::PathBuf, Arc<PolicyEngine>>> {
+    match inner.baseline_engines.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     }
@@ -1431,6 +1661,53 @@ mod tests {
             }
             .code(),
             "permission_not_pending"
+        );
+    }
+
+    #[test]
+    fn session_baseline_config_roundtrip_distinguishes_data_dir_from_unregistered() {
+        // 未登记（无键）→ None（P0 兼容：沿用缺省引擎）。
+        assert_eq!(session_baseline_from_config(&json!({})), None);
+        assert_eq!(
+            session_baseline_from_config(&json!({"native_id": "n-1"})),
+            None
+        );
+
+        // 数据目录基准（显式 null）→ Some(None)。
+        let data_dir = config_with_session_baseline(&json!({"native_id": "n-1"}), None);
+        assert_eq!(data_dir["native_id"], "n-1", "不得覆盖适配器键");
+        assert_eq!(
+            session_baseline_from_config(&data_dir),
+            Some(None),
+            "null = 数据目录基准（与键缺失区分）"
+        );
+
+        // 工作区根 → Some(Some(root))；原子写入可重复（幂等）。
+        let root = std::path::Path::new("C:/ws/a");
+        let bound = config_with_session_baseline(&data_dir, Some(root));
+        assert_eq!(
+            session_baseline_from_config(&bound),
+            Some(Some(std::path::PathBuf::from("C:/ws/a")))
+        );
+        assert_eq!(
+            session_baseline_from_config(&config_with_session_baseline(&bound, Some(root))),
+            Some(Some(std::path::PathBuf::from("C:/ws/a")))
+        );
+
+        // 形态非法（空串/非字符串）→ 未登记（fail-safe，不当作基准）。
+        assert_eq!(
+            session_baseline_from_config(&json!({"aether": {"workspace_baseline_root": ""}})),
+            None
+        );
+        assert_eq!(
+            session_baseline_from_config(&json!({"aether": {"workspace_baseline_root": 42}})),
+            None
+        );
+        // 非对象 config 以空对象兜底，不 panic。
+        assert_eq!(
+            config_with_session_baseline(&json!("not-an-object"), None)["aether"]
+                ["workspace_baseline_root"],
+            serde_json::Value::Null
         );
     }
 }

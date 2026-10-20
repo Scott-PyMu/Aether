@@ -79,6 +79,28 @@ export const commands = {
 	/**  ADR-004/D14：`workspace_id` 或 `root_path`（canonicalize + 同步盘拒绝）。 */
 	workspaceSet: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("workspace_set", { payload })),
 	/**
+	 *  M7-08/ADR-026 §2.1-1：工作区树清单（无参数；工作区 + 会话计数 + 合成组
+	 *  「默认（数据目录）」）。
+	 */
+	workspacesList: (payload: unknown | null) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("workspaces_list", { payload })),
+	/**
+	 *  M7-08/ADR-026 §2.1-1：新建工作区（名称 ≤64；root canonicalize + 存在目录 +
+	 *  同步盘拒绝；同根路径已存在 → `invalid_value`）。
+	 */
+	workspaceCreate: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("workspace_create", { payload })),
+	/**  M7-08/ADR-026 §2.1-1：工作区改名（仅名称；`root_path` 不可变）。 */
+	workspaceUpdate: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("workspace_update", { payload })),
+	/**
+	 *  M7-08/ADR-026 §2.1-1：删除工作区（存在会话引用 → `workspace_in_use`；只删行，
+	 *  不删磁盘文件）。
+	 */
+	workspaceDelete: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("workspace_delete", { payload })),
+	/**
+	 *  M7-08/ADR-026 §2.1-1：会话改派工作区（在途 → `session_busy`；记忆注入源切换；
+	 *  权限基准不重算——R15/不变量 11）。
+	 */
+	sessionWorkspaceAssign: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("session_workspace_assign", { payload })),
+	/**
 	 *  ADR-010/M3-09：引用选择器（`{ kind: "file" | "directory" }`）。
 	 * 
 	 *  Rust 侧系统选择器（复用 `DirectoryPicker` 抽象并扩展文件选择；E2E 注入替身），
@@ -116,6 +138,14 @@ export const commands = {
 	providerTest: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("provider_test", { payload })),
 	/**  M7-06/ADR-024：从供应商获取模型列表（归一化 + 幂等 upsert）。 */
 	providerModelsFetch: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("provider_models_fetch", { payload })),
+	/**  M7-09/ADR-026：Agent 预设清单（无参数；严格解析拒绝未知成员）。 */
+	presetsList: (payload: unknown | null) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("presets_list", { payload })),
+	/**  M7-09/ADR-026：新增自定义预设（名称 ≤64 字符、提示词 ≤32KiB）。 */
+	presetAdd: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("preset_add", { payload })),
+	/**  M7-09/ADR-026：更新预设（内置可编辑；`preset_id` 不存在 → `preset_not_found`）。 */
+	presetUpdate: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("preset_update", { payload })),
+	/**  M7-09/ADR-026：删除预设（内置 → `builtin_preset_undeletable`；硬约束）。 */
+	presetDelete: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("preset_delete", { payload })),
 	exportDiagnostics: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("export_diagnostics", { payload })),
 	/**
 	 *  M5-05/ADR-018：单会话 JSONL 导出（缺省 = 应用 `archives/` 目录；
@@ -377,7 +407,27 @@ export type IpcErrorCode =
 /**  供应商凭据无效或被拒（M7-06/ADR-024：401/403 类响应）。 */
 "provider_auth_failed" | 
 /**  供应商返回非授权类错误（M7-06/ADR-024：其余 4xx/5xx；message 含状态码）。 */
-"provider_error";
+"provider_error" | 
+/**
+ *  预设不存在（M7-09/ADR-026：`preset_update` / `preset_delete` / `session_create`
+ *  的 `preset_id` 按 id 查无；UI-UX §5 文案「预设不存在，已刷新列表」）。
+ */
+"preset_not_found" | 
+/**
+ *  内置预设禁止删除（M7-09/ADR-026：`preset_delete` 且 `is_builtin=1`；
+ *  内置**可编辑**，仅删除受保护——与内置供应商语义对齐）。
+ */
+"builtin_preset_undeletable" | 
+/**
+ *  工作区 id 不存在（M7-08/ADR-026 §2.1-1 / ADR-006 附录 B：
+ *  `workspace_update` / `workspace_delete` / `session_workspace_assign` 按 id 查无）。
+ */
+"workspace_not_found" | 
+/**
+ *  删除工作区时存在会话引用（M7-08/ADR-026 §2.1-1：**不级联、不改派**；
+ *  message 含引用计数，UI 提示「仍有 N 个会话引用」）。
+ */
+"workspace_in_use";
 
 /**  IPC 命令错误的线上形态：`{ "code": "...", "message": "...", "field": "..." }`。 */
 export type IpcError_Deserialize = {
@@ -410,6 +460,36 @@ export type PermissionResolveRequest = {
 export type PermissionsPendingRequest = {
 	session_id?: string | null,
 };
+
+/**  `preset_add`（M7-09/ADR-026 §2.2-2）：新增自定义预设（`is_builtin=0`）。 */
+export type PresetAddRequest = {
+	/**  名称（≤64 字符；非空）。 */
+	name: string,
+	/**  系统提示词（≤32KiB）。 */
+	system_prompt: string,
+};
+
+/**  `preset_delete`（M7-09/ADR-026 §2.2-2）：删除预设；内置 → `builtin_preset_undeletable`。 */
+export type PresetDeleteRequest = {
+	/**  预设 id（ULID；查无 → `preset_not_found`）。 */
+	preset_id: string,
+};
+
+/**
+ *  `preset_update`（M7-09/ADR-026 §2.2-2）：整体更新名称/提示词（两者至少一项；
+ *  内置预设**可编辑**，仅删除受保护）。
+ */
+export type PresetUpdateRequest = {
+	/**  预设 id（ULID；查无 → `preset_not_found`）。 */
+	preset_id: string,
+	/**  新名称（缺省 = 不变；≤64 字符）。 */
+	name?: string | null,
+	/**  新系统提示词（缺省 = 不变；≤32KiB）。 */
+	system_prompt?: string | null,
+};
+
+/**  `presets_list`（M7-09/ADR-026；ADR-014 附录 C-1 登记为无参数命令）。 */
+export type PresetsListRequest = Record<string, never>;
 
 /**  `provider_create`（ADR-010 决策 3）：`api_key` 明文仅传输（核心写 keyring）。 */
 export type ProviderCreateRequest = {
@@ -578,6 +658,11 @@ export type SessionCreateRequest = {
 	 *  `danger_full_access`；非法枚举 → `invalid_enum`）。
 	 */
 	permission_mode?: string | null,
+	/**
+	 *  Agent 预设（M7-09/ADR-026 §2.2：可选；ULID；查无 → `preset_not_found`）。
+	 *  合成结果落 `sessions.system_prompt` 并经 `session.create` 下发适配器。
+	 */
+	preset_id?: string | null,
 };
 
 export type SessionIdRequest = {
@@ -656,6 +741,10 @@ export type SessionSummary_Deserialize = {
 	thinking_depth: number | null,
 	/**  会话级权限模式（M6-01/ADR-014 决策 3；`SessionSummary` 回显档位）。 */
 	permission_mode: string | null,
+	/**  预设生效来源（M7-09/ADR-026 §2.2-4：`sessions.preset_id`；未选预设省略）。 */
+	preset_id: string | null,
+	/**  预设名称回显（来源已删除 → 名称缺失，`preset_id` 亦已由 `ON DELETE SET NULL` 置空）。 */
+	preset_name: string | null,
 	system_prompt: string | null,
 	config: unknown,
 	token_usage: unknown,
@@ -689,6 +778,10 @@ export type SessionSummary_Serialize = {
 	thinking_depth?: number | null,
 	/**  会话级权限模式（M6-01/ADR-014 决策 3；`SessionSummary` 回显档位）。 */
 	permission_mode?: string | null,
+	/**  预设生效来源（M7-09/ADR-026 §2.2-4：`sessions.preset_id`；未选预设省略）。 */
+	preset_id?: string | null,
+	/**  预设名称回显（来源已删除 → 名称缺失，`preset_id` 亦已由 `ON DELETE SET NULL` 置空）。 */
+	preset_name?: string | null,
 	system_prompt: string | null,
 	config: unknown,
 	token_usage: unknown,
@@ -713,6 +806,19 @@ export type SessionWarning = {
 	runtime_id: string,
 	/**  展示文案（不参与逻辑判断）。 */
 	message: string,
+};
+
+/**
+ *  `session_workspace_assign`（M7-08/ADR-026 §2.1-1/2）：会话改派工作区。
+ * 
+ *  在途 run（`running`/`queued`）或 `waiting_permission` → `session_busy`（稳定业务码
+ *  前缀，`invalid_value`，ADR-018 附录 A-7）；改派后记忆注入源切换、**权限基准不重算**
+ *  （R15/不变量 11）。
+ */
+export type SessionWorkspaceAssignRequest = {
+	session_id: string,
+	/**  目标工作区 id（ULID；查无 → `workspace_not_found`）。 */
+	workspace_id: string,
 };
 
 export type SettingsGetRequest = {
@@ -741,6 +847,26 @@ export type StartupMigrateRequest = {
 export type StartupPickTargetRequest = Record<string, never>;
 
 /**
+ *  `workspace_create`（M7-08/ADR-026 §2.1-1）：`root_path` canonicalize + 存在目录 +
+ *  同步盘拒绝（A4 口径，复用 `workspace_set` 校验链）；同根路径已存在 → `invalid_value`。
+ */
+export type WorkspaceCreateRequest = {
+	/**  名称（≤64 字符；非空）。 */
+	name: string,
+	/**  工作区根目录（canonicalize 后的绝对路径；同步盘拒绝）。 */
+	root_path: string,
+};
+
+/**
+ *  `workspace_delete`（M7-08/ADR-026 §2.1-1）：存在会话引用 → `workspace_in_use`
+ *  （不级联、不改派）；只删行，不删磁盘文件。
+ */
+export type WorkspaceDeleteRequest = {
+	/**  工作区 id（ULID；查无 → `workspace_not_found`）。 */
+	workspace_id: string,
+};
+
+/**
  *  `workspace_set`（ADR-004/D14）：`workspace_id` 存在性 或 `root_path`
  *  canonicalize（目录须存在；命中同步盘拒绝清单则拒绝）。P0 仅对新会话生效。
  */
@@ -748,6 +874,20 @@ export type WorkspaceSetRequest = {
 	workspace_id?: string | null,
 	root_path?: string | null,
 };
+
+/**
+ *  `workspace_update`（M7-08/ADR-026 §2.1-1）：**仅改名**；`root_path` 不可变
+ *  （防权限基准漂移），因此不提供 root 字段（未知字段严格拒绝）。
+ */
+export type WorkspaceUpdateRequest = {
+	/**  工作区 id（ULID；查无 → `workspace_not_found`）。 */
+	workspace_id: string,
+	/**  新名称（≤64 字符；非空）。 */
+	name: string,
+};
+
+/**  `workspaces_list`（M7-08/ADR-026 §2.1-1；无参数命令）。 */
+export type WorkspacesListRequest = Record<string, never>;
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

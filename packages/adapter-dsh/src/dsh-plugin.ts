@@ -10,11 +10,11 @@
  * `agent/assistant-stream` 事件契约（维护风险已记录于 ADR-002/ADR-008）。
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
-/** DSH 版本门闩（ADR-002 §3.1；M1-11 实测 ACP 只在 0.1.5+）。 */
-export const DEFAULT_DSH_VERSION_PIN = "0.1.5-rc.2";
+/** DSH 版本门闩（ADR-002 §3.1；M1-11 实测 ACP 只在 0.1.5+；2026-10-20 升级至 0.2.1-rc.2 并复测插件/ACP 兼容）。 */
+export const DEFAULT_DSH_VERSION_PIN = "0.2.1-rc.2";
 /** 插件包名（独立域；不得与 DSH 官方包同名）。 */
 export const PLUGIN_PACKAGE_NAME = "aether-dsh-stream";
 /** 插件契约标记（版本门闩第二条件：插件 hello 帧的 contract 字段）。 */
@@ -117,10 +117,134 @@ export function materializePlugin(profileDir: string): MaterializedPlugin {
   return { dir, packageJsonPath, indexPath };
 }
 
+// ===== M7-09/ADR-027：DSH 系统提示词注入插件 =====
+
+/** 提示词插件包名。 */
+export const PROMPT_PLUGIN_PACKAGE_NAME = "aether-dsh-prompt";
+/** 提示词插件版本。 */
+export const PROMPT_PLUGIN_VERSION = "0.1.0";
+/** 提示词 section 名（agent 作用域；`deployment:persona-prefix` 之后、plan 之前）。 */
+export const PROMPT_SECTION_NAME = "aether:session-prompt";
+/** 提示词 section 排序（DSH 外部贡献可用任意有限 order；0=persona、500=plan、1000+=工具）。 */
+export const PROMPT_SECTION_ORDER = 100;
+/** 侧信道目录环境变量（适配器注入；插件读取 `<dir>/<encodeURIComponent(sessionId)>.md`）。 */
+export const PROMPT_DIR_ENV = "AETHER_DSH_PROMPT_DIR";
+
+/** 提示词插件 `package.json`（无 BOM）。 */
+export const PROMPT_PLUGIN_PACKAGE_JSON = `${JSON.stringify(
+  {
+    name: PROMPT_PLUGIN_PACKAGE_NAME,
+    version: PROMPT_PLUGIN_VERSION,
+    type: "module",
+    main: "index.js",
+    private: true,
+  },
+  null,
+  2,
+)}\n`;
+
+/**
+ * 提示词插件源码（自研，约 30 行；不拷贝上游代码）。
+ *
+ * 设计（ADR-027）：
+ * - `agent/created` 在首次提示词组装前派发；通过 `agent.ctx.systemPrompt.section`
+ *   注册 **agent 作用域** section（只影响该会话，agent disposal 时自动 unwind）；
+ * - `text` 为函数：每次 assemble 读取侧信道文件
+ *   `<promptDir>/<encodeURIComponent(agent.id)>.md`（缺失/空 → 空串，`renderPrompt`
+ *   丢弃空段）；`interpolate: false` 保留用户提示词原文；
+ * - `inject = ["systemPrompt"]` 为 cordis 服务注入门控（未声明时访问服务会抛错）。
+ */
+export const PROMPT_PLUGIN_INDEX_JS = [
+  'import { readFileSync } from "node:fs";',
+  'import { join } from "node:path";',
+  "",
+  `export const name = "${PROMPT_PLUGIN_PACKAGE_NAME}";`,
+  'export const inject = ["systemPrompt"];',
+  "",
+  `const PROMPT_DIR = process.env["${PROMPT_DIR_ENV}"];`,
+  "",
+  "function readPrompt(sessionId) {",
+  "  if (!PROMPT_DIR || !sessionId) return \"\";",
+  "  try {",
+  "    return readFileSync(join(PROMPT_DIR, `${encodeURIComponent(sessionId)}.md`), \"utf8\");",
+  "  } catch {",
+  "    return \"\";",
+  "  }",
+  "}",
+  "",
+  "export function apply(ctx) {",
+  "  if (!PROMPT_DIR) return;",
+  '  ctx.on("agent/created", ({ agent }) => {',
+  "    try {",
+  "      agent.ctx.systemPrompt.section({",
+  `        name: "${PROMPT_SECTION_NAME}",`,
+  `        order: ${PROMPT_SECTION_ORDER},`,
+  "        text: () => readPrompt(String(agent.id)),",
+  "        // 用户提示词按原文注入：DSH 默认对 {{variable}} 严格插值，",
+  "        // 未知变量会使整次组装失败（ADR-027 §3）。",
+  "        interpolate: false,",
+  "      });",
+  "    } catch (error) {",
+  "      console.error(`[aether-dsh-prompt] 注入失败：${error && error.message ? error.message : error}`);",
+  "    }",
+  "  });",
+  "}",
+  "",
+].join("\n");
+
+/** 把提示词插件落盘到 profile 的 `node_modules`（幂等覆盖；无 BOM）。 */
+export function materializePromptPlugin(profileDir: string): MaterializedPlugin {
+  const dir = join(profileDir, "node_modules", PROMPT_PLUGIN_PACKAGE_NAME);
+  mkdirSync(dir, { recursive: true });
+  const packageJsonPath = join(dir, "package.json");
+  const indexPath = join(dir, "index.js");
+  writeFileSync(packageJsonPath, PROMPT_PLUGIN_PACKAGE_JSON, "utf8");
+  writeFileSync(indexPath, PROMPT_PLUGIN_INDEX_JS, "utf8");
+  assertNoBom(packageJsonPath);
+  assertNoBom(indexPath);
+  return { dir, packageJsonPath, indexPath };
+}
+
+/**
+ * 会话提示词侧信道文件路径（`<dir>/<encodeURIComponent(sessionId)>.md`）。
+ *
+ * DSH 的 `agent.id` 为 UUID；编码是防御纵深（避免 `native_id` 被写入带路径分隔符的
+ * 文件名）。插件侧使用同一编码，见 `PROMPT_PLUGIN_INDEX_JS`。
+ */
+export function promptFilePath(promptDir: string, sessionId: string): string {
+  return join(promptDir, `${encodeURIComponent(sessionId)}.md`);
+}
+
+/**
+ * 清空侧信道目录中的 `.md` 文件（适配器启动时清理上次进程残留的提示词副本）。
+ *
+ * 只删除本插件命名空间内的文件；会话恢复时核心会重新下发并写入。删除失败
+ * 尽力而为（不影响启动；残留最多是本地提示词副本，不进入日志/导出）。
+ */
+export function clearPromptDir(promptDir: string): number {
+  let removed = 0;
+  try {
+    for (const entry of readdirSync(promptDir)) {
+      if (!entry.endsWith(".md")) continue;
+      try {
+        unlinkSync(join(promptDir, entry));
+        removed += 1;
+      } catch {
+        /* 单个文件删除失败不阻断启动 */
+      }
+    }
+  } catch {
+    /* 目录不可读不阻断启动 */
+  }
+  return removed;
+}
+
 export interface PatchOptions {
   provider?: string;
   model?: string;
   pluginName?: string;
+  /** 提示词注入插件名（缺省 `aether-dsh-prompt`；测试可覆盖）。 */
+  promptPluginName?: string;
   /**
    * `llm-pi-ai` 行的 composition base 配置（官方分层：插件行 config 为 base，
    * `settings.yaml` 为用户覆盖层）。声明 `{providers: {...}}` 使 provider 路由在
@@ -149,10 +273,14 @@ export function buildPatchText(options: PatchOptions): string {
     // JSON 是合法 YAML（flow 映射），直接内联避免手写 YAML 序列化器。
     lines.push("- id: llm-pi-ai", `  config: ${JSON.stringify(options.providerConfig)}`, "");
   }
+  const streamPlugin = options.pluginName ?? PLUGIN_PACKAGE_NAME;
+  const promptPlugin = options.promptPluginName ?? PROMPT_PLUGIN_PACKAGE_NAME;
   lines.push(
     "- insert:",
-    `    - id: ${options.pluginName ?? PLUGIN_PACKAGE_NAME}`,
-    `      name: ${options.pluginName ?? PLUGIN_PACKAGE_NAME}`,
+    `    - id: ${streamPlugin}`,
+    `      name: ${streamPlugin}`,
+    `    - id: ${promptPlugin}`,
+    `      name: ${promptPlugin}`,
     "",
   );
   return lines.join("\n");

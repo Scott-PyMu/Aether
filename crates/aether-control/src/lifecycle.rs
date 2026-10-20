@@ -114,6 +114,8 @@ pub struct SessionCreateOptions {
     pub workspace_id: Option<WorkspaceId>,
     pub model: Option<String>,
     pub system_prompt: Option<String>,
+    /// 预设生效来源（M7-09/ADR-026：`sessions.preset_id`；`None` = 未选预设）。
+    pub preset_id: Option<aether_core::PresetId>,
     /// 会话级思考深度（0–4；缺省 [`aether_core::THINKING_DEPTH_DEFAULT`]）。
     pub thinking_depth: u8,
     /// 会话级权限模式（缺省 `workspace_write`）。
@@ -129,6 +131,7 @@ impl Default for SessionCreateOptions {
             workspace_id: None,
             model: None,
             system_prompt: None,
+            preset_id: None,
             thinking_depth: aether_core::THINKING_DEPTH_DEFAULT,
             permission_mode: aether_core::PermissionMode::default(),
             route: None,
@@ -802,6 +805,7 @@ impl SessionManager {
             model: options.model,
             thinking_depth: options.thinking_depth,
             permission_mode: options.permission_mode,
+            preset_id: options.preset_id,
             system_prompt: options.system_prompt,
             config: json!({}),
             token_usage: TokenUsage::default(),

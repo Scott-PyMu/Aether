@@ -65,8 +65,8 @@ pub use migration::{
 pub use ops::{
     ArtifactRecord, AuditLogRecord, AuditQuery, AuditQueryResult, PermissionGrantRecord,
     PermissionRecord, PermissionRuleRecord, ProviderModelRecord, ProviderRecord, SessionQuery,
-    StoreCommand, StoreOutcome, StoreSummary, AUDIT_QUERY_DEFAULT_LIMIT, AUDIT_QUERY_MAX_LIMIT,
-    SUMMARY_TABLES,
+    StoreCommand, StoreOutcome, StoreSummary, WorkspaceSessionCount, WorkspaceSessionCounts,
+    AUDIT_QUERY_DEFAULT_LIMIT, AUDIT_QUERY_MAX_LIMIT, SUMMARY_TABLES,
 };
 pub use pragma::PragmaSnapshot;
 pub use store::{quick_check, ExportReport, IntegrityReport, Store, StoreMode, TableExport};

@@ -18,12 +18,15 @@ use aether_tauri::ipc::dto::{
     AppRestartRequest, ArchiveExportRequest, ArtifactAddRequest, ArtifactRemoveRequest,
     ArtifactsListRequest, AuditExportRequest, AuditQueryRequest, BackupCreateRequest,
     BackupRestoreRequest, ExportDiagnosticsRequest, MessagesPageRequest, PermissionResolveRequest,
-    PermissionsPendingRequest, ProviderCreateRequest, ProviderDeleteRequest, ProviderModelAddRequest,
+    PermissionsPendingRequest, PresetAddRequest, PresetDeleteRequest, PresetUpdateRequest,
+    PresetsListRequest, ProviderCreateRequest, ProviderDeleteRequest, ProviderModelAddRequest,
     ProviderModelToggleRequest, ProviderModelsFetchRequest, ProviderTestRequest, ProviderToggleRequest,
     ProviderUpdateRequest, ProvidersListRequest,
     RunRetryRequest, RuntimeDisableRequest, RuntimeEnableRequest, RuntimeRetryRequest,
     SessionCreateRequest, SessionExportRequest, SessionIdRequest, SessionListRequest,
-    SessionSendRequest, SettingsGetRequest, SettingsSetRequest, WorkspaceSetRequest,
+    SessionSendRequest, SessionWorkspaceAssignRequest, SettingsGetRequest, SettingsSetRequest,
+    WorkspaceCreateRequest, WorkspaceDeleteRequest, WorkspaceSetRequest, WorkspaceUpdateRequest,
+    WorkspacesListRequest,
 };
 use aether_tauri::ipc::error::IpcError;
 use aether_tauri::ipc::path::{
@@ -170,6 +173,33 @@ impl IpcBackend for RecordingBackend {
         self.record("workspace_set")
     }
 
+    fn workspaces_list(&self, _request: &WorkspacesListRequest) -> Result<Value, IpcError> {
+        self.record("workspaces_list")
+    }
+
+    fn workspace_create(
+        &self,
+        _request: &WorkspaceCreateRequest,
+        _canonical_root_path: &Path,
+    ) -> Result<Value, IpcError> {
+        self.record("workspace_create")
+    }
+
+    fn workspace_update(&self, _request: &WorkspaceUpdateRequest) -> Result<Value, IpcError> {
+        self.record("workspace_update")
+    }
+
+    fn workspace_delete(&self, _request: &WorkspaceDeleteRequest) -> Result<Value, IpcError> {
+        self.record("workspace_delete")
+    }
+
+    fn session_workspace_assign(
+        &self,
+        _request: &SessionWorkspaceAssignRequest,
+    ) -> Result<Value, IpcError> {
+        self.record("session_workspace_assign")
+    }
+
     fn artifacts_list(&self, _request: &ArtifactsListRequest) -> Result<Value, IpcError> {
         self.record("artifacts_list")
     }
@@ -226,6 +256,22 @@ impl IpcBackend for RecordingBackend {
         _request: &ProviderModelsFetchRequest,
     ) -> Result<Value, IpcError> {
         self.record("provider_models_fetch")
+    }
+
+    fn presets_list(&self, _request: &PresetsListRequest) -> Result<Value, IpcError> {
+        self.record("presets_list")
+    }
+
+    fn preset_add(&self, _request: &PresetAddRequest) -> Result<Value, IpcError> {
+        self.record("preset_add")
+    }
+
+    fn preset_update(&self, _request: &PresetUpdateRequest) -> Result<Value, IpcError> {
+        self.record("preset_update")
+    }
+
+    fn preset_delete(&self, _request: &PresetDeleteRequest) -> Result<Value, IpcError> {
+        self.record("preset_delete")
     }
 
     fn export_diagnostics(
@@ -784,6 +830,91 @@ fn malformed_samples_return_structured_errors_and_do_not_reach_backend() {
             "path_rejected",
             None,
         ),
+        // ===== M7-08/ADR-026 §2.1：工作区五命令畸形参数矩阵（校验失败不落库/不透传） =====
+        (
+            "workspaces_list",
+            json!({ "unexpected": 1 }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
+        (
+            "workspace_create",
+            json!({ "root_path": inside }),
+            "missing_field",
+            Some("name"),
+        ),
+        (
+            "workspace_create",
+            json!({ "name": "ws", "root_path": inside, "unexpected": 1 }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
+        (
+            "workspace_create",
+            json!({ "name": "", "root_path": inside }),
+            "invalid_format",
+            Some("name"),
+        ),
+        (
+            "workspace_create",
+            json!({ "name": "x".repeat(65), "root_path": inside }),
+            "too_large",
+            Some("name"),
+        ),
+        (
+            "workspace_create",
+            json!({ "name": " ws ", "root_path": inside }),
+            "invalid_format",
+            Some("name"),
+        ),
+        (
+            "workspace_create",
+            json!({ "name": "ws", "root_path": "relative" }),
+            "path_rejected",
+            None,
+        ),
+        (
+            "workspace_update",
+            json!({ "workspace_id": "not-a-ulid", "name": "x" }),
+            "invalid_format",
+            Some("workspace_id"),
+        ),
+        (
+            "workspace_update",
+            json!({ "workspace_id": ULID, "name": "x", "root_path": inside }),
+            "unknown_field",
+            Some("root_path"),
+        ),
+        (
+            "workspace_delete",
+            json!({ "workspace_id": "x" }),
+            "invalid_format",
+            Some("workspace_id"),
+        ),
+        (
+            "workspace_delete",
+            json!({ "workspace_id": ULID, "unexpected": 1 }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
+        (
+            "session_workspace_assign",
+            json!({ "session_id": "not-a-ulid", "workspace_id": ULID }),
+            "invalid_format",
+            Some("session_id"),
+        ),
+        (
+            "session_workspace_assign",
+            json!({ "session_id": ULID, "workspace_id": "not-a-ulid" }),
+            "invalid_format",
+            Some("workspace_id"),
+        ),
+        (
+            "session_workspace_assign",
+            json!({ "session_id": ULID }),
+            "missing_field",
+            Some("workspace_id"),
+        ),
         (
             "session_send",
             json!(["not-an-object"]),
@@ -1206,6 +1337,29 @@ fn valid_requests_reach_backend_exactly_once() {
             json!({ "root_path": inside }),
             "workspace_set",
         ),
+        // M7-08/ADR-026 §2.1：工作区五命令合法形态到达后端。
+        ("workspaces_list", Value::Null, "workspaces_list"),
+        ("workspaces_list", json!({}), "workspaces_list"),
+        (
+            "workspace_create",
+            json!({ "name": "工作区", "root_path": inside }),
+            "workspace_create",
+        ),
+        (
+            "workspace_update",
+            json!({ "workspace_id": ULID, "name": "改名" }),
+            "workspace_update",
+        ),
+        (
+            "workspace_delete",
+            json!({ "workspace_id": ULID }),
+            "workspace_delete",
+        ),
+        (
+            "session_workspace_assign",
+            json!({ "session_id": ULID, "workspace_id": ULID }),
+            "session_workspace_assign",
+        ),
         // ADR-010/M3-09：文件引用四命令（ref_pick 由选择器夹具单测覆盖，不触后端）。
         (
             "artifacts_list",
@@ -1393,6 +1547,12 @@ fn valid_requests_reach_backend_exactly_once() {
         "runtime_disable",
         "workspace_set",
         "workspace_set",
+        "workspaces_list",
+        "workspaces_list",
+        "workspace_create",
+        "workspace_update",
+        "workspace_delete",
+        "session_workspace_assign",
         "artifacts_list",
         "artifact_add",
         "artifact_remove",
@@ -1817,6 +1977,156 @@ fn thinking_depth_matrix_valid_and_invalid_samples() {
         fixture.backend.calls().len(),
         11,
         "合法样本（5 档 × 2 + null）各到达后端恰好一次：{:?}",
+        fixture.backend.calls()
+    );
+}
+
+/// M7-09/ADR-026 DoD2：预设四命令 + `session_create.preset_id` 的参数校验矩阵
+/// （非法样本一律结构化错误且不调用下游）。
+#[test]
+fn preset_commands_validation_matrix() {
+    let fixture = fixture("m7-09-presets");
+    let long_name = "名".repeat(65);
+    // 上限按 UTF-8 字节数（32KiB = 32768 字节）；ASCII 便于精确构造边界。
+    let long_prompt = "x".repeat(32 * 1024 + 1);
+    let invalid: Vec<(&str, Value, &str, Option<&str>)> = vec![
+        // presets_list 无参数：任何成员都被严格模式拒绝。
+        (
+            "presets_list",
+            json!({ "limit": 1 }),
+            "unknown_field",
+            Some("limit"),
+        ),
+        // preset_add：缺字段 / 未知字段 / 类型 / 空名 / 超长 / 提示词超限。
+        ("preset_add", json!({ "name": "n" }), "missing_field", Some("system_prompt")),
+        (
+            "preset_add",
+            json!({ "system_prompt": "p" }),
+            "missing_field",
+            Some("name"),
+        ),
+        (
+            "preset_add",
+            json!({ "name": "n", "system_prompt": "p", "is_builtin": true }),
+            "unknown_field",
+            Some("is_builtin"),
+        ),
+        (
+            "preset_add",
+            json!({ "name": 42, "system_prompt": "p" }),
+            "invalid_type",
+            None,
+        ),
+        (
+            "preset_add",
+            json!({ "name": "", "system_prompt": "p" }),
+            "invalid_format",
+            Some("name"),
+        ),
+        (
+            "preset_add",
+            json!({ "name": long_name, "system_prompt": "p" }),
+            "too_large",
+            Some("name"),
+        ),
+        (
+            "preset_add",
+            json!({ "name": "n", "system_prompt": long_prompt }),
+            "too_large",
+            Some("system_prompt"),
+        ),
+        // preset_update：id 形态 / 空请求 / 超长。
+        (
+            "preset_update",
+            json!({ "preset_id": "not-a-ulid", "name": "n" }),
+            "invalid_format",
+            Some("preset_id"),
+        ),
+        (
+            "preset_update",
+            json!({ "preset_id": ULID }),
+            "invalid_value",
+            None,
+        ),
+        (
+            "preset_update",
+            json!({ "preset_id": ULID, "name": long_name }),
+            "too_large",
+            Some("name"),
+        ),
+        (
+            "preset_update",
+            json!({ "preset_id": ULID, "system_prompt": long_prompt }),
+            "too_large",
+            Some("system_prompt"),
+        ),
+        // preset_delete：id 形态 / 未知字段。
+        (
+            "preset_delete",
+            json!({ "preset_id": "01J0000000000000000000" }),
+            "invalid_format",
+            Some("preset_id"),
+        ),
+        (
+            "preset_delete",
+            json!({ "preset_id": ULID, "confirm": true }),
+            "unknown_field",
+            Some("confirm"),
+        ),
+        // session_create.preset_id：形态非法在命令层拦截。
+        (
+            "session_create",
+            json!({ "runtime_id": "mock", "title": "t", "preset_id": "abc" }),
+            "invalid_format",
+            Some("preset_id"),
+        ),
+    ];
+    for (command, payload, code, field) in invalid {
+        let result = invoke(&fixture.webview, command, payload.clone());
+        assert_error(result, code, field, &format!("{command} {payload}"));
+        assert!(
+            fixture.backend.calls().is_empty(),
+            "校验失败后不得调用下游（不落库/不透传）：{:?}",
+            fixture.backend.calls()
+        );
+    }
+
+    // 合法样本（边界值）：名称 64 字符、提示词恰 32KiB、空提示词、仅改名、
+    // `preset_id` 为 ULID —— 均到达后端恰好一次。
+    let boundary_name = "名".repeat(64);
+    let boundary_prompt = "x".repeat(32 * 1024);
+    let valid: Vec<(&str, Value)> = vec![
+        ("presets_list", Value::Null),
+        (
+            "preset_add",
+            json!({ "name": boundary_name, "system_prompt": boundary_prompt }),
+        ),
+        (
+            "preset_add",
+            json!({ "name": "empty-prompt", "system_prompt": "" }),
+        ),
+        (
+            "preset_update",
+            json!({ "preset_id": ULID, "name": "renamed" }),
+        ),
+        (
+            "preset_update",
+            json!({ "preset_id": ULID, "system_prompt": "" }),
+        ),
+        ("preset_delete", json!({ "preset_id": ULID })),
+        (
+            "session_create",
+            json!({ "runtime_id": "mock", "title": "t", "preset_id": ULID }),
+        ),
+    ];
+    for (command, payload) in &valid {
+        let result = invoke(&fixture.webview, command, payload.clone());
+        assert!(result.is_ok(), "合法样本必须到达后端：{command} {payload} → {result:?}");
+    }
+    assert_eq!(
+        fixture.backend.calls().len(),
+        valid.len(),
+        "合法样本各到达后端恰好一次：{:?}",
         fixture.backend.calls()
     );
 }

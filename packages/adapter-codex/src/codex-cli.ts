@@ -119,6 +119,30 @@ export interface CodexRunSpec {
   prompt: string;
   /** 适配器侧硬超时（兜底；核心 120s 断流看门狗优先）。 */
   timeoutMs: number;
+  /**
+   * M7-09/ADR-026：`session.create.system_prompt`（预设块 + 工作区约定块合成结果）。
+   *
+   * 映射为 Codex 配置覆盖 `-c developer_instructions=<TOML 基本字符串>`——实测该键
+   * 以 `developer` 角色进入模型输入（`codex debug prompt-input`）。超长时由适配器
+   * 回退为提示词前缀块（见 `CODEX_DEVELOPER_INSTRUCTIONS_MAX_CHARS`）。
+   */
+  developerInstructions?: string;
+}
+
+/**
+ * `-c developer_instructions=…` 的安全长度上限（字符；按 TOML 编码后计）。
+ *
+ * Windows 下 `codex` 为 npm `.cmd` 垫片，经 `cmd.exe /d /s /c` 启动（已知坑 7），
+ * 命令行总长上限约 8191 字符；取保守值 6000。其余平台 `ARG_MAX` 充裕（≥2MB），
+ * 取 30000 以避免个别 shell/环境限制。
+ */
+export function developerInstructionsLimit(platform: string = process.platform): number {
+  return platform === "win32" ? 6000 : 30000;
+}
+
+/** TOML 基本字符串编码（与 JSON 基本字符串等价；控制字符/引号/反斜杠转义）。 */
+export function encodeDeveloperInstructions(text: string): string {
+  return JSON.stringify(text);
 }
 
 /** 依据 M1-11 固定形状构造 CLI 参数。 */
@@ -135,6 +159,11 @@ export function buildCodexArgs(config: CodexCliConfig, spec: CodexRunSpec): stri
   }
   for (const override of config.configOverrides ?? []) {
     common.push("-c", override);
+  }
+  // M7-09/ADR-026：会话合成系统提示词 → `developer_instructions`（置于既有覆盖之后，
+  // 末位 `-c` 生效；不写用户 config.toml）。
+  if (spec.developerInstructions !== undefined) {
+    common.push("-c", `developer_instructions=${encodeDeveloperInstructions(spec.developerInstructions)}`);
   }
   const args: string[] = [...config.extraArgs];
   if (spec.threadId) {

@@ -443,6 +443,7 @@ fn disable_confirmation_closes_in_flight_runs_and_retry_replays() {
             model: None,
             thinking_depth: None,
             permission_mode: None,
+            preset_id: None,
         })
         .expect("session_create");
     let session_id =
@@ -597,6 +598,7 @@ fn disable_confirmation_closes_in_flight_runs_and_retry_replays() {
             model: None,
             thinking_depth: None,
             permission_mode: None,
+            preset_id: None,
         })
         .expect_err("disabled 运行时不得创建会话");
     assert!(

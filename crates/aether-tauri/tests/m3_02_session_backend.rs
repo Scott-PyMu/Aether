@@ -182,6 +182,7 @@ fn session_create(backend: &dyn IpcBackend, title: &str, model: Option<&str>) ->
         model: model.map(str::to_owned),
         thinking_depth: None,
         permission_mode: None,
+        preset_id: None,
     };
     backend.session_create(&request).expect("session_create")
 }

@@ -256,6 +256,7 @@ impl TestCore {
             model: None,
             thinking_depth: aether_core::THINKING_DEPTH_DEFAULT,
             permission_mode: aether_core::PermissionMode::default(),
+            preset_id: None,
             system_prompt: None,
             config: json!({}),
             token_usage: TokenUsage::default(),
@@ -1051,6 +1052,7 @@ fn disabled_runtime_cannot_create_session() {
                 model: None,
                 thinking_depth: None,
                 permission_mode: None,
+                preset_id: None,
             })
             .expect_err("disabled 运行时必须拒绝创建会话");
         assert_eq!(error.code, IpcErrorCode::InvalidValue);

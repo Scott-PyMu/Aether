@@ -67,14 +67,16 @@ pub use lifecycle::{
     RUN_STREAM_TIMEOUT_CODE, RUN_STREAM_TIMEOUT_MS, RUN_TASK_PANIC_CODE, WATCHDOG_TICK,
 };
 pub use memory::{
-    compose_memory_injection, evaluate_memory_tool, memory_write_within_limit, MemoryInjection,
-    MemoryTool, MEMORY_FILE_PRIORITY, MEMORY_INJECTION_HEADER, MEMORY_INJECTION_MAX_BYTES,
-    MEMORY_TRUNCATION_MARKER,
+    compose_memory_injection, compose_system_prompt, evaluate_memory_tool,
+    memory_write_within_limit, MemoryInjection, MemoryTool, MEMORY_FILE_PRIORITY,
+    MEMORY_INJECTION_HEADER, MEMORY_INJECTION_MAX_BYTES, MEMORY_TRUNCATION_MARKER,
 };
 pub use normalizer::{Normalizer, PendingEvent};
 pub use permission::{
-    path_violation_code, PendingTicketObserver, PermissionConfig, PermissionError,
-    PermissionRequest, PermissionResolution, PermissionService,
+    config_with_session_baseline, path_violation_code, session_baseline_from_config,
+    BaselineBinding, PendingTicketObserver, PermissionConfig, PermissionError, PermissionRequest,
+    PermissionResolution, PermissionService, SESSION_CONFIG_BASELINE_KEY,
+    SESSION_CONFIG_BASELINE_SECTION,
 };
 pub use pipeline::{
     EventPipeline, PipelineConfig, PipelineHealth, ReadbackFrame, ResourcePressure, RunInterrupt,

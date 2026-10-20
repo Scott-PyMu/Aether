@@ -8,10 +8,13 @@
  *      报告 `docs/M4-04-验收报告.md` 引用；失败项记录 rerun 命令）；
  *   4) 命令面完整性：命令全集（P0 36 + M5-05 导出 2 + M6-01 权限模式/规则 6 +
  *      M6-03 审计查询/导出 2 + M7-01 runtime_disable 1 + M7-03 暂停/恢复 2 +
- *      M7-06 连通性 2 = 51；bindings ↔ collect_commands ↔ generate_handler 三方一致）
- *      + 错误码全集 27 个分支覆盖扫描（M6-01 `rule_not_found`；M7-01 `runtime_busy`/
- *      `no_candidate_runtime`；M7-03 `pause_unsupported`；M7-06 `provider_unreachable`/
- *      `provider_auth_failed`/`provider_error`）+ 警告码
+ *      M7-06 连通性 2 + M7-09 预设 4 + M7-08 工作区管理 5 = 60；
+ *      bindings ↔ collect_commands ↔ generate_handler 三方一致）+ 错误码全集 31 个
+ *      分支覆盖扫描（M6-01 `rule_not_found`；M7-01
+ *      `runtime_busy`/`no_candidate_runtime`；M7-03 `pause_unsupported`；M7-06
+ *      `provider_unreachable`/`provider_auth_failed`/`provider_error`；M7-08
+ *      `workspace_not_found`/`workspace_in_use`；M7-09
+ *      `preset_not_found`/`builtin_preset_undeletable`）+ 警告码
  *      `thinking_depth_unsupported` 分支验证。
  *
  * 参数：--skip-coverage（跳过 T15 重负载），--skip-e2e（非 Windows 本地调试）。
@@ -67,6 +70,11 @@ const EXPECTED_COMMANDS = [
   "runtime_enable",
   "runtime_disable",
   "workspace_set",
+  "workspaces_list",
+  "workspace_create",
+  "workspace_update",
+  "workspace_delete",
+  "session_workspace_assign",
   "ref_pick",
   "artifacts_list",
   "artifact_add",
@@ -80,6 +88,10 @@ const EXPECTED_COMMANDS = [
   "provider_model_toggle",
   "provider_test",
   "provider_models_fetch",
+  "presets_list",
+  "preset_add",
+  "preset_update",
+  "preset_delete",
   "export_diagnostics",
   "session_export",
   "archive_export",
@@ -120,6 +132,10 @@ const EXPECTED_ERROR_CODES = [
   "provider_unreachable",
   "provider_auth_failed",
   "provider_error",
+  "workspace_not_found",
+  "workspace_in_use",
+  "preset_not_found",
+  "builtin_preset_undeletable",
 ];
 
 const results = [];
@@ -536,7 +552,7 @@ if (selected("T15")) {
   }
 }
 
-// ===== DoD4：命令面完整性（51 命令、27 错误码、1 警告码）=====
+// ===== DoD4：命令面完整性（60 命令、31 错误码、1 警告码）=====
 
 if (selected("DoD4")) {
   const commandsSource = readFileSync(

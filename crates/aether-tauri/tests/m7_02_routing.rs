@@ -1,4 +1,4 @@
-﻿//! M7-02：能力路由（ADR-022；DoD1/2/5）。
+//! M7-02：能力路由（ADR-022；DoD1/2/5）。
 //!
 //! 覆盖：
 //! - 路由矩阵（命令层）：固定优先级常量（claude-code=10 / codex=20 / mock=100）、
@@ -137,6 +137,7 @@ fn create_request(runtime_id: Option<&str>, model: Option<&str>) -> SessionCreat
         model: model.map(str::to_owned),
         thinking_depth: None,
         permission_mode: None,
+        preset_id: None,
     }
 }
 

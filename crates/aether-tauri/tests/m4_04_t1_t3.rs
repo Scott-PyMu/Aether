@@ -175,6 +175,7 @@ fn create_session(h: &Harness, title: &str) -> String {
             model: None,
             thinking_depth: None,
             permission_mode: None,
+            preset_id: None,
         })
         .expect("session_create");
     created["id"].as_str().expect("会话 id").to_owned()

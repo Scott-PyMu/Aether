@@ -24,6 +24,8 @@
  */
 import { useCallback, useEffect, useState } from "react";
 
+import { PresetsPage } from "./PresetsPage";
+import { presetsIpc as productionPresetsIpc, type PresetsIpc } from "./presets";
 import { ProvidersPage } from "./ProvidersPage";
 import { providersIpc as productionProvidersIpc, type ProvidersIpc } from "./providers";
 import { rulesIpc as productionRulesIpc, type RulesIpc } from "./rules";
@@ -60,14 +62,22 @@ export interface SettingsPageProps {
   providersIpc?: ProvidersIpc;
   /** 权限规则 IPC 契约（M6-01；缺省 = 生产实现；测试注入替身）。 */
   rulesIpc?: RulesIpc;
+  /** Agent 预设 IPC 契约（M7-09；缺省 = 生产实现；测试注入替身）。 */
+  presetsIpc?: PresetsIpc;
+  /** 新建会话入口当前选中的预设（M7-09「使用中」标记数据源；`null` = 未选）。 */
+  activePresetId?: string | null;
+  /** 预设选择变更（与新建会话入口同步；缺省 = 只读展示）。 */
+  onActivePresetChange?: (presetId: string | null) => void;
+  /** 预设增改删成功后通知（工作台新建会话入口的预设清单需刷新；缺省 = 不通知）。 */
+  onPresetsChanged?: () => void;
   onBack: () => void;
   onOpenBackup?: () => void;
   onOpenDiagnostics?: () => void;
   onOpenAbout?: () => void;
 }
 
-/** 设置页子导航（M3-11：基本设置 / 模型与供应商配置；M6-01：权限规则）。 */
-export type SettingsTab = "general" | "providers" | "rules";
+/** 设置页子导航（M3-11：基本设置 / 模型与供应商配置；M6-01：权限规则；M7-09：预设）。 */
+export type SettingsTab = "general" | "providers" | "rules" | "presets";
 
 export function SettingsPage({
   dataDir,
@@ -76,6 +86,10 @@ export function SettingsPage({
   workspace = workspaceIpc,
   providersIpc = productionProvidersIpc,
   rulesIpc = productionRulesIpc,
+  presetsIpc: presetsIpcProp = productionPresetsIpc,
+  activePresetId = null,
+  onActivePresetChange,
+  onPresetsChanged,
   onBack,
   onOpenBackup,
   onOpenDiagnostics,
@@ -301,7 +315,7 @@ export function SettingsPage({
       setWorkspaceRoot(result.root_path);
       setWorkspaceResult({
         result: "ok",
-        text: `工作区已绑定：${result.root_path}（新会话按此目录注入记忆并作为权限基准；已有会话不迁移）`,
+        text: `工作区已绑定：${result.root_path}（新会话按此目录注入记忆并作为权限基准；已有会话不迁移，保持创建时基准——R15）`,
       });
     } catch (failure) {
       setError(describeIpcError(failure));
@@ -363,11 +377,29 @@ export function SettingsPage({
           >
             权限规则
           </button>
+          <button
+            type="button"
+            data-testid="settings-tab-presets"
+            data-active={String(tab === "presets")}
+            className={tab === "presets" ? "settings-tab on" : "settings-tab"}
+            onClick={() => setTab("presets")}
+          >
+            Agent 预设
+          </button>
         </nav>
 
         {tab === "providers" ? <ProvidersPage ipc={providersIpc} /> : null}
 
         {tab === "rules" ? <RulesPage ipc={rulesIpc} /> : null}
+
+        {tab === "presets" ? (
+          <PresetsPage
+            ipc={presetsIpcProp}
+            activePresetId={activePresetId}
+            {...(onActivePresetChange ? { onActivePresetChange } : {})}
+            {...(onPresetsChanged ? { onChanged: onPresetsChanged } : {})}
+          />
+        ) : null}
 
         {tab === "general" ? (
           <>
@@ -514,7 +546,11 @@ export function SettingsPage({
         </section>
 
         <section className="settings-section">
-          <h3>工作区</h3>
+          <h3>工作区（缺省绑定）</h3>
+          <p className="settings-note" data-testid="settings-workspace-entry">
+            此入口仅设置缺省工作区（`workspace_set`）：新会话按此目录注入记忆并确定权限基准。
+            既有会话改派与工作区管理在左栏「工作区」树（M7-08）；此处不提供第二个全局绑定入口。
+          </p>
           <label className="settings-workspace-row">
             工作区根目录
             <input
@@ -556,7 +592,7 @@ export function SettingsPage({
           ) : null}
           <p data-testid="settings-workspace" className="settings-note">
             绑定后新会话注入工作区记忆（`AGENTS.md` &gt; `AETHER.md` &gt; `CLAUDE.md`，
-            32KB 上限）并以其为权限基准目录；已有会话不迁移（P0，D14）。
+            32KB 上限）并以其为权限基准目录；已有会话不迁移，保持创建时权限基准（R15，D14/ADR-026）。
           </p>
         </section>
 

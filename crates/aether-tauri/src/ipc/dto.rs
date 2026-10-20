@@ -81,6 +81,10 @@ pub struct SessionCreateRequest {
     /// `danger_full_access`；非法枚举 → `invalid_enum`）。
     #[serde(default)]
     pub permission_mode: Option<String>,
+    /// Agent 预设（M7-09/ADR-026 §2.2：可选；ULID；查无 → `preset_not_found`）。
+    /// 合成结果落 `sessions.system_prompt` 并经 `session.create` 下发适配器。
+    #[serde(default)]
+    pub preset_id: Option<String>,
 }
 
 impl SessionCreateRequest {
@@ -118,6 +122,11 @@ impl CommandRequest for SessionCreateRequest {
             validate::validate_thinking_depth(thinking_depth, "thinking_depth")?;
         }
         self.permission_mode_value()?;
+        if let Some(preset_id) = &self.preset_id {
+            if !is_ulid(preset_id) {
+                return Err(IpcError::invalid_format("preset_id", "必须是 26 位 ULID"));
+            }
+        }
         Ok(())
     }
 }
@@ -1535,4 +1544,219 @@ fn validate_settings_key(key: &str) -> Result<(), IpcError> {
         ));
     }
     Ok(())
+}
+
+/// 预设名称上限（M7-09/ADR-026 §2.2-2：≤64 字符；与核心常量同源）。
+pub const MAX_PRESET_NAME_CHARS: usize = aether_core::PRESET_NAME_MAX_CHARS;
+/// 预设系统提示词上限（M7-09/ADR-026 §2.2-2：≤32KiB；按 UTF-8 字节数）。
+pub const MAX_PRESET_PROMPT_BYTES: usize = aether_core::PRESET_SYSTEM_PROMPT_MAX_BYTES;
+
+/// 预设名称校验（非空 + ≤64 字符 + 无控制字符；ADR-026 §2.2-2）。
+fn validate_preset_name(name: &str) -> Result<(), IpcError> {
+    ensure_not_empty(name, "name")?;
+    ensure_max_chars(name, "name", MAX_PRESET_NAME_CHARS)?;
+    reject_control_chars(name, "name", false)
+}
+
+/// 预设系统提示词校验（≤32KiB；允许为空——空提示词合成时保留块头，来源仍可追溯）。
+fn validate_preset_prompt(system_prompt: &str) -> Result<(), IpcError> {
+    ensure_max_bytes(system_prompt, "system_prompt", MAX_PRESET_PROMPT_BYTES)
+}
+
+/// `presets_list`（M7-09/ADR-026；ADR-014 附录 C-1 登记为无参数命令）。
+#[derive(Debug, Default, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct PresetsListRequest {}
+
+impl CommandRequest for PresetsListRequest {}
+
+/// `preset_add`（M7-09/ADR-026 §2.2-2）：新增自定义预设（`is_builtin=0`）。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct PresetAddRequest {
+    /// 名称（≤64 字符；非空）。
+    pub name: String,
+    /// 系统提示词（≤32KiB）。
+    pub system_prompt: String,
+}
+
+impl CommandRequest for PresetAddRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        validate_preset_name(&self.name)?;
+        validate_preset_prompt(&self.system_prompt)
+    }
+}
+
+/// `preset_update`（M7-09/ADR-026 §2.2-2）：整体更新名称/提示词（两者至少一项；
+/// 内置预设**可编辑**，仅删除受保护）。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct PresetUpdateRequest {
+    /// 预设 id（ULID；查无 → `preset_not_found`）。
+    pub preset_id: String,
+    /// 新名称（缺省 = 不变；≤64 字符）。
+    #[serde(default)]
+    pub name: Option<String>,
+    /// 新系统提示词（缺省 = 不变；≤32KiB）。
+    #[serde(default)]
+    pub system_prompt: Option<String>,
+}
+
+impl CommandRequest for PresetUpdateRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.preset_id) {
+            return Err(IpcError::invalid_format("preset_id", "必须是 26 位 ULID"));
+        }
+        if self.name.is_none() && self.system_prompt.is_none() {
+            return Err(IpcError::invalid_value(
+                "必须至少提供 name 或 system_prompt 之一（空请求不产生变更）",
+            ));
+        }
+        if let Some(name) = &self.name {
+            validate_preset_name(name)?;
+        }
+        if let Some(system_prompt) = &self.system_prompt {
+            validate_preset_prompt(system_prompt)?;
+        }
+        Ok(())
+    }
+}
+
+/// `preset_delete`（M7-09/ADR-026 §2.2-2）：删除预设；内置 → `builtin_preset_undeletable`。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct PresetDeleteRequest {
+    /// 预设 id（ULID；查无 → `preset_not_found`）。
+    pub preset_id: String,
+}
+
+impl CommandRequest for PresetDeleteRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.preset_id) {
+            return Err(IpcError::invalid_format("preset_id", "必须是 26 位 ULID"));
+        }
+        Ok(())
+    }
+}
+
+// ===== M7-08/ADR-026 §2.1：工作区管理与多工作区（五命令；ADR-014 附录 C-1 登记）=====
+
+/// 工作区名称上限（ADR-026 §2.1-1：≤64 字符）。
+pub const WORKSPACE_NAME_MAX_CHARS: usize = 64;
+
+/// 工作区名称校验（非空、≤64 字符、无控制字符、首尾无空白——保证存储形态稳定）。
+fn validate_workspace_name(name: &str) -> Result<(), IpcError> {
+    if name.trim() != name {
+        return Err(IpcError::invalid_format("name", "首尾不得包含空白字符"));
+    }
+    ensure_not_empty(name, "name")?;
+    ensure_max_chars(name, "name", WORKSPACE_NAME_MAX_CHARS)?;
+    reject_control_chars(name, "name", false)
+}
+
+/// `workspaces_list`（M7-08/ADR-026 §2.1-1；无参数命令）。
+#[derive(Debug, Default, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspacesListRequest {}
+
+impl CommandRequest for WorkspacesListRequest {}
+
+/// `workspace_create`（M7-08/ADR-026 §2.1-1）：`root_path` canonicalize + 存在目录 +
+/// 同步盘拒绝（A4 口径，复用 `workspace_set` 校验链）；同根路径已存在 → `invalid_value`。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceCreateRequest {
+    /// 名称（≤64 字符；非空）。
+    pub name: String,
+    /// 工作区根目录（canonicalize 后的绝对路径；同步盘拒绝）。
+    pub root_path: String,
+}
+
+impl WorkspaceCreateRequest {
+    /// 规范化后的工作区根（命令层走查用）。
+    pub fn canonical_root_path(&self) -> Result<std::path::PathBuf, IpcError> {
+        path::validate_workspace_root(&self.root_path)
+    }
+}
+
+impl CommandRequest for WorkspaceCreateRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        validate_workspace_name(&self.name)?;
+        path::validate_workspace_root(&self.root_path).map(|_| ())
+    }
+}
+
+/// `workspace_update`（M7-08/ADR-026 §2.1-1）：**仅改名**；`root_path` 不可变
+/// （防权限基准漂移），因此不提供 root 字段（未知字段严格拒绝）。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceUpdateRequest {
+    /// 工作区 id（ULID；查无 → `workspace_not_found`）。
+    pub workspace_id: String,
+    /// 新名称（≤64 字符；非空）。
+    pub name: String,
+}
+
+impl CommandRequest for WorkspaceUpdateRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.workspace_id) {
+            return Err(IpcError::invalid_format(
+                "workspace_id",
+                "必须是 26 位 ULID",
+            ));
+        }
+        validate_workspace_name(&self.name)
+    }
+}
+
+/// `workspace_delete`（M7-08/ADR-026 §2.1-1）：存在会话引用 → `workspace_in_use`
+/// （不级联、不改派）；只删行，不删磁盘文件。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceDeleteRequest {
+    /// 工作区 id（ULID；查无 → `workspace_not_found`）。
+    pub workspace_id: String,
+}
+
+impl CommandRequest for WorkspaceDeleteRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.workspace_id) {
+            return Err(IpcError::invalid_format(
+                "workspace_id",
+                "必须是 26 位 ULID",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// `session_workspace_assign`（M7-08/ADR-026 §2.1-1/2）：会话改派工作区。
+///
+/// 在途 run（`running`/`queued`）或 `waiting_permission` → `session_busy`（稳定业务码
+/// 前缀，`invalid_value`，ADR-018 附录 A-7）；改派后记忆注入源切换、**权限基准不重算**
+/// （R15/不变量 11）。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct SessionWorkspaceAssignRequest {
+    pub session_id: String,
+    /// 目标工作区 id（ULID；查无 → `workspace_not_found`）。
+    pub workspace_id: String,
+}
+
+impl CommandRequest for SessionWorkspaceAssignRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.session_id) {
+            return Err(IpcError::invalid_format(
+                "session_id",
+                "必须是 26 位 ULID",
+            ));
+        }
+        if !is_ulid(&self.workspace_id) {
+            return Err(IpcError::invalid_format(
+                "workspace_id",
+                "必须是 26 位 ULID",
+            ));
+        }
+        Ok(())
+    }
 }

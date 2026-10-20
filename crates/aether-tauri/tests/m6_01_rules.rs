@@ -120,6 +120,7 @@ impl Harness {
             model: None,
             thinking_depth: aether_core::THINKING_DEPTH_DEFAULT,
             permission_mode: PermissionMode::WorkspaceWrite,
+            preset_id: None,
             system_prompt: None,
             config: json!({}),
             token_usage: TokenUsage::default(),

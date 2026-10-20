@@ -119,6 +119,10 @@ export interface SessionSummary {
   thinking_depth?: number | null;
   /** M6-01/ADR-014：会话级权限模式（缺省 `workspace_write`；`session_list` 回显）。 */
   permission_mode?: string | null;
+  /** M7-09/ADR-026：预设生效来源（未选预设省略）。 */
+  preset_id?: string | null;
+  /** M7-09/ADR-026：预设名称回显（来源为自定义预设时缺失名称，`preset_id` 亦为空）。 */
+  preset_name?: string | null;
   created_at: number;
   updated_at: number;
   closed_at?: number | null;
@@ -230,6 +234,8 @@ export interface SessionCreateInput {
   thinking_depth?: number;
   /** M6-01/ADR-014 决策 3：会话级权限模式（缺省 `workspace_write`）。 */
   permission_mode?: PermissionMode;
+  /** M7-09/ADR-026：Agent 预设（可选；合成提示词由核心完成；查无 → `preset_not_found`）。 */
+  preset_id?: string;
 }
 
 export interface SessionListFilter {

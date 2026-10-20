@@ -1,4 +1,4 @@
-﻿//! D7 命令面（MVP 全集）：每个命令都走「严格解析 → 语义校验 → 后端」，
+//! D7 命令面（MVP 全集）：每个命令都走「严格解析 → 语义校验 → 后端」，
 //! 校验失败返回结构化错误且不调用后端（不落库、不透传下游）。
 //!
 //! M1-08 只建立框架与命令面；真实实现由 [`crate::ipc::IpcBackend`] 的后续实现提供。
@@ -11,15 +11,18 @@ use super::dto::{
     ArtifactRemoveRequest, ArtifactsListRequest, AuditExportRequest, AuditQueryRequest,
     BackupCreateRequest, BackupListRequest, BackupRestoreRequest, ExportDiagnosticsRequest,
     HealthRequest, MessagesPageRequest, PermissionResolveRequest, PermissionsPendingRequest,
+    PresetAddRequest, PresetDeleteRequest, PresetUpdateRequest, PresetsListRequest,
     ProviderCreateRequest, ProviderDeleteRequest, ProviderModelAddRequest, ProviderModelToggleRequest,
     ProviderModelsFetchRequest, ProviderTestRequest, ProviderToggleRequest, ProviderUpdateRequest,
     ProvidersListRequest, RefPickKind, RefPickRequest,
     RuleAddRequest, RuleDeleteRequest, RuleToggleRequest, RuleUpdateRequest, RulesListRequest,
     RunRetryRequest, RuntimeDisableRequest, RuntimeEnableRequest, RuntimeRetryRequest,
     SessionCreateRequest, SessionExportRequest, SessionIdRequest, SessionListRequest,
-    SessionPermissionModeSetRequest, SessionSendRequest, SettingsGetRequest, SettingsSetRequest,
+    SessionPermissionModeSetRequest, SessionSendRequest, SessionWorkspaceAssignRequest,
+    SettingsGetRequest, SettingsSetRequest,
     StartupGetRequest,
-    StartupMigrateRequest, StartupPickTargetRequest, WorkspaceSetRequest,
+    StartupMigrateRequest, StartupPickTargetRequest, WorkspaceCreateRequest,
+    WorkspaceDeleteRequest, WorkspaceSetRequest, WorkspaceUpdateRequest, WorkspacesListRequest,
 };
 use super::error::{IpcError, IpcErrorCode};
 use super::validate::{parse_no_params, parse_strict};
@@ -441,6 +444,82 @@ pub(crate) fn workspace_set(
         .map(JsonPayload)
 }
 
+/// M7-08/ADR-026 §2.1-1：工作区树清单（无参数；工作区 + 会话计数 + 合成组
+/// 「默认（数据目录）」）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn workspaces_list(
+    state: tauri::State<'_, IpcState>,
+    payload: Option<JsonPayload>,
+) -> Result<JsonPayload, IpcError> {
+    let request: WorkspacesListRequest =
+        parse_no_params(payload.map(JsonPayload::into_value).unwrap_or(Value::Null))?;
+    state
+        .backend_ready()?
+        .workspaces_list(&request)
+        .map(JsonPayload)
+}
+
+/// M7-08/ADR-026 §2.1-1：新建工作区（名称 ≤64；root canonicalize + 存在目录 +
+/// 同步盘拒绝；同根路径已存在 → `invalid_value`）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn workspace_create(
+    state: tauri::State<'_, IpcState>,
+    payload: JsonPayload,
+) -> Result<JsonPayload, IpcError> {
+    let request: WorkspaceCreateRequest = parse_strict(payload.into_value())?;
+    let canonical = request.canonical_root_path()?;
+    state
+        .backend_ready()?
+        .workspace_create(&request, &canonical)
+        .map(JsonPayload)
+}
+
+/// M7-08/ADR-026 §2.1-1：工作区改名（仅名称；`root_path` 不可变）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn workspace_update(
+    state: tauri::State<'_, IpcState>,
+    payload: JsonPayload,
+) -> Result<JsonPayload, IpcError> {
+    let request: WorkspaceUpdateRequest = parse_strict(payload.into_value())?;
+    state
+        .backend_ready()?
+        .workspace_update(&request)
+        .map(JsonPayload)
+}
+
+/// M7-08/ADR-026 §2.1-1：删除工作区（存在会话引用 → `workspace_in_use`；只删行，
+/// 不删磁盘文件）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn workspace_delete(
+    state: tauri::State<'_, IpcState>,
+    payload: JsonPayload,
+) -> Result<JsonPayload, IpcError> {
+    let request: WorkspaceDeleteRequest = parse_strict(payload.into_value())?;
+    state
+        .backend_ready()?
+        .workspace_delete(&request)
+        .map(JsonPayload)
+}
+
+/// M7-08/ADR-026 §2.1-1：会话改派工作区（在途 → `session_busy`；记忆注入源切换；
+/// 权限基准不重算——R15/不变量 11）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn session_workspace_assign(
+    state: tauri::State<'_, IpcState>,
+    payload: JsonPayload,
+) -> Result<JsonPayload, IpcError> {
+    let request: SessionWorkspaceAssignRequest = parse_strict(payload.into_value())?;
+    state
+        .backend_ready()?
+        .session_workspace_assign(&request)
+        .map(JsonPayload)
+}
+
 #[tauri::command]
 #[specta::specta]
 pub(crate) fn export_diagnostics(
@@ -724,6 +803,60 @@ pub(crate) fn provider_models_fetch(
         .map(JsonPayload)
 }
 
+/// M7-09/ADR-026：Agent 预设清单（无参数；严格解析拒绝未知成员）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn presets_list(
+    state: tauri::State<'_, IpcState>,
+    payload: Option<JsonPayload>,
+) -> Result<JsonPayload, IpcError> {
+    let request: PresetsListRequest =
+        parse_no_params(payload.map(JsonPayload::into_value).unwrap_or(Value::Null))?;
+    state
+        .backend_ready()?
+        .presets_list(&request)
+        .map(JsonPayload)
+}
+
+/// M7-09/ADR-026：新增自定义预设（名称 ≤64 字符、提示词 ≤32KiB）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn preset_add(
+    state: tauri::State<'_, IpcState>,
+    payload: JsonPayload,
+) -> Result<JsonPayload, IpcError> {
+    let request: PresetAddRequest = parse_strict(payload.into_value())?;
+    state.backend_ready()?.preset_add(&request).map(JsonPayload)
+}
+
+/// M7-09/ADR-026：更新预设（内置可编辑；`preset_id` 不存在 → `preset_not_found`）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn preset_update(
+    state: tauri::State<'_, IpcState>,
+    payload: JsonPayload,
+) -> Result<JsonPayload, IpcError> {
+    let request: PresetUpdateRequest = parse_strict(payload.into_value())?;
+    state
+        .backend_ready()?
+        .preset_update(&request)
+        .map(JsonPayload)
+}
+
+/// M7-09/ADR-026：删除预设（内置 → `builtin_preset_undeletable`；硬约束）。
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn preset_delete(
+    state: tauri::State<'_, IpcState>,
+    payload: JsonPayload,
+) -> Result<JsonPayload, IpcError> {
+    let request: PresetDeleteRequest = parse_strict(payload.into_value())?;
+    state
+        .backend_ready()?
+        .preset_delete(&request)
+        .map(JsonPayload)
+}
+
 /// M1-06：启动门快照（拒绝启动时仍可达；UI 据此渲染门界面）。
 /// ADR-006：无参数命令；缺省载荷等价空对象，任何成员都会被严格模式拒绝。
 #[tauri::command]
@@ -848,6 +981,11 @@ pub fn collected<R: tauri::Runtime>() -> tauri_specta::Commands<R> {
         runtime_enable,
         runtime_disable,
         workspace_set,
+        workspaces_list,
+        workspace_create,
+        workspace_update,
+        workspace_delete,
+        session_workspace_assign,
         ref_pick,
         artifacts_list,
         artifact_add,
@@ -861,6 +999,10 @@ pub fn collected<R: tauri::Runtime>() -> tauri_specta::Commands<R> {
         provider_model_toggle,
         provider_test,
         provider_models_fetch,
+        presets_list,
+        preset_add,
+        preset_update,
+        preset_delete,
         export_diagnostics,
         session_export,
         archive_export,
@@ -910,6 +1052,11 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         runtime_enable,
         runtime_disable,
         workspace_set,
+        workspaces_list,
+        workspace_create,
+        workspace_update,
+        workspace_delete,
+        session_workspace_assign,
         ref_pick,
         artifacts_list,
         artifact_add,
@@ -923,6 +1070,10 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         provider_model_toggle,
         provider_test,
         provider_models_fetch,
+        presets_list,
+        preset_add,
+        preset_update,
+        preset_delete,
         export_diagnostics,
         session_export,
         archive_export,
@@ -973,6 +1124,11 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         runtime_enable,
         runtime_disable,
         workspace_set,
+        workspaces_list,
+        workspace_create,
+        workspace_update,
+        workspace_delete,
+        session_workspace_assign,
         ref_pick,
         artifacts_list,
         artifact_add,
@@ -986,6 +1142,10 @@ pub fn handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         provider_model_toggle,
         provider_test,
         provider_models_fetch,
+        presets_list,
+        preset_add,
+        preset_update,
+        preset_delete,
         export_diagnostics,
         session_export,
         archive_export,

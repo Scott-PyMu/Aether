@@ -10,7 +10,7 @@
  */
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -48,6 +48,13 @@ export interface ClaudeRunSpec {
    * `undefined` = 不注入（使用 CLI 默认）。
    */
   thinkingBudget?: number;
+  /**
+   * M7-09/ADR-026：`session.create.system_prompt` 物化文件（`--append-system-prompt-file`）。
+   *
+   * 用文件而非内联参数：预设 + 记忆注入合成后可达 64KiB，超过 Windows 命令行长度上限，
+   * 且避免引号/换行转义问题（CLI 原生支持 `-file` 变体，实测 `claude.exe` 接受该参数）。
+   */
+  appendSystemPromptFile?: string;
 }
 
 /**
@@ -140,9 +147,39 @@ export function buildClaudeArgs(config: ClaudeCliConfig, spec: ClaudeRunSpec): s
   if (config.model) {
     args.push("--model", config.model);
   }
+  // M7-09/ADR-026：合成系统提示词（预设块 + 工作区约定块）随会话创建下发后，
+  // 由适配器物化为 CLI 原生 `--append-system-prompt-file`（仅该参数，不改用户 settings）。
+  if (spec.appendSystemPromptFile) {
+    args.push("--append-system-prompt-file", spec.appendSystemPromptFile);
+  }
   args.push(spec.resume ? "--resume" : "--session-id", spec.nativeId);
   args.push("-p", "--output-format", "stream-json", "--include-partial-messages", "--verbose");
   return args;
+}
+
+/**
+ * 物化会话系统提示词文件（M7-09/ADR-026；`--append-system-prompt-file`）。
+ *
+ * 每次调用独占临时目录（会话间隔离；不在用户工作区落盘），内容原样写入。
+ * 返回文件路径；生命周期由调用方在会话销毁/适配器退出时清理。
+ */
+export function materializeSystemPromptFile(content: string): string {
+  const dir = mkdtempSync(join(tmpdir(), "aether-claude-prompt-"));
+  const file = join(dir, "system-prompt.md");
+  writeFileSync(file, content, "utf8");
+  return file;
+}
+
+/** 清理系统提示词临时文件（尽力而为：文件/目录不存在时忽略）。 */
+export function cleanupSystemPromptFile(file: string | undefined): void {
+  if (!file) return;
+  const dir = join(file, "..");
+  try {
+    rmSync(file, { force: true });
+    rmSync(dir, { recursive: true, force: true });
+  } catch {
+    // 临时目录清理失败不影响功能（OS 临时目录由系统回收）。
+  }
 }
 
 /**

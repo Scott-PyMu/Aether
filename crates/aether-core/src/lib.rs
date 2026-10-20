@@ -15,9 +15,11 @@ pub mod session_state;
 
 pub use domain::{
     LogLevel, Message, MessageReference, MessageRole, PermissionDecision, PermissionMode,
-    PermissionScope, PermissionStatus, ReferenceKind, Run, RunStatus, Runtime, RuntimeStatus,
-    Session, SessionStatus, TokenUsage, Workspace, PAUSE_RESUME_CAPABILITY,
-    THINKING_DEPTH_CAPABILITY, THINKING_DEPTH_DEFAULT, THINKING_DEPTH_MAX, THINKING_DEPTH_MIN,
+    PermissionScope, PermissionStatus, Preset, ReferenceKind, Run, RunStatus, Runtime,
+    RuntimeStatus, Session, SessionStatus, TokenUsage, Workspace, PAUSE_RESUME_CAPABILITY,
+    PRESET_NAME_MAX_CHARS, PRESET_PROMPT_MARKER_PREFIX, PRESET_PROMPT_MARKER_SUFFIX,
+    PRESET_SYSTEM_PROMPT_MAX_BYTES, THINKING_DEPTH_CAPABILITY, THINKING_DEPTH_DEFAULT,
+    THINKING_DEPTH_MAX, THINKING_DEPTH_MIN,
 };
 pub use error::{EnvelopeError, UnknownValue};
 pub use event::{
@@ -31,7 +33,7 @@ pub use event::{
     EVENT_ENVELOPE_VERSION,
 };
 pub use ids::{
-    EventId, MessageId, PermissionRequestId, RunId, RuntimeId, SessionId, ToolCallId,
+    EventId, MessageId, PermissionRequestId, PresetId, RunId, RuntimeId, SessionId, ToolCallId,
     WorkflowRunId, WorkspaceId,
 };
 pub use session_state::{

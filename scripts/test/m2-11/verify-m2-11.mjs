@@ -285,7 +285,7 @@ record(
       "--dsh-model",
       process.env.AETHER_REAL_DSH_MODEL ?? "deepseek-v4-pro",
       "--dsh-version",
-      process.env.AETHER_REAL_DSH_VERSION ?? "0.1.5-rc.2",
+      process.env.AETHER_REAL_DSH_VERSION ?? "0.2.1-rc.2",
       // 官方分层：llm-pi-ai composition base（同步注册，消 settings 注入竞态）。
       ...(process.env.AETHER_REAL_DSH_PROVIDER_CONFIG
         ? ["--dsh-provider-config", process.env.AETHER_REAL_DSH_PROVIDER_CONFIG]

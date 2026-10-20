@@ -610,3 +610,48 @@ describe("ClaudeCodeAdapter：档位投影与引用注入（M7-06 / ADR-024）",
     }
   });
 });
+
+describe("M7-09 系统提示词消费（ADR-026 §2.2-5）", () => {
+  it("session.create.system_prompt → CLI --append-system-prompt-file（内容原样；未提供不注入）", {
+    timeout: 40_000,
+  }, async () => {
+    const invocationFile = join(
+      mkdtempSync(join(tmpdir(), "fake-claude-system-prompt-")),
+      "invocations.jsonl",
+    );
+    const previous = process.env.FAKE_CLAUDE_INVOCATION_FILE;
+    process.env.FAKE_CLAUDE_INVOCATION_FILE = invocationFile;
+    const systemPrompt =
+      "<!-- aether:preset:01J00000000000000000000P02 -->\n你是资深软件工程师，专注于代码实现。\n\n# 工作区约定（记忆文件注入，优先级低于系统提示）\n来源：AGENTS.md\n\n工作区约定内容";
+    try {
+      const harness = new Harness();
+      await harness.start();
+      const created = await harness.createSession({ system_prompt: systemPrompt });
+      expect(created["has_system_prompt"]).toBe(true);
+      const runId = await harness.sendMessage(String(created["session_id"]), "chat-1");
+      expect(await harness.waitTerminal(runId)).toBe("run.completed");
+
+      // 未提供 system_prompt 的会话：不注入该参数。
+      const plain = await harness.createSession();
+      expect(plain["has_system_prompt"]).toBe(false);
+      const plainRun = await harness.sendMessage(String(plain["session_id"]), "chat-2");
+      expect(await harness.waitTerminal(plainRun)).toBe("run.completed");
+
+      const records = readFileSync(invocationFile, "utf8")
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => JSON.parse(line) as { argv: string[] });
+      expect(records).toHaveLength(2);
+      const argv = records[0]?.argv ?? [];
+      const index = argv.indexOf("--append-system-prompt-file");
+      expect(index).toBeGreaterThanOrEqual(0);
+      const file = argv[index + 1];
+      expect(file).toBeTruthy();
+      expect(readFileSync(String(file), "utf8")).toBe(systemPrompt);
+      expect(records[1]?.argv ?? []).not.toContain("--append-system-prompt-file");
+    } finally {
+      if (previous === undefined) delete process.env.FAKE_CLAUDE_INVOCATION_FILE;
+      else process.env.FAKE_CLAUDE_INVOCATION_FILE = previous;
+    }
+  });
+});

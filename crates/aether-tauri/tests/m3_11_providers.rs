@@ -1,7 +1,7 @@
 //! M3-11 集成测试：模型与供应商配置命令后端（ADR-010 决策 3/4；D3/D7/D10）。
 //!
 //! 覆盖实施计划 M3-11 DoD1–4 的 IPC 后端面：
-//! - DoD1：迁移已应用到最新（M7-01 起 `schema_version = 6`；表/约束/播种行为见
+//! - DoD1：迁移已应用到最新（M7-09 起 `schema_version = 7`；表/约束/播种行为见
 //!   `aether-store/tests/m3_11_providers.rs`）；供应商写路径经单写队列（D3）；
 //! - DoD2：命令矩阵（未知成员 / 非法 type / base_url 格式 / custom 缺 base_url /
 //!   `api_key` >8192 / 重复 model_id）→ 结构化错误且不落库；
@@ -438,7 +438,7 @@ impl Drop for Harness {
     }
 }
 
-/// DoD1：迁移已应用到最新（M7-01 起 `schema_version = 6`）；内置 4 条播种形状；
+/// DoD1：迁移已应用到最新（M7-09 起 `schema_version = 7`）；内置 4 条播种形状；
 /// 写路径经单写队列。
 #[test]
 fn dod1_builtin_seed_list_shape_and_write_queue() {
@@ -446,8 +446,8 @@ fn dod1_builtin_seed_list_shape_and_write_queue() {
     let summary = h.runtime.block_on(h.reads.store_summary()).expect("库摘要");
     assert_eq!(
         summary.schema_version,
-        Some(6),
-        "迁移必须到 0006（M7-01/ADR-015 runtimes.enabled）"
+        Some(7),
+        "迁移必须到 0007（M7-09/ADR-026 presets）"
     );
 
     let list = h.list().expect("供应商清单");

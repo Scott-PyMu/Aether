@@ -27,13 +27,15 @@ use std::time::Duration;
 use aether_adapters::connection::ConnectionState;
 use aether_adapters::supervisor::Supervisor;
 use aether_control::{
-    compose_memory_injection, LifecycleError, MemoryInjection, PermissionError, PermissionService,
-    SessionCreateOptions, SessionManager, READBACK_MAX_GAP,
+    compose_memory_injection, compose_system_prompt, config_with_session_baseline,
+    session_baseline_from_config, LifecycleError, MemoryInjection, PermissionError,
+    PermissionService, SessionCreateOptions, SessionManager, MEMORY_INJECTION_HEADER,
+    READBACK_MAX_GAP,
 };
 use aether_core::{
-    EventEnvelope, Message, PermissionDecision, PermissionScope, Runtime, RuntimeId, RuntimeStatus,
-    SessionId, SessionStatus, Workspace, WorkspaceId, PAUSE_RESUME_CAPABILITY,
-    THINKING_DEPTH_CAPABILITY, THINKING_DEPTH_DEFAULT,
+    EventEnvelope, Message, PermissionDecision, PermissionScope, Preset, PresetId, Runtime,
+    RuntimeId, RuntimeStatus, SessionId, SessionStatus, Workspace, WorkspaceId,
+    PAUSE_RESUME_CAPABILITY, THINKING_DEPTH_CAPABILITY, THINKING_DEPTH_DEFAULT,
 };
 use aether_security::{normalize_rule_target, PermissionResource, RuleError, RuleTargetKind};
 use aether_store::{
@@ -46,18 +48,22 @@ use serde_json::{json, Value};
 use crate::ipc::backend::IpcBackend;
 use crate::ipc::dto::{
     ArtifactAddRequest, ArtifactRemoveRequest, ArtifactsListRequest, MessagesPageRequest,
-    PermissionResolveRequest, PermissionsPendingRequest, ProviderCreateRequest,
+    PermissionResolveRequest, PermissionsPendingRequest, PresetAddRequest, PresetDeleteRequest,
+    PresetUpdateRequest, PresetsListRequest, ProviderCreateRequest,
     ProviderDeleteRequest, ProviderModelAddRequest, ProviderModelToggleRequest,
     ProviderModelsFetchRequest, ProviderTestRequest, ProviderToggleRequest, ProviderUpdateRequest,
     ProvidersListRequest, RuleAddRequest,
     RuleDeleteRequest, RuleToggleRequest, RuleUpdateRequest, SessionCreateRequest,
     SessionIdRequest, SessionListRequest, SessionPermissionModeSetRequest, SessionSendRequest,
+    SessionWorkspaceAssignRequest, WorkspaceCreateRequest, WorkspaceDeleteRequest,
+    WorkspaceUpdateRequest, WorkspacesListRequest,
 };
 use crate::ipc::error::{IpcError, IpcErrorCode};
 use crate::ipc::path::ArtifactPath;
 use crate::json_payload::JsonPayload;
 
 use crate::adapter_executor::AdapterRunExecutor;
+use crate::preset_control::PresetControl;
 use crate::provider_control::ProviderControl;
 
 /// 会话命令硬超时（`session.create`/`session.send` 含适配器调用预算，D6 方法表 30s）。
@@ -129,6 +135,12 @@ pub struct SessionSummary {
     /// 会话级权限模式（M6-01/ADR-014 决策 3；`SessionSummary` 回显档位）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<String>,
+    /// 预设生效来源（M7-09/ADR-026 §2.2-4：`sessions.preset_id`；未选预设省略）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preset_id: Option<String>,
+    /// 预设名称回显（来源已删除 → 名称缺失，`preset_id` 亦已由 `ON DELETE SET NULL` 置空）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preset_name: Option<String>,
     pub system_prompt: Option<String>,
     pub config: JsonPayload,
     pub token_usage: JsonPayload,
@@ -165,6 +177,11 @@ impl SessionSummary {
             model: session.model.clone(),
             thinking_depth: Some(session.thinking_depth),
             permission_mode: Some(session.permission_mode.as_str().to_owned()),
+            preset_id: session
+                .preset_id
+                .as_ref()
+                .map(|id| id.as_str().to_owned()),
+            preset_name: None,
             system_prompt: session.system_prompt.clone(),
             config: JsonPayload(session.config.clone()),
             token_usage: JsonPayload(token_usage),
@@ -179,6 +196,23 @@ impl SessionSummary {
     /// 同步能力门警告（`session_create`：runtime ready 且未声明 `thinking_depth`）。
     pub fn with_warnings(mut self, warnings: Option<Vec<SessionWarning>>) -> Self {
         self.warnings = warnings;
+        self
+    }
+
+    /// 回显预设生效来源（M7-09/ADR-026 §2.2-4：`preset_id` 已在 `from_session` 落位，
+    /// 此处补齐 `preset_name`；无预设行 → 两者均省略）。
+    #[must_use]
+    pub fn with_preset(mut self, preset: Option<&Preset>) -> Self {
+        match preset {
+            Some(preset) => {
+                self.preset_id = Some(preset.id.as_str().to_owned());
+                self.preset_name = Some(preset.name.clone());
+            }
+            None => {
+                self.preset_id = None;
+                self.preset_name = None;
+            }
+        }
         self
     }
 }
@@ -248,11 +282,12 @@ fn candidate_summary(candidates: &[aether_control::RouteCandidate]) -> String {
         .join("，")
 }
 
-/// 工作区绑定（M3-08；设计 D14/ADR-004 决策 3）。
+/// 工作区绑定（M3-08；设计 D14/ADR-004 决策 3；M7-08/R15 语义收敛）。
 ///
 /// 语义：`root_path` 为 canonical 路径；`workspace_set` 后**新会话**按该工作区注入
-/// 记忆文件并把权限基准目录换绑到同一根（`PermissionService` 策略引擎重建）；
-/// 已有会话的 `sessions.workspace_id` 不迁移（P0 口径）。
+/// 记忆文件并把**缺省**权限基准目录换绑到同一根（`PermissionService` 策略引擎重建）；
+/// **既有会话保持创建时基准**（M7-08/R15：`sessions.config.aether.workspace_baseline_root`
+/// 快照，不因换根迁移；见 ADR-014 附录 B 不变量 11）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceBinding {
     pub id: WorkspaceId,
@@ -292,8 +327,12 @@ pub struct SessionBackend {
     write: Option<WriteQueue>,
     /// 供应商命令执行体（M3-11；`None` = 未接线 → 供应商命令回 `core_not_ready`）。
     providers: Option<ProviderControl>,
+    /// Agent 预设命令执行体（M7-09；`None` = 未接线 → 预设命令回 `core_not_ready`）。
+    presets: Option<PresetControl>,
     /// 当前工作区绑定（M3-08；`None` = 未绑定）。
     workspace: Arc<Mutex<Option<WorkspaceBinding>>>,
+    /// 数据目录（M7-08 `workspaces_list` 合成组「默认（数据目录）」的根路径展示）。
+    data_dir: Option<std::path::PathBuf>,
     handle: tokio::runtime::Handle,
     timeout: Duration,
     /// 自动补读缺口上限（默认 [`READBACK_MAX_GAP`]；常量级调参，测试注入用）。
@@ -318,11 +357,20 @@ impl SessionBackend {
             permissions: None,
             write: None,
             providers: None,
+            presets: None,
             workspace: Arc::new(Mutex::new(None)),
+            data_dir: None,
             handle,
             timeout: SESSION_COMMAND_TIMEOUT,
             gap_limit: READBACK_MAX_GAP,
         }
+    }
+
+    /// 注入数据目录（M7-08：合成组「默认（数据目录）」的根路径展示；`None` = 不展示）。
+    #[must_use]
+    pub fn with_data_dir(mut self, data_dir: impl Into<std::path::PathBuf>) -> Self {
+        self.data_dir = Some(data_dir.into());
+        self
     }
 
     /// 注入权限服务（M3-03；`permissions_pending` / `permission_resolve` 的真实数据源）。
@@ -352,6 +400,22 @@ impl SessionBackend {
         self.providers.as_ref().ok_or_else(|| {
             IpcError::core_not_ready(
                 "供应商后端未接线：providers_list / provider_* 不可用（启动序列未完成）",
+            )
+        })
+    }
+
+    /// 注入 Agent 预设命令执行体（M7-09：`presets_list` / `preset_*` 四命令）。
+    #[must_use]
+    pub fn with_presets(mut self, presets: PresetControl) -> Self {
+        self.presets = Some(presets);
+        self
+    }
+
+    /// 预设命令执行体（未接线 → 预设命令回 `core_not_ready`）。
+    fn presets_required(&self) -> Result<&PresetControl, IpcError> {
+        self.presets.as_ref().ok_or_else(|| {
+            IpcError::core_not_ready(
+                "预设后端未接线：presets_list / preset_* 不可用（启动序列未完成）",
             )
         })
     }
@@ -556,6 +620,26 @@ impl IpcBackend for SessionBackend {
                     .map(|workspace| workspace.root_path);
                 roots.insert(key, root);
             }
+            // M7-09/ADR-026 §2.2-4：预设名称回显（按 preset_id 去重读取；预设已删除的
+            // 会话 `preset_id` 已被 `ON DELETE SET NULL` 置空，不出现悬空 id）。
+            let mut presets: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+            for session in &sessions {
+                let Some(preset_id) = &session.preset_id else {
+                    continue;
+                };
+                let key = preset_id.as_str().to_owned();
+                if presets.contains_key(&key) {
+                    continue;
+                }
+                if let Some(preset) = reads
+                    .preset(preset_id)
+                    .await
+                    .map_err(|error| IpcError::internal(format!("预设读取失败：{error}")))?
+                {
+                    presets.insert(key, preset.name);
+                }
+            }
             let summaries = sessions
                 .iter()
                 .map(|session| {
@@ -563,9 +647,17 @@ impl IpcBackend for SessionBackend {
                         .workspace_id
                         .as_ref()
                         .and_then(|id| roots.get(id.as_str()).cloned().flatten());
-                    SessionSummary::from_session(session, root)
+                    let mut summary = SessionSummary::from_session(session, root)?;
+                    if let Some(name) = session
+                        .preset_id
+                        .as_ref()
+                        .and_then(|id| presets.get(id.as_str()))
+                    {
+                        summary.preset_name = Some(name.clone());
+                    }
+                    Ok(summary)
                 })
-                .collect::<Result<Vec<_>, _>>()?;
+                .collect::<Result<Vec<_>, IpcError>>()?;
             serde_json::to_value(summaries)
                 .map_err(|error| IpcError::internal(format!("会话列表序列化失败：{error}")))
         })
@@ -575,6 +667,8 @@ impl IpcBackend for SessionBackend {
         let manager = self.manager_required()?.clone();
         let supervisor = self.supervisor.clone();
         let reads = self.reads.clone();
+        let permissions = self.permissions.clone();
+        let write = self.write.clone();
         let binding = lock_workspace(&self.workspace).clone();
         let requested_runtime_id = request.runtime_id.clone();
         let title = request.title.clone();
@@ -582,6 +676,7 @@ impl IpcBackend for SessionBackend {
         let model = request.model.clone();
         let thinking_depth_request = request.thinking_depth_value()?;
         let permission_mode = request.permission_mode_value()?.unwrap_or_default();
+        let preset_id = request.preset_id.clone();
         self.call(async move {
             let supervisor = supervisor.ok_or_else(|| {
                 IpcError::core_not_ready("监督器未接线：无法解析 runtime_id（启动序列未完成）")
@@ -744,7 +839,7 @@ impl IpcBackend for SessionBackend {
                     updated_at: 0,
                 }),
             };
-            let (workspace_id, system_prompt) = match &resolved_workspace {
+            let (workspace_id, memory_prompt) = match &resolved_workspace {
                 Some(workspace) => {
                     let injection: MemoryInjection =
                         compose_memory_injection(Path::new(&workspace.root_path));
@@ -759,6 +854,29 @@ impl IpcBackend for SessionBackend {
                 }
                 None => (None, None),
             };
+            // M7-09/ADR-026 §2.2-3：预设块（置前）→ 工作区记忆块（后置）合成；
+            // 禁止静默覆盖（两者均完整保留）；未选预设 → 仅记忆块（与 P0 行为一致）。
+            let preset = match &preset_id {
+                Some(value) => {
+                    let reads = reads.clone().ok_or_else(|| {
+                        IpcError::core_not_ready(
+                            "会话后端未接线：preset_id 存在性校验需要读连接池",
+                        )
+                    })?;
+                    let id = PresetId::new(value.clone()).map_err(|error| {
+                        IpcError::internal(format!("preset_id 非法：{error}"))
+                    })?;
+                    Some(
+                        reads
+                            .preset(&id)
+                            .await
+                            .map_err(|error| IpcError::internal(format!("预设读取失败：{error}")))?
+                            .ok_or_else(|| IpcError::preset_not_found(value))?,
+                    )
+                }
+                None => None,
+            };
+            let system_prompt = compose_system_prompt(preset.as_ref(), memory_prompt.as_deref());
             // M3-10/ADR-010 能力门（同步判定路径）：runtime ready 且未声明
             // `thinking_depth` → 会话级落缺省 2 + 响应携带非阻断警告（尽力而为）；
             // ready 且声明 → 维持请求值；runtime 未 ready → 接受请求并按延迟判定
@@ -782,6 +900,7 @@ impl IpcBackend for SessionBackend {
                         workspace_id,
                         model,
                         system_prompt,
+                        preset_id: preset.as_ref().map(|preset| preset.id.clone()),
                         thinking_depth: effective_depth,
                         permission_mode,
                         // M7-02/ADR-022：自动路由决策随创建入控制层（审计
@@ -791,13 +910,29 @@ impl IpcBackend for SessionBackend {
                 )
                 .await
                 .map_err(map_lifecycle_error)?;
+            // M7-08/R15（ADR-014 附录 B 不变量 11）：**权限基准按会话创建固定**——
+            // 登记创建时工作区根（`workspace_id IS NULL` → 数据目录）到权限服务，并把
+            // 同一快照持久化到 `sessions.config.aether.workspace_baseline_root`
+            // （跨重启不变；`workspace_set` 换根与改派均不重算）。
+            let baseline_root = resolved_workspace
+                .as_ref()
+                .map(|workspace| std::path::PathBuf::from(&workspace.root_path));
+            persist_session_baseline(
+                write.as_ref(),
+                permissions.as_ref(),
+                &session,
+                baseline_root.as_deref(),
+            )
+            .await;
             // ADR-010 附录 B.4：响应定型为 `SessionSummary`（`workspace_root` 取自
-            // 本会话解析出的工作区；未绑定省略；`thinking_depth` 回显生效值）。
+            // 本会话解析出的工作区；未绑定省略；`thinking_depth` 回显生效值）；
+            // M7-09/ADR-026 §2.2-4：`preset_id`/`preset_name` 回显生效来源。
             let workspace_root = resolved_workspace
                 .as_ref()
                 .map(|workspace| workspace.root_path.clone());
-            let summary =
-                SessionSummary::from_session(&session, workspace_root)?.with_warnings(warnings);
+            let summary = SessionSummary::from_session(&session, workspace_root)?
+                .with_preset(preset.as_ref())
+                .with_warnings(warnings);
             serde_json::to_value(summary)
                 .map_err(|error| IpcError::internal(format!("会话序列化失败：{error}")))
         })
@@ -910,6 +1045,373 @@ impl IpcBackend for SessionBackend {
         })
     }
 
+    // ===== M7-08/ADR-026 §2.1：工作区管理与多工作区（五命令）=====
+
+    /// M7-08 `workspaces_list`（ADR-026 §2.1-1）：工作区清单 + 会话计数
+    /// （`active`/`total`）。未分配会话（`workspace_id IS NULL`）以合成组
+    /// 「默认（数据目录）」呈现，**不建 `workspaces` 行**。
+    fn workspaces_list(&self, _request: &WorkspacesListRequest) -> Result<Value, IpcError> {
+        let reads = self.reads_required()?.clone();
+        let data_dir = self.data_dir.clone();
+        self.call(async move {
+            let workspaces = reads
+                .workspaces()
+                .await
+                .map_err(|error| IpcError::internal(format!("工作区清单读取失败：{error}")))?;
+            let counts = reads
+                .workspace_session_counts()
+                .await
+                .map_err(|error| IpcError::internal(format!("工作区会话计数读取失败：{error}")))?;
+            Ok(json!({
+                "workspaces": workspaces
+                    .iter()
+                    .map(|workspace| {
+                        let count = counts
+                            .by_workspace
+                            .get(workspace.id.as_str())
+                            .copied()
+                            .unwrap_or_default();
+                        workspace_json(workspace, count)
+                    })
+                    .collect::<Vec<_>>(),
+                "unassigned": {
+                    "name": "默认（数据目录）",
+                    "root_path": data_dir
+                        .as_ref()
+                        .map(|path| path.to_string_lossy().to_string()),
+                    "active_sessions": counts.unassigned.active,
+                    "total_sessions": counts.unassigned.total,
+                },
+            }))
+        })
+    }
+
+    /// M7-08 `workspace_create`（ADR-026 §2.1-1）：canonicalize + 存在目录 + 同步盘拒绝
+    /// 已在命令层完成；本层复核**同根路径唯一性**（已存在 → `invalid_value`，提示使用
+    /// 既有工作区），经单写队列落行并写审计 `workspace.created`。
+    fn workspace_create(
+        &self,
+        request: &WorkspaceCreateRequest,
+        canonical_root_path: &Path,
+    ) -> Result<Value, IpcError> {
+        let reads = self.reads_required()?.clone();
+        let write = self.write_required()?.clone();
+        let name = request.name.clone();
+        let root_path = canonical_root_path.to_string_lossy().to_string();
+        self.call(async move {
+            if let Some(existing) = reads
+                .workspace_by_root(&root_path)
+                .await
+                .map_err(|error| IpcError::internal(format!("工作区按路径读取失败：{error}")))?
+            {
+                return Err(IpcError::invalid_value(format!(
+                    "工作区根路径已存在（{}，workspace_id={}）；请直接在左栏树中使用既有工作区",
+                    existing.root_path,
+                    existing.id.as_str()
+                )));
+            }
+            let now = now_ms();
+            let workspace = Workspace {
+                id: WorkspaceId::new(ulid::Ulid::new().to_string()).map_err(|error| {
+                    IpcError::internal(format!("workspace_id 生成失败：{error}"))
+                })?,
+                name,
+                root_path,
+                // ADR-026 §2.1-4：`memory_files` P1 不启用（恒空数组；D14 三文件名优先级不变）。
+                memory_files: Vec::new(),
+                created_at: now,
+                updated_at: now,
+            };
+            let outcome = write
+                .execute(StoreCommand::UpsertWorkspace {
+                    workspace: workspace.clone(),
+                })
+                .await
+                .map_err(|error| IpcError::internal(format!("工作区落库失败：{error}")))?;
+            if let StoreOutcome::Applied { affected } = outcome {
+                if affected == 0 {
+                    return Err(IpcError::internal("工作区落库未影响任何行（不变量破坏）"));
+                }
+            }
+            insert_workspace_audit(
+                &write,
+                "workspace.created",
+                json!({
+                    "workspace_id": workspace.id.as_str(),
+                    "name": workspace.name,
+                    "root_path": workspace.root_path,
+                    "memory_files_enabled": false,
+                }),
+                now,
+            )
+            .await?;
+            Ok(workspace_json(
+                &workspace,
+                aether_store::WorkspaceSessionCount::default(),
+            ))
+        })
+    }
+
+    /// M7-08 `workspace_update`（ADR-026 §2.1-1）：**仅改名**；`root_path` 不可变
+    /// （防权限基准漂移）。查无 → `workspace_not_found`；写审计 `workspace.updated`。
+    fn workspace_update(&self, request: &WorkspaceUpdateRequest) -> Result<Value, IpcError> {
+        let reads = self.reads_required()?.clone();
+        let write = self.write_required()?.clone();
+        let workspace_id = WorkspaceId::new(request.workspace_id.clone())
+            .map_err(|error| IpcError::internal(format!("workspace_id 非法：{error}")))?;
+        let name = request.name.clone();
+        self.call(async move {
+            let workspace = reads
+                .workspace(&workspace_id)
+                .await
+                .map_err(|error| IpcError::internal(format!("工作区读取失败：{error}")))?
+                .ok_or_else(|| IpcError::workspace_not_found(workspace_id.as_str()))?;
+            let previous_name = workspace.name.clone();
+            let now = now_ms();
+            let outcome = write
+                .execute(StoreCommand::RenameWorkspace {
+                    id: workspace_id.clone(),
+                    name: name.clone(),
+                    updated_at: now,
+                })
+                .await
+                .map_err(|error| IpcError::internal(format!("工作区改名落库失败：{error}")))?;
+            if let StoreOutcome::Applied { affected } = outcome {
+                if affected == 0 {
+                    return Err(IpcError::workspace_not_found(workspace_id.as_str()));
+                }
+            }
+            insert_workspace_audit(
+                &write,
+                "workspace.updated",
+                json!({
+                    "workspace_id": workspace_id.as_str(),
+                    "from": previous_name,
+                    "to": name,
+                    "root_path_immutable": workspace.root_path,
+                }),
+                now,
+            )
+            .await?;
+            let counts = reads
+                .workspace_session_counts()
+                .await
+                .map_err(|error| IpcError::internal(format!("工作区会话计数读取失败：{error}")))?;
+            let count = counts
+                .by_workspace
+                .get(workspace_id.as_str())
+                .copied()
+                .unwrap_or_default();
+            let mut updated = workspace;
+            updated.name = name;
+            updated.updated_at = now;
+            Ok(workspace_json(&updated, count))
+        })
+    }
+
+    /// M7-08 `workspace_delete`（ADR-026 §2.1-1）：存在会话引用 → `workspace_in_use`
+    /// （**不级联、不改派**；引用检查在存储事务内复核）；**只删行、不删磁盘文件**；
+    /// 无引用 → 删除并写审计 `workspace.deleted`。
+    fn workspace_delete(&self, request: &WorkspaceDeleteRequest) -> Result<Value, IpcError> {
+        let reads = self.reads_required()?.clone();
+        let write = self.write_required()?.clone();
+        let workspace_id = WorkspaceId::new(request.workspace_id.clone())
+            .map_err(|error| IpcError::internal(format!("workspace_id 非法：{error}")))?;
+        self.call(async move {
+            let workspace = reads
+                .workspace(&workspace_id)
+                .await
+                .map_err(|error| IpcError::internal(format!("工作区读取失败：{error}")))?
+                .ok_or_else(|| IpcError::workspace_not_found(workspace_id.as_str()))?;
+            let now = now_ms();
+            let outcome = write
+                .execute(StoreCommand::DeleteWorkspace {
+                    id: workspace_id.clone(),
+                })
+                .await
+                .map_err(|error| IpcError::internal(format!("工作区删除失败：{error}")))?;
+            match outcome {
+                StoreOutcome::WorkspaceInUse { sessions } => {
+                    return Err(IpcError::workspace_in_use(workspace_id.as_str(), sessions));
+                }
+                StoreOutcome::Applied { affected } => {
+                    if affected == 0 {
+                        return Err(IpcError::workspace_not_found(workspace_id.as_str()));
+                    }
+                }
+                other => {
+                    return Err(IpcError::internal(format!(
+                        "工作区删除返回了非预期结果：{other:?}"
+                    )));
+                }
+            }
+            insert_workspace_audit(
+                &write,
+                "workspace.deleted",
+                json!({
+                    "workspace_id": workspace_id.as_str(),
+                    "name": workspace.name,
+                    "root_path": workspace.root_path,
+                    "sessions": 0,
+                    "disk_untouched": true,
+                }),
+                now,
+            )
+            .await?;
+            Ok(json!({
+                "workspace_id": workspace_id.as_str(),
+                "deleted": true,
+                // ADR-026 §2.1-1：只删行，不删磁盘文件（回归断言锚点）。
+                "disk_untouched": true,
+            }))
+        })
+    }
+
+    /// M7-08 `session_workspace_assign`（ADR-026 §2.1-1/2）：会话改派工作区。
+    ///
+    /// - 在途 run（`running`/`queued`）或 `waiting_permission`（含 `creating` 过渡态）
+    ///   → `invalid_value` + `session_busy` 稳定业务码前缀（ADR-018 附录 A-7）；
+    /// - 改派后**记忆注入源即时切换**（按目标工作区根重合成 `system_prompt` 的记忆块；
+    ///   既有预设块原样保留——预设内容不随改派重算）；
+    /// - **权限基准不重算**（R5/R15，不变量 11）：创建时快照优先；未登记（升级前会话）
+    ///   按当前 `workspace_id` 派生后固定（防改派放大权限）；
+    /// - 写审计 `session.workspace_assigned`（detail 显式记录「权限基准不重算」）。
+    fn session_workspace_assign(
+        &self,
+        request: &SessionWorkspaceAssignRequest,
+    ) -> Result<Value, IpcError> {
+        let reads = self.reads_required()?.clone();
+        let write = self.write_required()?.clone();
+        let permissions = self.permissions.clone();
+        let session_id = parse_session_id(&request.session_id)?;
+        let workspace_id = WorkspaceId::new(request.workspace_id.clone())
+            .map_err(|error| IpcError::internal(format!("workspace_id 非法：{error}")))?;
+        self.call(async move {
+            let session = reads
+                .session(&session_id)
+                .await
+                .map_err(|error| IpcError::internal(format!("会话读取失败：{error}")))?
+                .ok_or_else(|| assign_session_not_found(&session_id))?;
+            // 在途前置：状态非空闲或存在 queued/running run → session_busy（不转移）。
+            let active_run = reads
+                .session_has_active_run(&session_id)
+                .await
+                .map_err(|error| IpcError::internal(format!("在途 run 读取失败：{error}")))?;
+            if is_session_busy(session.status, active_run) {
+                return Err(IpcError::invalid_value(format!(
+                    "session_busy：会话 {} 在途（status={}，active_run={active_run}），不可改派工作区；\
+                     请先等待 run 结束或中断",
+                    session_id.as_str(),
+                    session.status.as_str()
+                )));
+            }
+            let target = reads
+                .workspace(&workspace_id)
+                .await
+                .map_err(|error| IpcError::internal(format!("工作区读取失败：{error}")))?
+                .ok_or_else(|| IpcError::workspace_not_found(workspace_id.as_str()))?;
+            let previous = session.workspace_id.clone();
+            let baseline = match session_baseline_from_config(&session.config) {
+                Some(root) => root,
+                None => match &session.workspace_id {
+                    Some(current) => reads
+                        .workspace(current)
+                        .await
+                        .map_err(|error| {
+                            IpcError::internal(format!("工作区读取失败：{error}"))
+                        })?
+                        .map(|workspace| std::path::PathBuf::from(workspace.root_path)),
+                    None => None,
+                },
+            };
+            if let Some(service) = &permissions {
+                service.set_session_baseline(&session_id, baseline.as_deref());
+            }
+            if previous.as_ref() == Some(&workspace_id) {
+                // 幂等：不重复改写 `workspace_id`/提示词；升级前会话首次改派时仍固化基准
+                // 快照（未登记 → 按当前工作区派生），使跨重启语义稳定。
+                if session_baseline_from_config(&session.config).is_none() {
+                    let config =
+                        config_with_session_baseline(&session.config, baseline.as_deref());
+                    if let Err(error) = write
+                        .execute(StoreCommand::UpdateSessionConfig {
+                            session_id: session_id.clone(),
+                            config,
+                            updated_at: now_ms(),
+                        })
+                        .await
+                    {
+                        tracing::warn!(
+                            session_id = %session_id,
+                            error = %error,
+                            "幂等改派的基准快照落库失败（进程内基准仍生效）"
+                        );
+                    }
+                }
+                return Ok(assign_response(
+                    &session_id,
+                    &workspace_id,
+                    previous.as_ref(),
+                    baseline.as_deref(),
+                    false,
+                ));
+            }
+            let config = config_with_session_baseline(&session.config, baseline.as_deref());
+            let memory = compose_memory_injection(Path::new(&target.root_path)).render();
+            let system_prompt =
+                replace_workspace_memory_block(session.system_prompt.as_deref(), memory);
+            let now = now_ms();
+            let outcome = write
+                .execute(StoreCommand::AssignSessionWorkspace {
+                    session_id: session_id.clone(),
+                    workspace_id: workspace_id.clone(),
+                    config,
+                    system_prompt: system_prompt.clone(),
+                    updated_at: now,
+                })
+                .await
+                .map_err(|error| IpcError::internal(format!("会话改派落库失败：{error}")))?;
+            if let StoreOutcome::Applied { affected } = outcome {
+                if affected == 0 {
+                    return Err(assign_session_not_found(&session_id));
+                }
+            }
+            write
+                .execute(StoreCommand::InsertAudit {
+                    record: AuditLogRecord {
+                        id: new_audit_id(),
+                        session_id: Some(session_id.as_str().to_owned()),
+                        runtime_id: Some(session.runtime_id.as_str().to_owned()),
+                        actor: "user".to_owned(),
+                        action: "session.workspace_assigned".to_owned(),
+                        resource: Some("session".to_owned()),
+                        detail: Some(
+                            json!({
+                                "from": previous.as_ref().map(WorkspaceId::as_str),
+                                "to": workspace_id.as_str(),
+                                "root_path": target.root_path,
+                                "baseline_root": baseline.as_ref().map(|path| path.to_string_lossy().to_string()),
+                                "baseline_recomputed": false,
+                                "memory_injection_switched": true,
+                            })
+                            .to_string(),
+                        ),
+                        result: Some("updated".to_owned()),
+                        ts: now,
+                    },
+                })
+                .await
+                .map_err(|error| IpcError::internal(format!("审计落库失败：{error}")))?;
+            Ok(assign_response(
+                &session_id,
+                &workspace_id,
+                previous.as_ref(),
+                baseline.as_deref(),
+                true,
+            ))
+        })
+    }
+
     /// M3-09 `artifacts_list`（ADR-010 决策 1）：会话引用清单（按 `created_at` 升序）。
     ///
     /// 只读：不触发 `workspace_set`、不产生事件；不存在会话 → `invalid_value`。
@@ -1000,6 +1502,25 @@ impl IpcBackend for SessionBackend {
                 ))),
             }
         })
+    }
+
+    // ===== M7-09（ADR-026 §2.2）：Agent 预设四命令（薄转发 [`PresetControl`]；
+    // 校验/内置保护/审计语义全部在 preset_control，本层不复刻）。=====
+
+    fn presets_list(&self, request: &PresetsListRequest) -> Result<Value, IpcError> {
+        self.presets_required()?.presets_list(request)
+    }
+
+    fn preset_add(&self, request: &PresetAddRequest) -> Result<Value, IpcError> {
+        self.presets_required()?.preset_add(request)
+    }
+
+    fn preset_update(&self, request: &PresetUpdateRequest) -> Result<Value, IpcError> {
+        self.presets_required()?.preset_update(request)
+    }
+
+    fn preset_delete(&self, request: &PresetDeleteRequest) -> Result<Value, IpcError> {
+        self.presets_required()?.preset_delete(request)
     }
 
     // ===== M3-11（ADR-010 决策 3）：模型与供应商配置七命令（薄转发 [`ProviderControl`]；
@@ -1933,6 +2454,158 @@ fn session_not_found(session_id: &SessionId) -> IpcError {
         "session_id 不存在（{}）；引用操作仅对既有会话可用",
         session_id.as_str()
     ))
+}
+
+/// 会话不存在（M7-08 `session_workspace_assign`；`session_not_found` 稳定业务码前缀，
+/// 口径同 ADR-018 附录 A-7：不入错误码枚举、UI 按 message 展示）。
+fn assign_session_not_found(session_id: &SessionId) -> IpcError {
+    IpcError::invalid_value(format!(
+        "session_not_found：会话不存在（{}）；无法改派工作区",
+        session_id.as_str()
+    ))
+}
+
+// ===== M7-08：工作区/权限基准辅助 =====
+
+/// 会话当前是否「在途」（ADR-026 §2.1-1 改派前置）：非空闲会话状态或存在在途 run。
+///
+/// 口径：`creating` / `running` / `waiting_permission` 或 `queued`/`running` run →
+/// `session_busy`；`paused` 无在途 run（受控中断已收口）不阻断——与 ADR 文本
+/// 「在途 run（`running`/`queued`）或 `waiting_permission`」一致。
+fn is_session_busy(status: SessionStatus, active_run: bool) -> bool {
+    active_run
+        || matches!(
+            status,
+            SessionStatus::Creating | SessionStatus::Running | SessionStatus::WaitingPermission
+        )
+}
+
+/// 工作区响应条目（`workspaces_list` / `workspace_create` / `workspace_update`）。
+fn workspace_json(
+    workspace: &Workspace,
+    count: aether_store::WorkspaceSessionCount,
+) -> Value {
+    json!({
+        "workspace_id": workspace.id.as_str(),
+        "name": workspace.name,
+        "root_path": workspace.root_path,
+        // ADR-026 §2.1-4：P1 不启用（恒空数组；字段保留待 P4 记忆检索时重议）。
+        "memory_files": workspace.memory_files,
+        "active_sessions": count.active,
+        "total_sessions": count.total,
+        "created_at": workspace.created_at,
+        "updated_at": workspace.updated_at,
+    })
+}
+
+/// 工作区管理审计（`workspace.created` / `workspace.updated` / `workspace.deleted`；
+/// actor=`user`，ADR-026 附录 A-3）。
+async fn insert_workspace_audit(
+    write: &WriteQueue,
+    action: &str,
+    detail: Value,
+    ts: i64,
+) -> Result<(), IpcError> {
+    write
+        .execute(StoreCommand::InsertAudit {
+            record: AuditLogRecord {
+                id: new_audit_id(),
+                session_id: None,
+                runtime_id: None,
+                actor: "user".to_owned(),
+                action: action.to_owned(),
+                resource: Some("workspace".to_owned()),
+                detail: Some(detail.to_string()),
+                result: Some("updated".to_owned()),
+                ts,
+            },
+        })
+        .await
+        .map_err(|error| IpcError::internal(format!("工作区审计落库失败：{error}")))?;
+    Ok(())
+}
+
+/// 改派响应（ADR-026 §2.1-1；UI 提示「权限基准不变，如需变更请新建会话」）。
+fn assign_response(
+    session_id: &SessionId,
+    workspace_id: &WorkspaceId,
+    previous: Option<&WorkspaceId>,
+    baseline_root: Option<&Path>,
+    changed: bool,
+) -> Value {
+    json!({
+        "session_id": session_id.as_str(),
+        "workspace_id": workspace_id.as_str(),
+        "previous_workspace_id": previous.map(WorkspaceId::as_str),
+        "changed": changed,
+        // R15：改派不重算权限基准（防改派放大权限）。
+        "baseline_unchanged": true,
+        "baseline_root": baseline_root.map(|path| path.to_string_lossy().to_string()),
+        "memory_injection_switched": changed,
+        "notice": "权限基准不变，如需变更请新建会话",
+    })
+}
+
+/// 会话创建时固定权限基准（M7-08/R15）：进程内登记 + 持久化快照。
+///
+/// 持久化失败不阻断会话创建（进程内基准已生效；重启后该会话按「未登记」沿用缺省
+/// 基准——保守方向：不放大权限），仅告警。
+async fn persist_session_baseline(
+    write: Option<&WriteQueue>,
+    permissions: Option<&PermissionService>,
+    session: &aether_core::Session,
+    baseline: Option<&Path>,
+) {
+    if let Some(service) = permissions {
+        service.set_session_baseline(&session.id, baseline);
+    }
+    let Some(write) = write else {
+        return;
+    };
+    let config = config_with_session_baseline(&session.config, baseline);
+    if config == session.config {
+        return;
+    }
+    if let Err(error) = write
+        .execute(StoreCommand::UpdateSessionConfig {
+            session_id: session.id.clone(),
+            config,
+            updated_at: now_ms(),
+        })
+        .await
+    {
+        tracing::warn!(
+            session_id = %session.id,
+            error = %error,
+            "权限基准快照落库失败（进程内基准仍生效；重启后按未登记兼容）"
+        );
+    }
+}
+
+/// 替换 `system_prompt` 中的工作区记忆块（记忆注入源切换；D14/ADR-026 §2.1-1）。
+///
+/// 结构：`[预设块]\n\n[工作区约定记忆块]`（M7-09/ADR-026 合成顺序）。
+/// 改派只替换记忆块，**既有预设块原样保留**（预设内容不随改派重算，禁止静默覆盖）；
+/// 记忆块按 [`MEMORY_INJECTION_HEADER`] 定位（`rfind`：记忆块恒在末尾），
+/// `memory=None` 时仅保留预设块。
+fn replace_workspace_memory_block(
+    existing: Option<&str>,
+    memory: Option<String>,
+) -> Option<String> {
+    let marker = format!("{MEMORY_INJECTION_HEADER}\n来源：");
+    let preset_block = existing
+        .map(|text| match text.rfind(&marker) {
+            Some(index) => text[..index].trim_end(),
+            None => text.trim_end(),
+        })
+        .filter(|text| !text.is_empty())
+        .map(str::to_owned);
+    match (preset_block, memory) {
+        (Some(preset), Some(memory)) => Some(format!("{preset}\n\n{memory}")),
+        (Some(preset), None) => Some(preset),
+        (None, Some(memory)) => Some(memory),
+        (None, None) => None,
+    }
 }
 
 /// 引用条目响应形状（ADR-010 附录 B.1：`{ id, path, kind, size_bytes, created_at }`）。

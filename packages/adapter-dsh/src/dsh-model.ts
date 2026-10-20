@@ -1,14 +1,14 @@
 /**
  * DSH 按会话选模型（M7-06/ADR-024 DoD4；实测口径见任务证据）。
  *
- * 实测（DSH 0.1.5-rc.2）：`session/new|resume` 的 `configOptions` 含
+ * 实测（DSH 0.2.1-rc.2；0.1.5-rc.2 形态一致）：`session/new|resume` 的 `configOptions` 含
  * `{ id: "model", category: "model", type: "select" }`，其选项 `value` 为
  * **`["<provider>","<model>"]` 的 JSON 字符串**（按 provider 分组）；
  * 经 `session/set_config_option { configId: "model", value }` 生效（返回刷新后的
  * configOptions）。本模块只做解析与选择，不做网络/进程操作。
  */
 
-/** ACP 模型配置项 id（实测值；0.1.5-rc.2）。 */
+/** ACP 模型配置项 id（实测值；0.2.1-rc.2）。 */
 export const DSH_MODEL_CONFIG_ID = "model";
 /** `session/set_config_option` 超时（同 reasoning：会话级有状态设置）。 */
 export const MODEL_SET_TIMEOUT_MS = 5_000;

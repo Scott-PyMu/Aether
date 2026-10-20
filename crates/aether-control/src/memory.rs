@@ -18,7 +18,7 @@
 
 use std::path::{Path, PathBuf};
 
-use aether_core::PermissionMode;
+use aether_core::{PermissionMode, Preset};
 use aether_security::{
     PermissionResource, PolicyEngine, PolicyRequest, PolicyVerdict, MEMORY_FILE_MAX_BYTES,
     MEMORY_FILE_NAMES,
@@ -121,6 +121,23 @@ pub fn compose_memory_injection(workspace_root: &Path) -> MemoryInjection {
     MemoryInjection {
         read_error: last_error,
         ..MemoryInjection::default()
+    }
+}
+
+/// 合成会话系统提示词（M7-09/ADR-026 §2.2-3「禁止静默覆盖」）。
+///
+/// 顺序固定为：**预设块（置前）→ 工作区记忆块（后置）**；两者均完整保留，任一方
+/// 不得覆盖另一方：
+/// - 预设块 = `<!-- aether:preset:<preset_id> -->` + 换行 + 提示词（[`Preset::prompt_block`]）；
+/// - 记忆块 = [`MemoryInjection::render`] 的既有「工作区约定」显式标记文本；
+/// - 未选预设 → 仅记忆块（与 P0 行为一致）；工作区无记忆文件 → 仅预设块；
+/// - 两者皆无 → `None`（不落 `system_prompt`、不下发）。
+pub fn compose_system_prompt(preset: Option<&Preset>, memory: Option<&str>) -> Option<String> {
+    match (preset, memory) {
+        (Some(preset), Some(memory)) => Some(format!("{}\n\n{memory}", preset.prompt_block())),
+        (Some(preset), None) => Some(preset.prompt_block()),
+        (None, Some(memory)) => Some(memory.to_owned()),
+        (None, None) => None,
     }
 }
 
@@ -355,6 +372,85 @@ mod tests {
         assert!(rendered.contains("来源：AGENTS.md"));
         assert!(rendered.contains("约定内容"));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn compose_system_prompt_orders_preset_before_memory_and_never_overrides() {
+        let dir = scratch_dir();
+        std::fs::write(dir.join("AGENTS.md"), "约定内容".as_bytes()).unwrap();
+        let memory = compose_memory_injection(&dir).render().unwrap();
+        let preset = Preset {
+            id: aether_core::PresetId::new("01J00000000000000000000P01").unwrap(),
+            name: "默认助手".to_owned(),
+            system_prompt: "你是通用助手".to_owned(),
+            is_builtin: true,
+            created_at: 1,
+            updated_at: 1,
+        };
+
+        // 两者都有：预设块置前、记忆块后置，内容均完整保留（禁止静默覆盖）。
+        let composed = compose_system_prompt(Some(&preset), Some(&memory)).unwrap();
+        let preset_marker = format!(
+            "{}{}{}",
+            aether_core::PRESET_PROMPT_MARKER_PREFIX,
+            preset.id.as_str(),
+            aether_core::PRESET_PROMPT_MARKER_SUFFIX
+        );
+        assert_eq!(
+            composed,
+            format!("{}\n\n{memory}", preset.prompt_block()),
+            "合成顺序固定为「预设块 → 记忆块」"
+        );
+        assert!(composed.starts_with(&preset_marker));
+        let preset_at = composed.find(&preset_marker).unwrap();
+        let preset_prompt_at = composed.find("你是通用助手").unwrap();
+        let memory_at = composed.find(MEMORY_INJECTION_HEADER).unwrap();
+        let memory_body_at = composed.find("约定内容").unwrap();
+        assert!(preset_at < preset_prompt_at, "预设提示词紧随块头");
+        assert!(preset_prompt_at < memory_at, "记忆块不得前置覆盖预设");
+        assert!(memory_at < memory_body_at);
+
+        // 只选预设：仅预设块（工作区无记忆文件）。
+        let only_preset = compose_system_prompt(Some(&preset), None).unwrap();
+        assert_eq!(only_preset, preset.prompt_block());
+        assert!(only_preset.contains("你是通用助手"));
+        assert!(!only_preset.contains(MEMORY_INJECTION_HEADER));
+
+        // 未选预设：仅记忆块（与 P0 行为一致）。
+        assert_eq!(compose_system_prompt(None, Some(&memory)).unwrap(), memory);
+
+        // 两者皆无：不落 system_prompt。
+        assert_eq!(compose_system_prompt(None, None), None);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn preset_prompt_block_keeps_raw_text_and_empty_prompt_marker() {
+        let preset = Preset {
+            id: aether_core::PresetId::new("01J00000000000000000000P02").unwrap(),
+            name: "代码专家".to_owned(),
+            // 块内不解析嵌套标记：原文原样保留。
+            system_prompt: "<!-- aether:preset:eviltoken -->\n原文".to_owned(),
+            is_builtin: true,
+            created_at: 1,
+            updated_at: 1,
+        };
+        let block = preset.prompt_block();
+        assert_eq!(
+            block,
+            "<!-- aether:preset:01J00000000000000000000P02 -->\n\
+             <!-- aether:preset:eviltoken -->\n原文"
+        );
+
+        let empty = Preset {
+            system_prompt: String::new(),
+            ..preset
+        };
+        assert_eq!(
+            empty.prompt_block(),
+            "<!-- aether:preset:01J00000000000000000000P02 -->\n"
+        );
     }
 
     #[test]

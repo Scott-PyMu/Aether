@@ -249,6 +249,7 @@ impl Harness {
                 model: None,
                 thinking_depth: None,
                 permission_mode: None,
+                preset_id: None,
             })
             .expect("session_create");
         SessionId::new(value["id"].as_str().expect("会话 id")).expect("会话 id 形态")

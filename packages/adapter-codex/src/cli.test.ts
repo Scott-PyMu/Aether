@@ -8,6 +8,8 @@ import {
   buildCodexArgs,
   CODEX_CONFIG_MARKER,
   codexSandbox,
+  developerInstructionsLimit,
+  encodeDeveloperInstructions,
   materializeCodexProviderConfig,
   normalizeCommand,
   renderCodexProviderConfig,
@@ -55,6 +57,36 @@ describe("buildCodexArgs", () => {
   it("extraArgs 前置（node 脚本注入顺序）", () => {
     const args = buildCodexArgs({ ...config, extraArgs: ["cli.mjs"] }, { prompt: "hi", timeoutMs: 1 });
     expect(args[0]).toBe("cli.mjs");
+  });
+});
+
+describe("M7-09 系统提示词下发（ADR-026）", () => {
+  it("developer_instructions 以 TOML 基本字符串注入（新会话/resume 同口径）；缺省不注入", () => {
+    const prompt =
+      "<!-- aether:preset:01J00000000000000000000P02 -->\n你是资深软件工程师\n\n# 工作区约定（记忆文件注入，优先级低于系统提示）\n来源：AGENTS.md\n\n约定";
+    for (const threadId of [undefined, "thr_1"]) {
+      const args = buildCodexArgs(config, {
+        threadId: threadId ?? null,
+        prompt: "hi",
+        timeoutMs: 1,
+        developerInstructions: prompt,
+      });
+      const index = args.indexOf("-c");
+      const overrides = args.filter((_arg, position) => position > 0 && args[position - 1] === "-c");
+      const instruction = overrides.find((arg) => arg.startsWith("developer_instructions="));
+      expect(instruction).toBeTruthy();
+      const value = String(instruction).slice("developer_instructions=".length);
+      expect(JSON.parse(value)).toBe(prompt);
+      expect(index).toBeGreaterThanOrEqual(0);
+    }
+    const absent = buildCodexArgs(config, { prompt: "hi", timeoutMs: 1 });
+    expect(absent.some((arg) => arg.startsWith("developer_instructions="))).toBe(false);
+  });
+
+  it("平台长度上限与编码（win32 保守 6000；其余 30000）", () => {
+    expect(developerInstructionsLimit("win32")).toBe(6000);
+    expect(developerInstructionsLimit("linux")).toBe(30000);
+    expect(encodeDeveloperInstructions('a"b\\c\n')).toBe('"a\\"b\\\\c\\n"');
   });
 });
 

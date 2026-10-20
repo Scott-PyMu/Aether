@@ -73,6 +73,18 @@ pub enum IpcErrorCode {
     ProviderAuthFailed,
     /// 供应商返回非授权类错误（M7-06/ADR-024：其余 4xx/5xx；message 含状态码）。
     ProviderError,
+    /// 预设不存在（M7-09/ADR-026：`preset_update` / `preset_delete` / `session_create`
+    /// 的 `preset_id` 按 id 查无；UI-UX §5 文案「预设不存在，已刷新列表」）。
+    PresetNotFound,
+    /// 内置预设禁止删除（M7-09/ADR-026：`preset_delete` 且 `is_builtin=1`；
+    /// 内置**可编辑**，仅删除受保护——与内置供应商语义对齐）。
+    BuiltinPresetUndeletable,
+    /// 工作区 id 不存在（M7-08/ADR-026 §2.1-1 / ADR-006 附录 B：
+    /// `workspace_update` / `workspace_delete` / `session_workspace_assign` 按 id 查无）。
+    WorkspaceNotFound,
+    /// 删除工作区时存在会话引用（M7-08/ADR-026 §2.1-1：**不级联、不改派**；
+    /// message 含引用计数，UI 提示「仍有 N 个会话引用」）。
+    WorkspaceInUse,
 }
 
 impl IpcErrorCode {
@@ -105,6 +117,10 @@ impl IpcErrorCode {
             Self::ProviderUnreachable => "provider_unreachable",
             Self::ProviderAuthFailed => "provider_auth_failed",
             Self::ProviderError => "provider_error",
+            Self::PresetNotFound => "preset_not_found",
+            Self::BuiltinPresetUndeletable => "builtin_preset_undeletable",
+            Self::WorkspaceNotFound => "workspace_not_found",
+            Self::WorkspaceInUse => "workspace_in_use",
         }
     }
 }
@@ -307,6 +323,47 @@ impl IpcError {
         Self::new(
             IpcErrorCode::ProviderError,
             format!("供应商返回错误（{status_text}）：{detail}"),
+        )
+    }
+
+    /// M7-09/ADR-026：预设不存在（按 id 查无；UI-UX §5 文案「预设不存在，已刷新列表」）。
+    pub fn preset_not_found(preset_id: &str) -> Self {
+        Self::new(
+            IpcErrorCode::PresetNotFound,
+            format!("预设不存在（{preset_id}）；已刷新预设列表"),
+        )
+    }
+
+    /// M7-09/ADR-026：内置预设禁止删除（硬约束；不得以 UI 隐藏代替）。
+    ///
+    /// 内置**可编辑**（名称/提示词可改，编辑差异入审计），仅删除受保护。
+    pub fn builtin_preset_undeletable(preset_id: &str) -> Self {
+        Self::at_field(
+            IpcErrorCode::BuiltinPresetUndeletable,
+            "preset_id",
+            format!("内置预设不可删除（{preset_id}）；可编辑其名称与系统提示词"),
+        )
+    }
+
+    /// M7-08/ADR-026 §2.1-1：工作区 id 不存在（UI-UX §5 文案「工作区不存在，已刷新」）。
+    pub fn workspace_not_found(workspace_id: &str) -> Self {
+        Self::new(
+            IpcErrorCode::WorkspaceNotFound,
+            format!("工作区不存在（{workspace_id}）；已刷新左栏树"),
+        )
+    }
+
+    /// M7-08/ADR-026 §2.1-1：删除工作区时存在会话引用（不级联、不改派）。
+    ///
+    /// UI-UX §5 文案「仍有 {count} 个会话引用该工作区」；提供「先改派」入口。
+    pub fn workspace_in_use(workspace_id: &str, sessions: u64) -> Self {
+        Self::at_field(
+            IpcErrorCode::WorkspaceInUse,
+            "workspace_id",
+            format!(
+                "仍有 {sessions} 个会话引用该工作区（{workspace_id}）；请先改派会话再删除\
+                 （不级联、不自动改派）"
+            ),
         )
     }
 

@@ -54,6 +54,7 @@ async fn seed_runtime_and_session(queue: &aether_store::WriteQueue) -> Session {
         model: None,
         thinking_depth: aether_core::THINKING_DEPTH_DEFAULT,
         permission_mode: PermissionMode::default(),
+        preset_id: None,
         system_prompt: None,
         config: serde_json::json!({}),
         token_usage: TokenUsage::default(),

@@ -311,7 +311,7 @@ optIn(
     "--dsh-model",
     process.env.AETHER_REAL_DSH_MODEL ?? "deepseek-v4-pro",
     "--dsh-version",
-    process.env.AETHER_REAL_DSH_VERSION ?? "0.1.5-rc.2",
+    process.env.AETHER_REAL_DSH_VERSION ?? "0.2.1-rc.2",
     "--runs",
     realRuns,
     "--timeout-ms",

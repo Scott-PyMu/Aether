@@ -12,14 +12,16 @@ use super::dto::{
     AppRestartRequest, ArchiveExportRequest, ArtifactAddRequest, ArtifactRemoveRequest,
     ArtifactsListRequest, AuditExportRequest, AuditQueryRequest, BackupCreateRequest,
     BackupRestoreRequest, ExportDiagnosticsRequest, MessagesPageRequest, PermissionResolveRequest,
-    PermissionsPendingRequest, ProviderCreateRequest, ProviderDeleteRequest, ProviderModelAddRequest,
+    PermissionsPendingRequest, PresetAddRequest, PresetDeleteRequest, PresetUpdateRequest,
+    PresetsListRequest, ProviderCreateRequest, ProviderDeleteRequest, ProviderModelAddRequest,
     ProviderModelToggleRequest, ProviderModelsFetchRequest, ProviderTestRequest, ProviderToggleRequest,
     ProviderUpdateRequest, ProvidersListRequest,
     RuleAddRequest, RuleDeleteRequest, RuleToggleRequest, RuleUpdateRequest, RunRetryRequest,
     RuntimeDisableRequest, RuntimeEnableRequest, RuntimeRetryRequest, SessionCreateRequest,
     SessionExportRequest,
     SessionIdRequest, SessionListRequest, SessionPermissionModeSetRequest, SessionSendRequest,
-    SettingsGetRequest, SettingsSetRequest, WorkspaceSetRequest,
+    SessionWorkspaceAssignRequest, SettingsGetRequest, SettingsSetRequest, WorkspaceCreateRequest,
+    WorkspaceDeleteRequest, WorkspaceSetRequest, WorkspaceUpdateRequest, WorkspacesListRequest,
 };
 use super::error::IpcError;
 use super::path::ArtifactPath;
@@ -191,6 +193,42 @@ pub trait IpcBackend: Send + Sync + 'static {
         Err(IpcError::not_implemented("workspace_set"))
     }
 
+    /// M7-08/ADR-026 §2.1-1：工作区树清单（工作区 + 会话计数；未分配会话以合成组
+    /// 「默认（数据目录）」呈现，不建 `workspaces` 行）。
+    fn workspaces_list(&self, _request: &WorkspacesListRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("workspaces_list"))
+    }
+
+    /// M7-08/ADR-026 §2.1-1：新建工作区（canonicalize + 存在目录 + 同步盘拒绝 +
+    /// 同根路径唯一性）；`canonical_root_path` 为命令层校验结果。
+    fn workspace_create(
+        &self,
+        _request: &WorkspaceCreateRequest,
+        _canonical_root_path: &Path,
+    ) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("workspace_create"))
+    }
+
+    /// M7-08/ADR-026 §2.1-1：工作区改名（`root_path` 不可变；查无 → `workspace_not_found`）。
+    fn workspace_update(&self, _request: &WorkspaceUpdateRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("workspace_update"))
+    }
+
+    /// M7-08/ADR-026 §2.1-1：删除工作区（存在会话引用 → `workspace_in_use`；
+    /// 只删行、不删磁盘文件；写审计）。
+    fn workspace_delete(&self, _request: &WorkspaceDeleteRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("workspace_delete"))
+    }
+
+    /// M7-08/ADR-026 §2.1-1：会话改派工作区（在途 → `session_busy`；记忆注入源切换；
+    /// **权限基准不重算**——R15/不变量 11）。
+    fn session_workspace_assign(
+        &self,
+        _request: &SessionWorkspaceAssignRequest,
+    ) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("session_workspace_assign"))
+    }
+
     /// ADR-010/M3-09：会话引用清单（按 `created_at` 升序；不存在会话 → `invalid_value`）。
     fn artifacts_list(&self, _request: &ArtifactsListRequest) -> Result<Value, IpcError> {
         Err(IpcError::not_implemented("artifacts_list"))
@@ -249,6 +287,26 @@ pub trait IpcBackend: Send + Sync + 'static {
         _request: &ProviderModelToggleRequest,
     ) -> Result<Value, IpcError> {
         Err(IpcError::not_implemented("provider_model_toggle"))
+    }
+
+    /// M7-09/ADR-026：Agent 预设清单（无参数；内置在前、创建时间升序）。
+    fn presets_list(&self, _request: &PresetsListRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("presets_list"))
+    }
+
+    /// M7-09/ADR-026：新增自定义预设（名称 ≤64 字符、提示词 ≤32KiB）。
+    fn preset_add(&self, _request: &PresetAddRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("preset_add"))
+    }
+
+    /// M7-09/ADR-026：更新预设（内置可编辑；`preset_id` 不存在 → `preset_not_found`）。
+    fn preset_update(&self, _request: &PresetUpdateRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("preset_update"))
+    }
+
+    /// M7-09/ADR-026：删除预设（内置 → `builtin_preset_undeletable`）。
+    fn preset_delete(&self, _request: &PresetDeleteRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("preset_delete"))
     }
 
     /// M7-06/ADR-024：供应商连通性测试（真实网络请求；总超时 10s / 连接 5s；

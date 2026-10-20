@@ -45,6 +45,7 @@ import { ModelSelector } from "./ModelSelector";
 import { permissionIpc as productionPermissionIpc, type PermissionIpc } from "./permission";
 import { PermissionModeSelector } from "./PermissionModeSelector";
 import { PermissionPanel } from "./PermissionPanel";
+import { presetsIpc as productionPresetsIpc, type PresetEntry, type PresetsIpc } from "./presets";
 import { providersIpc as productionProvidersIpc, type ProvidersIpc } from "./providers";
 import { RuntimePanel } from "./RuntimePanel";
 import {
@@ -83,6 +84,8 @@ import { generateUlid } from "./ulid";
 import { useSessionEvents } from "./useSessionEvents";
 import { VirtualList } from "./VirtualList";
 import { WorkbenchTabs } from "./WorkbenchTabs";
+import { workspacesIpc as productionWorkspacesIpc, type WorkspacesIpc } from "./workspace";
+import { WorkspaceTree } from "./WorkspaceTree";
 
 /** 历史消息加载条数（`messages_page` 最近一页；与 EventStore 重载默认一致）。 */
 export const DEFAULT_HISTORY_LIMIT = 500;
@@ -137,6 +140,22 @@ export interface SessionWorkbenchProps {
    * 测试注入替身以覆盖重启恢复与损坏回退）。
    */
   settingsIpc?: SettingsIpc;
+  /**
+   * M7-09/ADR-026：Agent 预设 IPC（新建会话入口的预设选择数据源；
+   * 缺省 = 生产 Tauri 实现；测试注入替身）。
+   */
+  presetsIpc?: PresetsIpc;
+  /** M7-09/ADR-026：新建会话入口当前选中的预设（由 `App` 持有，供设置页「使用中」标记）。 */
+  activePresetId?: string | null;
+  /** M7-09/ADR-026：预设选择变更（缺省 = 本地只读展示）。 */
+  onActivePresetChange?: (presetId: string | null) => void;
+  /** M7-09/ADR-026：预设清单版本（设置页增改删后递增 → 重新拉取清单）。 */
+  presetsVersion?: number;
+  /**
+   * M7-08/ADR-026 §2.1：左栏工作区树 IPC（工作区管理五命令；缺省 = 生产实现；
+   * 测试注入替身以覆盖创建/改名/删除/改派与错误路径）。
+   */
+  workspacesIpc?: WorkspacesIpc;
 }
 
 function mergeMessages(previous: MessageRow[], incoming: MessageRow[]): MessageRow[] {
@@ -181,6 +200,11 @@ export function SessionWorkbench({
   archiveIpc: archiveIpcProp = productionArchiveIpc,
   eventListener = defaultAetherEventListener,
   settingsIpc: settingsIpcProp = productionSettingsIpc,
+  presetsIpc: presetsIpcProp = productionPresetsIpc,
+  activePresetId = null,
+  onActivePresetChange,
+  presetsVersion = 0,
+  workspacesIpc: workspacesIpcProp = productionWorkspacesIpc,
 }: SessionWorkbenchProps) {
   const [runtimes, setRuntimes] = useState<RuntimeInfo[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
@@ -206,6 +230,11 @@ export function SessionWorkbench({
   /** M3-11：输入区模型选择（作用于新建会话；与手动输入共用 `modelDraft` 草稿字段）。 */
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const [titleDraft, setTitleDraft] = useState("");
+  /**
+   * M7-09/ADR-026：Agent 预设清单（新建会话入口可选；读取失败静默降级为空清单——
+   * 预设为可选能力，不阻断工作台）。
+   */
+  const [presets, setPresets] = useState<PresetEntry[]>([]);
   const [draft, setDraft] = useState("");
   /**
    * M7-06/ADR-024：随消息附带的文件引用（待发送；`@` 入口 + 拖拽添加，≤32 条；
@@ -301,6 +330,25 @@ export function SessionWorkbench({
       active = false;
     };
   }, [settingsIpcProp]);
+  // M7-09/ADR-026：预设清单（新建会话入口可选；失败静默降级——不阻断会话创建）。
+  useEffect(() => {
+    let active = true;
+    void presetsIpcProp
+      .listPresets()
+      .then((list) => {
+        if (active) {
+          setPresets(list);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setPresets([]);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [presetsIpcProp, presetsVersion]);
   /** M7-04：打开的标签会话（按标签顺序；过滤已不存在的会话）。 */
   const tabSessions = useMemo(() => {
     const byId = new Map(sessions.map((session) => [session.id, session]));
@@ -619,6 +667,12 @@ export function SessionWorkbench({
     }
     const title = titleDraft.trim() || `会话 ${new Date().toLocaleTimeString()}`;
     const model = modelDraft.trim();
+    // M7-09/ADR-026：所选预设（清单刷新后已消失的 id 不再透传，避免无谓的
+    // `preset_not_found`；服务端仍为权威校验方）。
+    const selectedPresetId =
+      activePresetId && presets.some((preset) => preset.id === activePresetId)
+        ? activePresetId
+        : null;
     const startedAt = performance.now();
     try {
       const created = await ipc.createSession({
@@ -630,6 +684,8 @@ export function SessionWorkbench({
         thinking_depth: thinkingDepth,
         // M6-01/ADR-014：会话级权限模式随 `session_create` 透传（缺省 workspace_write）。
         permission_mode: permissionMode,
+        // M7-09/ADR-026：预设随 `session_create` 透传（合成提示词由核心完成）。
+        ...(selectedPresetId ? { preset_id: selectedPresetId } : {}),
       });
       // M3-10：同步判定路径非阻断警告（delta 等；延迟判定路径无警告，以回显为准）。
       setThinkingWarning(thinkingWarningOf(created.warnings));
@@ -650,11 +706,13 @@ export function SessionWorkbench({
     }
   }, [
     applyLayout,
+    activePresetId,
     autoRoute,
     ipc,
     layout,
     modelDraft,
     permissionMode,
+    presets,
     refreshSessions,
     reportError,
     runtimes,
@@ -943,6 +1001,17 @@ export function SessionWorkbench({
       />
       <div className="workbench-columns" data-split={String(splitSession !== null)}>
         <aside className="workbench-sidebar">
+          {/* M7-08/ADR-026 §2.1：工作区树（分组/计数/折叠 + 创建/改名/删除/改派；
+              锚点 `workspace-tree` / `workspace-item` / `workspace-create`）。 */}
+          <WorkspaceTree
+            ipc={workspacesIpcProp}
+            sessions={sessions}
+            activeSessionId={activeSessionId}
+            onOpenSession={openSessionView}
+            onAssigned={() => {
+              void refreshSessionsRef.current();
+            }}
+          />
           <h2 className="workbench-title">会话</h2>
           <ul className="session-list" data-testid="session-list">
             {sessionGroups.map(({ group, sessions: groupedSessions }) => (
@@ -1071,6 +1140,23 @@ export function SessionWorkbench({
               value={modelDraft}
               onChange={(event) => onModelDraftChange(event.target.value)}
             />
+            {/* M7-09/ADR-026：新建会话入口可选预设（合成提示词由核心按
+                「预设块 → 工作区约定块」完成；失败不阻断会话创建以外的路径）。 */}
+            <select
+              data-testid="session-preset-select"
+              aria-label="Agent 预设"
+              value={activePresetId ?? ""}
+              onChange={(event) =>
+                onActivePresetChange?.(event.target.value === "" ? null : event.target.value)
+              }
+            >
+              <option value="">不使用预设</option>
+              {presets.map((preset) => (
+                <option key={preset.id} value={preset.id}>
+                  {preset.is_builtin ? `${preset.name}（内置）` : preset.name}
+                </option>
+              ))}
+            </select>
             <button type="button" data-testid="session-create-submit" onClick={onCreateSession}>
               新建会话
             </button>

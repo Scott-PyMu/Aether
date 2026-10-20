@@ -19,14 +19,17 @@ use crate::ipc::dto::{
     ArtifactsListRequest, AuditExportRequest, AuditQueryRequest, BackupCreateRequest,
     BackupListRequest, BackupRestoreRequest, BackupSource, ExportDiagnosticsRequest, HealthRequest,
     MessagesPageRequest, PermissionDecision, PermissionResolveRequest, PermissionsPendingRequest,
+    PresetAddRequest, PresetDeleteRequest, PresetUpdateRequest, PresetsListRequest,
     ProviderCreateRequest, ProviderDeleteRequest, ProviderModelAddRequest, ProviderModelToggleRequest,
     ProviderToggleRequest, ProviderType, ProviderUpdateRequest, ProvidersListRequest, RefPickKind,
     RefPickRequest, RuleAddRequest, RuleDeleteRequest, RuleToggleRequest, RuleUpdateRequest,
     RulesListRequest, RunRetryRequest, RuntimeDisableRequest, RuntimeEnableRequest,
     RuntimeRetryRequest, SessionCreateRequest, SessionIdRequest, SessionListRequest,
-    SessionPermissionModeSetRequest, SessionSendRequest, SessionStatus, SettingsGetRequest,
+    SessionPermissionModeSetRequest, SessionSendRequest, SessionStatus,
+    SessionWorkspaceAssignRequest, SettingsGetRequest,
     SettingsSetRequest, StartupGetRequest,
-    StartupMigrateRequest, StartupPickTargetRequest, WorkspaceSetRequest,
+    StartupMigrateRequest, StartupPickTargetRequest, WorkspaceCreateRequest,
+    WorkspaceDeleteRequest, WorkspaceSetRequest, WorkspaceUpdateRequest, WorkspacesListRequest,
 };
 use crate::ipc::error::IpcError;
 use crate::json_payload::JsonPayload;
@@ -112,6 +115,11 @@ pub fn builder<R: tauri::Runtime>() -> Builder<R> {
         .typ::<RuntimeEnableRequest>()
         .typ::<RuntimeDisableRequest>()
         .typ::<WorkspaceSetRequest>()
+        .typ::<WorkspacesListRequest>()
+        .typ::<WorkspaceCreateRequest>()
+        .typ::<WorkspaceUpdateRequest>()
+        .typ::<WorkspaceDeleteRequest>()
+        .typ::<SessionWorkspaceAssignRequest>()
         .typ::<RefPickRequest>()
         .typ::<RefPickKind>()
         .typ::<ArtifactsListRequest>()
@@ -125,6 +133,10 @@ pub fn builder<R: tauri::Runtime>() -> Builder<R> {
         .typ::<ProviderToggleRequest>()
         .typ::<ProviderModelAddRequest>()
         .typ::<ProviderModelToggleRequest>()
+        .typ::<PresetsListRequest>()
+        .typ::<PresetAddRequest>()
+        .typ::<PresetUpdateRequest>()
+        .typ::<PresetDeleteRequest>()
         .typ::<SessionSummary>()
         .typ::<SessionWarning>()
         .typ::<ExportDiagnosticsRequest>()

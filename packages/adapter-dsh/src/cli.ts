@@ -9,7 +9,7 @@
  * - `--dsh-profile <name>`（默认 acp）
  * - `--dsh-provider <name>` / `--dsh-model <name>`（overlay 覆写）
  * - `--dsh-version <ver>`（显式版本；缺省从 dsh-bin 向上解析 package.json）
- * - `--dsh-version-pin <ver>`（默认 0.1.5-rc.2）
+ * - `--dsh-version-pin <ver>`（默认 0.2.1-rc.2）
  * - `--dsh-provider-config <inline-json|file>`（`llm-pi-ai` composition base；核心传入）
  * - `--dsh-arg <arg>`（可重复；追加启动参数）
  * - `--dsh-patch <path>`（overlay 路径；缺省生成到 DSH_HOME）

@@ -59,6 +59,12 @@ pub const EMBEDDED_MIGRATIONS: &[MigrationFile] = &[
         name: "0006_runtime_enabled.sql",
         bytes: include_bytes!("../../../migrations/0006_runtime_enabled.sql"),
     },
+    // M7-09/ADR-026：presets 表 + 3 条内置播种 + sessions.preset_id（预设生效来源）。
+    MigrationFile {
+        version: 7,
+        name: "0007_presets.sql",
+        bytes: include_bytes!("../../../migrations/0007_presets.sql"),
+    },
 ];
 
 /// 迁移文件 sha256（小写十六进制）。

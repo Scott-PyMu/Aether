@@ -21,7 +21,7 @@ import {
   type AdapterRuntimeInfo,
   type EnvelopeContext,
 } from "@aether/adapter-sdk";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { DshAcpClient, AcpError, type AcpUpdateParams } from "./dsh-acp-client";
@@ -37,8 +37,12 @@ import {
 } from "./dsh-model";
 import {
   checkVersionLatch,
+  clearPromptDir,
   materializePlugin,
+  materializePromptPlugin,
   PLUGIN_CONTRACT,
+  promptFilePath,
+  PROMPT_DIR_ENV,
   resolveDshVersion,
   writePatchFile,
 } from "./dsh-plugin";
@@ -58,14 +62,14 @@ export const RUNTIME_CAPABILITIES: readonly string[] = [
   "tools.list",
   "permission.resolve",
   // M3-10/ADR-010：档位 0–4 → ACP `session/set_config_option`（`reasoning_effort`，
-  // category=thought_level；DSH 0.1.5-rc.2 默认支持，映射表见 M3-10 证据）。
+  // category=thought_level；DSH 0.2.1-rc.2 实测支持，映射表见 M3-10 证据）。
   "thinking_depth",
   // M7-03/ADR-017：受控中断 + Mode R 原生恢复（ACP `session/resume`；
   // M2-11 真实证据：`real-dsh-*` Mode R PASS）。
   "pause_resume",
 ];
 
-/** DSH ACP 思考/推理配置项 id（`category=thought_level`；0.1.5-rc.2 实测）。 */
+/** DSH ACP 思考/推理配置项 id（`category=thought_level`；0.2.1-rc.2 实测）。 */
 export const DSH_REASONING_CONFIG_ID = "reasoning_effort";
 /** `session/set_config_option` 请求超时（适配器内部调用，非 D6 方法表）。 */
 export const REASONING_SET_TIMEOUT_MS = 5_000;
@@ -211,6 +215,16 @@ export function toolDefinitions(observed?: ReadonlySet<string>): ToolDefinition[
   }));
 }
 
+/** 删除侧信道提示词文件（M7-09/ADR-027；尽力而为，不存在时忽略）。 */
+function removePromptFile(file: string | undefined): void {
+  if (!file) return;
+  try {
+    rmSync(file, { force: true });
+  } catch {
+    /* 临时文件清理失败不影响功能（OS 临时目录由系统回收）。 */
+  }
+}
+
 export interface DshCliConfig {
   /** `@deepseek-ai/dsh/lib/bin.js`（生产由核心物化路径）。 */
   bin: string;
@@ -228,7 +242,7 @@ export interface DshCliConfig {
   extraArgs: string[];
   /** 工作目录（ACP `session/new` 的 cwd）。 */
   workspace: string;
-  /** 版本门闩 pin（默认 `0.1.5-rc.2`）。 */
+  /** 版本门闩 pin（默认 `0.2.1-rc.2`）。 */
   versionPin: string;
   /** 显式 DSH 版本（测试/无包路径场景；缺省从 `bin` 向上解析 package.json）。 */
   dshVersion?: string;
@@ -278,6 +292,14 @@ interface DshSession {
   nativeId: string;
   resumed: boolean;
   model?: string;
+  /**
+   * M7-09/ADR-027：`session.create.system_prompt`（预设块 + 工作区约定块合成结果）。
+   * 经侧信道文件 `<promptDir>/<encodeURIComponent(sessionId)>.md` 注入 DSH 插件
+   * （`aether-dsh-prompt`）。
+   */
+  systemPrompt?: string;
+  /** 侧信道提示词文件路径（`undefined` = 未携带系统提示词）。 */
+  systemPromptFile?: string;
   /** M3-10/ADR-010：会话级思考深度（0–4；override 优先，仅本次 run）。 */
   thinkingDepth?: number;
   /** `session/new|resume` 广告的 `reasoning_effort` 具体值（模型级；空 = 不支持）。 */
@@ -318,6 +340,11 @@ export class DshAdapter {
   private server: DshAcpClient | null = null;
   private channel: DeltaChannel | null = null;
   private pluginHello: PluginHello | null = null;
+  /**
+   * M7-09/ADR-027：系统提示词侧信道目录（`<deltaDir>/prompts`；初始化时确定，
+   * 经 `AETHER_DSH_PROMPT_DIR` 传给注入插件）。
+   */
+  private promptDir: string | null = null;
   private initializeInfo: Record<string, unknown> | null = null;
   private initializePromise: Promise<Record<string, unknown>> | null = null;
   private shuttingDown = false;
@@ -437,8 +464,18 @@ export class DshAdapter {
     const effectiveModel = envProvider?.defaultModel ?? cli.model;
 
     // DoD2：插件落盘（独立包名 + 无 BOM 字节断言）与 overlay 生成。
+    // M7-09/ADR-027：同时落盘系统提示词注入插件（agent 作用域 section）与侧信道目录。
+    const promptDir = join(deltaDir, "prompts");
+    mkdirSync(promptDir, { recursive: true });
+    // 启动清理上次进程残留的提示词副本（会话恢复时由核心重新下发写入）。
+    const stalePrompts = clearPromptDir(promptDir);
+    if (stalePrompts > 0) {
+      this.options.stderr?.(`[dsh] 清理残留系统提示词侧信道文件 ${stalePrompts} 个`);
+    }
+    this.promptDir = promptDir;
     try {
       materializePlugin(profileDir);
+      materializePromptPlugin(profileDir);
     } catch (error) {
       throw new RpcError(
         ERROR_CODES.INTERNAL_ERROR,
@@ -478,6 +515,7 @@ export class DshAdapter {
       workspace: cli.workspace,
       deltaFile,
       extraArgs: cli.extraArgs,
+      env: { [PROMPT_DIR_ENV]: promptDir },
       onUpdate: (params) => this.onAcpUpdate(params),
       onPermissionRequest: (params, requestId) => this.onPermissionRequest(params, requestId),
       onStderr: (line) => this.options.stderr?.(line),
@@ -572,6 +610,7 @@ export class DshAdapter {
       model?: unknown;
       native_id?: unknown;
       thinking_depth?: unknown;
+      system_prompt?: unknown;
     };
     const requested = input.native_id;
     if (requested !== undefined && (typeof requested !== "string" || requested.length === 0)) {
@@ -619,6 +658,40 @@ export class DshAdapter {
     const reasoningValues = dshReasoningValuesFrom(configOptions);
     // M7-06/ADR-024 DoD4：`session/new|resume` 广告的模型选项（provider×model）。
     const modelOptionEntries = modelOptionEntriesFrom(configOptions);
+    // M7-09/ADR-027：合成系统提示词写入侧信道文件（插件按 `agent.id` 读取；
+    // 写入发生在 `session/new|resume` 返回后、首个提示词组装前）。
+    const systemPrompt =
+      typeof input.system_prompt === "string" && input.system_prompt.length > 0
+        ? input.system_prompt
+        : undefined;
+    let systemPromptFile: string | undefined;
+    // ADR-027 v1.1：`has_system_prompt` = 核心已下发；`system_prompt_effective`
+    // = 注入是否生效（null=未下发 / true=侧信道写入成功 / false=写入失败或目录缺失）。
+    let systemPromptEffective: boolean | null = null;
+    if (systemPrompt !== undefined) {
+      if (this.promptDir !== null) {
+        const file = promptFilePath(this.promptDir, sessionId);
+        try {
+          writeFileSync(file, systemPrompt, "utf8");
+          systemPromptFile = file;
+          systemPromptEffective = true;
+        } catch (error) {
+          systemPromptEffective = false;
+          this.options.stderr?.(
+            `[dsh] 系统提示词侧信道写入失败（继续会话；注入不生效）：${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      } else {
+        systemPromptEffective = false;
+        this.options.stderr?.("[dsh] 侧信道目录未初始化：系统提示词注入跳过（继续会话）");
+      }
+    } else if (this.promptDir !== null) {
+      // 恢复会话但核心未下发提示词：清理上次进程可能残留的同 id 侧信道文件，
+      // 避免旧提示词在下一次组装时被意外注入。
+      removePromptFile(promptFilePath(this.promptDir, sessionId));
+    }
     const session: DshSession = {
       id: sessionId,
       nativeId: sessionId,
@@ -627,6 +700,8 @@ export class DshAdapter {
       ...(thinkingDepth !== undefined ? { thinkingDepth } : {}),
       ...(reasoningValues.length > 0 ? { reasoningValues } : {}),
       ...(modelOptionEntries.length > 0 ? { modelOptionEntries } : {}),
+      ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+      ...(systemPromptFile !== undefined ? { systemPromptFile } : {}),
       clientMsgIds: new Map(),
       runs: new Map(),
       observedTools: new Set(),
@@ -646,6 +721,10 @@ export class DshAdapter {
       native_id: session.nativeId,
       resumed: session.resumed,
       model: model ?? this.options.cli.model ?? null,
+      // M7-09/ADR-027：`has_system_prompt` = 是否下发（不含正文）；
+      // `system_prompt_effective` = 是否注入生效（v1.1 三态，不含正文）。
+      has_system_prompt: systemPrompt !== undefined,
+      system_prompt_effective: systemPromptEffective,
       created_at: Date.now(),
     };
   }
@@ -948,6 +1027,8 @@ export class DshAdapter {
       run.interrupted = true;
     }
     this.server?.request("session/close", { sessionId: session.id }, 5_000).catch(() => undefined);
+    // M7-09/ADR-027：会话销毁即清理侧信道提示词文件（不保留用户提示词副本）。
+    removePromptFile(session.systemPromptFile);
     this.sessions.delete(sessionId);
     this.releaseRuns(session);
     return Promise.resolve({ disposed: true, residual_channels: this.residualChannels() });
@@ -985,6 +1066,8 @@ export class DshAdapter {
       for (const run of session.runs.values()) {
         run.interrupted = true;
       }
+      // M7-09/ADR-027：适配器退出清理全部侧信道提示词文件。
+      removePromptFile(session.systemPromptFile);
       // 不调用 `session/close`：DSH 的会话持久化正是 Mode R（session/resume）的依据，
       // 关闭会话会丢弃原生上下文；进程退出本身经 stdin EOF 收口（spike 已知坑 18）。
       this.releaseRuns(session);

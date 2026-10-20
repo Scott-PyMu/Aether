@@ -31,7 +31,9 @@ import { randomUUID } from "node:crypto";
 
 import {
   ClaudeCliRun,
+  cleanupSystemPromptFile,
   claudePermissionMode,
+  materializeSystemPromptFile,
   thinkingBudgetForDepth,
   type ClaudeCliConfig,
   type KillTreeFn,
@@ -142,6 +144,11 @@ interface ClaudeSession {
    * 在途会话保持创建时的投影参数——`session.create` 时一次判定）。
    */
   permissionMode?: string;
+  /**
+   * M7-09/ADR-026：`session.create.system_prompt`（合成提示词）物化文件路径；
+   * 每次 CLI 调用以 `--append-system-prompt-file` 下发（`undefined` = 无系统提示词）。
+   */
+  systemPromptFile?: string;
   lastInit: ClaudeInitEvent | null;
   clientMsgIds: Map<string, string>;
   runs: Map<string, ClaudeRunState>;
@@ -250,6 +257,8 @@ export class ClaudeCodeAdapter {
             run.interrupted = true;
             void run.cli?.interrupt();
           }
+          // M7-09/ADR-026：适配器退出清理全部系统提示词临时文件。
+          cleanupSystemPromptFile(session.systemPromptFile);
         }
         this.sessions.clear();
         this.adapter.stop();
@@ -266,6 +275,7 @@ export class ClaudeCodeAdapter {
       native_id?: unknown;
       thinking_depth?: unknown;
       permission_mode?: unknown;
+      system_prompt?: unknown;
     };
     const requested = input.native_id;
     if (requested !== undefined && !isUuid(requested)) {
@@ -279,6 +289,15 @@ export class ClaudeCodeAdapter {
     const thinkingDepth = parseThinkingDepth(input.thinking_depth);
     // M7-06/ADR-024 A-4：档位 → `--permission-mode` 投影（仅新会话生效；未知档位忽略）。
     const permissionMode = claudePermissionMode(input.permission_mode);
+    // M7-09/ADR-026：合成系统提示词（预设块 + 工作区约定块）→ CLI
+    // `--append-system-prompt-file`（文件形态规避命令行长度上限；不改用户 settings）。
+    const systemPrompt =
+      typeof input.system_prompt === "string" && input.system_prompt.length > 0
+        ? input.system_prompt
+        : undefined;
+    const systemPromptFile = systemPrompt !== undefined
+      ? materializeSystemPromptFile(systemPrompt)
+      : undefined;
     const session: ClaudeSession = {
       id: nativeId,
       nativeId,
@@ -287,6 +306,7 @@ export class ClaudeCodeAdapter {
       ...(model !== undefined ? { model } : {}),
       ...(thinkingDepth !== undefined ? { thinkingDepth } : {}),
       ...(permissionMode !== undefined ? { permissionMode } : {}),
+      ...(systemPromptFile !== undefined ? { systemPromptFile } : {}),
       lastInit: null,
       clientMsgIds: new Map(),
       runs: new Map(),
@@ -298,6 +318,8 @@ export class ClaudeCodeAdapter {
       native_id: session.nativeId,
       resumed: session.resumed,
       model: model ?? this.options.cli.model ?? null,
+      // M7-09：回显是否携带系统提示词（不含正文；便于核心/测试观测，不泄露内容）。
+      has_system_prompt: systemPromptFile !== undefined,
       created_at: Date.now(),
     };
   }
@@ -362,6 +384,11 @@ export class ClaudeCodeAdapter {
         prompt,
         timeoutMs: this.runTimeoutMs,
         ...(thinkingBudget !== undefined ? { thinkingBudget } : {}),
+        // M7-09/ADR-026：合成系统提示词经 CLI 原生 `--append-system-prompt-file` 生效
+        // （首轮与 resume 同口径；会话销毁/适配器退出时清理临时文件）。
+        ...(session.systemPromptFile !== undefined
+          ? { appendSystemPromptFile: session.systemPromptFile }
+          : {}),
       },
       onEvent: (event) => this.onCliEvent(session, run, event),
       onMalformedLine: (line) => this.onCliMalformedLine(run, line),
@@ -408,6 +435,8 @@ export class ClaudeCodeAdapter {
       run.interrupted = true;
       void run.cli?.interrupt();
     }
+    // M7-09/ADR-026：会话销毁即清理系统提示词临时文件（不保留用户提示词副本）。
+    cleanupSystemPromptFile(session.systemPromptFile);
     this.sessions.delete(sessionId);
     return { disposed: true };
   }

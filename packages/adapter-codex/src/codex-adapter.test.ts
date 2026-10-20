@@ -8,9 +8,10 @@ import { describe, expect, it } from "vitest";
 import {
   CodexAdapter,
   reasoningForThinkingDepth,
+  SYSTEM_PROMPT_FALLBACK_HEADER,
   type CodexAdapterOptions,
 } from "./codex-adapter";
-import type { CodexCliConfig } from "./codex-cli";
+import { developerInstructionsLimit, type CodexCliConfig } from "./codex-cli";
 
 const FAKE_CLI = fileURLToPath(
   new URL("../../../scripts/test/m2-11/fake-codex/cli.mjs", import.meta.url),
@@ -601,6 +602,81 @@ describe("CodexAdapter：档位投影、引用注入与供应商消费映射（M
       else process.env.AETHER_PROVIDER_ID = previous.id;
       if (previous.key === undefined) delete process.env.AETHER_PROVIDER_ENV_KEY;
       else process.env.AETHER_PROVIDER_ENV_KEY = previous.key;
+    }
+  });
+});
+
+describe("M7-09 系统提示词消费（ADR-026 §2.2-5）", () => {
+  it("session.create.system_prompt → -c developer_instructions（解码一致；未提供不注入）", { timeout: 60_000 }, async () => {
+    const invocationFile = join(mkdtempSync(join(tmpdir(), "fake-codex-prompt-")), "invocations.jsonl");
+    const previous = process.env.FAKE_CODEX_INVOCATION_FILE;
+    process.env.FAKE_CODEX_INVOCATION_FILE = invocationFile;
+    const systemPrompt =
+      "<!-- aether:preset:01J00000000000000000000P02 -->\n你是资深软件工程师，专注于代码实现。\n\n# 工作区约定（记忆文件注入，优先级低于系统提示）\n来源：AGENTS.md\n\n工作区约定内容";
+    try {
+      const harness = new Harness();
+      await harness.start();
+      const created = await harness.requestResult("session.create", { system_prompt: systemPrompt });
+      expect(created["has_system_prompt"]).toBe(true);
+      const ack = await harness.requestResult("session.send", {
+        session_id: String(created["session_id"]),
+        client_msg_id: "m7-09-prompt-1",
+        text: "chat",
+      });
+      expect(await harness.waitTerminal(String(ack["run_id"]))).toBe("run.completed");
+
+      const plain = await harness.requestResult("session.create", {});
+      expect(plain["has_system_prompt"]).toBe(false);
+      const plainAck = await harness.requestResult("session.send", {
+        session_id: String(plain["session_id"]),
+        client_msg_id: "m7-09-prompt-2",
+        text: "chat",
+      });
+      expect(await harness.waitTerminal(String(plainAck["run_id"]))).toBe("run.completed");
+
+      const records = readFileSync(invocationFile, "utf8")
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => JSON.parse(line) as { argv: string[] });
+      expect(records).toHaveLength(2);
+      const encoded = records[0]?.argv.find((arg) => arg.startsWith("developer_instructions="));
+      expect(encoded).toBeTruthy();
+      expect(JSON.parse(String(encoded).slice("developer_instructions=".length))).toBe(systemPrompt);
+      expect(records[1]?.argv.some((arg) => arg.startsWith("developer_instructions="))).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.FAKE_CODEX_INVOCATION_FILE;
+      else process.env.FAKE_CODEX_INVOCATION_FILE = previous;
+    }
+  });
+
+  it("超长系统提示词回退为显式前缀块（内容完整；不注入 -c）", { timeout: 60_000 }, async () => {
+    const invocationFile = join(mkdtempSync(join(tmpdir(), "fake-codex-prompt-long-")), "invocations.jsonl");
+    const previous = process.env.FAKE_CODEX_INVOCATION_FILE;
+    process.env.FAKE_CODEX_INVOCATION_FILE = invocationFile;
+    // 编码后长度 > win32 保守上限 6000（测试按当前平台上限构造：上限 + 512）。
+    const systemPrompt = "长".repeat(developerInstructionsLimit() + 512);
+    try {
+      const harness = new Harness();
+      await harness.start();
+      const created = await harness.requestResult("session.create", { system_prompt: systemPrompt });
+      expect(created["has_system_prompt"]).toBe(true);
+      const ack = await harness.requestResult("session.send", {
+        session_id: String(created["session_id"]),
+        client_msg_id: "m7-09-prompt-long",
+        text: "chat",
+      });
+      expect(await harness.waitTerminal(String(ack["run_id"]))).toBe("run.completed");
+      const record = readFileSync(invocationFile, "utf8")
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => JSON.parse(line) as { argv: string[]; prompt: string })[0];
+      expect(record?.argv.some((arg) => arg.startsWith("developer_instructions="))).toBe(false);
+      expect(record?.prompt.startsWith(SYSTEM_PROMPT_FALLBACK_HEADER)).toBe(true);
+      expect(record?.prompt).toContain(systemPrompt);
+      expect(record?.prompt.trim().endsWith("chat")).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.FAKE_CODEX_INVOCATION_FILE;
+      else process.env.FAKE_CODEX_INVOCATION_FILE = previous;
     }
   });
 });

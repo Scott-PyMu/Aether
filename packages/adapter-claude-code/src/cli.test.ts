@@ -1,11 +1,13 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
 import {
   buildClaudeArgs,
+  cleanupSystemPromptFile,
   claudePermissionMode,
   ensureIsolatedSettings,
+  materializeSystemPromptFile,
   normalizeCommand,
   type ClaudeCliConfig,
 } from "./claude-cli";
@@ -80,6 +82,45 @@ describe("buildClaudeArgs（接入笔记固定参数形状）", () => {
     expect(defaultMode).toEqual(expect.arrayContaining(["--permission-mode", "default"]));
     expect(defaultMode).not.toContain("--settings");
     expect(defaultMode).not.toContain("--tools");
+  });
+});
+
+describe("M7-09 系统提示词下发（ADR-026）", () => {
+  it("--append-system-prompt-file 透传（首轮/resume 同口径）；缺省不注入", () => {
+    const file = "/tmp/aether-system-prompt.md";
+    for (const resume of [false, true]) {
+      const args = buildClaudeArgs(baseConfig(), {
+        nativeId: "11111111-2222-3333-4444-555555555555",
+        resume,
+        prompt: "hi",
+        timeoutMs: 1,
+        appendSystemPromptFile: file,
+      });
+      const index = args.indexOf("--append-system-prompt-file");
+      expect(index).toBeGreaterThanOrEqual(0);
+      expect(args[index + 1]).toBe(file);
+      // 与内联变体互斥：不得同时出现（避免提示词重复注入）。
+      expect(args).not.toContain("--append-system-prompt");
+    }
+    const absent = buildClaudeArgs(baseConfig(), {
+      nativeId: "11111111-2222-3333-4444-555555555555",
+      resume: false,
+      prompt: "hi",
+      timeoutMs: 1,
+    });
+    expect(absent).not.toContain("--append-system-prompt-file");
+  });
+
+  it("物化文件原样写入（含合成块标记与换行）；清理后文件/目录移除", () => {
+    const content =
+      "<!-- aether:preset:01J00000000000000000000P02 -->\n你是资深软件工程师\n\n# 工作区约定（记忆文件注入，优先级低于系统提示）\n来源：AGENTS.md\n\n约定";
+    const file = materializeSystemPromptFile(content);
+    expect(readFileSync(file, "utf8")).toBe(content);
+    cleanupSystemPromptFile(file);
+    expect(existsSync(file)).toBe(false);
+    // 幂等：重复清理不抛错（不存在时忽略）。
+    expect(() => cleanupSystemPromptFile(file)).not.toThrow();
+    expect(() => cleanupSystemPromptFile(undefined)).not.toThrow();
   });
 });
 

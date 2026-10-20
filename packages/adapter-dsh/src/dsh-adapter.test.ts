@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,7 +11,7 @@ import {
   dshReasoningValuesFrom,
   type DshAdapterOptions,
 } from "./dsh-adapter";
-import { DEFAULT_DSH_VERSION_PIN } from "./dsh-plugin";
+import { DEFAULT_DSH_VERSION_PIN, promptFilePath } from "./dsh-plugin";
 
 const FAKE_ACP = fileURLToPath(
   new URL("../../../scripts/test/m2-11/fake-dsh/acp-server.mjs", import.meta.url),
@@ -698,5 +698,46 @@ describe("DshAdapter：按会话选模型与供应商消费映射（M7-06 / ADR-
         else process.env[key] = value;
       }
     }
+  });
+});
+
+describe("M7-09/ADR-027 系统提示词侧信道", () => {
+  it("session.create.system_prompt → 侧信道文件（按会话 id）；dispose 删除；未提供不写", {
+    timeout: 60_000,
+  }, async () => {
+    const harness = new Harness();
+    await harness.start();
+    const prompt =
+      "<!-- aether:preset:01J00000000000000000000P02 -->\n你是资深软件工程师\n\n# 工作区约定（记忆文件注入，优先级低于系统提示）\n来源：AGENTS.md\n\n工作区约定内容";
+    const created = await harness.requestResult("session.create", { system_prompt: prompt });
+    expect(created.has_system_prompt).toBe(true);
+    expect(created.system_prompt_effective).toBe(true);
+    const sessionId = String(created.session_id);
+    const promptDir = join(harness.home, "aether-bridge", "prompts");
+    const promptFile = promptFilePath(promptDir, sessionId);
+    expect(readFileSync(promptFile, "utf8")).toBe(prompt);
+
+    // 未提供 system_prompt：不回显、不写文件，生效位为 null/缺省。
+    const plain = await harness.requestResult("session.create", {});
+    expect(plain.has_system_prompt).toBe(false);
+    expect(plain.system_prompt_effective).toBeNull();
+    const plainFile = promptFilePath(promptDir, String(plain.session_id));
+    expect(existsSync(plainFile)).toBe(false);
+
+    // dispose：删除侧信道文件。
+    await harness.requestResult("session.dispose", { session_id: sessionId });
+    expect(existsSync(promptFile)).toBe(false);
+
+    // 侧信道写失败：核心已下发（true），但生效位必须为 false（不得假装生效）。
+    // 用同名文件占位 `prompts/` 目录，使 writeFileSync 报 ENOTDIR。
+    rmSync(promptDir, { recursive: true, force: true });
+    writeFileSync(promptDir, "blocked", "utf8");
+    const failed = await harness.requestResult("session.create", {
+      system_prompt: prompt,
+    });
+    expect(failed.has_system_prompt).toBe(true);
+    expect(failed.system_prompt_effective).toBe(false);
+    await harness.requestResult("session.dispose", { session_id: String(failed.session_id) });
+    await harness.shutdown();
   });
 });

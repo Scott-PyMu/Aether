@@ -261,6 +261,7 @@ impl Harness {
                 model: None,
                 thinking_depth: None,
                 permission_mode: None,
+                preset_id: None,
             })
             .expect("session_create");
         serde_json::from_value(value).expect("Session 反序列化")
@@ -422,6 +423,7 @@ fn workspace_set_injects_memory_and_swaps_permission_root() {
             model: None,
             thinking_depth: None,
             permission_mode: None,
+            preset_id: None,
         })
         .expect_err("未知 workspace_id 必须拒绝");
     assert_eq!(

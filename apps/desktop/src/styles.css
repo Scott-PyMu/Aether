@@ -2128,3 +2128,347 @@ body {
 .split-message-stream {
   max-height: none;
 }
+
+/* ===== M7-08/ADR-026 §2.1：左栏工作区树（workspace-tree / workspace-item） ===== */
+
+.workspace-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  border-bottom: 1px solid #262a30;
+  padding-bottom: 0.5rem;
+}
+
+.workspace-tree-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.workspace-tree-header .workbench-title {
+  margin: 0;
+}
+
+.workspace-tree-header button,
+.workspace-item-actions button,
+.workspace-create-form button,
+.workspace-rename-form button,
+.workspace-delete-confirm button {
+  background-color: #24282e;
+  color: #cfd4da;
+  border: 1px solid #333941;
+  border-radius: 5px;
+  padding: 0.15rem 0.45rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.workspace-tree-header button:hover,
+.workspace-item-actions button:hover:not(:disabled),
+.workspace-create-form button:hover:not(:disabled),
+.workspace-rename-form button:hover:not(:disabled),
+.workspace-delete-confirm button:hover:not(:disabled) {
+  background-color: #2d333b;
+}
+
+.workspace-item-actions button:disabled,
+.workspace-create-form button:disabled,
+.workspace-rename-form button:disabled,
+.workspace-delete-confirm button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.workspace-tree-notice {
+  margin: 0;
+  font-size: 0.72rem;
+  color: #6c7278;
+}
+
+.workspace-error {
+  margin: 0;
+  padding: 0.35rem 0.5rem;
+  border-radius: 5px;
+  border-left: 3px solid var(--ae-danger, #d66f6f);
+  background-color: #2a1d1d;
+  color: #e0b4b4;
+  font-size: 0.78rem;
+  word-break: break-all;
+}
+
+.workspace-assign-result {
+  margin: 0;
+  padding: 0.3rem 0.5rem;
+  border-radius: 5px;
+  background-color: #1d2a1d;
+  border-left: 3px solid var(--ae-success, #7fbf7f);
+  color: #b9d8b9;
+  font-size: 0.75rem;
+}
+
+.workspace-assign-result[data-result="failed"] {
+  background-color: #2a1d1d;
+  border-left-color: var(--ae-danger, #d66f6f);
+  color: #e0b4b4;
+}
+
+.workspace-create-form,
+.workspace-rename-form,
+.workspace-delete-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.4rem;
+  border: 1px solid #2c3138;
+  border-radius: 6px;
+  background-color: #1a1d21;
+}
+
+.workspace-create-form input,
+.workspace-rename-form input {
+  background-color: #111316;
+  border: 1px solid #333941;
+  border-radius: 5px;
+  color: #e6e9ec;
+  padding: 0.25rem 0.4rem;
+  font-size: 0.78rem;
+}
+
+.workspace-root-row,
+.workspace-create-actions {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.workspace-root-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.workspace-create-hint,
+.workspace-delete-confirm p {
+  margin: 0;
+  font-size: 0.7rem;
+  color: #8a9097;
+}
+
+.workspace-tree-list,
+.workspace-session-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.workspace-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.workspace-item-row {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.workspace-item-toggle {
+  background: none;
+  border: none;
+  color: #8a9097;
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 0 0.15rem;
+}
+
+.workspace-item-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  background: none;
+  border: none;
+  color: #cfd4da;
+  cursor: pointer;
+  font-size: 0.82rem;
+}
+
+.workspace-item-count {
+  font-size: 0.7rem;
+  color: #6c7278;
+  font-variant-numeric: tabular-nums;
+}
+
+.workspace-item[data-manageable="true"] .workspace-item-name {
+  color: #dfe4e9;
+}
+
+.workspace-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  padding-left: 1rem;
+}
+
+.workspace-session-list {
+  padding-left: 1.1rem;
+}
+
+.workspace-session {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-left: 2px solid transparent;
+  color: #9aa4af;
+  cursor: pointer;
+  font-size: 0.78rem;
+  padding: 0.1rem 0.35rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-session:hover {
+  color: #e6e9ec;
+}
+
+.workspace-session[data-active="true"] {
+  border-left-color: #6f9dd8;
+  color: #e6e9ec;
+}
+
+.workspace-session[data-status="waiting_permission"] {
+  color: #d6a84f;
+}
+
+.workspace-session[data-status="failed"] {
+  color: #d66f6f;
+}
+
+.workspace-session-empty,
+.workspace-tree-empty,
+.workspace-tree-loading {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.72rem;
+  color: #6c7278;
+}
+
+/* ===== M7-09/ADR-026：Agent 预设（设置页 presets-page + 新建会话入口） ===== */
+.preset-list {
+  list-style: none;
+  margin: 0.5rem 0 1rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.preset-item {
+  border: 1px solid #2a2f36;
+  border-radius: 6px;
+  padding: 0.5rem 0.6rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.preset-item[data-active="true"] {
+  border-color: #6f9dd8;
+}
+
+.preset-item-main {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex: 1 1 18rem;
+  min-width: 0;
+}
+
+.preset-name {
+  font-weight: 600;
+  color: #e6e9ec;
+}
+
+.preset-builtin,
+.preset-in-use {
+  font-size: 0.68rem;
+  border-radius: 4px;
+  padding: 0.05rem 0.3rem;
+  border: 1px solid #3a4149;
+  color: #9aa4af;
+}
+
+.preset-in-use {
+  border-color: #4f7a52;
+  color: #8fc894;
+}
+
+.preset-preview {
+  font-size: 0.72rem;
+  color: #6c7278;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preset-actions {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.preset-edit {
+  flex: 1 1 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid #2a2f36;
+}
+
+.preset-edit-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.78rem;
+  color: #9aa4af;
+}
+
+.preset-edit-row textarea,
+.preset-edit-row input {
+  background: #14171a;
+  border: 1px solid #2a2f36;
+  border-radius: 4px;
+  color: #e6e9ec;
+  padding: 0.3rem 0.4rem;
+  font: inherit;
+}
+
+.preset-delete-confirm {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.76rem;
+  color: #d6a84f;
+}
+
+.preset-add {
+  border-top: 1px solid #2a2f36;
+  padding-top: 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.preset-empty {
+  font-size: 0.76rem;
+  color: #6c7278;
+}

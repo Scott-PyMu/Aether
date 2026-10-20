@@ -8,7 +8,7 @@ import {
   resolveModelOption,
 } from "./dsh-model";
 
-/** 与真实 DSH 0.1.5-rc.2 实测形态一致（`session/new` configOptions 摘录）。 */
+/** 与真实 DSH 0.2.1-rc.2 实测形态一致（`session/new` configOptions 摘录；0.1.5-rc.2 形态相同）。 */
 const REAL_SHAPED_CONFIG_OPTIONS = [
   {
     id: "model",

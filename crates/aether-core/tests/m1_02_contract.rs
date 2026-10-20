@@ -35,6 +35,8 @@ const MIGRATION_0002_SQL: &str = include_str!("../../../migrations/0002_unique_k
 const MIGRATION_0003_SQL: &str = include_str!("../../../migrations/0003_p0_ui_extensions.sql");
 const MIGRATION_0004_SQL: &str =
     include_str!("../../../migrations/0004_permission_mode_and_rules.sql");
+/// M7-09/ADR-026：`sessions.preset_id`（预设生效来源；实体字段 `Session.preset_id`）。
+const MIGRATION_0007_SQL: &str = include_str!("../../../migrations/0007_presets.sql");
 
 // ===== 附录 C DDL 静态解析（无 DB 依赖，Windows 本地可运行） =====
 
@@ -156,7 +158,12 @@ fn columns_set(table: &str) -> BTreeSet<String> {
 /// 解析 0002+ 增量迁移中的 `ALTER TABLE <t> ADD COLUMN <name> ...`（数据驱动叠加）。
 fn incremental_columns(table: &str) -> BTreeSet<String> {
     let mut columns = BTreeSet::new();
-    for sql in [MIGRATION_0002_SQL, MIGRATION_0003_SQL, MIGRATION_0004_SQL] {
+    for sql in [
+        MIGRATION_0002_SQL,
+        MIGRATION_0003_SQL,
+        MIGRATION_0004_SQL,
+        MIGRATION_0007_SQL,
+    ] {
         for statement in strip_sql_comments(sql).split(';') {
             let Some(rest) = statement.trim().strip_prefix("ALTER TABLE") else {
                 continue;
@@ -985,6 +992,7 @@ fn sample_session() -> Session {
         model: None,
         thinking_depth: aether_core::THINKING_DEPTH_DEFAULT,
         permission_mode: aether_core::PermissionMode::default(),
+        preset_id: None,
         system_prompt: None,
         config: json!({"native_id": "n-1"}),
         token_usage: TokenUsage {

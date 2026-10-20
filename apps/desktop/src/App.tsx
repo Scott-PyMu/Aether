@@ -19,6 +19,13 @@ export function App() {
   const [startup, setStartup] = useState<StartupSnapshot | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [view, setView] = useState<AppView>("workbench");
+  /**
+   * M7-09/ADR-026：新建会话入口当前选中的 Agent 预设（提升到 `App` 以便设置页
+   * 「使用中」标记与工作台新建入口共享同一选择；`null` = 不使用预设）。
+   */
+  const [activePresetId, setActivePresetId] = useState<string | null>(null);
+  /** M7-09/ADR-026：预设清单版本（设置页增改删后递增 → 工作台重新拉取清单）。 */
+  const [presetsVersion, setPresetsVersion] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -113,7 +120,12 @@ export function App() {
       </p>
       <HealthMonitor onOpenDiagnostics={() => setView("diagnostics")} />
       <EventBridgeIndicator />
-      <SessionWorkbench onOpenDiagnostics={() => setView("diagnostics")} />
+      <SessionWorkbench
+        onOpenDiagnostics={() => setView("diagnostics")}
+        activePresetId={activePresetId}
+        onActivePresetChange={setActivePresetId}
+        presetsVersion={presetsVersion}
+      />
       {view === "backup" ? (
         <BackupPage onBack={() => setView("workbench")} />
       ) : null}
@@ -127,6 +139,9 @@ export function App() {
         <SettingsPage
           dataDir={startup.data_dir}
           securityLevel={startup.security_level ?? null}
+          activePresetId={activePresetId}
+          onActivePresetChange={setActivePresetId}
+          onPresetsChanged={() => setPresetsVersion((value) => value + 1)}
           onBack={() => setView("workbench")}
           onOpenBackup={() => setView("backup")}
           onOpenDiagnostics={() => setView("diagnostics")}

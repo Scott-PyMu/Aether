@@ -9,7 +9,7 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{parse_variant, UnknownValue};
-use crate::ids::{MessageId, RunId, RuntimeId, SessionId, WorkspaceId};
+use crate::ids::{MessageId, PresetId, RunId, RuntimeId, SessionId, WorkspaceId};
 
 /// 事件/实体内嵌的 token 用量。
 ///
@@ -378,6 +378,42 @@ pub struct Workspace {
     pub updated_at: i64,
 }
 
+/// Agent 预设名称上限（ADR-026 §2.2-2：≤64 字符）。
+pub const PRESET_NAME_MAX_CHARS: usize = 64;
+/// Agent 预设系统提示词上限（ADR-026 §2.2-2：≤32KiB；按 UTF-8 字节数）。
+pub const PRESET_SYSTEM_PROMPT_MAX_BYTES: usize = 32 * 1024;
+/// 预设提示词块标记前缀（ADR-026 附录 A-4：`<!-- aether:preset:<preset_id> -->`）。
+pub const PRESET_PROMPT_MARKER_PREFIX: &str = "<!-- aether:preset:";
+/// 预设提示词块标记后缀（ADR-026 附录 A-4）。
+pub const PRESET_PROMPT_MARKER_SUFFIX: &str = " -->";
+
+/// Agent 预设实体（`presets` 表；M7-09/ADR-026）。
+///
+/// 内置预设（`is_builtin=true`）**可编辑、不可删除**（与内置供应商语义对齐：
+/// 仅删除受保护）；提示词文案随迁移播种，编辑差异记入审计。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Preset {
+    pub id: PresetId,
+    pub name: String,
+    pub system_prompt: String,
+    pub is_builtin: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+impl Preset {
+    /// 预设提示词块（ADR-026 附录 A-4）：`<!-- aether:preset:<id> -->` + 换行 + 提示词。
+    ///
+    /// 块内不解析嵌套标记（提示词按原文保留）；空提示词仍保留块头（合成结果可追溯来源）。
+    pub fn prompt_block(&self) -> String {
+        format!(
+            "{PRESET_PROMPT_MARKER_PREFIX}{}{PRESET_PROMPT_MARKER_SUFFIX}\n{}",
+            self.id.as_str(),
+            self.system_prompt
+        )
+    }
+}
+
 /// 会话实体（`sessions` 表）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Session {
@@ -393,6 +429,9 @@ pub struct Session {
     /// 会话级权限模式（缺省 [`PermissionMode::WorkspaceWrite`]；ADR-014 决策 3）。
     #[serde(default)]
     pub permission_mode: PermissionMode,
+    /// 预设生效来源（`sessions.preset_id`；M7-09/ADR-026；`None` = 未选预设）。
+    #[serde(default)]
+    pub preset_id: Option<PresetId>,
     pub system_prompt: Option<String>,
     pub config: serde_json::Value,
     pub token_usage: TokenUsage,

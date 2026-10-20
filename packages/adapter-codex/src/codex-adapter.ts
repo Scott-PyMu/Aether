@@ -30,6 +30,7 @@ import { join } from "node:path";
 import {
   CodexCliRun,
   codexSandbox,
+  developerInstructionsLimit,
   materializeCodexProviderConfig,
   type CodexCliConfig,
   type KillTreeFn,
@@ -47,6 +48,15 @@ import { CodexSessionStore } from "./codex-sessions";
 export const RUNTIME_NAME = "codex";
 /** 适配器版本（semver，hello 上报）。 */
 export const ADAPTER_VERSION = "0.1.0";
+
+/**
+ * 超长系统提示词的回退前缀块标记（M7-09/ADR-026）。
+ *
+ * 仅当 `developer_instructions` 编码后超出平台命令行长度上限时使用：内容完整保留，
+ * 以显式块标记置于用户消息前（通道变更可见、可审计；非静默丢弃）。
+ */
+export const SYSTEM_PROMPT_FALLBACK_HEADER = "<aether-system-prompt>";
+export const SYSTEM_PROMPT_FALLBACK_FOOTER = "</aether-system-prompt>";
 
 /** 适配器能力清单（hello/initialize 上报；M3-10 增 `thinking_depth`；
  * M7-03/ADR-017 增 `pause_resume`）。 */
@@ -143,6 +153,11 @@ interface CodexSession {
    * `session.create` 时一次判定）。
    */
   sandbox?: string;
+  /**
+   * M7-09/ADR-026：`session.create.system_prompt`（预设块 + 工作区约定块合成结果）。
+   * 每次 run 以 `-c developer_instructions=…` 下发；超长时回退为提示词前缀块。
+   */
+  systemPrompt?: string;
   clientMsgIds: Map<string, string>;
   runs: Map<string, CodexRunState>;
   observedTools: Set<string>;
@@ -278,6 +293,7 @@ export class CodexAdapter {
       native_id?: unknown;
       thinking_depth?: unknown;
       permission_mode?: unknown;
+      system_prompt?: unknown;
     };
     const requested = input.native_id;
     if (requested !== undefined && !isAliasId(requested)) {
@@ -290,6 +306,12 @@ export class CodexAdapter {
     const thinkingDepth = parseThinkingDepth(input.thinking_depth);
     // M7-06/ADR-024 A-4：档位 → `sandbox_mode` 投影（仅新会话生效；未知档位忽略）。
     const sandbox = codexSandbox(input.permission_mode);
+    // M7-09/ADR-026：合成系统提示词（预设块 + 工作区约定块）随会话保存；每次 run
+    // 以 `-c developer_instructions=…` 下发（超长回退见 onSend）。
+    const systemPrompt =
+      typeof input.system_prompt === "string" && input.system_prompt.length > 0
+        ? input.system_prompt
+        : undefined;
     const alias = isAliasId(requested) ? requested : ulid();
     const threadId = isAliasId(requested) ? this.store.lookup(requested) : null;
     const session: CodexSession = {
@@ -300,6 +322,7 @@ export class CodexAdapter {
       ...(model !== undefined ? { model } : {}),
       ...(thinkingDepth !== undefined ? { thinkingDepth } : {}),
       ...(sandbox !== undefined ? { sandbox } : {}),
+      ...(systemPrompt !== undefined ? { systemPrompt } : {}),
       clientMsgIds: new Map(),
       runs: new Map(),
       observedTools: new Set(),
@@ -311,6 +334,8 @@ export class CodexAdapter {
       native_id: session.alias,
       resumed: session.resumed,
       model: model ?? this.options.cli.model ?? null,
+      // M7-09：回显是否携带系统提示词（不含正文）。
+      has_system_prompt: systemPrompt !== undefined,
       created_at: Date.now(),
     };
   }
@@ -361,7 +386,22 @@ export class CodexAdapter {
     const thinkingDepth = parseThinkingDepth(input.thinking_depth) ?? session.thinkingDepth;
     const reasoning = reasoningForThinkingDepth(thinkingDepth);
     // M7-06/ADR-024 A-3：统一映射 = 消息前缀引用块（核心不读内容；引用 ≠ 预授权）。
-    const prompt = composePromptWithReferences(input.text, parseReferences(input.references));
+    let prompt = composePromptWithReferences(input.text, parseReferences(input.references));
+    // M7-09/ADR-026：合成系统提示词经 `-c developer_instructions=…` 下发；
+    // 编码后超出平台命令行长度上限时回退为显式前缀块（内容完整、可见、可审计）。
+    let developerInstructions: string | undefined;
+    if (session.systemPrompt !== undefined) {
+      const encodedLength = JSON.stringify(session.systemPrompt).length;
+      if (encodedLength + 40 <= developerInstructionsLimit()) {
+        developerInstructions = session.systemPrompt;
+      } else {
+        prompt = `${SYSTEM_PROMPT_FALLBACK_HEADER}\n${session.systemPrompt}\n${SYSTEM_PROMPT_FALLBACK_FOOTER}\n\n${prompt}`;
+        this.options.stderr?.(
+          `[codex] 系统提示词超出命令行长度上限（编码后 ${encodedLength} 字符 > ${developerInstructionsLimit()}）：` +
+            `已回退为提示词前缀块 ${SYSTEM_PROMPT_FALLBACK_HEADER}（内容完整，仅通道变更）`,
+        );
+      }
+    }
     run.cli = new CodexCliRun({
       config: {
         ...this.options.cli,
@@ -374,6 +414,7 @@ export class CodexAdapter {
         threadId: session.threadId,
         prompt,
         timeoutMs: this.runTimeoutMs,
+        ...(developerInstructions !== undefined ? { developerInstructions } : {}),
       },
       env: this.cliEnv(),
       onEvent: (event) => this.onCliEvent(session, run, event),

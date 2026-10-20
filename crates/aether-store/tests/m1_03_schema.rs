@@ -10,8 +10,8 @@ mod common;
 use aether_store::StoreError;
 use rusqlite::Connection;
 
-/// 附录 C 全部表（设计文档 v1.16；含 schema_migrations、ADR-010 的 3 张表与
-/// M6-01 的 permission_rules，共 21 张）。
+/// 附录 C 全部表（设计文档 v1.16；含 schema_migrations、ADR-010 的 3 张表、
+/// M6-01 的 permission_rules 与 M7-09 的 presets，共 22 张）。
 const APPENDIX_C_TABLES: &[&str] = &[
     "adapter_plugins",
     "artifacts",
@@ -23,6 +23,7 @@ const APPENDIX_C_TABLES: &[&str] = &[
     "node_runs",
     "permission_rules",
     "permissions",
+    "presets",
     "provider_models",
     "providers",
     "runs",
@@ -350,6 +351,8 @@ fn appendix_c_foreign_keys_exist() {
         ),
         ("sessions", "runtime_id", "runtimes", "id", "NO ACTION"),
         ("sessions", "workspace_id", "workspaces", "id", "NO ACTION"),
+        // M7-09/ADR-026：预设生效来源（删除预设后置空，提示词保持原样）。
+        ("sessions", "preset_id", "presets", "id", "SET NULL"),
         ("tasks", "session_id", "sessions", "id", "CASCADE"),
         (
             "workflow_runs",

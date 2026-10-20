@@ -217,6 +217,7 @@ impl Harness {
             model: None,
             thinking_depth,
             permission_mode: None,
+            preset_id: None,
         })
     }
 

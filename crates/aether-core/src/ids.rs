@@ -92,3 +92,7 @@ string_id!(
     /// 工作流运行 ID（`workflow_runs.id`，P2 预留）。
     WorkflowRunId
 );
+string_id!(
+    /// Agent 预设 ID（`presets.id`；M7-09/ADR-026）。
+    PresetId
+);

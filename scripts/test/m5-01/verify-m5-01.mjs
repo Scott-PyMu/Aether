@@ -96,7 +96,9 @@ function checkReviewOpinion() {
 
 function checkDesignDoc() {
   const text = read("设计文档.md");
-  expect(/\*\*v1\.16（冻结）\*\*/.test(text), "设计文档头部未升 v1.16");
+  // M5-01 合入时为 v1.16；后续 ADR 可继续升版（如 ADR-027 → v1.17），
+  // 本检查只要求「不低于 v1.16 且已冻结」，不把设计文档钉死在 M5-01 版本。
+  expect(/\*\*v1\.(1[6-9]|[2-9]\d)（冻结）\*\*/.test(text), "设计文档头部未升 v1.16+");
   for (const number of ["ADR-017", "ADR-018", "ADR-019", "ADR-020", "ADR-021", "ADR-022", "ADR-023", "ADR-024", "ADR-025", "ADR-026"]) {
     expect(text.includes(number), `设计文档缺少 ${number} 引用`);
   }
@@ -115,7 +117,7 @@ function checkDesignDoc() {
   }
   // 事件类型不变：附录 B 注记既有发射点。
   expect(text.includes("不新增事件类型"), "设计文档附录 B 未注明事件类型不变");
-  // 附录 C 规划位与落库进度（M6-01 已落库项为终态 DDL；未落库项不得预合入）。
+  // 附录 C 规划位与落库进度（M6-01/M7-09 已落库项为终态 DDL；未落库项不得预合入）。
   const appendixStart = text.indexOf("## 附录 C");
   const codeStart = text.indexOf("```sql", appendixStart);
   const codeEnd = text.indexOf("```", codeStart + 6);
@@ -124,7 +126,7 @@ function checkDesignDoc() {
     .split(/\r?\n/)
     .map((line) => line.replace(/--.*$/, "").trim())
     .join("\n");
-  for (const forbidden of ["CREATE VIRTUAL TABLE", "CREATE TABLE presets"]) {
+  for (const forbidden of ["CREATE VIRTUAL TABLE"]) {
     expect(!uncommented.includes(forbidden), `附录 C 预合入了未落库任务的终态 DDL：${forbidden}`);
   }
   // M6-01 落库核验：permission_rules / sessions.permission_mode 终态 DDL 必在同批附录内。
@@ -136,7 +138,16 @@ function checkDesignDoc() {
     uncommented.includes("ALTER TABLE sessions ADD COLUMN permission_mode"),
     "附录 C 缺少 M6-01 sessions.permission_mode 终态 DDL（迁移 0004 已落库）",
   );
-  console.log("[dod2] 设计 v1.16：ADR 引用/计数/规划位（M6-01 终态已合入）/事件不变 核验通过");
+  // M7-09 落库核验：presets / sessions.preset_id 终态 DDL 必在同批附录内。
+  expect(
+    uncommented.includes("CREATE TABLE presets"),
+    "附录 C 缺少 M7-09 presets 终态 DDL（迁移 0007 已落库）",
+  );
+  expect(
+    uncommented.includes("ALTER TABLE sessions ADD COLUMN preset_id"),
+    "附录 C 缺少 M7-09 sessions.preset_id 终态 DDL（迁移 0007 已落库）",
+  );
+  console.log("[dod2] 设计 v1.16+：ADR 引用/计数/规划位（M6-01/M7-09 终态已合入）/事件不变 核验通过");
 }
 
 function checkAdr006() {

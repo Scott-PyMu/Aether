@@ -13,8 +13,8 @@ use std::str::FromStr;
 
 use aether_core::{
     Message, MessageId, MessageRole, PermissionDecision, PermissionMode, PermissionScope,
-    PermissionStatus, Run, RunId, RunStatus, Runtime, Session, SessionId, SessionStatus, Workspace,
-    WorkspaceId,
+    PermissionStatus, Preset, PresetId, Run, RunId, RunStatus, Runtime, Session, SessionId,
+    SessionStatus, Workspace, WorkspaceId,
 };
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
@@ -167,6 +167,27 @@ pub struct AuditQueryResult {
     pub offset: usize,
     /// 是否还有下一页（`rows.len()` 回填为 `limit` 后判定）。
     pub has_more: bool,
+}
+
+/// 单个工作区的会话计数（M7-08 `workspaces_list`；ADR-026 §2.1-1）。
+///
+/// `active` = 在途口径（会话状态 `creating`/`running`/`paused`/`waiting_permission`，
+/// **或**存在 `queued`/`running` run——与 `active_work_counts` 同源判定）；
+/// `total` = 该工作区全部会话数（含终态）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct WorkspaceSessionCount {
+    pub active: u64,
+    pub total: u64,
+}
+
+/// `workspaces_list` 的计数快照：按工作区聚合 + 未分配会话（`workspace_id IS NULL`）
+/// 的合成组计数（ADR-026 §2.1-1：合成组不建 `workspaces` 行）。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct WorkspaceSessionCounts {
+    /// `workspace_id → 计数`（无会话的工作区不出现，调用方补 0）。
+    pub by_workspace: BTreeMap<String, WorkspaceSessionCount>,
+    /// `sessions.workspace_id IS NULL` 的合成组「默认（数据目录）」。
+    pub unassigned: WorkspaceSessionCount,
 }
 
 /// 审计过滤条件 → `WHERE` 子句与命名参数（等值 + 闭区间时间）。
@@ -333,6 +354,41 @@ pub enum StoreCommand {
     ///
     /// 单写者约束：工作区写路径同样经 [`crate::WriteQueue::execute`]（AGENTS §2.4）。
     UpsertWorkspace { workspace: Workspace },
+    /// 工作区改名（M7-08 `workspace_update`；ADR-026 §2.1-1：`root_path` 不可变，
+    /// 防权限基准漂移）。不存在时影响 0 行——存在性由命令层先行判定。
+    RenameWorkspace {
+        id: WorkspaceId,
+        name: String,
+        updated_at: i64,
+    },
+    /// 删除工作区行（M7-08 `workspace_delete`；ADR-026 §2.1-1）。
+    ///
+    /// **存在会话引用（`sessions.workspace_id`）→ 不删除、不级联、不改派**，返回
+    /// [`StoreOutcome::WorkspaceInUse`]；引用检查在**同一事务内**复核（ADR-026
+    /// 「删除前置检查在事务内复核」）。只删行，不触碰磁盘文件。
+    DeleteWorkspace { id: WorkspaceId },
+    /// 会话改派工作区（M7-08 `session_workspace_assign`；ADR-026 §2.1-1）。
+    ///
+    /// 原子写入 `sessions.workspace_id`、`sessions.config`（含权限基准快照标记）与
+    /// `sessions.system_prompt`（按新工作区记忆注入重合成的结果）；权限基准**不重算**
+    /// （R15/不变量 11）——由调用方在 `config` 中固定创建时基准。
+    AssignSessionWorkspace {
+        session_id: SessionId,
+        workspace_id: WorkspaceId,
+        config: serde_json::Value,
+        system_prompt: Option<String>,
+        updated_at: i64,
+    },
+    /// 插入 Agent 预设（M7-09 `preset_add`；ADR-026 §2.2-2）。
+    ///
+    /// 单写者约束：预设写路径同样经 [`crate::WriteQueue::execute`]（AGENTS §2.4）。
+    InsertPreset { preset: Preset },
+    /// 整体更新 Agent 预设（M7-09 `preset_update`；内置可编辑，`is_builtin` 与
+    /// `created_at` 不变——调用方负责合并后整体写入）。
+    UpdatePreset { preset: Preset },
+    /// 删除自定义预设（M7-09 `preset_delete`；内置拒绝在命令层先行判定；
+    /// `sessions.preset_id` 经 `ON DELETE SET NULL` 置空，会话提示词保持原样）。
+    DeletePreset { id: PresetId },
     /// 幂等登记会话引用（M3-09 `artifact_add`；ADR-010 决策 1）：单事务内
     /// `INSERT … ON CONFLICT(session_id, path) DO NOTHING` + 回读，同会话同路径
     /// 命中既有行时返回原引用（不重复插入、不改变原 `id`/`created_at`）。
@@ -410,6 +466,12 @@ pub enum StoreOutcome {
         artifact: ArtifactRecord,
         /// `true` = 本次新建；`false` = 幂等命中既有行（UNIQUE 兜底）。
         inserted: bool,
+    },
+    /// [`StoreCommand::DeleteWorkspace`] 结果：存在会话引用（`sessions.workspace_id`），
+    /// **未删除**、未级联、未改派（ADR-026 §2.1-1：`workspace_in_use`）。
+    WorkspaceInUse {
+        /// 引用该工作区的会话数（UI 文案「仍有 N 个会话引用」）。
+        sessions: u64,
     },
 }
 
@@ -494,8 +556,8 @@ pub(crate) fn apply_command(
             let affected = transaction
                 .execute(
                     "INSERT INTO sessions (id, runtime_id, workspace_id, parent_session_id, title, status, \
-                     model, thinking_depth, permission_mode, system_prompt, config, token_usage, created_at, updated_at, closed_at) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                     model, thinking_depth, permission_mode, system_prompt, config, token_usage, created_at, updated_at, closed_at, preset_id) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
                     params![
                         session.id.as_str(),
                         session.runtime_id.as_str(),
@@ -512,6 +574,7 @@ pub(crate) fn apply_command(
                         session.created_at,
                         session.updated_at,
                         session.closed_at,
+                        session.preset_id.as_ref().map(PresetId::as_str),
                     ],
                 )
                 .map_err(txn_failed)?;
@@ -932,6 +995,111 @@ pub(crate) fn apply_command(
             transaction.commit().map_err(txn_failed)?;
             Ok(StoreOutcome::Applied { affected })
         }
+        StoreCommand::RenameWorkspace {
+            id,
+            name,
+            updated_at,
+        } => {
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            let affected = transaction
+                .execute(
+                    "UPDATE workspaces SET name = ?2, updated_at = ?3 WHERE id = ?1",
+                    params![id.as_str(), name, updated_at],
+                )
+                .map_err(txn_failed)?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::Applied { affected })
+        }
+        StoreCommand::DeleteWorkspace { id } => {
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            // ADR-026 §2.1-1：存在会话引用 → 拒绝（不级联、不改派）；检查与删除同一
+            // 事务（防「检查后会话改派」竞态）。
+            let references: i64 = transaction
+                .query_row(
+                    "SELECT COUNT(*) FROM sessions WHERE workspace_id = ?1",
+                    [id.as_str()],
+                    |row| row.get(0),
+                )
+                .map_err(txn_failed)?;
+            if references > 0 {
+                return Ok(StoreOutcome::WorkspaceInUse {
+                    sessions: u64::try_from(references).unwrap_or(u64::MAX),
+                });
+            }
+            let affected = transaction
+                .execute("DELETE FROM workspaces WHERE id = ?1", [id.as_str()])
+                .map_err(txn_failed)?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::Applied { affected })
+        }
+        StoreCommand::AssignSessionWorkspace {
+            session_id,
+            workspace_id,
+            config,
+            system_prompt,
+            updated_at,
+        } => {
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            let config = json_text(config)?;
+            let affected = transaction
+                .execute(
+                    "UPDATE sessions SET workspace_id = ?2, config = ?3, system_prompt = ?4, \
+                     updated_at = ?5 WHERE id = ?1",
+                    params![
+                        session_id.as_str(),
+                        workspace_id.as_str(),
+                        config,
+                        system_prompt,
+                        updated_at,
+                    ],
+                )
+                .map_err(txn_failed)?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::Applied { affected })
+        }
+        StoreCommand::InsertPreset { preset } => {
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            let affected = transaction
+                .execute(
+                    "INSERT INTO presets (id, name, system_prompt, is_builtin, created_at, updated_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![
+                        preset.id.as_str(),
+                        preset.name,
+                        preset.system_prompt,
+                        i64::from(preset.is_builtin),
+                        preset.created_at,
+                        preset.updated_at,
+                    ],
+                )
+                .map_err(txn_failed)?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::Applied { affected })
+        }
+        StoreCommand::UpdatePreset { preset } => {
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            let affected = transaction
+                .execute(
+                    "UPDATE presets SET name = ?2, system_prompt = ?3, updated_at = ?4 WHERE id = ?1",
+                    params![
+                        preset.id.as_str(),
+                        preset.name,
+                        preset.system_prompt,
+                        preset.updated_at,
+                    ],
+                )
+                .map_err(txn_failed)?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::Applied { affected })
+        }
+        StoreCommand::DeletePreset { id } => {
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            let affected = transaction
+                .execute("DELETE FROM presets WHERE id = ?1", [id.as_str()])
+                .map_err(txn_failed)?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::Applied { affected })
+        }
         StoreCommand::InsertArtifact { artifact } => {
             // 幂等（UNIQUE(session_id, path) 兜底）：先尝试插入，命中冲突回读既有行；
             // 同一事务保证「查重 → 返回」原子，重复添加不产生重复行也不改写既有引用。
@@ -1289,7 +1457,8 @@ impl SessionQuery {
         let limit = i64::from(self.limit.unwrap_or(500).min(500));
         let sql = format!(
             "SELECT id, runtime_id, workspace_id, parent_session_id, title, status, model, system_prompt, \
-             config, token_usage, created_at, updated_at, closed_at, thinking_depth, permission_mode \
+             config, token_usage, created_at, updated_at, closed_at, thinking_depth, permission_mode, \
+             preset_id \
              FROM sessions{where_clause} \
              ORDER BY created_at DESC, rowid DESC LIMIT ?"
         );
@@ -1307,7 +1476,7 @@ impl ReadPool {
                 .query_row(
                     "SELECT id, runtime_id, workspace_id, parent_session_id, title, status, model, \
                      system_prompt, config, token_usage, created_at, updated_at, closed_at, thinking_depth, \
-                     permission_mode \
+                     permission_mode, preset_id \
                      FROM sessions WHERE id = ?1",
                     [session.as_str()],
                     read_session_row,
@@ -1381,9 +1550,28 @@ impl ReadPool {
         .await
     }
 
+    /// 会话是否存在在途 run（`queued` / `running`；M7-08 改派前置检查：ADR-026
+    /// §2.1-1「在途 run 或 waiting_permission → session_busy」）。
+    pub async fn session_has_active_run(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<bool, StoreError> {
+        let session = session_id.as_str().to_owned();
+        self.with_connection(move |connection| {
+            let count: i64 = connection
+                .query_row(
+                    "SELECT COUNT(*) FROM runs WHERE session_id = ?1 AND status IN ('queued','running')",
+                    [session.as_str()],
+                    |row| row.get(0),
+                )
+                .map_err(StoreError::from)?;
+            Ok(count > 0)
+        })
+        .await
+    }
+
     /// 按 id 读取 run（不存在为 `None`）。
-    pub async fn run(&self, run_id: &RunId) -> Result<Option<Run>, StoreError> {
-        let run = run_id.as_str().to_owned();
+    pub async fn run(&self, run_id: &RunId) -> Result<Option<Run>, StoreError> {        let run = run_id.as_str().to_owned();
         self.with_connection(move |connection| {
             connection
                 .query_row(
@@ -1443,7 +1631,7 @@ impl ReadPool {
             let mut statement = connection.prepare(
                 "SELECT id, runtime_id, workspace_id, parent_session_id, title, status, model, \
                  system_prompt, config, token_usage, created_at, updated_at, closed_at, thinking_depth, \
-                 permission_mode \
+                 permission_mode, preset_id \
                  FROM sessions \
                  WHERE status NOT IN ('idle', 'completed', 'failed', 'cancelled') \
                  ORDER BY created_at ASC, rowid ASC",
@@ -1855,6 +2043,23 @@ impl ReadPool {
         .await
     }
 
+    /// 全部工作区（M7-08 `workspaces_list`；按 `updated_at` 降序、`rowid` 降序稳定排序）。
+    pub async fn workspaces(&self) -> Result<Vec<Workspace>, StoreError> {
+        self.with_connection(move |connection| {
+            let mut statement = connection.prepare(
+                "SELECT id, name, root_path, memory_files, created_at, updated_at \
+                 FROM workspaces ORDER BY updated_at DESC, rowid DESC",
+            )?;
+            let rows = statement.query_map([], read_workspace_row)?;
+            let mut workspaces = Vec::new();
+            for row in rows {
+                workspaces.push(row?);
+            }
+            Ok(workspaces)
+        })
+        .await
+    }
+
     /// 按 id 读取工作区（不存在为 `None`；M3-08 `workspace_set` 的 `workspace_id` 分支）。
     pub async fn workspace(
         &self,
@@ -1907,6 +2112,85 @@ impl ReadPool {
                      FROM workspaces ORDER BY updated_at DESC, rowid DESC LIMIT 1",
                     [],
                     read_workspace_row,
+                )
+                .optional()
+                .map_err(StoreError::from)
+        })
+        .await
+    }
+
+    /// 工作区会话计数快照（M7-08 `workspaces_list`；ADR-026 §2.1-1）。
+    ///
+    /// 聚合口径：按 `sessions.workspace_id` 分组；`active` = 在途口径（会话状态
+    /// `creating`/`running`/`paused`/`waiting_permission`，或存在 `queued`/`running`
+    /// run——与 [`Self::active_work_counts`] 同源）；`total` 含终态。
+    /// `workspace_id IS NULL` 归入合成组（不建 `workspaces` 行）。
+    pub async fn workspace_session_counts(&self) -> Result<WorkspaceSessionCounts, StoreError> {
+        self.with_connection(move |connection| {
+            let mut statement = connection.prepare(
+                "SELECT workspace_id, COUNT(*) AS total, \
+                   SUM(CASE WHEN status IN ('creating','running','paused','waiting_permission') \
+                              OR EXISTS (SELECT 1 FROM runs \
+                                           WHERE runs.session_id = sessions.id \
+                                             AND runs.status IN ('queued','running')) \
+                        THEN 1 ELSE 0 END) AS active \
+                 FROM sessions GROUP BY workspace_id",
+            )?;
+            let rows = statement.query_map([], |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                ))
+            })?;
+            let mut counts = WorkspaceSessionCounts::default();
+            for row in rows {
+                let (workspace_id, total, active) = row?;
+                let count = WorkspaceSessionCount {
+                    active: u64::try_from(active.unwrap_or(0)).unwrap_or(u64::MAX),
+                    total: u64::try_from(total).unwrap_or(u64::MAX),
+                };
+                match workspace_id {
+                    Some(workspace_id) => {
+                        counts.by_workspace.insert(workspace_id, count);
+                    }
+                    None => counts.unassigned = count,
+                }
+            }
+            Ok(counts)
+        })
+        .await
+    }
+
+    /// Agent 预设清单（M7-09 `presets_list` 语义；内置在前、按 `created_at` 升序、
+    /// `rowid` 兜底稳定顺序——内置播种先于自定义行，故自然置前）。
+    pub async fn presets(&self) -> Result<Vec<Preset>, StoreError> {
+        self.with_connection(move |connection| {
+            let mut statement = connection.prepare(
+                "SELECT id, name, system_prompt, is_builtin, created_at, updated_at \
+                 FROM presets ORDER BY is_builtin DESC, created_at ASC, rowid ASC",
+            )?;
+            let rows = statement.query_map([], read_preset_row)?;
+            let mut presets = Vec::new();
+            for row in rows {
+                presets.push(row?);
+            }
+            Ok(presets)
+        })
+        .await
+    }
+
+    /// 按 id 读取预设（不存在为 `None`；`preset_update`/`preset_delete`/`session_create`
+    /// 的存在性判定）。
+    pub async fn preset(&self, preset_id: &PresetId) -> Result<Option<Preset>, StoreError> {
+        let id = preset_id.as_str().to_owned();
+        self.with_connection(move |connection| {
+            connection
+                .query_row(
+                    "SELECT id, name, system_prompt, is_builtin, created_at, updated_at \
+                     FROM presets WHERE id = ?1",
+                    [id.as_str()],
+                    read_preset_row,
                 )
                 .optional()
                 .map_err(StoreError::from)
@@ -1987,6 +2271,17 @@ fn read_workspace_row(row: &Row<'_>) -> rusqlite::Result<Workspace> {
     })
 }
 
+fn read_preset_row(row: &Row<'_>) -> rusqlite::Result<Preset> {
+    Ok(Preset {
+        id: PresetId::new(row.get::<_, String>(0)?).map_err(|_| parse_column_error(0, "id"))?,
+        name: row.get(1)?,
+        system_prompt: row.get(2)?,
+        is_builtin: row.get::<_, i64>(3)? != 0,
+        created_at: row.get(4)?,
+        updated_at: row.get(5)?,
+    })
+}
+
 fn read_session_row(row: &Row<'_>) -> rusqlite::Result<Session> {
     let status: String = row.get(5)?;
     let status = status
@@ -2025,6 +2320,10 @@ fn read_session_row(row: &Row<'_>) -> rusqlite::Result<Session> {
             PermissionMode::from_code(&value)
                 .ok_or_else(|| parse_column_error(14, "permission_mode"))?
         },
+        preset_id: row
+            .get::<_, Option<String>>(15)?
+            .map(|value| PresetId::new(value).map_err(|_| parse_column_error(15, "preset_id")))
+            .transpose()?,
     })
 }
 
@@ -2228,6 +2527,7 @@ mod tests {
             model: None,
             thinking_depth: aether_core::THINKING_DEPTH_DEFAULT,
             permission_mode: PermissionMode::default(),
+            preset_id: None,
             system_prompt: None,
             config: serde_json::json!({}),
             token_usage: TokenUsage::default(),
