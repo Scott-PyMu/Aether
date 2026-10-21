@@ -73,6 +73,13 @@ fn plain(path: &Path) -> String {
     text.strip_prefix(r"\\?\").unwrap_or(&text).to_owned()
 }
 
+/// 不做 canonicalize 的展示路径（合成组 root_path 原样返回 `data_dir`；
+/// CI 临时目录可能含 `RUNNER~1` 8.3 短名，canonicalize 会改写为长名）。
+fn plain_raw(path: &Path) -> String {
+    let text = path.to_string_lossy().to_string();
+    text.strip_prefix(r"\\?\").unwrap_or(&text).to_owned()
+}
+
 /// 目标文件可能尚不存在：canonicalize 父目录后拼接（测试夹具口径同 M3-08
 /// `outside_target`；规避 CI 临时目录 8.3 短名别名）。
 fn plain_join(path: &Path) -> String {
@@ -357,7 +364,7 @@ fn list_create_update_and_synthetic_default_group() {
     assert_eq!(listed["unassigned"]["name"], "默认（数据目录）");
     assert_eq!(
         listed["unassigned"]["root_path"].as_str(),
-        Some(plain(harness.dir.path()).as_str()),
+        Some(plain_raw(harness.dir.path()).as_str()),
         "合成组展示数据目录根路径（不建 workspaces 行）"
     );
 

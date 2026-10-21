@@ -1743,12 +1743,7 @@ impl IpcBackend for SessionBackend {
                 .session(&session_id)
                 .await
                 .map_err(|error| IpcError::internal(format!("会话读取失败：{error}")))?
-                .ok_or_else(|| {
-                    IpcError::invalid_value(format!(
-                        "会话不存在（session_not_found）：{}",
-                        session_id.as_str()
-                    ))
-                })?;
+                .ok_or_else(|| IpcError::session_not_found(session_id.as_str()))?;
             ensure_pause_supported(&supervisor, &session.runtime_id).await?;
             let report = manager
                 .pause(&session_id)
@@ -1779,12 +1774,7 @@ impl IpcBackend for SessionBackend {
                 .session(&session_id)
                 .await
                 .map_err(|error| IpcError::internal(format!("会话读取失败：{error}")))?
-                .ok_or_else(|| {
-                    IpcError::invalid_value(format!(
-                        "会话不存在（session_not_found）：{}",
-                        session_id.as_str()
-                    ))
-                })?;
+                .ok_or_else(|| IpcError::session_not_found(session_id.as_str()))?;
             ensure_pause_supported(&supervisor, &session.runtime_id).await?;
             ensure_runtime_available(&reads, &supervisor, &session.runtime_id).await?;
             let report = manager

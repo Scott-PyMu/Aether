@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -168,7 +168,8 @@ describe("M7-09/ADR-027 系统提示词注入插件", () => {
   });
 
   it("运行时行为：agent/created 注册 agent 作用域 section；按会话 id 读文件；缺失返回空串", async () => {
-    const home = mkdtempSync(join(tmpdir(), "dsh-prompt-run-"));
+    // CI Windows 临时目录可能为 8.3 短名（RUNNER~1）；动态 import 需真实长路径。
+    const home = realpathSync(mkdtempSync(join(tmpdir(), "dsh-prompt-run-")));
     const promptDir = join(home, "prompts");
     mkdirSync(promptDir, { recursive: true });
     const materialized = materializePromptPlugin(join(home, "profiles", "acp"));

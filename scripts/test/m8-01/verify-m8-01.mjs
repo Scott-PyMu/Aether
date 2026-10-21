@@ -47,8 +47,11 @@ const fixture = path.join(targetDir, "debug", `aether-adapter-fixture${exeSuffix
 const fixtureEnv = { AETHER_FIXTURE_BIN: fixture, AETHER_REQUIRE_FIXTURE: "1" };
 const { command: pnpm, prefix: pnpmPrefix } = pnpmCommand();
 
-// 夜跑期间禁止 cargo 访问网络/索引锁（依赖已锁定；降低并行构建争用）。
-process.env.CARGO_NET_OFFLINE ??= "true";
+// 可选：夜跑环境已预热依赖时可设 AETHER_CARGO_OFFLINE=1 禁止 cargo 访问网络
+// （CI 首次运行无缓存，默认必须联网解析/下载依赖）。
+if (process.env.AETHER_CARGO_OFFLINE === "1") {
+  process.env.CARGO_NET_OFFLINE ??= "true";
+}
 
 function argValue(flag, fallback) {
   const index = process.argv.indexOf(flag);

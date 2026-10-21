@@ -1,9 +1,9 @@
-# M4-06：IPC 参数校验全量复查清单（51 命令）
+# M4-06：IPC 参数校验全量复查清单（63 命令）
 
 > 依据：设计 D7（每个 IPC 命令显式校验：serde 严格反序列化 + 路径 canonicalize +
 > 枚举白名单 + 长度上限；失败返回结构化错误码，不落库、不透传下游）、M1-08 DoD3、
 > 各任务 DTO 登记（ADR-004/006/007/010/018/019/024）。
-> 机器核验：`node scripts/test/m4-04/verify-m4-04.mjs`（命令面 51 条三源一致 +
+> 机器核验：`node scripts/test/m4-04/verify-m4-04.mjs`（命令面 63 条三源一致 +
 > `ipc_validation`/`health_command`/`m1_06_startup_ipc`/`m1_06_picker` 矩阵回归）；
 > `node scripts/test/m4-06/verify-m4-06.mjs`（本清单 ↔ bindings 命令面逐条比对，
 > 缺失即失败）；本清单为逐条人工复查记录（签核栏）。
@@ -61,14 +61,28 @@
 | 49 | `session_resume` | 能力门实时复核；仅 `paused` 可恢复；`persist_degraded` 拒恢复（M7-03/ADR-017） | `ipc_validation.rs`；`m7_03_pause.rs` | ✅ |
 | 50 | `provider_test` | DTO 严格解析 + 畸形矩阵；无密钥不发请求（`invalid_value` field=api_key_ref）；五路径结构化结果含状态码（M7-06/ADR-024） | `ipc_validation.rs`；`m7_06_provider_connectivity.rs` | ✅ |
 | 51 | `provider_models_fetch` | 同 `provider_test` 校验；模型归一化（trim/去重/空串/超长跳过）与幂等 upsert（M7-06/ADR-024） | `ipc_validation.rs`；`m7_06_provider_connectivity.rs` | ✅ |
+| 52 | `workspaces_list` | 无参数；响应工作区清单 + 未分配合成组计数（M7-08/ADR-026） | `ipc_validation.rs`；`m7_08_workspaces.rs` | ✅ |
+| 53 | `workspace_create` | `name` ≤64 + 非空；`root_path` canonicalize/存在目录/同步盘拒绝/同根唯一（M7-08） | `ipc_validation.rs`；`m7_08_workspaces.rs` | ✅ |
+| 54 | `workspace_update` | `workspace_id` ULID + 名称校验；`root_path` 不可变（未知字段严格拒绝） | `ipc_validation.rs`；`m7_08_workspaces.rs` | ✅ |
+| 55 | `workspace_delete` | `workspace_id` 存在性；存在会话引用 → `workspace_in_use`（不级联/不改派） | `ipc_validation.rs`；`m7_08_workspaces.rs` | ✅ |
+| 56 | `session_workspace_assign` | 双 ULID；在途/等待审批 → `session_busy`；权限基准不重算（R15） | `ipc_validation.rs`；`m7_08_workspaces.rs` | ✅ |
+| 57 | `session_search` | query 非空/≤256；limit ≤100；offset ≥0；FTS 短语转义（M7-07/ADR-025） | `ipc_validation.rs`；`m7_07_session_manage.rs` | ✅ |
+| 58 | `session_rename` | `session_id` ULID；标题非空/≤256/控制字符拒绝；单写队列（M7-07） | `ipc_validation.rs`；`m7_07_session_manage.rs` | ✅ |
+| 59 | `session_delete` | `session_id` ULID；在途/待审批 → `session_busy`；硬删级联（events 不级联，R7） | `ipc_validation.rs`；`m7_07_session_manage.rs` | ✅ |
+| 60 | `presets_list` | 无参数；响应按创建时间升序（M7-09/ADR-026） | `ipc_validation.rs`；`m7_09_presets.rs` | ✅ |
+| 61 | `preset_add` | 名称 ≤64；提示词 ≤32KiB；非空；审计（M7-09） | `ipc_validation.rs`；`m7_09_presets.rs` | ✅ |
+| 62 | `preset_update` | `preset_id` 存在性；至少一项更新；内置可编辑（M7-09） | `ipc_validation.rs`；`m7_09_presets.rs` | ✅ |
+| 63 | `preset_delete` | `preset_id` 存在性；内置 → `builtin_preset_undeletable`（M7-09） | `ipc_validation.rs`；`m7_09_presets.rs` | ✅ |
 
-**错误码全集（27）**：`invalid_json`/`unknown_field`/`missing_field`/`invalid_type`/
+**错误码全集（32）**：`invalid_json`/`unknown_field`/`missing_field`/`invalid_type`/
 `invalid_value`/`invalid_enum`/`too_large`/`out_of_range`/`invalid_format`/`path_rejected`/
 `startup_blocked`/`migration_failed`/`internal`/`core_not_ready`/`not_implemented`/
 `readback_gap_too_large`/`artifact_path_rejected`/`builtin_provider_undeletable`/
 `provider_not_found`/`provider_model_not_found`/`rule_not_found`（M6-01）/`runtime_busy`、
 `no_candidate_runtime`（M7-01）/`pause_unsupported`（M7-03）/`provider_unreachable`、
-`provider_auth_failed`、`provider_error`（M7-06）——逐条测试引用覆盖由
+`provider_auth_failed`、`provider_error`（M7-06）/`session_not_found`（M7-07）/
+`workspace_not_found`、`workspace_in_use`（M7-08）/`preset_not_found`、
+`builtin_preset_undeletable`（M7-09）——逐条测试引用覆盖由
 `m4-04 DoD4-错误码` 机械核验（0 未覆盖）。
 
 **警告码子表**：`thinking_depth_unsupported`（同步判定路径响应警告 + 延迟判定路径

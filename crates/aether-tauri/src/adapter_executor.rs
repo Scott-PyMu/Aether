@@ -23,12 +23,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use aether_adapters::connection::ConnectionState;
+use aether_adapters::connection::{ConnectionState, RequestError};
 use aether_adapters::permission_loop::{
     PermissionGate, PermissionGateFuture, PermissionLoop, PermissionLoopProbe,
     PermissionLoopRequest, PermissionLoopSnapshot,
 };
-use aether_adapters::session_client::{AdapterSessionClient, RunOutcome};
+use aether_adapters::session_client::{
+    AdapterSessionClient, RunOutcome, SessionClientError, ADAPTER_DISCONNECTED_CODE,
+};
 use aether_adapters::supervisor::Supervisor;
 use aether_control::{
     EventPipeline, ExecutorFuture, ExecutorOutcome, RunExecutor, RunRequest, SubmitOutcome,
@@ -235,6 +237,18 @@ fn error_info(code: &str, message: impl Into<String>) -> ErrorInfo {
         code: code.to_owned(),
         message: message.into(),
         recoverable: true,
+    }
+}
+
+/// 请求错误 → run 收口错误：连接在响应前断开（含进程被禁用/回收）按 D5 归为
+/// `adapter_disconnected`（可重试），其余方法级错误保持 `adapter_request_failed`。
+fn request_error_info(error: SessionClientError) -> ErrorInfo {
+    match error {
+        SessionClientError::Request(RequestError::Disconnected { detail })
+        | SessionClientError::Request(RequestError::QueueClosed { detail }) => {
+            error_info(ADAPTER_DISCONNECTED_CODE, format!("适配器连接断开：{detail}"))
+        }
+        other => error_info(ADAPTER_REQUEST_FAILED_CODE, other.to_string()),
     }
 }
 
@@ -455,7 +469,7 @@ impl AdapterRunExecutor {
             .pause(&adapter_session)
             .await
             .map(|_| ())
-            .map_err(|error| error_info(ADAPTER_REQUEST_FAILED_CODE, error.to_string()))
+            .map_err(request_error_info)
     }
 
     /// 取得/重建 runtime 的会话客户端（确保适配器已就绪）。
@@ -569,7 +583,7 @@ impl AdapterRunExecutor {
                 Some(session.permission_mode.as_str()),
             )
             .await
-            .map_err(|error| error_info(ADAPTER_REQUEST_FAILED_CODE, error.to_string()))?;
+            .map_err(request_error_info)?;
         if let Some(native_id) = &created.native_id {
             let mut config = session.config.clone();
             match config.as_object_mut() {
@@ -691,7 +705,7 @@ impl AdapterRunExecutor {
                 &request.references,
             )
             .await
-            .map_err(|error| error_info(ADAPTER_REQUEST_FAILED_CODE, error.to_string()))?;
+            .map_err(request_error_info)?;
         let buffered = {
             let mut forward = lock(&self.forward);
             forward.register_run(&ack.run_id, &request.session_id, &request.run_id)
