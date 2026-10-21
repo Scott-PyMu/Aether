@@ -38,13 +38,19 @@ export function pnpmCommand() {
   const appData = process.env.APPDATA ?? path.join(os.homedir(), "AppData", "Roaming");
   const localAppData = process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local");
   const candidates = [
-    // pnpm/action-setup：PNPM_HOME 指向 node_modules\.bin，里面有 pnpm.cmd / pnpm.exe。
-    process.env.PNPM_HOME && path.join(process.env.PNPM_HOME, "pnpm.cmd"),
+    // pnpm/action-setup：PNPM_HOME 指向 node_modules\.bin。
+    // 优先独立 exe / pnpm.cjs（Node 可直接 spawn），.cmd 仅作最后兜底
+    //（Windows Node 22+ 直接 spawn .cmd 会 EINVAL）。
     process.env.PNPM_HOME && path.join(process.env.PNPM_HOME, "pnpm.exe"),
+    process.env.PNPM_HOME &&
+      path.join(process.env.PNPM_HOME, "..", "pnpm", "bin", "pnpm.cjs"),
+    process.env.PNPM_HOME &&
+      path.join(process.env.PNPM_HOME, "..", "pnpm", "bin", "pnpm.js"),
     process.env.PNPM_HOME && path.join(process.env.PNPM_HOME, "pnpm.cjs"),
     path.join(appData, "npm", "node_modules", "pnpm", "bin", "pnpm.cjs"),
     path.join(appData, "npm", "node_modules", "pnpm", "bin", "pnpm.js"),
     localAppData && path.join(localAppData, "pnpm", "pnpm.exe"),
+    process.env.PNPM_HOME && path.join(process.env.PNPM_HOME, "pnpm.cmd"),
   ].filter(Boolean);
   for (const candidate of candidates) {
     if (!existsSync(candidate)) continue;

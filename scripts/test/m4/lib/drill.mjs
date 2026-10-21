@@ -19,6 +19,15 @@ import { repoRoot } from "../../lib/exec.mjs";
 
 const PHASES = ["trigger", "response", "recovery"];
 
+function quoteWindowsArg(arg) {
+  if (!/[ \t"&|<>^]/.test(arg)) return arg;
+  return `"${`${arg}`.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, "$1$1")}"`;
+}
+
+function winShimLine(command, args) {
+  return [command, ...args].map(quoteWindowsArg).join(" ");
+}
+
 /** 归一化时间戳为文件系统安全的字符串。 */
 export function stampNow() {
   return new Date().toISOString().replace(/[:.]/g, "-");
@@ -49,13 +58,23 @@ export function createDrill(options) {
 
   function capture(command, args, { env, cwd, timeoutMs } = {}) {
     const started = Date.now();
-    const result = spawnSync(command, args, {
+    const options = {
       cwd: cwd ?? repoRoot,
       env: { ...process.env, ...(env ?? {}) },
       encoding: "utf8",
       maxBuffer: 64 * 1024 * 1024,
       timeout: timeoutMs ?? 30 * 60 * 1000,
-    });
+    };
+    let result = spawnSync(command, args, options);
+    // Windows Node 22+ 直接 spawn .cmd/.bat 返回 EINVAL；pnpm/action-setup 的
+    // 垫片在 CI 常见，回退到 cmd.exe 外壳执行（内部固定命令，非用户输入）。
+    if (
+      process.platform === "win32" &&
+      result.error?.code === "EINVAL" &&
+      /\.(cmd|bat)$/i.test(command)
+    ) {
+      result = spawnSync(winShimLine(command, args), { ...options, shell: true });
+    }
     const elapsedMs = Date.now() - started;
     const out = `${result.stdout ?? ""}${result.stderr ?? ""}`;
     return { status: result.status ?? 1, out, elapsedMs, error: result.error };
