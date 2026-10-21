@@ -134,8 +134,10 @@ drill.define({
       command: cargo,
       args: ["test", "-p", "aether-store", "--test", "m2_06_shutdown", "--", "--nocapture"],
       markers: [
-        { phase: "response", prefix: "[m2-06 DoD3]" },
-        { phase: "recovery", prefix: "[m2-06 DoD2]" },
+        { phase: "response", prefix: "[m2-06 DoD3]", contains: true },
+        // Rust test harness 在并发测试时可能把 `test <name> ... ` 与测试内
+        // println 拼在同一行；按子串提取（证据行仍必须存在）。
+        { phase: "recovery", prefix: "[m2-06 DoD2]", contains: true },
       ],
     },
     {
