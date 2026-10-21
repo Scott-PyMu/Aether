@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-10-19T10:41:25.957Z",
-  "cargo_lock_sha256": "51577ddab3228fe532451130e30dfc6a12f392d6574ae053a343b7d4e1ff602e",
+  "generated_at": "2026-10-21T07:05:20.236Z",
+  "cargo_lock_sha256": "80284c4f89d50b54f8e6c4f70aa992a76ce4847cbe50084db9d614ce2610098c",
   "pnpm_lock_sha256": "2e156293cfa942d26c4ff536c8304ad941ecb876050e586bc1293a03d44a5768",
   "rust_crate_count": 595,
   "npm_package_count": 513,
