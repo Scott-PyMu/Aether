@@ -169,7 +169,8 @@ describe("M7-09/ADR-027 系统提示词注入插件", () => {
 
   it("运行时行为：agent/created 注册 agent 作用域 section；按会话 id 读文件；缺失返回空串", async () => {
     // CI Windows 临时目录可能为 8.3 短名（RUNNER~1）；动态 import 需真实长路径。
-    const home = realpathSync(mkdtempSync(join(tmpdir(), "dsh-prompt-run-")));
+    // `realpathSync.native` 走 OS API，能展开 8.3 短名（JS 实现不一定）。
+    const home = realpathSync.native(mkdtempSync(join(tmpdir(), "dsh-prompt-run-")));
     const promptDir = join(home, "prompts");
     mkdirSync(promptDir, { recursive: true });
     const materialized = materializePromptPlugin(join(home, "profiles", "acp"));
