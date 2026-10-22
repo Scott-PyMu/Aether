@@ -177,7 +177,7 @@ export function PermissionPanel({
             权限请求
           </h3>
           <p className="permission-action">
-            {active.resource}:{active.action}
+            {active.resource} · {active.action}
           </p>
           <dl className="permission-targets">
             <dt>原始请求</dt>
@@ -261,7 +261,7 @@ export function PermissionPanel({
               data-status={item.status}
               data-request-id={item.requestId}
             >
-              <span>{item.resource}:{item.action}</span>
+              <span>{item.resource} · {item.action}</span>
               <span className="permission-resolved-result">
                 {item.status === "timeout"
                   ? "已超时自动拒绝（300s）"

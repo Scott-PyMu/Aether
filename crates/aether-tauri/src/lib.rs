@@ -22,6 +22,7 @@ pub mod bindings;
 pub mod config;
 pub mod core_health;
 pub mod diagnostics_control;
+pub mod credential_broker;
 pub mod disk;
 pub mod event_bridge;
 pub mod ipc;
@@ -537,6 +538,23 @@ fn build_backend(
     // M2-08 启动序列尾段（D2：库打开 + quick_check → 孤儿清理 → 迁移/预热）：
     // 清理台账残留（强杀核心后的孤儿）；按持久化偏好预热（M7-01/ADR-015 决策 5：
     // `enabled=0` 不 spawn、置 `cold → disabled(user_disabled)`）；接线心跳监控（T5b）。
+    // M7-06/ADR-024 / ADR-028：存储/密钥存储就绪后**先接线**，再预热适配器——
+    // 否则首次 spawn 拿不到供应商 env/broker（只有后续 enable/retry 才生效）。
+    let boot_secrets = if backup_deps.is_some() {
+        provider_control::boot_secret_store(&data_dir)
+    } else {
+        None
+    };
+    if let Some(reads) = reads.as_ref() {
+        provider_env_hook.wire(reads.clone(), boot_secrets.clone());
+    }
+    // ADR-028：本地凭据 broker（仅本机通道；失败时适配器回退单供应商 env）。
+    if let Some(info) =
+        credential_broker::start(provider_env_hook.clone(), &data_dir, &handle)
+    {
+        provider_env_hook.set_broker_info(info);
+    }
+
     let monitors = match &supervisor {
         Some(supervisor) => {
             let prefs = match &reads {
@@ -623,16 +641,6 @@ fn build_backend(
     // M5-03（D13/D10/ADR-020）：主密钥存储（Keychain；A3 降级加密文件）在备份与
     // 供应商之间共享同一实例（keyring 自检一次）；加密缺省开启，密钥不可用时
     // 备份暂停并告警（不产出明文，ADR-020 缓解措施）。降级启动（无存储）不探测。
-    let boot_secrets = if backup_deps.is_some() {
-        provider_control::boot_secret_store(&data_dir)
-    } else {
-        None
-    };
-    // M7-06/ADR-024：消费映射注入点接线（存储/密钥存储均就绪；降级启动时
-    // secrets = None → 不注入）。
-    if let Some(reads) = reads.as_ref() {
-        provider_env_hook.wire(reads.clone(), boot_secrets.clone());
-    }
     let inner: std::sync::Arc<dyn ipc::IpcBackend> = match backup_deps {
         Some((reads, write)) => {
             let backend = std::sync::Arc::new(backup_control::BackupControlBackend::new(

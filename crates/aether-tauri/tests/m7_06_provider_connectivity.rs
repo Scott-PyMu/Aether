@@ -188,6 +188,7 @@ impl Fixture {
             name: "M7-06 桩供应商".to_owned(),
             provider_type: "custom".to_owned(),
             base_url: None,
+            endpoints: "{}".to_owned(),
             api_key_ref,
             enabled: true,
             is_builtin: false,

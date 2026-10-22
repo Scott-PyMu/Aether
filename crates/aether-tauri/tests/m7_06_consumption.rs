@@ -1,4 +1,4 @@
-﻿//! M7-06/ADR-024 DoD3：三运行时「配置供应商 → run 真实使用该 base URL/模型」证据
+//! M7-06/ADR-024 DoD3：三运行时「配置供应商 → run 真实使用该 base URL/模型」证据
 //! （opt-in 真实冒烟；缺凭证时由 `scripts/test/m7-06/verify-m7-06.mjs` 打印显式 SKIP）。
 //!
 //! 链路（与生产同口径）：临时库登记供应商（`base_url` = 本地记录型代理；`api_key_ref`
@@ -282,6 +282,7 @@ fn run_case(runtime_id: &str) {
         name: format!("M7-06 {runtime_id}"),
         provider_type: case.provider_type.to_owned(),
         base_url: Some(format!("http://127.0.0.1:{}{prefix}", proxy.port)),
+        endpoints: "{}".to_owned(),
         api_key_ref: Some(reference.to_uri()),
         enabled: true,
         is_builtin: false,

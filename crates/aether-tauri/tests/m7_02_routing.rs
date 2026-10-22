@@ -138,6 +138,7 @@ fn create_request(runtime_id: Option<&str>, model: Option<&str>) -> SessionCreat
         thinking_depth: None,
         permission_mode: None,
         preset_id: None,
+        provider_id: None,
     }
 }
 
@@ -326,6 +327,7 @@ fn model_condition_requires_enabled_provider() {
                 name: "Test".to_owned(),
                 provider_type: "custom".to_owned(),
                 base_url: Some("https://example.invalid".to_owned()),
+                endpoints: "{}".to_owned(),
                 api_key_ref: None,
                 enabled: true,
                 is_builtin: false,

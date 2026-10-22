@@ -1,4 +1,4 @@
-﻿//! M3-08 集成测试：工作区记忆（设计 D14/D9；ADR-004 决策 3；v1.18 网关接线追记）。
+//! M3-08 集成测试：工作区记忆（设计 D14/D9；ADR-004 决策 3；v1.18 网关接线追记）。
 //!
 //! 覆盖（实施计划 v1.18 §4 M3-08 七项 DoD 的集成面）：
 //! - DoD1：`workspace_set` 绑定 → 新会话按工作区注入记忆（优先级 + 32KB 上限文本由
@@ -262,6 +262,7 @@ impl Harness {
                 thinking_depth: None,
                 permission_mode: None,
                 preset_id: None,
+                provider_id: None,
             })
             .expect("session_create");
         serde_json::from_value(value).expect("Session 反序列化")
@@ -424,6 +425,7 @@ fn workspace_set_injects_memory_and_swaps_permission_root() {
             thinking_depth: None,
             permission_mode: None,
             preset_id: None,
+            provider_id: None,
         })
         .expect_err("未知 workspace_id 必须拒绝");
     assert_eq!(

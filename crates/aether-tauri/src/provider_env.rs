@@ -25,6 +25,8 @@ use aether_adapters::supervisor::{SpawnEnvFuture, SpawnEnvSource};
 use aether_security::{KeychainRef, SecretStore};
 use aether_store::ReadPool;
 
+use crate::credential_broker::BrokerInfo;
+
 /// Claude Code 密钥环境变量（ADR-024 A-1）。
 pub const ENV_ANTHROPIC_API_KEY: &str = "ANTHROPIC_API_KEY";
 /// Claude Code Base URL 环境变量（ADR-024 A-1）。
@@ -43,6 +45,8 @@ pub const ENV_AETHER_PROVIDER_BASE_URL: &str = "AETHER_PROVIDER_BASE_URL";
 pub const ENV_AETHER_PROVIDER_ENV_KEY: &str = "AETHER_PROVIDER_ENV_KEY";
 /// 消费映射辅助（非密钥）：模型清单 JSON（DSH provider 条目 `models`）。
 pub const ENV_AETHER_PROVIDER_MODELS: &str = "AETHER_PROVIDER_MODELS";
+/// ADR-028：本地凭据 broker 地址 + token（JSON `{endpoint,token}`；不含供应商密钥）。
+pub const ENV_CREDENTIAL_BROKER: &str = "AETHER_CREDENTIAL_BROKER";
 /// 消费映射辅助（非密钥）：默认模型 id（DSH acp 行 `model`；实测：缺省模型不设置时
 /// DSH 不注册该 provider 的模型选项，M7-06 证据）。
 pub const ENV_AETHER_PROVIDER_MODEL: &str = "AETHER_PROVIDER_MODEL";
@@ -57,6 +61,37 @@ pub fn expected_provider_type(runtime_id: &str) -> Option<&'static str> {
     }
 }
 
+/// ADR-028：读取 provider 的协议端点（`{}`/缺失 → `None`，由调用方回退 `base_url`）。
+fn protocol_endpoint(provider: &aether_store::ProviderRecord, protocol: &str) -> Option<String> {
+    let parsed: serde_json::Value = serde_json::from_str(&provider.endpoints).ok()?;
+    parsed
+        .get(protocol)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+/// ADR-028 过渡：运行时协议可用性（显式端点优先；无端点时回退到旧类型规则）。
+pub(crate) fn provider_supports_protocol(
+    provider: &aether_store::ProviderRecord,
+    runtime_id: &str,
+) -> bool {
+    match runtime_id {
+        "claude-code" => {
+            provider.provider_type == "anthropic"
+                || protocol_endpoint(provider, "anthropic").is_some()
+        }
+        "codex" => {
+            provider.provider_type == "openai" || protocol_endpoint(provider, "openai").is_some()
+        }
+        "deepseek-harness" => {
+            provider.provider_type == "deepseek" || protocol_endpoint(provider, "dsh").is_some()
+        }
+        _ => false,
+    }
+}
+
 /// DSH provider 条目模型清单上限（env 体积护栏；常量级调参记任务证据）。
 pub const DSH_MODELS_ENV_CAP: usize = 100;
 
@@ -68,6 +103,8 @@ pub struct ProviderEnvHook {
     data_dir: PathBuf,
     reads: OnceLock<ReadPool>,
     secrets: OnceLock<Option<Arc<dyn SecretStore>>>,
+    /// ADR-028：凭据 broker 地址/token（broker 启动后接线；未接线 = 旧单供应商路径）。
+    broker: OnceLock<BrokerInfo>,
 }
 
 impl ProviderEnvHook {
@@ -77,6 +114,7 @@ impl ProviderEnvHook {
             data_dir,
             reads: OnceLock::new(),
             secrets: OnceLock::new(),
+            broker: OnceLock::new(),
         })
     }
 
@@ -86,13 +124,18 @@ impl ProviderEnvHook {
         let _ = self.secrets.set(secrets);
     }
 
+    /// ADR-028：broker 启动后注入地址/token（幂等：仅首次生效）。
+    pub fn set_broker_info(&self, info: BrokerInfo) {
+        let _ = self.broker.set(info);
+    }
+
     /// Codex 隔离 home（消费映射命中时注入 `CODEX_HOME`）。
     fn codex_home(&self) -> PathBuf {
         self.data_dir.join("runtime-homes").join("codex")
     }
 
     async fn resolve(&self, runtime_id: &str) -> Vec<(String, String)> {
-        let Some(expected_type) = expected_provider_type(runtime_id) else {
+        let Some(_expected_type) = expected_provider_type(runtime_id) else {
             return Vec::new();
         };
         let Some(reads) = self.reads.get() else {
@@ -109,10 +152,11 @@ impl ProviderEnvHook {
                 return Vec::new();
             }
         };
-        // 选择规则：启用 + 类型映射命中 → `(updated_at, id)` 最大者（确定性）。
+        // 选择规则（ADR-028 过渡）：启用 + 该运行时协议端点可用（显式 endpoints 或类型回退）
+        // → `(updated_at, id)` 最大者（确定性）。显式 provider_id 的路由由 Broker 阶段替代。
         let selected = providers
             .iter()
-            .filter(|provider| provider.enabled && provider.provider_type == expected_type)
+            .filter(|provider| provider.enabled && provider_supports_protocol(provider, runtime_id))
             .max_by(|left, right| {
                 (left.updated_at, left.id.as_str()).cmp(&(right.updated_at, right.id.as_str()))
             });
@@ -175,7 +219,10 @@ impl ProviderEnvHook {
         match runtime_id {
             "claude-code" => {
                 let mut envs = vec![(ENV_ANTHROPIC_API_KEY.to_owned(), key)];
-                if let Some(base_url) = base_url.filter(|value| !value.trim().is_empty()) {
+                if let Some(base_url) = protocol_endpoint(provider, "anthropic")
+                    .or(base_url)
+                    .filter(|value| !value.trim().is_empty())
+                {
                     envs.push((ENV_ANTHROPIC_BASE_URL.to_owned(), base_url));
                 }
                 envs
@@ -186,7 +233,10 @@ impl ProviderEnvHook {
                     (ENV_AETHER_PROVIDER_ID.to_owned(), provider_id),
                     (ENV_AETHER_PROVIDER_ENV_KEY.to_owned(), ENV_OPENAI_API_KEY.to_owned()),
                 ];
-                if let Some(base_url) = base_url.filter(|value| !value.trim().is_empty()) {
+                if let Some(base_url) = protocol_endpoint(provider, "openai")
+                    .or(base_url)
+                    .filter(|value| !value.trim().is_empty())
+                {
                     envs.push((ENV_AETHER_PROVIDER_BASE_URL.to_owned(), base_url));
                 }
                 let home = self.codex_home();
@@ -209,7 +259,10 @@ impl ProviderEnvHook {
                     (ENV_AETHER_PROVIDER_ID.to_owned(), provider_id.clone()),
                     (ENV_AETHER_PROVIDER_ENV_KEY.to_owned(), ENV_DEEPSEEK_API_KEY.to_owned()),
                 ];
-                if let Some(base_url) = base_url.filter(|value| !value.trim().is_empty()) {
+                if let Some(base_url) = protocol_endpoint(provider, "dsh")
+                    .or(base_url)
+                    .filter(|value| !value.trim().is_empty())
+                {
                     envs.push((ENV_AETHER_PROVIDER_BASE_URL.to_owned(), base_url));
                 }
                 // 模型清单（enabled；DSH provider 条目 `models`）——上限护栏，
@@ -248,8 +301,108 @@ impl ProviderEnvHook {
     }
 }
 
+/// ADR-028：broker 返回给适配器的单供应商凭据（只在当前 run 使用）。
+#[derive(Clone, PartialEq, Eq)]
+pub struct ProviderCredential {
+    pub base_url: Option<String>,
+    pub api_key: String,
+    pub auth_env: String,
+}
+
+/// `protocol` → 适配器子进程认证 env 名。
+fn auth_env_for(protocol: &str) -> Option<&'static str> {
+    match protocol {
+        "anthropic" => Some(ENV_ANTHROPIC_API_KEY),
+        "openai" => Some(ENV_OPENAI_API_KEY),
+        "dsh" => Some(ENV_DEEPSEEK_API_KEY),
+        _ => None,
+    }
+}
+
+/// ADR-028：协议端点解析（显式 endpoints 优先；DeepSeek 的 Anthropic 端点可回退追加）。
+fn resolve_protocol_base_url(
+    provider: &aether_store::ProviderRecord,
+    protocol: &str,
+) -> Option<String> {
+    if let Some(endpoint) = protocol_endpoint(provider, protocol) {
+        return Some(endpoint);
+    }
+    let base = provider.base_url.as_deref()?.trim();
+    if base.is_empty() {
+        return None;
+    }
+    if protocol == "anthropic"
+        && provider.provider_type == "deepseek"
+        && !base.trim_end_matches('/').ends_with("/anthropic")
+    {
+        return Some(format!("{}/anthropic", base.trim_end_matches('/')));
+    }
+    Some(base.to_owned())
+}
+
+impl ProviderEnvHook {
+    /// ADR-028：按 `provider_id + protocol` 读取单供应商凭据（broker 调用）。
+    ///
+    /// 密钥只在此调用期间进入内存；调用方负责写入当前 CLI 子进程 env，不缓存/不落盘。
+    pub async fn resolve_credential(
+        &self,
+        provider_id: &str,
+        protocol: &str,
+    ) -> Result<ProviderCredential, String> {
+        let reads = self
+            .reads
+            .get()
+            .ok_or_else(|| "凭据 broker 未接线（存储未就绪）".to_owned())?;
+        let provider = reads
+            .provider(provider_id)
+            .await
+            .map_err(|error| format!("供应商读取失败：{error}"))?
+            .ok_or_else(|| format!("供应商不存在：{provider_id}"))?;
+        if !provider.enabled {
+            return Err(format!("供应商已停用：{provider_id}"));
+        }
+        let base_url = resolve_protocol_base_url(&provider, protocol);
+        let auth_env = auth_env_for(protocol)
+            .ok_or_else(|| format!("未知协议：{protocol}"))?
+            .to_owned();
+        let api_key_ref = provider
+            .api_key_ref
+            .as_deref()
+            .filter(|reference| !reference.is_empty())
+            .ok_or_else(|| format!("供应商未配置密钥：{provider_id}"))?;
+        let reference = KeychainRef::parse(api_key_ref)
+            .map_err(|error| format!("api_key_ref 不可解析：{error}"))?;
+        let store = match self.secrets.get() {
+            Some(Some(store)) => Arc::clone(store),
+            _ => return Err("安全存储未挂载".to_owned()),
+        };
+        let secret = tokio::task::spawn_blocking(move || store.get(&reference))
+            .await
+            .map_err(|error| format!("密钥读取任务失败：{error}"))?
+            .map_err(|error| format!("密钥读取失败：{error}"))?;
+        Ok(ProviderCredential {
+            base_url,
+            api_key: secret.expose().to_owned(),
+            auth_env,
+        })
+    }
+}
+
 impl SpawnEnvSource for ProviderEnvHook {
     fn spawn_env<'a>(&'a self, runtime_id: &'a str) -> SpawnEnvFuture<'a> {
-        Box::pin(async move { self.resolve(runtime_id).await })
+        Box::pin(async move {
+            let mut envs = self.resolve(runtime_id).await;
+            // ADR-028：broker 地址/token 与单供应商 env 并行注入；适配器按会话选择。
+            if let Some(info) = self.broker.get() {
+                match serde_json::to_string(info) {
+                    Ok(text) => envs.push((ENV_CREDENTIAL_BROKER.to_owned(), text)),
+                    Err(error) => tracing::warn!(
+                        error = %error,
+                        "凭据 broker 信息序列化失败：不注入（适配器回退单供应商 env）"
+                    ),
+                }
+            }
+            envs
+        })
     }
 }

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 模型与供应商配置页（M3-11；ADR-010 决策 3/4；S-05 设置覆盖层内页面）。
  *
  * - 供应商列表：卡片（图标/名称/描述「N 个模型已启用」）+ 启用开关
@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   OFFICIAL_PROVIDER_PRESETS,
+  PROVIDER_ENDPOINT_PRESETS,
   providerAbbr,
   providerColor,
   providerDesc,
@@ -46,6 +47,8 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
   const [formType, setFormType] = useState<ProviderType>("anthropic");
   const [formName, setFormName] = useState("");
   const [formBaseUrl, setFormBaseUrl] = useState("");
+  /** ADR-028：协议端点（`anthropic`/`openai`/`google`/`dsh`）。 */
+  const [formEndpoints, setFormEndpoints] = useState<Record<string, string>>({});
   const [formApiKey, setFormApiKey] = useState("");
   const [apiKeyTouched, setApiKeyTouched] = useState(false);
   const [showKey, setShowKey] = useState(false);
@@ -113,10 +116,12 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
       setFormType("anthropic");
       setFormName(preset.name);
       setFormBaseUrl(preset.baseUrl);
+      setFormEndpoints({ ...PROVIDER_ENDPOINT_PRESETS.anthropic.endpoints });
     } else {
       setFormType("custom");
       setFormName("");
       setFormBaseUrl("");
+      setFormEndpoints({});
     }
     setView("form");
   }, []);
@@ -127,6 +132,12 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
     setFormType(provider.type);
     setFormName(provider.name);
     setFormBaseUrl(provider.base_url ?? "");
+    const endpointPreset = PROVIDER_ENDPOINT_PRESETS[provider.type]?.endpoints ?? {};
+    setFormEndpoints(
+      provider.endpoints && Object.keys(provider.endpoints).length > 0
+        ? { ...provider.endpoints }
+        : { ...endpointPreset },
+    );
     setFormApiKey("");
     setApiKeyTouched(false);
     setShowKey(false);
@@ -158,6 +169,7 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
       const preset = OFFICIAL_PROVIDER_PRESETS[type];
       setFormName(preset.name);
       setFormBaseUrl(preset.baseUrl);
+      setFormEndpoints({ ...PROVIDER_ENDPOINT_PRESETS[type].endpoints });
     }
   }, []);
 
@@ -178,12 +190,18 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
     clearError();
     setTestResult(null);
     setModelsNotice(null);
+    const endpoints = Object.fromEntries(
+      Object.entries(formEndpoints)
+        .map(([protocol, url]) => [protocol, url.trim()] as const)
+        .filter(([, url]) => url.length > 0),
+    );
     try {
       if (editing) {
         const input: Parameters<ProvidersIpc["update"]>[0] = {
           id: editing.id,
           name,
           base_url: baseUrl,
+          endpoints,
           enabled: formEnabled,
         };
         if (formApiKey) {
@@ -198,6 +216,7 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
         const input: Parameters<ProvidersIpc["create"]>[0] = {
           name,
           type: formType,
+          endpoints,
           enabled: formEnabled,
         };
         if (baseUrl) {
@@ -224,6 +243,7 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
     editing,
     formApiKey,
     formBaseUrl,
+    formEndpoints,
     formEnabled,
     formMode,
     formName,
@@ -382,13 +402,22 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
     return (
       <section className="providers-page" data-testid="providers-page">
         <div className="provider-form" data-testid="provider-form">
-          <div className="provider-form-head">
-            <button type="button" data-testid="provider-form-back" onClick={backToList}>
-              返回
-            </button>
-            <h3>{formTitle}</h3>
+          <div className="form-head">
             <button
               type="button"
+              className="back"
+              data-testid="provider-form-back"
+              aria-label="返回供应商列表"
+              onClick={backToList}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M19 12H5M12 19l-7-7 7-7" />
+              </svg>
+            </button>
+            <div className="title">{formTitle}</div>
+            <button
+              type="button"
+              className="btn-primary"
               data-testid="provider-form-save"
               disabled={busy}
               onClick={() => void onSave()}
@@ -397,138 +426,323 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
             </button>
           </div>
 
-          {formMode === "official" && !editing ? (
-            <label className="provider-field">
-              供应商类型
-              <select
-                data-testid="provider-type-select"
-                value={formType}
-                disabled={busy}
-                onChange={(event) => onSelectOfficialType(event.target.value as ProviderType)}
-              >
-                {Object.entries(OFFICIAL_PROVIDER_PRESETS).map(([value, preset]) => (
-                  <option key={value} value={value}>
-                    {preset.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : null}
-
-          <label className="provider-field">
-            供应商名称
-            <input
-              type="text"
-              data-testid="provider-name-input"
-              placeholder="例如: My Anthropic"
-              value={formName}
-              disabled={busy}
-              onChange={(event) => setFormName(event.target.value)}
-            />
-          </label>
-
-          <label className="provider-field">
-            Base URL
-            <span className="provider-preview">预览：{previewPath}</span>
-            <input
-              type="text"
-              data-testid="provider-base-url-input"
-              placeholder="https://api.example.com"
-              value={formBaseUrl}
-              disabled={busy}
-              onChange={(event) => setFormBaseUrl(event.target.value)}
-            />
-          </label>
-
-          <div className="provider-field">
-            <span className="provider-field-label">
-              <span>API Key</span>
-              <button
-                type="button"
-                data-testid="provider-test"
-                disabled={busy || !editing}
-                title={editing ? "发起真实连通性测试（10s 超时）" : "创建保存后可测试连接"}
-                onClick={() => void onTest()}
-              >
-                测试连接
-              </button>
-            </span>
-            {editing?.api_key_ref ? (
-              <p className="provider-key-ref" data-testid="provider-api-key-ref-readonly">
-                当前密钥引用（只读）：{editing.api_key_ref}
-              </p>
+          <div className="form-section-title">基本信息</div>
+          <div className="form-card">
+            {formMode === "official" && !editing ? (
+              <div className="form-row">
+                <div className="form-label">供应商类型</div>
+                <select
+                  className="form-input"
+                  data-testid="provider-type-select"
+                  value={formType}
+                  disabled={busy}
+                  onChange={(event) => onSelectOfficialType(event.target.value as ProviderType)}
+                >
+                  {Object.entries(OFFICIAL_PROVIDER_PRESETS).map(([value, preset]) => (
+                    <option key={value} value={value}>
+                      {preset.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
             ) : null}
-            <div className="provider-key-input">
+
+            <div className="form-row">
+              <div className="form-label">供应商名称</div>
               <input
-                type={showKey ? "text" : "password"}
-                data-testid="provider-api-key-input"
-                placeholder={editing ? "输入新密钥以覆盖（留空保持不变）" : "输入 API Key"}
-                value={formApiKey}
+                type="text"
+                className="form-input"
+                data-testid="provider-name-input"
+                placeholder="例如: My Anthropic"
+                value={formName}
                 disabled={busy}
-                onChange={(event) => {
-                  setFormApiKey(event.target.value);
-                  setApiKeyTouched(true);
-                }}
+                onChange={(event) => setFormName(event.target.value)}
               />
-              <button
-                type="button"
-                data-testid="provider-api-key-reveal"
-                disabled={busy}
-                onClick={() => setShowKey((visible) => !visible)}
-              >
-                {showKey ? "隐藏" : "显示"}
-              </button>
             </div>
-            {editing && apiKeyTouched && formApiKey.length === 0 && editing.api_key_ref ? (
-              <p className="provider-key-hint">保存后将清除密钥引用（keychain 条目一并删除）</p>
-            ) : null}
-          </div>
 
-          <label className="provider-enabled-row">
-            <input
-              type="checkbox"
-              data-testid="provider-enabled-switch"
-              checked={formEnabled}
-              disabled={busy}
-              onChange={(event) => setFormEnabled(event.target.checked)}
-            />
-            启用此配置（关闭后该配置的模型不会出现在选择器中）
-          </label>
+            <div className="form-row">
+              <div className="form-label">Base URL</div>
+              <div className="preview-hint">
+                预览：<b>{previewPath}</b>
+              </div>
+              <input
+                type="text"
+                className="form-input"
+                data-testid="provider-base-url-input"
+                placeholder="https://api.example.com"
+                value={formBaseUrl}
+                disabled={busy}
+                onChange={(event) => setFormBaseUrl(event.target.value)}
+              />
+            </div>
+
+            <div className="form-row">
+              <div className="form-label">协议端点（默认已按供应商预填，可覆盖）</div>
+              <div className="provider-endpoint-grid">
+                <label className="provider-endpoint-field">
+                  <span>Anthropic 兼容（Claude Code）</span>
+                  <input
+                    type="text"
+                    className="form-input"
+                    data-testid="provider-endpoint-anthropic"
+                    placeholder="https://api.example.com/anthropic"
+                    value={formEndpoints.anthropic ?? ""}
+                    disabled={busy}
+                    onChange={(event) =>
+                      setFormEndpoints((current) => ({
+                        ...current,
+                        anthropic: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+                <label className="provider-endpoint-field">
+                  <span>OpenAI 兼容（Codex）</span>
+                  <input
+                    type="text"
+                    className="form-input"
+                    data-testid="provider-endpoint-openai"
+                    placeholder="https://api.example.com/v1"
+                    value={formEndpoints.openai ?? ""}
+                    disabled={busy}
+                    onChange={(event) =>
+                      setFormEndpoints((current) => ({
+                        ...current,
+                        openai: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+                <label className="provider-endpoint-field">
+                  <span>Google / 原生</span>
+                  <input
+                    type="text"
+                    className="form-input"
+                    data-testid="provider-endpoint-google"
+                    placeholder="https://generativelanguage.googleapis.com"
+                    value={formEndpoints.google ?? ""}
+                    disabled={busy}
+                    onChange={(event) =>
+                      setFormEndpoints((current) => ({
+                        ...current,
+                        google: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+                <label className="provider-endpoint-field">
+                  <span>DSH / 原生</span>
+                  <input
+                    type="text"
+                    className="form-input"
+                    data-testid="provider-endpoint-dsh"
+                    placeholder="DSH profile 端点（可选）"
+                    value={formEndpoints.dsh ?? ""}
+                    disabled={busy}
+                    onChange={(event) =>
+                      setFormEndpoints((current) => ({
+                        ...current,
+                        dsh: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+              </div>
+              <p className="preview-hint">
+                Claude Code 使用 Anthropic 端点；Codex 使用 OpenAI 端点；端点不是密钥，可随时修改。
+              </p>
+            </div>
+
+            <div className="form-row">
+              <div className="form-label">
+                <span>API Key</span>
+                <button
+                  type="button"
+                  className="btn-test"
+                  data-testid="provider-test"
+                  disabled={busy || !editing}
+                  title={editing ? "发起真实连通性测试（10s 超时）" : "创建保存后可测试连接"}
+                  onClick={() => void onTest()}
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z" />
+                  </svg>
+                  测试连接
+                </button>
+              </div>
+              {editing?.api_key_ref ? (
+                <p className="provider-key-ref" data-testid="provider-api-key-ref-readonly">
+                  当前密钥引用（只读）：{editing.api_key_ref}
+                </p>
+              ) : null}
+              <div className="input-wrap provider-key-input">
+                <input
+                  className="form-input"
+                  type={showKey ? "text" : "password"}
+                  data-testid="provider-api-key-input"
+                  placeholder={editing ? "输入新密钥以覆盖（留空保持不变）" : "输入 API Key"}
+                  value={formApiKey}
+                  disabled={busy}
+                  onChange={(event) => {
+                    setFormApiKey(event.target.value);
+                    setApiKeyTouched(true);
+                  }}
+                />
+                <button
+                  type="button"
+                  className="eye"
+                  data-testid="provider-api-key-reveal"
+                  title={showKey ? "隐藏密钥" : "显示密钥"}
+                  aria-label={showKey ? "隐藏密钥" : "显示密钥"}
+                  disabled={busy}
+                  onClick={() => setShowKey((visible) => !visible)}
+                >
+                  {showKey ? (
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z" />
+                      <circle cx="12" cy="12" r="3" />
+                      <path d="M3 3l18 18" />
+                    </svg>
+                  ) : (
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z" />
+                      <circle cx="12" cy="12" r="3" />
+                    </svg>
+                  )}
+                </button>
+              </div>
+              {editing && apiKeyTouched && formApiKey.length === 0 && editing.api_key_ref ? (
+                <p className="provider-key-hint">保存后将清除密钥引用（keychain 条目一并删除）</p>
+              ) : null}
+            </div>
+
+            <div className="form-row">
+              <div className="switch-row">
+                <div className="switch-label">
+                  <div className="n">启用此配置</div>
+                  <div className="d">关闭后该配置的模型不会出现在选择列表中</div>
+                </div>
+                <label className="switch">
+                  <input
+                    type="checkbox"
+                    data-testid="provider-enabled-switch"
+                    checked={formEnabled}
+                    disabled={busy}
+                    onChange={(event) => setFormEnabled(event.target.checked)}
+                  />
+                  <span />
+                </label>
+              </div>
+            </div>
+          </div>
 
           {editing ? (
             <section className="provider-models">
-              <h4>模型</h4>
-              {editing.models.length === 0 ? (
-                <p className="provider-model-empty">还没有模型，从下方添加</p>
+              <div className="form-section-title">已启用模型</div>
+              {editing.models.filter((model) => model.enabled).length === 0 ? (
+                <p className="provider-model-empty empty-state">
+                  还没有启用任何模型，从下方可用模型中选择
+                </p>
               ) : (
-                <ul className="provider-model-list">
-                  {editing.models.map((model) => (
-                    <li
-                      key={model.id}
-                      className="provider-model-item"
-                      data-testid="provider-model-item"
-                      data-model-id={model.model_id}
-                      data-enabled={String(model.enabled)}
-                    >
-                      <span className="provider-model-name">{model.display_name}</span>
-                      <span className="provider-model-id">{model.model_id}</span>
-                      <button
-                        type="button"
-                        data-testid="provider-model-toggle"
+                <ul className="provider-model-list mlist">
+                  {editing.models
+                    .filter((model) => model.enabled)
+                    .map((model) => (
+                      <li
+                        key={model.id}
+                        className="provider-model-item mlist-item"
+                        data-testid="provider-model-item"
                         data-model-id={model.model_id}
-                        data-action={model.enabled ? "disable" : "enable"}
-                        disabled={busy}
-                        onClick={() => void onToggleModel(model, !model.enabled)}
+                        data-enabled={String(model.enabled)}
                       >
-                        {model.enabled ? "停用" : "启用"}
-                      </button>
-                    </li>
-                  ))}
+                        <span
+                          className="provider-model-icon mi"
+                          style={{ background: providerColor(editing.type) }}
+                        >
+                          {providerAbbr(editing)}
+                        </span>
+                        <div className="provider-model-info info">
+                          <span className="provider-model-name n">{model.display_name}</span>
+                          <span className="provider-model-id mid">{model.model_id}</span>
+                        </div>
+                        <button
+                          type="button"
+                          className="act on"
+                          data-testid="provider-model-toggle"
+                          data-model-id={model.model_id}
+                          data-action="disable"
+                          disabled={busy}
+                          onClick={() => void onToggleModel(model, false)}
+                        >
+                          停用
+                        </button>
+                      </li>
+                    ))}
                 </ul>
               )}
-              <div className="provider-model-add-row">
+
+              <div className="models-head">
+                <div className="form-section-title" style={{ marginBottom: 0 }}>
+                  可用模型
+                </div>
+                <button
+                  type="button"
+                  className="btn-fetch"
+                  data-testid="provider-models-fetch"
+                  disabled={busy}
+                  title="从供应商获取模型列表（归一化 + 幂等写入）"
+                  onClick={() => void onFetchModels()}
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M12 3v12M7 10l5 5 5-5M5 21h14" />
+                  </svg>
+                  从供应商获取
+                </button>
+              </div>
+              {editing.models.filter((model) => !model.enabled).length === 0 ? (
+                <p className="provider-model-empty empty-state">没有未启用的模型</p>
+              ) : (
+                <ul className="provider-model-list mlist">
+                  {editing.models
+                    .filter((model) => !model.enabled)
+                    .map((model) => (
+                      <li
+                        key={model.id}
+                        className="provider-model-item mlist-item"
+                        data-testid="provider-model-item"
+                        data-model-id={model.model_id}
+                        data-enabled={String(model.enabled)}
+                      >
+                        <span
+                          className="provider-model-icon mi"
+                          style={{ background: providerColor(editing.type), opacity: 0.5 }}
+                        >
+                          {providerAbbr(editing)}
+                        </span>
+                        <div className="provider-model-info info">
+                          <span className="provider-model-name n">{model.display_name}</span>
+                          <span className="provider-model-id mid">{model.model_id}</span>
+                        </div>
+                        <button
+                          type="button"
+                          className="act off"
+                          data-testid="provider-model-toggle"
+                          data-model-id={model.model_id}
+                          data-action="enable"
+                          disabled={busy}
+                          onClick={() => void onToggleModel(model, true)}
+                        >
+                          启用
+                        </button>
+                      </li>
+                    ))}
+                </ul>
+              )}
+
+              <div className="model-input-row provider-model-add-row">
                 <input
                   type="text"
+                  className="form-input"
                   data-testid="provider-model-id-input"
                   placeholder="模型 ID（如 claude-opus-4-6）"
                   value={modelIdDraft}
@@ -537,6 +751,7 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
                 />
                 <input
                   type="text"
+                  className="form-input"
                   data-testid="provider-model-name-input"
                   placeholder="显示名称（可选）"
                   value={modelNameDraft}
@@ -545,20 +760,14 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
                 />
                 <button
                   type="button"
+                  className="btn-plus"
                   data-testid="provider-model-add"
                   disabled={busy}
+                  title="添加模型"
+                  aria-label="添加模型"
                   onClick={() => void onAddModel()}
                 >
-                  ＋ 添加模型
-                </button>
-                <button
-                  type="button"
-                  data-testid="provider-models-fetch"
-                  disabled={busy}
-                  title="从供应商获取模型列表（归一化 + 幂等写入）"
-                  onClick={() => void onFetchModels()}
-                >
-                  从供应商获取
+                  ＋
                 </button>
               </div>
               {modelsNotice ? (
@@ -600,16 +809,17 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
 
   return (
     <section className="providers-page" data-testid="providers-page">
-      <div className="providers-head">
+      <div className="mc-head">
         <div>
-          <h3>模型配置</h3>
-          <p className="providers-desc">
+          <div className="mc-ttl">模型配置</div>
+          <div className="mc-desc">
             管理 AI 供应商连接，配置 API Key 和可用模型。启用的供应商与模型会出现在会话输入框的模型选择器中。
-          </p>
+          </div>
         </div>
-        <div className="providers-actions">
+        <div className="mc-actions">
           <button
             type="button"
+            className="btn-add"
             data-testid="providers-add"
             disabled={busy}
             onClick={() => openCreate("official")}
@@ -618,6 +828,7 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
           </button>
           <button
             type="button"
+            className="btn-add"
             data-testid="providers-add-custom"
             disabled={busy}
             onClick={() => openCreate("custom")}
@@ -630,35 +841,36 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
       {providers === null ? (
         <p className="providers-loading">正在加载供应商…</p>
       ) : providers.length === 0 ? (
-        <p className="providers-empty" data-testid="provider-empty">
+        <p className="providers-empty empty-state" data-testid="provider-empty">
           还没有供应商配置，点击右上角添加
         </p>
       ) : (
-        <ul className="provider-cards">
+        <ul className="provider-cards prov-cards">
           {providers.map((provider) => (
             <li
               key={provider.id}
-              className="provider-card"
+              className="provider-card prov-card"
               data-testid="provider-card"
               data-provider-id={provider.id}
               data-enabled={String(provider.enabled)}
               data-is-builtin={String(provider.is_builtin)}
             >
               <span
-                className="provider-icon"
+                className="provider-icon prov-icon"
                 style={{ background: providerColor(provider.type) }}
               >
                 {providerAbbr(provider)}
               </span>
-              <div className="provider-info">
-                <div className="provider-name">{provider.name}</div>
-                <div className="provider-desc">{providerDesc(provider)}</div>
+              <div className="provider-info prov-info">
+                <div className="provider-name prov-name">{provider.name}</div>
+                <div className="provider-desc prov-desc">{providerDesc(provider)}</div>
               </div>
               {confirmDeleteId === provider.id ? (
-                <div className="provider-confirm" data-testid="provider-delete-confirm">
-                  <span className="provider-confirm-text">确认删除？</span>
+                <div className="provider-confirm prov-confirm" data-testid="provider-delete-confirm">
+                  <span className="provider-confirm-text warn">确认删除？</span>
                   <button
                     type="button"
+                    className="btn-sm cancel"
                     data-testid="provider-delete-cancel"
                     disabled={busy}
                     onClick={() => setConfirmDeleteId(null)}
@@ -667,6 +879,7 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
                   </button>
                   <button
                     type="button"
+                    className="btn-sm danger"
                     data-testid="provider-delete-confirm-button"
                     disabled={busy}
                     onClick={() => void onConfirmDelete(provider.id)}
@@ -675,28 +888,41 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
                   </button>
                 </div>
               ) : (
-                <div className="provider-actions">
-                  <button
-                    type="button"
-                    data-testid="provider-edit"
-                    data-provider-id={provider.id}
-                    disabled={busy}
-                    onClick={() => openEdit(provider)}
-                  >
-                    编辑
-                  </button>
-                  <button
-                    type="button"
-                    data-testid="provider-delete"
-                    data-provider-id={provider.id}
-                    data-is-builtin={String(provider.is_builtin)}
-                    disabled={busy || provider.is_builtin}
-                    title={provider.is_builtin ? "内置供应商不可删除" : "删除供应商"}
-                    onClick={() => setConfirmDeleteId(provider.id)}
-                  >
-                    删除
-                  </button>
-                  <label className="provider-toggle-label">
+                <div className="provider-actions prov-actions">
+                  <div className="provider-tools prov-tools">
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      data-testid="provider-edit"
+                      data-provider-id={provider.id}
+                      disabled={busy}
+                      title="编辑"
+                      aria-label={`编辑 ${provider.name}`}
+                      onClick={() => openEdit(provider)}
+                    >
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M12 20h9" />
+                        <path d="M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4z" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-btn danger"
+                      data-testid="provider-delete"
+                      data-provider-id={provider.id}
+                      data-is-builtin={String(provider.is_builtin)}
+                      disabled={busy || provider.is_builtin}
+                      title={provider.is_builtin ? "内置供应商不可删除" : "删除供应商"}
+                      aria-label={`删除 ${provider.name}`}
+                      onClick={() => setConfirmDeleteId(provider.id)}
+                    >
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M3 6h18M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" />
+                        <path d="M10 11v6M14 11v6" />
+                      </svg>
+                    </button>
+                  </div>
+                  <label className="switch provider-toggle-label">
                     <input
                       type="checkbox"
                       data-testid="provider-toggle"
@@ -704,9 +930,10 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
                       data-enabled={String(provider.enabled)}
                       checked={provider.enabled}
                       disabled={busy}
+                      aria-label={`启用 ${provider.name}`}
                       onChange={(event) => void onToggleProvider(provider.id, event.target.checked)}
                     />
-                    启用
+                    <span />
                   </label>
                 </div>
               )}

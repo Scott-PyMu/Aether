@@ -1,4 +1,4 @@
-﻿//! M7-02：并发闸门（ADR-022 附录 A-5/A-6；DoD3/DoD4）。
+//! M7-02：并发闸门（ADR-022 附录 A-5/A-6；DoD3/DoD4）。
 //!
 //! 覆盖：
 //! - 参数注入：`clamp(floor(free_ram_gb/1.5), 2, 10)`（8GB 模拟 = 7.0 → 4；16GB → 10）；
@@ -203,6 +203,7 @@ fn create_session(h: &Harness, title: &str) -> String {
             thinking_depth: None,
             permission_mode: None,
             preset_id: None,
+            provider_id: None,
         })
         .expect("创建会话");
     created["id"].as_str().expect("会话 id").to_owned()

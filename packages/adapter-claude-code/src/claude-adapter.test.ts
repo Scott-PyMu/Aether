@@ -1,7 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync } from "node:fs";
+import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
@@ -32,6 +34,7 @@ class Harness {
 
   private readonly pending: string[] = [];
   private wake?: () => void;
+  private nextRequestId = 100_000;
   private readonly lines = this.lineStream();
 
   constructor(options: Partial<ClaudeAdapterOptions> = {}) {
@@ -59,6 +62,9 @@ class Harness {
       },
       cli,
       ...(options.runTimeoutMs !== undefined ? { runTimeoutMs: options.runTimeoutMs } : {}),
+      ...(options.credentialClient !== undefined
+        ? { credentialClient: options.credentialClient }
+        : {}),
     });
   }
 
@@ -88,7 +94,7 @@ class Harness {
   }
 
   async requestResult(method: string, params: unknown = {}): Promise<Record<string, unknown>> {
-    const id = 100_000 + this.frames.filter((frame) => frame.id !== undefined).length;
+    const id = this.nextRequestId++;
     this.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
     const frame = await this.waitForFrame((candidate) => candidate.id === id, `response ${method}`);
     if (frame.error) throw new Error(`RPC error ${frame.error.code}: ${frame.error.message}`);
@@ -96,7 +102,7 @@ class Harness {
   }
 
   async requestError(method: string, params: unknown = {}): Promise<Frame> {
-    const id = 200_000 + this.frames.filter((frame) => frame.id !== undefined).length;
+    const id = this.nextRequestId++;
     this.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
     return this.waitForFrame(
       (candidate) => candidate.id === id && candidate.error !== undefined,
@@ -215,6 +221,37 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 10_000): Promise<
 
 function payload(frame: Frame | undefined): Record<string, unknown> {
   return (frame?.params?.payload ?? {}) as Record<string, unknown>;
+}
+
+interface MockAnthropic {
+  server: Server;
+  baseUrl: string;
+  hits: Array<{ path: string; key: string }>;
+}
+
+async function startMockAnthropic(tag: string): Promise<MockAnthropic> {
+  const hits: Array<{ path: string; key: string }> = [];
+  const server = createServer((request, response) => {
+    request.resume();
+    request.on("end", () => {
+      hits.push({
+        path: request.url ?? "",
+        key: String(request.headers["x-api-key"] ?? ""),
+      });
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ tag }));
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const address = server.address() as AddressInfo;
+  return { server, baseUrl: `http://127.0.0.1:${address.port}`, hits };
+}
+
+async function closeMockAnthropic(server: Server): Promise<void> {
+  await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
 describe("ClaudeCodeAdapter：D6 方法（M2-02 DoD1/DoD2）", () => {
@@ -652,6 +689,166 @@ describe("M7-09 系统提示词消费（ADR-026 §2.2-5）", () => {
     } finally {
       if (previous === undefined) delete process.env.FAKE_CLAUDE_INVOCATION_FILE;
       else process.env.FAKE_CLAUDE_INVOCATION_FILE = previous;
+    }
+  });
+});
+
+describe("ADR-028 / M7-10: concurrent providers", () => {
+  it(
+    "两个并发会话按 provider 取不同 base_url/key（本地 mock Anthropic 上游）",
+    { timeout: 60_000 },
+    async () => {
+      const invocationFile = join(
+        mkdtempSync(join(tmpdir(), "fake-claude-multi-provider-")),
+        "invocations.jsonl",
+      );
+      const previousFile = process.env.FAKE_CLAUDE_INVOCATION_FILE;
+      const previousProbe = process.env.FAKE_CLAUDE_PROVIDER_PROBE;
+      process.env.FAKE_CLAUDE_INVOCATION_FILE = invocationFile;
+      process.env.FAKE_CLAUDE_PROVIDER_PROBE = "1";
+      const providerA = await startMockAnthropic("A");
+      const providerB = await startMockAnthropic("B");
+      const providerAId = "01J0000000000000000000PA01";
+      const providerBId = "01J0000000000000000000PB02";
+      const credentials = new Map([
+        [
+          providerAId,
+          {
+            base_url: providerA.baseUrl,
+            api_key: "test-key-a",
+            auth_env: "ANTHROPIC_API_KEY",
+          },
+        ],
+        [
+          providerBId,
+          {
+            base_url: providerB.baseUrl,
+            api_key: "test-key-b",
+            auth_env: "ANTHROPIC_API_KEY",
+          },
+        ],
+      ]);
+      try {
+        const harness = new Harness({
+          credentialClient: {
+            get: async (providerId: string) => {
+              // 让两路 onSend 在取凭据阶段也交错，验证不是共享进程级 env。
+              await new Promise((resolve) => setTimeout(resolve, 50));
+              const credential = credentials.get(providerId);
+              if (!credential) throw new Error(`unknown provider ${providerId}`);
+              return credential;
+            },
+          },
+        });
+        await harness.start();
+        const [createdA, createdB] = await Promise.all([
+          harness.createSession({ provider_id: providerAId }),
+          harness.createSession({ provider_id: providerBId }),
+        ]);
+        const [runA, runB] = await Promise.all([
+          harness.sendMessage(String(createdA["session_id"]), "chat-a"),
+          harness.sendMessage(String(createdB["session_id"]), "chat-b"),
+        ]);
+        const terminals = await Promise.all([
+          harness.waitTerminal(runA),
+          harness.waitTerminal(runB),
+        ]);
+        expect(terminals).toEqual(["run.completed", "run.completed"]);
+        expect(providerA.hits).toHaveLength(1);
+        expect(providerB.hits).toHaveLength(1);
+        expect(providerA.hits[0]?.key).toBe("test-key-a");
+        expect(providerB.hits[0]?.key).toBe("test-key-b");
+        expect(providerA.hits[0]?.path).toBe("/v1/messages");
+        expect(providerB.hits[0]?.path).toBe("/v1/messages");
+
+        const records = readFileSync(invocationFile, "utf8")
+          .trim()
+          .split(/\r?\n/)
+          .map(
+            (line) =>
+              JSON.parse(line) as {
+                provider_probe?: { body?: string; base_url?: string } | null;
+              },
+          );
+        expect(records).toHaveLength(2);
+        const bodies = records.map((record) => record.provider_probe?.body ?? "");
+        expect(bodies.some((body) => body.includes('"tag":"A"'))).toBe(true);
+        expect(bodies.some((body) => body.includes('"tag":"B"'))).toBe(true);
+        // 两个会话都不得把 broker token 继承给 CLI。
+        const raw = JSON.stringify(records);
+        expect(raw).not.toContain("AETHER_CREDENTIAL_BROKER");
+      } finally {
+        if (previousFile === undefined) delete process.env.FAKE_CLAUDE_INVOCATION_FILE;
+        else process.env.FAKE_CLAUDE_INVOCATION_FILE = previousFile;
+        if (previousProbe === undefined) delete process.env.FAKE_CLAUDE_PROVIDER_PROBE;
+        else process.env.FAKE_CLAUDE_PROVIDER_PROBE = previousProbe;
+        await closeMockAnthropic(providerA.server);
+        await closeMockAnthropic(providerB.server);
+      }
+    },
+  );
+});
+
+describe("ADR-028 / M7-10: per-session provider credential", () => {
+  it("session.create.provider_id -> broker -> current CLI env", { timeout: 40_000 }, async () => {
+    const invocationFile = join(
+      mkdtempSync(join(tmpdir(), "fake-claude-provider-")),
+      "invocations.jsonl",
+    );
+    const previous = process.env.FAKE_CLAUDE_INVOCATION_FILE;
+    process.env.FAKE_CLAUDE_INVOCATION_FILE = invocationFile;
+    const previousBroker = process.env.AETHER_CREDENTIAL_BROKER;
+    process.env.AETHER_CREDENTIAL_BROKER = JSON.stringify({
+      endpoint: process.platform === "win32" ? "\\\\.\\pipe\\unused" : "/tmp/unused.sock",
+      token: "test-token",
+    });
+    const calls: Array<[string, string]> = [];
+    const testKey = "test-provider-key-not-real";
+    try {
+      const harness = new Harness({
+        credentialClient: {
+          get: async (providerId: string, protocol: string) => {
+            calls.push([providerId, protocol]);
+            return {
+              base_url: "https://api.deepseek.com/anthropic",
+              api_key: testKey,
+              auth_env: "ANTHROPIC_API_KEY",
+            };
+          },
+        },
+      });
+      await harness.start();
+      const created = await harness.createSession({
+        provider_id: "01J0000000000000000000M710",
+      });
+      const runId = await harness.sendMessage(String(created["session_id"]), "chat");
+      expect(await harness.waitTerminal(runId)).toBe("run.completed");
+      expect(calls).toEqual([["01J0000000000000000000M710", "anthropic"]]);
+
+      const records = readFileSync(invocationFile, "utf8")
+        .trim()
+        .split(/\r?\n/)
+        .map(
+          (line) =>
+            JSON.parse(line) as {
+              provider_base_url?: string | null;
+              provider_api_key_present?: boolean;
+              broker_token_present?: boolean;
+            },
+        );
+      expect(records).toHaveLength(1);
+      expect(records[0]?.provider_base_url).toBe("https://api.deepseek.com/anthropic");
+      expect(records[0]?.provider_api_key_present).toBe(true);
+      // broker token 不能被子 CLI 继承（否则可绕过适配器取任意 provider 凭据）。
+      expect(records[0]?.broker_token_present).toBe(false);
+      // 密钥只在当前 CLI 子进程 env 中；不得出现在适配器输出/错误日志。
+      expect(JSON.stringify(harness.frames)).not.toContain(testKey);
+      expect(JSON.stringify(harness.stderr)).not.toContain(testKey);
+    } finally {
+      if (previous === undefined) delete process.env.FAKE_CLAUDE_INVOCATION_FILE;
+      else process.env.FAKE_CLAUDE_INVOCATION_FILE = previous;
+      if (previousBroker === undefined) delete process.env.AETHER_CREDENTIAL_BROKER;
+      else process.env.AETHER_CREDENTIAL_BROKER = previousBroker;
     }
   });
 });

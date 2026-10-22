@@ -394,6 +394,7 @@ impl Harness {
                 thinking_depth: None,
                 permission_mode: None,
                 preset_id: preset_id.map(str::to_owned),
+                provider_id: None,
             })
             .expect("session_create")
     }
@@ -647,6 +648,7 @@ fn session_create_rejects_unknown_preset_without_creating_session() {
             thinking_depth: None,
             permission_mode: None,
             preset_id: Some("01J00000000000000000000ZZZZ".to_owned()),
+            provider_id: None,
         })
         .unwrap_err();
     assert_eq!(error.code.as_str(), "preset_not_found");

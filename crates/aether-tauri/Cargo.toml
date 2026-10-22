@@ -52,7 +52,7 @@ tauri = { version = "2.11.5", features = [] }
 tauri-plugin-dialog = "2.7.3"
 tauri-plugin-single-instance = "2.4.4"
 # ADR-007：核心启动（StoreRuntime/EventPipeline）需 tokio 句柄；日志经 tracing（§2.2 选型）。
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "time"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "net", "io-util", "sync"] }
 tracing = "0.1"
 # M3-01/T14（设计 D7）：TS 类型绑定生成器（生成物 `packages/protocol/src/bindings.ts`，
 # 禁止手改，AGENTS §2.8；CI 重新生成 + `git diff --exit-code`，T14）。

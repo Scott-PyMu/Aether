@@ -4,6 +4,8 @@
 //! 语义校验（长度 / 枚举 / 格式）在 `validate` 中完成，保持「解析 → 校验 → 下游」
 //! 三段式与错误码稳定。
 
+use std::collections::BTreeMap;
+
 use serde::Deserialize;
 
 use super::error::{IpcError, IpcErrorCode};
@@ -73,6 +75,10 @@ pub struct SessionCreateRequest {
     pub workspace_id: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    /// ADR-028：会话级供应商 id（可选；`None` = 由模型解析/旧单供应商路径）。
+    /// 显式指定时校验供应商存在/启用、模型归属与运行时协议端点。
+    #[serde(default)]
+    pub provider_id: Option<String>,
     /// 会话级思考深度（ADR-010 决策 2：0–4，缺省 2；越界 `out_of_range`、
     /// 类型非法 `invalid_type`）。
     #[serde(default)]
@@ -117,6 +123,14 @@ impl CommandRequest for SessionCreateRequest {
         }
         if let Some(model) = &self.model {
             validate::validate_model(model, "model")?;
+        }
+        if let Some(provider_id) = &self.provider_id {
+            if !is_ulid(provider_id) {
+                return Err(IpcError::invalid_format(
+                    "provider_id",
+                    "必须是 26 位 ULID",
+                ));
+            }
         }
         if let Some(thinking_depth) = self.thinking_depth {
             validate::validate_thinking_depth(thinking_depth, "thinking_depth")?;
@@ -543,6 +557,9 @@ pub struct ProviderCreateRequest {
     pub provider_type: ProviderType,
     #[serde(default)]
     pub base_url: Option<String>,
+    /// ADR-028：协议端点（`anthropic`/`openai`/`google`/`dsh` → base URL）。
+    #[serde(default)]
+    pub endpoints: Option<BTreeMap<String, String>>,
     #[serde(default)]
     pub api_key: Option<String>,
     pub enabled: bool,
@@ -567,6 +584,9 @@ impl CommandRequest for ProviderCreateRequest {
         if let Some(api_key) = &self.api_key {
             validate_api_key(api_key)?;
         }
+        if let Some(endpoints) = &self.endpoints {
+            validate_provider_endpoints(endpoints)?;
+        }
         Ok(())
     }
 }
@@ -580,6 +600,9 @@ pub struct ProviderUpdateRequest {
     pub name: String,
     #[serde(default)]
     pub base_url: Option<String>,
+    /// ADR-028：`None` = 不变；`Some(map)` = 整体替换（`{}` 清除）。
+    #[serde(default)]
+    pub endpoints: Option<BTreeMap<String, String>>,
     #[serde(default)]
     pub api_key: Option<String>,
     pub enabled: bool,
@@ -598,6 +621,9 @@ impl CommandRequest for ProviderUpdateRequest {
         }
         if let Some(api_key) = &self.api_key {
             validate_api_key(api_key)?;
+        }
+        if let Some(endpoints) = &self.endpoints {
+            validate_provider_endpoints(endpoints)?;
         }
         Ok(())
     }
@@ -727,6 +753,36 @@ fn validate_provider_base_url(base_url: &str) -> Result<(), IpcError> {
         ));
     }
     reject_control_chars(base_url, "base_url", false)
+}
+
+/// ADR-028：协议端点映射校验（仅允许已知协议；值必须为 HTTP(S) URL）。
+fn validate_provider_endpoints(endpoints: &BTreeMap<String, String>) -> Result<(), IpcError> {
+    if endpoints.len() > 8 {
+        return Err(IpcError::invalid_value("endpoints 最多 8 项"));
+    }
+    for (protocol, url) in endpoints {
+        if !matches!(
+            protocol.as_str(),
+            "anthropic" | "openai" | "google" | "dsh"
+        ) {
+            return Err(IpcError::invalid_enum(
+                "endpoints",
+                format!("未知协议端点：{protocol}"),
+            ));
+        }
+        if url.trim().is_empty() {
+            continue;
+        }
+        ensure_max_chars(url, "endpoints", MAX_PROVIDER_BASE_URL_CHARS)?;
+        if !(url.starts_with("http://") || url.starts_with("https://")) {
+            return Err(IpcError::invalid_format(
+                "endpoints",
+                format!("协议 {protocol} 的端点必须以 http:// 或 https:// 开头"),
+            ));
+        }
+        reject_control_chars(url, "endpoints", false)?;
+    }
+    Ok(())
 }
 
 /// API Key 明文（仅传输）：非空时 ≤8192 字符（`too_large`）；拒绝控制字符。

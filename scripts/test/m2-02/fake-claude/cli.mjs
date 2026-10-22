@@ -256,6 +256,41 @@ async function main() {
   // M7-06：追加 `prompt`（stdin 全文）——引用块注入（`<aether-references>`）观测口径。
   const invocationFile = process.env.FAKE_CLAUDE_INVOCATION_FILE;
 
+  // ADR-028：可选的本地 mock Anthropic 上游探测（仅测试；验证 per-run provider env）。
+  let providerProbe = null;
+  if (
+    process.env.FAKE_CLAUDE_PROVIDER_PROBE === "1" &&
+    typeof process.env.ANTHROPIC_BASE_URL === "string" &&
+    process.env.ANTHROPIC_BASE_URL.length > 0
+  ) {
+    const base = process.env.ANTHROPIC_BASE_URL.replace(/\/+$/, "");
+    try {
+      const response = await fetch(`${base}/v1/messages`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "anthropic-version": "2023-06-01",
+          "x-api-key": process.env.ANTHROPIC_API_KEY ?? "",
+        },
+        body: JSON.stringify({
+          model: "probe",
+          max_tokens: 1,
+          messages: [{ role: "user", content: "provider probe" }],
+        }),
+      });
+      providerProbe = {
+        status: response.status,
+        body: await response.text(),
+        base_url: base,
+      };
+    } catch (error) {
+      providerProbe = {
+        error: error instanceof Error ? error.message : String(error),
+        base_url: base,
+      };
+    }
+  }
+
   const prompt = (await readPrompt()).trim();
   if (invocationFile && invocationFile.length > 0) {
     try {
@@ -264,6 +299,11 @@ async function main() {
         `${JSON.stringify({
           argv: process.argv.slice(2),
           max_thinking_tokens: process.env.MAX_THINKING_TOKENS ?? null,
+          // ADR-028：只记录端点与 key 是否存在，绝不落盘 key 明文。
+          provider_base_url: process.env.ANTHROPIC_BASE_URL ?? null,
+          provider_api_key_present: Boolean(process.env.ANTHROPIC_API_KEY),
+          broker_token_present: Boolean(process.env.AETHER_CREDENTIAL_BROKER),
+          provider_probe: providerProbe,
           prompt,
         })}\n`,
         "utf8",

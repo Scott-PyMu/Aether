@@ -315,6 +315,7 @@ impl Harness {
             name: name.to_owned(),
             provider_type,
             base_url: base_url.map(str::to_owned),
+            endpoints: None,
             api_key: api_key.map(str::to_owned),
             enabled,
         })
@@ -332,6 +333,7 @@ impl Harness {
             id: id.to_owned(),
             name: name.to_owned(),
             base_url: base_url.map(str::to_owned),
+            endpoints: None,
             api_key: api_key.map(str::to_owned),
             enabled,
         })
@@ -446,8 +448,8 @@ fn dod1_builtin_seed_list_shape_and_write_queue() {
     let summary = h.runtime.block_on(h.reads.store_summary()).expect("库摘要");
     assert_eq!(
         summary.schema_version,
-        Some(8),
-        "迁移必须到 0008（M7-07/ADR-025 FTS5）"
+        Some(9),
+        "迁移必须到 0009（ADR-028 供应商协议端点）"
     );
 
     let list = h.list().expect("供应商清单");
@@ -494,6 +496,7 @@ fn dod1_builtin_seed_list_shape_and_write_queue() {
             "base_url",
             "created_at",
             "enabled",
+            "endpoints",
             "id",
             "is_builtin",
             "models",
@@ -807,6 +810,7 @@ fn dod4_key_reference_tri_state_and_namespace_rules() {
         name: "共享引用".to_owned(),
         provider_type: "custom".to_owned(),
         base_url: Some("https://api.example.com".to_owned()),
+        endpoints: "{}".to_owned(),
         api_key_ref: Some(shared_uri.to_owned()),
         enabled: true,
         is_builtin: false,

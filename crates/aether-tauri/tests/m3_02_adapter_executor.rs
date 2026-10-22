@@ -1,4 +1,4 @@
-﻿//! M3-02：真实适配器会话链路集成测试（Mock 适配器 + 监督器 + 生命周期 + IPC 后端）。
+//! M3-02：真实适配器会话链路集成测试（Mock 适配器 + 监督器 + 生命周期 + IPC 后端）。
 //!
 //! 覆盖生产接线（`docs/M2-02-证据.md` §4 / `docs/M2-10-证据.md` §4.3 承接项）：
 //! - `RunExecutor` → 适配器会话客户端：`session.create` → `session.send`（流式）→ 终态；
@@ -177,6 +177,7 @@ fn mock_adapter_end_to_end_create_stream_interrupt_and_backfill() {
             thinking_depth: None,
             permission_mode: None,
             preset_id: None,
+            provider_id: None,
         })
         .expect("session_create");
     let session_id = created["id"].as_str().expect("会话 id").to_owned();

@@ -1053,6 +1053,7 @@ fn disabled_runtime_cannot_create_session() {
                 thinking_depth: None,
                 permission_mode: None,
                 preset_id: None,
+                provider_id: None,
             })
             .expect_err("disabled 运行时必须拒绝创建会话");
         assert_eq!(error.code, IpcErrorCode::InvalidValue);

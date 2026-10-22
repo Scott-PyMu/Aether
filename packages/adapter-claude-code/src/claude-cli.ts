@@ -285,6 +285,8 @@ export interface ClaudeCliRunOptions {
   onStderrLine: (line: string) => void;
   spawnFn?: SpawnFn;
   killTreeFn?: KillTreeFn;
+  /** ADR-028：当前 run 的 provider env 覆盖（只传给该 CLI 子进程）。 */
+  env?: NodeJS.ProcessEnv;
 }
 
 /**
@@ -328,12 +330,19 @@ export class ClaudeCliRun {
     const { config, spec } = this.options;
     const built = buildClaudeArgs(config, spec);
     const normalized = normalizeCommand(config.bin, built);
-    // M3-10/ADR-010：思考预算经 `MAX_THINKING_TOKENS` 环境变量注入（未给定时
-    // 不传 env，子进程继承当前环境）。
-    const env =
-      spec.thinkingBudget === undefined
-        ? undefined
-        : { ...process.env, MAX_THINKING_TOKENS: String(spec.thinkingBudget) };
+    // M3-10/ADR-010：思考预算经 `MAX_THINKING_TOKENS` 环境变量注入。
+    // ADR-028：provider env 只覆盖本次 CLI 子进程；broker token 不得继承给 CLI，
+    // 否则 CLI 可绕过适配器直接向 broker 请求任意 provider 凭据。
+    const baseEnv: NodeJS.ProcessEnv = { ...process.env };
+    delete baseEnv.AETHER_CREDENTIAL_BROKER;
+    const env: NodeJS.ProcessEnv = {
+      ...baseEnv,
+      ...(this.options.env ?? {}),
+      ...(spec.thinkingBudget !== undefined
+        ? { MAX_THINKING_TOKENS: String(spec.thinkingBudget) }
+        : {}),
+    };
+    delete env.AETHER_CREDENTIAL_BROKER;
     let child: ChildProcessWithoutNullStreams;
     try {
       child = this.spawnFn(normalized.command, normalized.args, {

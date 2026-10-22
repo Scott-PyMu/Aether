@@ -1,4 +1,4 @@
-﻿//! M7-01 集成测试（DoD0/DoD1/DoD2/DoD4/DoD7）：官方适配器热插拔状态机、事件发射
+//! M7-01 集成测试（DoD0/DoD1/DoD2/DoD4/DoD7）：官方适配器热插拔状态机、事件发射
 //! 链路、在途收口与重启矩阵。
 //!
 //! 宿主：`aether-adapter-fixture --mode session`（最小 D6 会话面；`--session-log`
@@ -444,6 +444,7 @@ fn disable_confirmation_closes_in_flight_runs_and_retry_replays() {
             thinking_depth: None,
             permission_mode: None,
             preset_id: None,
+            provider_id: None,
         })
         .expect("session_create");
     let session_id =
@@ -599,6 +600,7 @@ fn disable_confirmation_closes_in_flight_runs_and_retry_replays() {
             thinking_depth: None,
             permission_mode: None,
             preset_id: None,
+            provider_id: None,
         })
         .expect_err("disabled 运行时不得创建会话");
     assert!(

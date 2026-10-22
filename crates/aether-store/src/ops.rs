@@ -98,6 +98,8 @@ pub struct ProviderRecord {
     /// `anthropic` / `openai` / `deepseek` / `google` / `custom`（应用层校验）。
     pub provider_type: String,
     pub base_url: Option<String>,
+    /// 协议端点 JSON（ADR-028）：`{"anthropic":"…","openai":"…"}`；`{}` = 使用 base_url/类型默认。
+    pub endpoints: String,
     pub api_key_ref: Option<String>,
     pub enabled: bool,
     pub is_builtin: bool,
@@ -1299,13 +1301,15 @@ pub(crate) fn apply_command(
             let transaction = connection.transaction().map_err(txn_failed)?;
             let affected = transaction
                 .execute(
-                    "INSERT INTO providers (id, name, type, base_url, api_key_ref, enabled, is_builtin, \
-                     created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    "INSERT INTO providers (id, name, type, base_url, endpoints, api_key_ref, enabled, \
+                     is_builtin, created_at, updated_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                     params![
                         provider.id,
                         provider.name,
                         provider.provider_type,
                         provider.base_url,
+                        provider.endpoints,
                         provider.api_key_ref,
                         i64::from(provider.enabled),
                         i64::from(provider.is_builtin),
@@ -1321,12 +1325,13 @@ pub(crate) fn apply_command(
             let transaction = connection.transaction().map_err(txn_failed)?;
             let affected = transaction
                 .execute(
-                    "UPDATE providers SET name = ?2, base_url = ?3, api_key_ref = ?4, enabled = ?5, \
-                     updated_at = ?6 WHERE id = ?1",
+                    "UPDATE providers SET name = ?2, base_url = ?3, endpoints = ?4, api_key_ref = ?5, \
+                     enabled = ?6, updated_at = ?7 WHERE id = ?1",
                     params![
                         provider.id,
                         provider.name,
                         provider.base_url,
+                        provider.endpoints,
                         provider.api_key_ref,
                         i64::from(provider.enabled),
                         provider.updated_at,
@@ -2026,7 +2031,7 @@ impl ReadPool {
     pub async fn providers(&self) -> Result<Vec<ProviderRecord>, StoreError> {
         self.with_connection(move |connection| {
             let mut statement = connection.prepare(
-                "SELECT id, name, type, base_url, api_key_ref, enabled, is_builtin, created_at, updated_at \
+                "SELECT id, name, type, base_url, api_key_ref, enabled, is_builtin, created_at, updated_at, endpoints \
                  FROM providers ORDER BY created_at ASC, rowid ASC",
             )?;
             let rows = statement.query_map([], read_provider_row)?;
@@ -2045,7 +2050,7 @@ impl ReadPool {
         self.with_connection(move |connection| {
             connection
                 .query_row(
-                    "SELECT id, name, type, base_url, api_key_ref, enabled, is_builtin, created_at, updated_at \
+                    "SELECT id, name, type, base_url, api_key_ref, enabled, is_builtin, created_at, updated_at, endpoints \
                      FROM providers WHERE id = ?1",
                     [id.as_str()],
                     read_provider_row,
@@ -2665,6 +2670,7 @@ fn read_provider_row(row: &Row<'_>) -> rusqlite::Result<ProviderRecord> {
         is_builtin: row.get::<_, i64>(6)? != 0,
         created_at: row.get(7)?,
         updated_at: row.get(8)?,
+        endpoints: row.get(9)?,
     })
 }
 

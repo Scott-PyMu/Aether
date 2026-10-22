@@ -130,6 +130,7 @@ impl Harness {
                 thinking_depth: None,
                 permission_mode: None,
                 preset_id: None,
+                provider_id: None,
             })
             .expect("session_create");
         let id = value["id"].as_str().expect("session id");

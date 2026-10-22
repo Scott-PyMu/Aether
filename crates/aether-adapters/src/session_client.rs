@@ -149,6 +149,18 @@ pub struct AdapterSessionClient {
     pump: JoinHandle<()>,
 }
 
+/// ADR-028：`session.create` 可选参数集合（避免参数列表过长；全部可缺省）。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SessionCreateParams<'a> {
+    pub title: Option<&'a str>,
+    pub native_id: Option<&'a str>,
+    pub model: Option<&'a str>,
+    pub system_prompt: Option<&'a str>,
+    pub thinking_depth: Option<u8>,
+    pub permission_mode: Option<&'a str>,
+    pub provider_id: Option<&'a str>,
+}
+
 impl AdapterSessionClient {
     /// 建立客户端并启动通知 pump（连接须已握手完成）。
     pub fn new(connection: Arc<AdapterConnection>) -> Self {
@@ -261,6 +273,32 @@ impl AdapterSessionClient {
         thinking_depth: Option<u8>,
         permission_mode: Option<&str>,
     ) -> Result<CreatedSession, SessionClientError> {
+        self.create_session_with_all_options(SessionCreateParams {
+            title,
+            native_id,
+            model,
+            system_prompt,
+            thinking_depth,
+            permission_mode,
+            provider_id: None,
+        })
+        .await
+    }
+
+    /// ADR-028：`session.create` 全量参数 + 可选 `provider_id`（多供应商凭据 broker 路由）。
+    pub async fn create_session_with_all_options(
+        &self,
+        options: SessionCreateParams<'_>,
+    ) -> Result<CreatedSession, SessionClientError> {
+        let SessionCreateParams {
+            title,
+            native_id,
+            model,
+            system_prompt,
+            thinking_depth,
+            permission_mode,
+            provider_id,
+        } = options;
         let mut params = json!({});
         if let Some(title) = title {
             params["title"] = Value::String(title.to_owned());
@@ -279,6 +317,9 @@ impl AdapterSessionClient {
         }
         if let Some(permission_mode) = permission_mode {
             params["permission_mode"] = Value::String(permission_mode.to_owned());
+        }
+        if let Some(provider_id) = provider_id {
+            params["provider_id"] = Value::String(provider_id.to_owned());
         }
         let response = self
             .connection

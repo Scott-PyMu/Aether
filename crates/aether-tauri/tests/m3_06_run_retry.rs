@@ -1,4 +1,4 @@
-﻿//! M3-06 集成测试：`run_retry` IPC 接线与 Mode R/N 重放（设计 D5/D7、ADR-004/ADR-005）。
+//! M3-06 集成测试：`run_retry` IPC 接线与 Mode R/N 重放（设计 D5/D7、ADR-004/ADR-005）。
 //!
 //! 宿主：`aether-adapter-fixture --mode session`（最小 D6 会话面；`session.create`
 //! 携带 `native_id` → `resumed=true`），调用记录写入 `--session-log` 供断言：
@@ -199,6 +199,7 @@ fn run_retry_uses_terminal_guard_and_replays_per_mode_r_and_n() {
             thinking_depth: None,
             permission_mode: None,
             preset_id: None,
+            provider_id: None,
         })
         .expect("session_create");
     let session_id = SessionId::new(created["id"].as_str().expect("会话 id").to_owned()).unwrap();

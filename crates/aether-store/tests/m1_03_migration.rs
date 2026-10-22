@@ -89,7 +89,7 @@ fn existing_0001_only_database_is_upgraded_by_0002_increment() {
     assert_eq!(applied.len(), EMBEDDED_MIGRATIONS.len());
     assert_eq!(applied[0].version, 1);
     assert_eq!(applied[1].version, 2);
-    assert_eq!(applied.last().map(|item| item.version), Some(8));
+    assert_eq!(applied.last().map(|item| item.version), Some(9));
 
     let conn = store.connection();
     let has_column: i64 = conn

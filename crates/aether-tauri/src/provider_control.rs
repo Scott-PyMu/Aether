@@ -14,6 +14,7 @@
 //! 单写者约束（AGENTS §2.4）：全部写路径经单写队列（[`WriteQueue::execute`]）。
 //! 写命令的事务实现见 `aether_store::ops`（本层不复刻 SQL）。
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
@@ -196,6 +197,7 @@ impl ProviderControl {
         let name = request.name.clone();
         let provider_type = request.provider_type;
         let base_url = normalize_base_url(request.base_url.as_deref());
+        let endpoints = endpoints_json(request.endpoints.as_ref())?;
         let api_key = request.api_key.clone();
         let enabled = request.enabled;
         self.call(async move {
@@ -219,6 +221,7 @@ impl ProviderControl {
                 name,
                 provider_type: provider_type_str(provider_type).to_owned(),
                 base_url,
+                endpoints,
                 api_key_ref: api_key_ref.clone(),
                 enabled,
                 is_builtin: false,
@@ -256,6 +259,7 @@ impl ProviderControl {
         let id = request.id.clone();
         let name = request.name.clone();
         let base_url = request.base_url.clone();
+        let endpoints = request.endpoints.clone();
         let api_key = request.api_key.clone();
         let enabled = request.enabled;
         self.call(async move {
@@ -290,11 +294,17 @@ impl ProviderControl {
                 Some(value) if value.is_empty() => None,
                 Some(value) => Some(value),
             };
+            // ADR-028：`endpoints` 缺省=不变；`Some(map)` = 整体替换（`{}` 清除）。
+            let endpoints = match endpoints.as_ref() {
+                Some(map) => endpoints_json(Some(map))?,
+                None => existing.endpoints.clone(),
+            };
             let updated = ProviderRecord {
                 id: id.clone(),
                 name,
                 provider_type: existing.provider_type.clone(),
                 base_url,
+                endpoints,
                 api_key_ref,
                 enabled,
                 is_builtin: existing.is_builtin,
@@ -722,11 +732,23 @@ fn normalize_base_url(value: Option<&str>) -> Option<String> {
 
 /// 供应商清单元素形状（ADR-010 附录 B.1；**不含 `api_key` 本体**）。
 fn provider_json(provider: &ProviderRecord, models: &[ProviderModelRecord]) -> Value {
+    let endpoints: Value = match serde_json::from_str(&provider.endpoints) {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::warn!(
+                provider_id = %provider.id,
+                error = %error,
+                "供应商端点 JSON 损坏：按空映射回显（不阻断清单）"
+            );
+            json!({})
+        }
+    };
     json!({
         "id": provider.id,
         "name": provider.name,
         "type": provider.provider_type,
         "base_url": provider.base_url,
+        "endpoints": endpoints,
         "api_key_ref": provider.api_key_ref,
         "enabled": provider.enabled,
         "is_builtin": provider.is_builtin,
@@ -734,6 +756,15 @@ fn provider_json(provider: &ProviderRecord, models: &[ProviderModelRecord]) -> V
         "updated_at": provider.updated_at,
         "models": models.iter().map(model_json).collect::<Vec<_>>(),
     })
+}
+
+/// ADR-028：端点映射 → 持久化 JSON（`None`/空 = `{}`）。
+fn endpoints_json(endpoints: Option<&BTreeMap<String, String>>) -> Result<String, IpcError> {
+    match endpoints {
+        Some(map) if !map.is_empty() => serde_json::to_string(map)
+            .map_err(|error| IpcError::internal(format!("供应商端点序列化失败：{error}"))),
+        _ => Ok("{}".to_owned()),
+    }
 }
 
 /// 模型清单元素形状（ADR-010 附录 B.1）。

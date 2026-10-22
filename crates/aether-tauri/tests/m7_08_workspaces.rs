@@ -214,6 +214,7 @@ impl Harness {
                 thinking_depth: None,
                 permission_mode: None,
                 preset_id: None,
+                provider_id: None,
             })
             .expect("session_create");
         serde_json::from_value(value).expect("Session 反序列化")

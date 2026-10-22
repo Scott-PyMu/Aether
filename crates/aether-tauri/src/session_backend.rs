@@ -49,15 +49,13 @@ use crate::ipc::backend::IpcBackend;
 use crate::ipc::dto::{
     ArtifactAddRequest, ArtifactRemoveRequest, ArtifactsListRequest, MessagesPageRequest,
     PermissionResolveRequest, PermissionsPendingRequest, PresetAddRequest, PresetDeleteRequest,
-    PresetUpdateRequest, PresetsListRequest, ProviderCreateRequest,
-    ProviderDeleteRequest, ProviderModelAddRequest, ProviderModelToggleRequest,
-    ProviderModelsFetchRequest, ProviderTestRequest, ProviderToggleRequest, ProviderUpdateRequest,
-    ProvidersListRequest, RuleAddRequest,
-    RuleDeleteRequest, RuleToggleRequest, RuleUpdateRequest, SessionCreateRequest,
-    SessionIdRequest, SessionListRequest, SessionPermissionModeSetRequest, SessionSendRequest,
-    SessionDeleteRequest, SessionRenameRequest, SessionSearchRequest,
-    SessionWorkspaceAssignRequest, WorkspaceCreateRequest, WorkspaceDeleteRequest,
-    WorkspaceUpdateRequest, WorkspacesListRequest,
+    PresetUpdateRequest, PresetsListRequest, ProviderCreateRequest, ProviderDeleteRequest,
+    ProviderModelAddRequest, ProviderModelToggleRequest, ProviderModelsFetchRequest,
+    ProviderTestRequest, ProviderToggleRequest, ProviderUpdateRequest, ProvidersListRequest,
+    RuleAddRequest, RuleDeleteRequest, RuleToggleRequest, RuleUpdateRequest, SessionCreateRequest,
+    SessionDeleteRequest, SessionIdRequest, SessionListRequest, SessionPermissionModeSetRequest,
+    SessionRenameRequest, SessionSearchRequest, SessionSendRequest, SessionWorkspaceAssignRequest,
+    WorkspaceCreateRequest, WorkspaceDeleteRequest, WorkspaceUpdateRequest, WorkspacesListRequest,
 };
 use crate::ipc::error::{IpcError, IpcErrorCode};
 use crate::ipc::path::ArtifactPath;
@@ -178,10 +176,7 @@ impl SessionSummary {
             model: session.model.clone(),
             thinking_depth: Some(session.thinking_depth),
             permission_mode: Some(session.permission_mode.as_str().to_owned()),
-            preset_id: session
-                .preset_id
-                .as_ref()
-                .map(|id| id.as_str().to_owned()),
+            preset_id: session.preset_id.as_ref().map(|id| id.as_str().to_owned()),
             preset_name: None,
             system_prompt: session.system_prompt.clone(),
             config: JsonPayload(session.config.clone()),
@@ -736,6 +731,7 @@ impl IpcBackend for SessionBackend {
         let title = request.title.clone();
         let workspace_id = request.workspace_id.clone();
         let model = request.model.clone();
+        let provider_id_request = request.provider_id.clone();
         let thinking_depth_request = request.thinking_depth_value()?;
         let permission_mode = request.permission_mode_value()?.unwrap_or_default();
         let preset_id = request.preset_id.clone();
@@ -954,6 +950,22 @@ impl IpcBackend for SessionBackend {
             } else {
                 thinking_depth_request.unwrap_or(THINKING_DEPTH_DEFAULT)
             };
+            // ADR-028：仅显式 provider_id 进入多供应商校验；缺省保持旧单供应商路径
+            // （不按模型隐式解析，避免 broker 不可用时改变既有会话行为）。
+            // 仅声明 `multi_provider` 的运行时接受会话级 provider；其余运行时保持旧路径
+            // （Codex/DSH 的 per-session provider 为 Phase 2/3，避免传了被忽略而串 key）。
+            let supports_multi_provider = runtime
+                .capabilities
+                .iter()
+                .any(|capability| capability == "multi_provider");
+            let provider_id = resolve_session_provider(
+                reads.as_ref(),
+                runtime.id.as_str(),
+                provider_id_request.as_deref(),
+                model.as_deref(),
+                supports_multi_provider,
+            )
+            .await?;
             let session = manager
                 .create_session_with_options(
                     runtime,
@@ -965,6 +977,7 @@ impl IpcBackend for SessionBackend {
                         preset_id: preset.as_ref().map(|preset| preset.id.clone()),
                         thinking_depth: effective_depth,
                         permission_mode,
+                        provider_id,
                         // M7-02/ADR-022：自动路由决策随创建入控制层（审计
                         // `route.decided` + `session.created.routed=true`）；手动为 `None`。
                         route,
@@ -2543,10 +2556,7 @@ fn is_session_busy(status: SessionStatus, active_run: bool) -> bool {
 }
 
 /// 工作区响应条目（`workspaces_list` / `workspace_create` / `workspace_update`）。
-fn workspace_json(
-    workspace: &Workspace,
-    count: aether_store::WorkspaceSessionCount,
-) -> Value {
+fn workspace_json(workspace: &Workspace, count: aether_store::WorkspaceSessionCount) -> Value {
     json!({
         "workspace_id": workspace.id.as_str(),
         "name": workspace.name,
@@ -2730,6 +2740,66 @@ async fn ensure_pause_supported(
     }
 }
 
+/// ADR-028：校验显式会话级供应商（存在 + 启用 + 模型归属 + 运行时协议端点 + 能力）。
+///
+/// 显式 `provider_id`：存在 + 启用 + 运行时协议端点 +（可选）模型归属且启用；
+/// 任一不满足 → `invalid_value`（创建前拒绝，不推迟到 CLI/API 层）。
+async fn resolve_session_provider(
+    reads: Option<&ReadPool>,
+    runtime_id: &str,
+    requested: Option<&str>,
+    model: Option<&str>,
+    supports_multi_provider: bool,
+) -> Result<Option<String>, IpcError> {
+    if !supports_multi_provider {
+        return if requested.is_some() {
+            Err(IpcError::invalid_value(format!(
+                "运行时 {runtime_id} 暂不支持会话级多供应商（缺少 multi_provider 能力）"
+            )))
+        } else {
+            Ok(None)
+        };
+    }
+    // 缺省 = 旧单供应商路径（不按模型隐式选 provider，避免 broker 不可用时
+    // 把既有会话从可用 env 路径推到失败）。
+    let Some(provider_id) = requested else {
+        return Ok(None);
+    };
+    let Some(reads) = reads else {
+        return Err(IpcError::invalid_value("存储未就绪：无法校验 provider_id"));
+    };
+    let provider = reads
+        .provider(provider_id)
+        .await
+        .map_err(|error| IpcError::internal(format!("读取供应商失败：{error}")))?
+        .ok_or_else(|| IpcError::invalid_value(format!("供应商不存在：{provider_id}")))?;
+    if !provider.enabled {
+        return Err(IpcError::invalid_value(format!(
+            "供应商已停用：{provider_id}"
+        )));
+    }
+    if !crate::provider_env::provider_supports_protocol(&provider, runtime_id) {
+        return Err(IpcError::invalid_value(format!(
+            "供应商 {provider_id} 未配置运行时 {runtime_id} 所需协议端点"
+        )));
+    }
+    if let Some(model) = model {
+        let models = reads
+            .provider_models()
+            .await
+            .map_err(|error| IpcError::internal(format!("读取供应商模型失败：{error}")))?;
+        let owned = models.iter().any(|entry| {
+            entry.provider_id == provider_id && entry.model_id == model && entry.enabled
+        });
+        if !owned {
+            return Err(IpcError::invalid_value(format!(
+                "模型 {model} 不属于供应商 {provider_id} 或未启用"
+            )));
+        }
+    }
+    Ok(Some(provider_id.to_owned()))
+}
+
 /// 恢复前的运行时可用性复核（M7-03/ADR-017 §2.1-4①：`enabled=0` 或
 /// `disabled` → 拒绝并保持 `paused`；注册表缺失同样拒绝）。
 async fn ensure_runtime_available(
@@ -2874,5 +2944,110 @@ mod tests {
             .code(),
             "与核心管线错误码一致（同码透传）"
         );
+    }
+
+    #[test]
+    fn provider_id_validates_model_endpoint_and_capability() {
+        use aether_store::{
+            ProviderModelRecord, ProviderRecord, StoreCommand, StoreRuntime, WriteQueueConfig,
+        };
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let storage = StoreRuntime::open(
+            dir.path().join("aether.db"),
+            WriteQueueConfig::default(),
+            runtime.handle(),
+        )
+        .unwrap();
+        let provider_id = "01J0000000000000000000M710";
+        runtime
+            .block_on(storage.queue().execute(StoreCommand::InsertProvider {
+                provider: ProviderRecord {
+                    id: provider_id.to_owned(),
+                    name: "DeepSeek".to_owned(),
+                    provider_type: "deepseek".to_owned(),
+                    base_url: Some("https://api.deepseek.com".to_owned()),
+                    endpoints: r#"{"anthropic":"https://api.deepseek.com/anthropic"}"#.to_owned(),
+                    api_key_ref: Some(format!("keychain://aether/provider/{provider_id}")),
+                    enabled: true,
+                    is_builtin: false,
+                    created_at: 1,
+                    updated_at: 10,
+                },
+            }))
+            .unwrap();
+        runtime
+            .block_on(storage.queue().execute(StoreCommand::InsertProviderModel {
+                model: ProviderModelRecord {
+                    id: "01J0000000000000000000M711".to_owned(),
+                    provider_id: provider_id.to_owned(),
+                    model_id: "deepseek-flash".to_owned(),
+                    display_name: "DeepSeek Flash".to_owned(),
+                    enabled: true,
+                    created_at: 1,
+                },
+            }))
+            .unwrap();
+
+        assert_eq!(
+            runtime
+                .block_on(resolve_session_provider(
+                    Some(storage.reads()),
+                    "claude-code",
+                    None,
+                    Some("deepseek-flash"),
+                    true,
+                ))
+                .unwrap(),
+            None,
+            "缺省 provider_id 必须走旧单供应商路径，不按模型隐式解析"
+        );
+        assert_eq!(
+            runtime
+                .block_on(resolve_session_provider(
+                    Some(storage.reads()),
+                    "claude-code",
+                    Some(provider_id),
+                    Some("deepseek-flash"),
+                    true,
+                ))
+                .unwrap(),
+            Some(provider_id.to_owned())
+        );
+        // 显式 provider 与模型归属不一致 → 创建前拒绝。
+        let wrong_model = runtime
+            .block_on(resolve_session_provider(
+                Some(storage.reads()),
+                "claude-code",
+                Some(provider_id),
+                Some("claude-opus"),
+                true,
+            ))
+            .unwrap_err();
+        assert_eq!(wrong_model.code, IpcErrorCode::InvalidValue);
+        // 显式 provider 缺少运行时协议端点 → 创建前拒绝。
+        let wrong_protocol = runtime
+            .block_on(resolve_session_provider(
+                Some(storage.reads()),
+                "google",
+                Some(provider_id),
+                Some("deepseek-flash"),
+                true,
+            ))
+            .unwrap_err();
+        assert_eq!(wrong_protocol.code, IpcErrorCode::InvalidValue);
+        // 未声明 multi_provider 的运行时拒绝显式 provider_id，避免传了被忽略而串 key。
+        let unsupported = runtime
+            .block_on(resolve_session_provider(
+                Some(storage.reads()),
+                "codex",
+                Some(provider_id),
+                None,
+                false,
+            ))
+            .unwrap_err();
+        assert_eq!(unsupported.code, IpcErrorCode::InvalidValue);
+        assert!(unsupported.message.contains("multi_provider"));
     }
 }

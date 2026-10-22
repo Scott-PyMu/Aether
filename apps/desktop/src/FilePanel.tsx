@@ -130,17 +130,29 @@ export function FilePanel({
 
   return (
     <section className="file-panel" data-testid="file-panel">
-      <h2 className="workbench-title">文件</h2>
-      <p className="file-panel-hint">只读引用：不列目录、不预览；读取仍走权限门</p>
+      <div className="r-search">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="11" cy="11" r="7" />
+          <path d="M21 21l-4.35-4.35" />
+        </svg>
+        <input
+          type="search"
+          className="r-search-input"
+          aria-label="搜索引用"
+          placeholder="搜索文件..."
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+        />
+      </div>
 
-      <div className="file-panel-subtabs" role="tablist" aria-label="文件引用分类">
+      <div className="r-subtabs" role="tablist" aria-label="文件引用分类">
         <button
           type="button"
           role="tab"
           aria-selected={tab === "session"}
           data-testid="file-panel-session-tab"
           data-active={String(tab === "session")}
-          className={tab === "session" ? "file-panel-subtab on" : "file-panel-subtab"}
+          className={tab === "session" ? "r-subtab on" : "r-subtab"}
           onClick={() => setTab("session")}
         >
           会话文件
@@ -151,86 +163,90 @@ export function FilePanel({
           aria-selected={tab === "project"}
           data-testid="file-panel-project-tab"
           data-active={String(tab === "project")}
-          className={tab === "project" ? "file-panel-subtab on" : "file-panel-subtab"}
+          className={tab === "project" ? "r-subtab on" : "r-subtab"}
           onClick={() => setTab("project")}
         >
           项目文件
         </button>
       </div>
 
+      <p className="r-hint">
+        支持拖拽文件或文件夹到输入框，实现引用；读取仍走权限门
+      </p>
       {tab === "project" ? (
         <p className="file-panel-workspace">
           {workspaceRoot ? `工作区：${workspaceRoot}` : "未绑定工作区"}
         </p>
       ) : null}
 
-      <input
-        type="search"
-        className="file-panel-search"
-        aria-label="搜索引用"
-        placeholder="搜索引用"
-        value={search}
-        onChange={(event) => setSearch(event.target.value)}
-      />
-
-      {!sessionId ? (
-        <p className="file-panel-empty" data-testid="file-panel-empty">
-          请选择会话
-        </p>
-      ) : visible.length === 0 ? (
-        <p className="file-panel-empty" data-testid="file-panel-empty">
-          目录为空
-        </p>
-      ) : (
-        <ul className="file-panel-list">
-          {visible.map((artifact) => (
-            <li
-              key={artifact.id}
-              className="ref-item"
-              data-testid="ref-item"
-              data-ref-kind={tab}
-              data-artifact-id={artifact.id}
-              data-path={artifact.path}
-            >
-              <span className="ref-path" title={artifact.path}>
-                {artifact.path}
-              </span>
-              <span className="ref-meta">
-                {artifact.kind === "file" && artifact.size_bytes !== null
-                  ? `${artifact.size_bytes} B`
-                  : "目录"}
-              </span>
-              <button
-                type="button"
-                className="ref-remove"
-                data-testid="ref-remove"
-                disabled={busy}
-                aria-label={`移除引用 ${artifact.path}`}
-                onClick={() => void onRemove(artifact.id)}
+      <div className="r-body">
+        {!sessionId ? (
+          <p className="r-empty" data-testid="file-panel-empty">
+            请选择会话
+          </p>
+        ) : visible.length === 0 ? (
+          <p className="r-empty" data-testid="file-panel-empty">
+            目录为空
+          </p>
+        ) : (
+          <ul className="file-panel-list">
+            {visible.map((artifact) => (
+              <li
+                key={artifact.id}
+                className="ref-item"
+                data-testid="ref-item"
+                data-ref-kind={tab}
+                data-artifact-id={artifact.id}
+                data-path={artifact.path}
               >
-                移除
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+                <span className="ref-path" title={artifact.path}>
+                  {artifact.path}
+                </span>
+                <span className="ref-meta">
+                  {artifact.kind === "file" && artifact.size_bytes !== null
+                    ? `${artifact.size_bytes} B`
+                    : "目录"}
+                </span>
+                <button
+                  type="button"
+                  className="ref-remove"
+                  data-testid="ref-remove"
+                  disabled={busy}
+                  aria-label={`移除引用 ${artifact.path}`}
+                  onClick={() => void onRemove(artifact.id)}
+                >
+                  移除
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
 
-      <div className="file-panel-actions">
+      <div className="r-btns">
         <button
           type="button"
+          className="r-bigbtn"
           data-testid="ref-add-file"
           disabled={!sessionId || busy}
           onClick={() => void onAdd("file")}
         >
           添加文件
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M21 11l-9 9a6 6 0 01-8.5-8.5l9-9a4 4 0 015.5 5.5l-9 9a2 2 0 01-2.8-2.8l8-8" />
+          </svg>
         </button>
         <button
           type="button"
+          className="r-bigbtn"
           data-testid="ref-add-folder"
           disabled={!sessionId || busy}
           onClick={() => void onAdd("directory")}
         >
           附加文件夹
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
+          </svg>
         </button>
       </div>
 

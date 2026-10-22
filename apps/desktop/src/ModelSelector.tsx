@@ -30,6 +30,10 @@ export interface ModelSelectorProps {
   value: string | null;
   /** 选择回调（`null` = 清空/回退到无选择）。 */
   onChange: (modelId: string | null) => void;
+  /** ADR-028：选中模型所属 provider（`null` = 无/已失效；新建会话透传）。 */
+  onProviderChange?: (providerId: string | null) => void;
+  /** ADR-028：由调用方持有的 provider 选择（同一模型多 provider 时用于回显）。 */
+  providerValue?: string | null;
   /** 激活会话的会话级模型（只读展示；不提供修改入口）。 */
   sessionModel?: string | null;
   disabled?: boolean;
@@ -39,6 +43,8 @@ export function ModelSelector({
   ipc = productionProvidersIpc,
   value,
   onChange,
+  onProviderChange,
+  providerValue = null,
   sessionModel = null,
   disabled = false,
 }: ModelSelectorProps) {
@@ -73,16 +79,37 @@ export function ModelSelector({
       return;
     }
     const selection = findModelProvider(providers, value);
+    if (selection === null) {
+      // 已选模型已知但供应商/模型被停用 → 回退到首个可用模型；
+      // 完全未知的手动输入 → 清空选择态（不擅自改写用户输入）。
+      const known = providers.some((provider) =>
+        provider.models.some((model) => model.model_id === value),
+      );
+      const firstGroup = groups[0];
+      const firstModel = firstGroup?.models[0];
+      if (known && firstGroup && firstModel) {
+        onChange(firstModel.model_id);
+        onProviderChange?.(firstGroup.id);
+      } else {
+        onChange(null);
+        onProviderChange?.(null);
+      }
+      return;
+    }
     const next = ensureSelectedModelValid(
-      selection ? { providerId: selection.id, modelId: value } : null,
+      { providerId: selection.id, modelId: value },
       groups,
     );
     if (next === null) {
       onChange(null);
+      onProviderChange?.(null);
     } else if (next.modelId !== value) {
       onChange(next.modelId);
+      onProviderChange?.(next.providerId);
+    } else {
+      onProviderChange?.(next.providerId);
     }
-  }, [groups, onChange, providers, value]);
+  }, [groups, onChange, onProviderChange, providers, value]);
 
   const toggle = useCallback(async () => {
     const next = !open;
@@ -93,15 +120,21 @@ export function ModelSelector({
     }
   }, [open, refresh]);
 
-  const selectedProvider = value ? findModelProvider(providers, value) : null;
+  const selectedProvider = value
+    ? (providerValue
+        ? providers.find(
+            (provider) =>
+              provider.id === providerValue &&
+              provider.models.some((model) => model.model_id === value),
+          ) ?? findModelProvider(providers, value)
+        : findModelProvider(providers, value))
+    : null;
   const selectedModel = selectedProvider?.models.find((model) => model.model_id === value);
   const label = selectedModel
     ? `${selectedProvider?.name ?? ""} · ${selectedModel.display_name}`
     : value !== null
       ? value
-      : sessionModel
-        ? `会话模型：${sessionModel}（只读）`
-        : "选择模型";
+      : "选择模型";
 
   const keyword = search.trim().toLowerCase();
   const filtered: ModelGroup[] = groups
@@ -118,40 +151,55 @@ export function ModelSelector({
     .filter((group) => group.models.length > 0);
 
   return (
-    <div className="model-selector" data-testid="model-selector" data-value={value ?? ""}>
+    <div className="model-selector picker" data-testid="model-selector" data-value={value ?? ""}>
       <button
         type="button"
-        className={value ? "model-selector-btn" : "model-selector-btn empty"}
+        className={value ? "model-selector-btn picker-btn" : "model-selector-btn picker-btn empty"}
         data-testid="model-selector-toggle"
         aria-expanded={open}
         disabled={disabled}
-        title="模型选择（作用于新建会话；运行期只读）"
+        title={
+          sessionModel
+            ? `当前会话模型：${sessionModel}（只读）；此处选择作用于新建会话`
+            : "模型选择（作用于新建会话；运行期只读）"
+        }
         onClick={() => void toggle()}
       >
         {selectedProvider ? (
           <span
-            className="model-selector-icon"
+            className="model-selector-icon picker-mi"
             style={{ background: providerColor(selectedProvider.type) }}
           >
             {providerAbbr(selectedProvider)}
           </span>
         ) : null}
         <span className="model-selector-label">{label}</span>
+        <span className="ar">▾</span>
       </button>
 
       {open ? (
-        <div className="model-selector-list" data-testid="model-selector-list">
-          <input
-            type="search"
-            className="model-selector-search"
-            data-testid="model-selector-search"
-            placeholder="搜索模型"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-          />
+        <div
+          className="model-selector-list dropdown model-dd"
+          data-testid="model-selector-list"
+        >
+          <div className="model-search">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="11" cy="11" r="7" />
+              <path d="M21 21l-4.35-4.35" />
+            </svg>
+            <input
+              type="search"
+              className="model-selector-search"
+              data-testid="model-selector-search"
+              placeholder="搜索模型..."
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </div>
+          <div className="model-list">
           {error ? <p className="model-selector-error">{error}</p> : null}
           {filtered.length === 0 ? (
-            <p className="model-selector-empty" data-testid="model-selector-empty">
+            <p className="model-selector-empty model-empty" data-testid="model-selector-empty">
               {keyword.length > 0
                 ? "没有匹配的模型"
                 : "没有可用的模型；请先在「设置 → 模型与供应商配置」中启用供应商和模型（也可在新建表单手动输入模型 ID）"}
@@ -159,9 +207,9 @@ export function ModelSelector({
           ) : (
             filtered.map((group) => (
               <div key={group.id} className="model-selector-group">
-                <div className="model-selector-group-label">
+                <div className="model-selector-group-label model-group-label">
                   <span
-                    className="model-selector-icon"
+                    className="model-selector-icon gmi"
                     style={{ background: providerColor(groupProviderType(group, providers)) }}
                   >
                     {group.name.trim().charAt(0).toUpperCase()}
@@ -174,25 +222,35 @@ export function ModelSelector({
                     <button
                       key={model.id}
                       type="button"
-                      className={selected ? "model-selector-item on" : "model-selector-item"}
+                      className={
+                        selected
+                          ? "model-selector-item model-item on"
+                          : "model-selector-item model-item"
+                      }
                       data-testid="model-selector-item"
                       data-provider-id={group.id}
                       data-model-id={model.model_id}
                       data-enabled={String(model.enabled)}
                       onClick={() => {
                         onChange(model.model_id);
+                        onProviderChange?.(group.id);
                         setOpen(false);
                       }}
                     >
-                      <span className="model-selector-item-name">{model.display_name}</span>
+                      <span className="model-selector-item-name nm">
+                        {model.display_name}
+                      </span>
                       <span className="model-selector-item-id">{model.model_id}</span>
-                      {selected ? <span className="model-selector-check">✓</span> : null}
+                      {selected ? (
+                        <span className="model-selector-check ck">✓</span>
+                      ) : null}
                     </button>
                   );
                 })}
               </div>
             ))
           )}
+          </div>
         </div>
       ) : null}
     </div>

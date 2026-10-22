@@ -1,4 +1,4 @@
-﻿//! M3-02：会话命令与消息分页后端集成测试。
+//! M3-02：会话命令与消息分页后端集成测试。
 //!
 //! 覆盖：
 //! - `messages_page`：按 `last_seq` 分页（升序、`complete` 判定，含
@@ -186,6 +186,7 @@ fn session_create(backend: &dyn IpcBackend, title: &str, model: Option<&str>) ->
         thinking_depth: None,
         permission_mode: None,
         preset_id: None,
+        provider_id: None,
     };
     backend.session_create(&request).expect("session_create")
 }

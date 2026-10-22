@@ -29,7 +29,8 @@ use aether_adapters::permission_loop::{
     PermissionLoopRequest, PermissionLoopSnapshot,
 };
 use aether_adapters::session_client::{
-    AdapterSessionClient, RunOutcome, SessionClientError, ADAPTER_DISCONNECTED_CODE,
+    AdapterSessionClient, RunOutcome, SessionClientError, SessionCreateParams,
+    ADAPTER_DISCONNECTED_CODE,
 };
 use aether_adapters::supervisor::Supervisor;
 use aether_control::{
@@ -573,15 +574,23 @@ impl AdapterRunExecutor {
         // M3-10/ADR-010：`thinking_depth` 仅在运行时声明能力时透传。
         // M7-06/ADR-024：`permission_mode` 档位随 `session.create` 下发（适配器投影为
         // 运行时启动参数；仅新会话生效——在途会话判定参数不受后续档位变更影响）。
+        // ADR-028：`provider_id` 从 `sessions.config.aether.provider_id` 读取，供
+        // 适配器向 broker 按需取凭据；缺省 = 旧单供应商 env 路径。
+        let provider_id = session
+            .config
+            .get("aether")
+            .and_then(|value| value.get("provider_id"))
+            .and_then(Value::as_str);
         let created = client
-            .create_session_with_options(
-                Some(&session.title),
-                native_id.as_deref(),
-                session.model.as_deref(),
-                session.system_prompt.as_deref(),
+            .create_session_with_all_options(SessionCreateParams {
+                title: Some(&session.title),
+                native_id: native_id.as_deref(),
+                model: session.model.as_deref(),
+                system_prompt: session.system_prompt.as_deref(),
                 thinking_depth,
-                Some(session.permission_mode.as_str()),
-            )
+                permission_mode: Some(session.permission_mode.as_str()),
+                provider_id,
+            })
             .await
             .map_err(request_error_info)?;
         if let Some(native_id) = &created.native_id {

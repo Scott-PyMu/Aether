@@ -85,7 +85,7 @@ export const THINKING_DEPTH_LABELS: Record<number, string> = {
   1: "低",
   2: "高",
   3: "极高",
-  4: "最大",
+  4: "最高",
 };
 /** 能力置灰 tooltip（UI-UX §2.4/§5 文案）。 */
 export const THINKING_DEPTH_UNSUPPORTED_HINT = "当前运行时不支持思考深度";
@@ -230,6 +230,8 @@ export interface SessionCreateInput {
   title: string;
   workspace_id?: string;
   model?: string;
+  /** ADR-028：会话级供应商 id（可选；显式指定后核心校验模型归属/协议端点）。 */
+  provider_id?: string;
   /** M3-10/ADR-010：会话级思考深度（0–4；缺省 2）。 */
   thinking_depth?: number;
   /** M6-01/ADR-014 决策 3：会话级权限模式（缺省 `workspace_write`）。 */

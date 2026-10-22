@@ -120,6 +120,8 @@ pub struct SessionCreateOptions {
     pub thinking_depth: u8,
     /// 会话级权限模式（缺省 `workspace_write`）。
     pub permission_mode: aether_core::PermissionMode,
+    /// ADR-028：所选供应商 id（模型→供应商解析；`None` = 旧单供应商路径）。
+    pub provider_id: Option<String>,
     /// 自动路由决策（M7-02/ADR-022；`Some` = `runtime_id` 缺省经自动路由选中，
     /// 落审计 `route.decided` 且 `session.created.routed=true`；手动指定 = `None`）。
     pub route: Option<RouteDecision>,
@@ -134,6 +136,7 @@ impl Default for SessionCreateOptions {
             preset_id: None,
             thinking_depth: aether_core::THINKING_DEPTH_DEFAULT,
             permission_mode: aether_core::PermissionMode::default(),
+            provider_id: None,
             route: None,
         }
     }
@@ -795,6 +798,11 @@ impl SessionManager {
         let now = self.inner.clock.now_ms();
         let session_id = SessionId::new(ulid::generate()).map_err(internal_from)?;
         let runtime_id = runtime.id.clone();
+        // ADR-028：provider_id 落 `sessions.config.aether.provider_id`（重试/恢复可复用）。
+        let config = match options.provider_id.as_deref() {
+            Some(provider_id) => json!({ "aether": { "provider_id": provider_id } }),
+            None => json!({}),
+        };
         let session = Session {
             id: session_id.clone(),
             runtime_id: runtime_id.clone(),
@@ -807,7 +815,7 @@ impl SessionManager {
             permission_mode: options.permission_mode,
             preset_id: options.preset_id,
             system_prompt: options.system_prompt,
-            config: json!({}),
+            config,
             token_usage: TokenUsage::default(),
             created_at: now,
             updated_at: now,

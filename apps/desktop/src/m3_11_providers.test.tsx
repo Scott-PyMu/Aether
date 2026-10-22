@@ -503,7 +503,7 @@ function fakeSessionIpc(): SessionIpc {
         kind: "mock",
         version: "0.1.0",
         protocol: "1.0",
-        capabilities: [],
+        capabilities: ["multi_provider"],
         enabled: true,
         status: "ready" as const,
         status_reason: null,
@@ -581,6 +581,8 @@ describe("SessionWorkbench 模型选择器集成（M3-11 DoD6/DoD7）", () => {
       const input = (ipc.createSession as unknown as ReturnType<typeof vi.fn>).mock
         .calls[0]?.[0];
       expect(input.model).toBe("claude-opus");
+      // ADR-028：模型选择器同时确定 provider，新建会话显式消歧。
+      expect(input.provider_id).toBe(PROVIDER_A);
 
       // 运行期只读：发送消息不触发供应商配置命令（无 update 入口）。
       expect(providers.update).not.toHaveBeenCalled();

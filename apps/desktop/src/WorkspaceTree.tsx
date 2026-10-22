@@ -232,15 +232,15 @@ export function WorkspaceTree({
     return (
       <li
         key={key === "" ? "__unassigned__" : key}
-        className="workspace-item"
+        className="workspace-item ws"
         data-testid="workspace-item"
         data-workspace-id={key}
         data-manageable={String(options.manageable)}
       >
-        <div className="workspace-item-row">
+        <div className="workspace-item-row ws-h">
           <button
             type="button"
-            className="workspace-item-toggle"
+            className="workspace-item-toggle arw"
             data-testid="workspace-item-toggle"
             aria-expanded={!isCollapsed}
             onClick={() => toggleCollapsed(key)}
@@ -249,7 +249,7 @@ export function WorkspaceTree({
           </button>
           <button
             type="button"
-            className="workspace-item-name"
+            className="workspace-item-name nm"
             data-testid="workspace-item-name"
             data-workspace-id={key}
             title={rootPath ?? undefined}
@@ -258,7 +258,7 @@ export function WorkspaceTree({
             {name}
           </button>
           <span
-            className="workspace-item-count"
+            className="workspace-item-count ct"
             data-testid="workspace-item-count"
             data-active={String(active)}
             data-total={String(total)}
@@ -358,7 +358,7 @@ export function WorkspaceTree({
             （无会话）
           </p>
         ) : (
-          <ul className="workspace-session-list">
+          <ul className="workspace-session-list sess">
             {nodeSessions.map((session) => (
               <li key={session.id}>
                 <button
@@ -388,17 +388,6 @@ export function WorkspaceTree({
     <section className="workspace-tree" data-testid="workspace-tree" aria-label="工作区">
       <div className="workspace-tree-header">
         <h2 className="workbench-title">工作区</h2>
-        <button
-          type="button"
-          data-testid="workspace-create"
-          aria-expanded={createOpen}
-          onClick={() => {
-            setCreateOpen((open) => !open);
-            setError(null);
-          }}
-        >
-          + 新建
-        </button>
       </div>
       <p className="workspace-tree-notice" data-testid="workspace-assign-notice">
         {WORKSPACE_BASELINE_NOTICE}
@@ -426,6 +415,49 @@ export function WorkspaceTree({
             : "改派失败（见错误提示）"}
         </p>
       ) : null}
+      {loading ? (
+        <p className="workspace-tree-loading" data-testid="workspace-tree-loading">
+          加载工作区…
+        </p>
+      ) : (
+        <ul className="workspace-tree-list">
+          {list.workspaces.map((workspace: WorkspaceSummary) =>
+            renderWorkspaceNode(
+              workspace.workspace_id,
+              workspace.name,
+              workspace.root_path,
+              workspace.active_sessions,
+              workspace.total_sessions,
+              { workspaceId: workspace.workspace_id, manageable: true },
+            ),
+          )}
+          {renderWorkspaceNode(
+            UNASSIGNED_WORKSPACE_KEY,
+            list.unassigned.name,
+            list.unassigned.root_path,
+            list.unassigned.active_sessions,
+            list.unassigned.total_sessions,
+            { workspaceId: null, manageable: false },
+          )}
+        </ul>
+      )}
+      {!loading && list.workspaces.length === 0 && list.unassigned.total_sessions === 0 ? (
+        <p className="workspace-tree-empty" data-testid="workspace-tree-empty">
+          暂无工作区；点击「＋ 新建工作区」添加。
+        </p>
+      ) : null}
+      <button
+        type="button"
+        className="new-ws"
+        data-testid="workspace-create"
+        aria-expanded={createOpen}
+        onClick={() => {
+          setCreateOpen((open) => !open);
+          setError(null);
+        }}
+      >
+        ＋ 新建工作区
+      </button>
       {createOpen ? (
         <div className="workspace-create-form" data-testid="workspace-create-form">
           <input
@@ -471,37 +503,6 @@ export function WorkspaceTree({
             设置页的「工作区绑定」= 缺省工作区（仅新会话生效）；此处用于管理与改派既有会话。
           </p>
         </div>
-      ) : null}
-      {loading ? (
-        <p className="workspace-tree-loading" data-testid="workspace-tree-loading">
-          加载工作区…
-        </p>
-      ) : (
-        <ul className="workspace-tree-list">
-          {list.workspaces.map((workspace: WorkspaceSummary) =>
-            renderWorkspaceNode(
-              workspace.workspace_id,
-              workspace.name,
-              workspace.root_path,
-              workspace.active_sessions,
-              workspace.total_sessions,
-              { workspaceId: workspace.workspace_id, manageable: true },
-            ),
-          )}
-          {renderWorkspaceNode(
-            UNASSIGNED_WORKSPACE_KEY,
-            list.unassigned.name,
-            list.unassigned.root_path,
-            list.unassigned.active_sessions,
-            list.unassigned.total_sessions,
-            { workspaceId: null, manageable: false },
-          )}
-        </ul>
-      )}
-      {!loading && list.workspaces.length === 0 && list.unassigned.total_sessions === 0 ? (
-        <p className="workspace-tree-empty" data-testid="workspace-tree-empty">
-          暂无工作区；点击「+ 新建」添加。
-        </p>
       ) : null}
     </section>
   );

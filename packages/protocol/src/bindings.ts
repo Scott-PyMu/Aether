@@ -507,6 +507,8 @@ export type ProviderCreateRequest = {
 	name: string,
 	type: ProviderType,
 	base_url?: string | null,
+	/**  ADR-028：协议端点（`anthropic`/`openai`/`google`/`dsh` → base URL）。 */
+	endpoints?: { [key in string]: string } | null,
 	api_key?: string | null,
 	enabled: boolean,
 };
@@ -553,6 +555,8 @@ export type ProviderUpdateRequest = {
 	id: string,
 	name: string,
 	base_url?: string | null,
+	/**  ADR-028：`None` = 不变；`Some(map)` = 整体替换（`{}` 清除）。 */
+	endpoints?: { [key in string]: string } | null,
 	api_key?: string | null,
 	enabled: boolean,
 };
@@ -659,6 +663,11 @@ export type SessionCreateRequest = {
 	title: string,
 	workspace_id?: string | null,
 	model?: string | null,
+	/**
+	 *  ADR-028：会话级供应商 id（可选；`None` = 由模型解析/旧单供应商路径）。
+	 *  显式指定时校验供应商存在/启用、模型归属与运行时协议端点。
+	 */
+	provider_id?: string | null,
 	/**
 	 *  会话级思考深度（ADR-010 决策 2：0–4，缺省 2；越界 `out_of_range`、
 	 *  类型非法 `invalid_type`）。

@@ -14,6 +14,42 @@ import { invoke } from "@tauri-apps/api/core";
 /** 供应商类型（ADR-010 决策 3：创建后不可改）。 */
 export type ProviderType = "anthropic" | "openai" | "deepseek" | "google" | "custom";
 
+/**
+ * ADR-028：主流供应商默认协议端点（用户只需填 Key；可覆盖）。
+ * `openai` = OpenAI 兼容协议；`anthropic` = Anthropic 兼容协议；`google` = Gemini 原生。
+ */
+export const PROVIDER_ENDPOINT_PRESETS: Record<
+  ProviderType,
+  { endpoints: Record<string, string>; models: string[] }
+> = {
+  anthropic: {
+    endpoints: { anthropic: "https://api.anthropic.com" },
+    models: [],
+  },
+  openai: {
+    endpoints: { openai: "https://api.openai.com/v1" },
+    models: [],
+  },
+  deepseek: {
+    endpoints: {
+      openai: "https://api.deepseek.com",
+      anthropic: "https://api.deepseek.com/anthropic",
+    },
+    models: ["deepseek-flash", "deepseek-v4-pro"],
+  },
+  google: {
+    endpoints: {
+      google: "https://generativelanguage.googleapis.com",
+      openai: "https://generativelanguage.googleapis.com/v1beta/openai/",
+    },
+    models: [],
+  },
+  custom: {
+    endpoints: {},
+    models: [],
+  },
+};
+
 /** 供应商模型（`provider_models` 表投影；启用态驱动选择器）。 */
 export interface ProviderModel {
   id: string;
@@ -28,6 +64,8 @@ export interface ProviderEntry {
   name: string;
   type: ProviderType;
   base_url: string | null;
+  /** ADR-028：协议端点（`anthropic`/`openai`/`google`/`dsh` → base URL）。 */
+  endpoints?: Record<string, string> | null;
   api_key_ref: string | null;
   enabled: boolean;
   is_builtin: boolean;
@@ -40,6 +78,7 @@ export interface ProviderCreateInput {
   name: string;
   type: ProviderType;
   base_url?: string;
+  endpoints?: Record<string, string>;
   /** 明文仅传输（非空时核心写 keyring）；缺省/空串 = 不写入。 */
   api_key?: string;
   enabled: boolean;
@@ -50,6 +89,8 @@ export interface ProviderUpdateInput {
   name: string;
   /** 缺省 = 不变；空串 = 清除。 */
   base_url?: string;
+  /** 缺省 = 不变；`{}` = 清除；非空 = 整体替换。 */
+  endpoints?: Record<string, string>;
   /** 缺省 = 不变；空串 = 清除；非空 = 覆盖明文写入。 */
   api_key?: string;
   enabled: boolean;
@@ -264,9 +305,19 @@ export function findModelProvider(
   providers: ProviderEntry[],
   modelId: string,
 ): ProviderEntry | null {
-  return (
-    providers.find((provider) =>
-      provider.models.some((model) => model.model_id === modelId),
-    ) ?? null
-  );
+  // ADR-028：同一模型可能出现在多个供应商；展示取启用供应商中
+  // `(updated_at, id)` 最大者（确定性）。实际新建会话由用户点击的 provider 显式透传。
+  const candidates = providers
+    .filter(
+      (provider) =>
+        provider.enabled &&
+        provider.models.some((model) => model.model_id === modelId && model.enabled),
+    )
+    .sort((left, right) => {
+      if (left.updated_at !== right.updated_at) {
+        return right.updated_at - left.updated_at;
+      }
+      return right.id.localeCompare(left.id);
+    });
+  return candidates[0] ?? null;
 }

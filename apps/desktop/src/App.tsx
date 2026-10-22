@@ -51,17 +51,28 @@ export function App() {
 
   if (loadError) {
     return (
-      <main className="app-shell" data-testid="startup-load-error">
-        <h1>Aether</h1>
-        <p>启动自检失败：{loadError}</p>
+      <main className="app" data-testid="startup-load-error">
+        <div className="boot-screen">
+          <div className="boot-card">
+            <div className="about-logo">A</div>
+            <h1>Aether</h1>
+            <p className="boot-error">启动自检失败：{loadError}</p>
+          </div>
+        </div>
       </main>
     );
   }
 
   if (!startup) {
     return (
-      <main className="app-shell" data-testid="startup-loading">
-        <p>正在执行启动自检…</p>
+      <main className="app" data-testid="startup-loading">
+        <div className="boot-screen">
+          <div className="boot-card">
+            <div className="about-logo">A</div>
+            <h1>Aether</h1>
+            <p>正在执行启动自检…</p>
+          </div>
+        </div>
       </main>
     );
   }
@@ -71,90 +82,57 @@ export function App() {
   }
 
   return (
-    <main className="app-shell">
-      <h1>Aether</h1>
-      <p className="app-subtitle">统一多 Agent 编排平台</p>
-      <p data-testid="app-version">版本 {APP_VERSION}</p>
-      <p data-testid="protocol-version">
-        线协议 v{PROTOCOL_VERSION.major}.{PROTOCOL_VERSION.minor}
-      </p>
-      <p className="app-data-dir" data-testid="app-data-dir">
-        数据目录：{startup.data_dir}
-      </p>
-      <p className="app-nav">
-        <button
-          type="button"
-          data-testid="backup-open"
-          onClick={() => setView("backup")}
-        >
-          备份与恢复
-        </button>
-        <button
-          type="button"
-          data-testid="settings-open"
-          onClick={() => setView("settings")}
-        >
-          设置
-        </button>
-        <button
-          type="button"
-          data-testid="diagnostics-open"
-          onClick={() => setView("diagnostics")}
-        >
-          诊断
-        </button>
-        <button
-          type="button"
-          data-testid="audit-open"
-          onClick={() => setView("audit")}
-        >
-          审计
-        </button>
-        <button
-          type="button"
-          data-testid="about-open"
-          onClick={() => setView("about")}
-        >
-          关于
-        </button>
-      </p>
-      <HealthMonitor onOpenDiagnostics={() => setView("diagnostics")} />
-      <EventBridgeIndicator />
-      <SessionWorkbench
-        onOpenDiagnostics={() => setView("diagnostics")}
-        activePresetId={activePresetId}
-        onActivePresetChange={setActivePresetId}
-        presetsVersion={presetsVersion}
-      />
-      {view === "backup" ? (
-        <BackupPage onBack={() => setView("workbench")} />
-      ) : null}
-      {view === "diagnostics" ? (
-        <DiagnosticsPage onBack={() => setView("workbench")} />
-      ) : null}
-      {view === "audit" ? (
-        <AuditPage onBack={() => setView("workbench")} />
-      ) : null}
-      {view === "settings" ? (
-        <SettingsPage
-          dataDir={startup.data_dir}
-          securityLevel={startup.security_level ?? null}
+    <main className="app">
+      <div className="app-main">
+        <SessionWorkbench
+          onOpenDiagnostics={() => setView("diagnostics")}
           activePresetId={activePresetId}
           onActivePresetChange={setActivePresetId}
-          onPresetsChanged={() => setPresetsVersion((value) => value + 1)}
-          onBack={() => setView("workbench")}
+          presetsVersion={presetsVersion}
+          onOpenSettings={() => setView("settings")}
           onOpenBackup={() => setView("backup")}
-          onOpenDiagnostics={() => setView("diagnostics")}
+          onOpenAudit={() => setView("audit")}
           onOpenAbout={() => setView("about")}
-        />
-      ) : null}
-      {view === "about" ? (
-        <AboutPage
+          appVersion={APP_VERSION}
+          protocolVersion={PROTOCOL_VERSION}
           dataDir={startup.data_dir}
-          onBack={() => setView("workbench")}
-          onOpenDiagnostics={() => setView("diagnostics")}
+          statusSlot={
+            <>
+              <HealthMonitor onOpenDiagnostics={() => setView("diagnostics")} />
+              <EventBridgeIndicator />
+            </>
+          }
         />
-      ) : null}
+        {view === "backup" ? (
+          <BackupPage onBack={() => setView("workbench")} />
+        ) : null}
+        {view === "diagnostics" ? (
+          <DiagnosticsPage onBack={() => setView("workbench")} />
+        ) : null}
+        {view === "audit" ? (
+          <AuditPage onBack={() => setView("workbench")} />
+        ) : null}
+        {view === "settings" ? (
+          <SettingsPage
+            dataDir={startup.data_dir}
+            securityLevel={startup.security_level ?? null}
+            activePresetId={activePresetId}
+            onActivePresetChange={setActivePresetId}
+            onPresetsChanged={() => setPresetsVersion((value) => value + 1)}
+            onBack={() => setView("workbench")}
+            onOpenBackup={() => setView("backup")}
+            onOpenDiagnostics={() => setView("diagnostics")}
+            onOpenAbout={() => setView("about")}
+          />
+        ) : null}
+        {view === "about" ? (
+          <AboutPage
+            dataDir={startup.data_dir}
+            onBack={() => setView("workbench")}
+            onOpenDiagnostics={() => setView("diagnostics")}
+          />
+        ) : null}
+      </div>
     </main>
   );
 }

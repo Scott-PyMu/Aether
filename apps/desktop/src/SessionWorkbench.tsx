@@ -12,14 +12,12 @@
  * Tauri 生产实现）与 `permissionIpc`（权限/运行时控制命令面，默认 Tauri 生产实现）
  * ——E2E/单测注入替身即可覆盖完整交互路径。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { appEventStore } from "./aetherStore";
 import { archiveIpc as productionArchiveIpc, type ArchiveIpc } from "./archive";
 import { artifactsIpc as productionArtifactsIpc, type ArtifactsIpc } from "./artifacts";
 import { describeIpcError, ipcErrorCode } from "./startup";
-import { diagnosticsIpc as productionDiagnosticsIpc, type DiagnosticsIpc } from "./diagnostics";
-import { DiagnosticsEntry } from "./DiagnosticsEntry";
 import {
   defaultAetherEventListener,
   type AetherEventListener,
@@ -96,7 +94,7 @@ export const STREAM_VIEWPORT_HEIGHT = 480;
 /** 空会话占位 id（未选会话时 hook 仍需一个稳定键）。 */
 const NO_SESSION = "__none__";
 
-/** 思考深度档位 tick 顺序（关闭/低/高/极高/最大；ADR-010）。 */
+/** 思考深度档位 tick 顺序（关闭/低/高/极高/最高；ADR-010）。 */
 const THINKING_DEPTH_TICKS = [
   THINKING_DEPTH_MIN,
   1,
@@ -104,6 +102,32 @@ const THINKING_DEPTH_TICKS = [
   3,
   THINKING_DEPTH_MAX,
 ];
+
+/** 运行时选择器配色（与原型 agent picker 一致）。 */
+const RUNTIME_ACCENTS: Record<string, string> = {
+  claude: "#D97706",
+  codex: "#16A34A",
+  dsh: "#2F6FD0",
+  deepseek: "#4D6BFE",
+};
+
+function runtimeAccentOf(runtime: RuntimeInfo | null | undefined): string {
+  if (!runtime) {
+    return "#666666";
+  }
+  return RUNTIME_ACCENTS[runtime.kind] ?? RUNTIME_ACCENTS[runtime.id] ?? "#666666";
+}
+
+function runtimeAbbrOf(runtime: RuntimeInfo | null | undefined): string {
+  if (!runtime) {
+    return "?";
+  }
+  if (runtime.kind in RUNTIME_ACCENTS) {
+    return runtime.kind === "claude" ? "CC" : runtime.kind === "codex" ? "CX" : "DS";
+  }
+  const letters = runtime.name.replace(/[^A-Za-z]/g, "");
+  return (letters.slice(0, 2) || runtime.name.slice(0, 2)).toUpperCase();
+}
 
 /** 从响应 `warnings` 提取思考深度非阻断提示（无则 `null`）。 */
 function thinkingWarningOf(warnings?: SessionWarning[]): string | null {
@@ -120,10 +144,8 @@ export interface SessionWorkbenchProps {
   historyLimit?: number;
   streamItemHeight?: number;
   streamHeight?: number;
-  /** M3-05：右栏诊断分区（提供时渲染；打开 S-07 诊断导出页）。 */
+  /** M3-05：打开 S-07 诊断导出页（用户菜单入口）。 */
   onOpenDiagnostics?: () => void;
-  /** M3-05：诊断 IPC 注入（测试替身；缺省 = 生产 Tauri 实现）。 */
-  diagnosticsIpc?: DiagnosticsIpc;
   /** M3-09：文件引用面板 IPC 注入（测试替身；缺省 = 生产 Tauri 实现）。 */
   artifactsIpc?: ArtifactsIpc;
   /** M3-11：供应商配置 IPC 注入（模型选择器派生数据源；缺省 = 生产 Tauri 实现）。 */
@@ -157,6 +179,19 @@ export interface SessionWorkbenchProps {
    * 测试注入替身以覆盖创建/改名/删除/改派与错误路径）。
    */
   workspacesIpc?: WorkspacesIpc;
+  /**
+   * UI 版式（对齐 P0 原型）：侧栏用户菜单入口与版本信息。
+   * 均为可选——嵌入/测试场景缺省不渲染入口，不影响既有锚点。
+   */
+  onOpenSettings?: () => void;
+  onOpenBackup?: () => void;
+  onOpenAudit?: () => void;
+  onOpenAbout?: () => void;
+  appVersion?: string;
+  protocolVersion?: { major: number; minor: number };
+  dataDir?: string;
+  /** 侧栏底部状态槽（健康横幅 / 事件通道指示；由 App 注入）。 */
+  statusSlot?: ReactNode;
 }
 
 function mergeMessages(previous: MessageRow[], incoming: MessageRow[]): MessageRow[] {
@@ -195,7 +230,6 @@ export function SessionWorkbench({
   streamItemHeight = STREAM_ITEM_HEIGHT,
   streamHeight = STREAM_VIEWPORT_HEIGHT,
   onOpenDiagnostics,
-  diagnosticsIpc: diagnosticsIpcProp = productionDiagnosticsIpc,
   artifactsIpc: artifactsIpcProp = productionArtifactsIpc,
   providersIpc: providersIpcProp = productionProvidersIpc,
   archiveIpc: archiveIpcProp = productionArchiveIpc,
@@ -206,6 +240,14 @@ export function SessionWorkbench({
   onActivePresetChange,
   presetsVersion = 0,
   workspacesIpc: workspacesIpcProp = productionWorkspacesIpc,
+  onOpenSettings,
+  onOpenBackup,
+  onOpenAudit,
+  onOpenAbout,
+  appVersion,
+  protocolVersion,
+  dataDir,
+  statusSlot,
 }: SessionWorkbenchProps) {
   const [runtimes, setRuntimes] = useState<RuntimeInfo[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
@@ -247,6 +289,8 @@ export function SessionWorkbench({
   const [modelDraft, setModelDraft] = useState("");
   /** M3-11：输入区模型选择（作用于新建会话；与手动输入共用 `modelDraft` 草稿字段）。 */
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
+  /** ADR-028：选择器选中的模型所属供应商（新建会话透传 `provider_id`）。 */
+  const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
   const [titleDraft, setTitleDraft] = useState("");
   /**
    * M7-09/ADR-026：Agent 预设清单（新建会话入口可选；读取失败静默降级为空清单——
@@ -278,6 +322,16 @@ export function SessionWorkbench({
   const [retryingRunId, setRetryingRunId] = useState<string | null>(null);
   /** M3-03：右栏（运行时/权限）抽屉开关（<1280px 断点；≥1280 常驻）。 */
   const [rightOpen, setRightOpen] = useState(true);
+  /** 原型版式：Agent / Chat 双模式（Chat 为 P2 占位，仅切换展示）。 */
+  const [mode, setMode] = useState<"agent" | "chat">("agent");
+  /** 原型版式：左栏折叠 / 新建会话展开 / 用户菜单。 */
+  const [sideCollapsed, setSideCollapsed] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  /** 右栏分区：文件（原型默认）/ 改动（P1 占位）。 */
+  const [rightTab, setRightTab] = useState<"files" | "changes">("files");
+  /** 输入区 Agent 运行时选择器（原型 agent picker）。 */
+  const [agentPickerOpen, setAgentPickerOpen] = useState(false);
   /** M3-03：待审批计数（全局面板数据源 → 顶栏徽标）。 */
   const [pendingPermissionCount, setPendingPermissionCount] = useState(0);
   /** M3-10：思考深度档位（0–4；随会话生效值回显）与弹层开关（原型输入区滑块）。 */
@@ -389,6 +443,8 @@ export function SessionWorkbench({
     [runtimes, selectedRuntime],
   );
   const thinkingSupported = supportsThinkingDepth(selectedRuntimeInfo);
+  const thinkingPercent =
+    (thinkingDepth / THINKING_DEPTH_MAX) * 100;
   /** M7-03/ADR-017：当前会话运行时的 `pause_resume` 能力（置灰依据；ADR-017 附录 A-5）。 */
   const activeSessionRuntime = useMemo(
     () => runtimes.find((runtime) => runtime.id === activeSession?.runtime_id) ?? null,
@@ -768,11 +824,17 @@ export function SessionWorkbench({
     setModelDraft(modelId ?? "");
   }, []);
 
+  /** ADR-028：模型选择器同时回传所属供应商（`null` = 清空）。 */
+  const onModelProviderChange = useCallback((providerId: string | null) => {
+    setSelectedProviderId(providerId);
+  }, []);
+
   /** M3-11：手动输入模型（保留 UI-05 路径）；与选择器选择不一致时清空选择态。 */
   const onModelDraftChange = useCallback((value: string) => {
     setModelDraft(value);
     setSelectedModelId((current) => (current !== null && current !== value ? null : current));
-  }, []);
+    setSelectedProviderId((current) => (selectedModelId === value ? current : null));
+  }, [selectedModelId]);
 
   const onCreateSession = useCallback(async () => {
     if (!autoRoute && !selectedRuntime) {
@@ -794,6 +856,13 @@ export function SessionWorkbench({
     }
     const title = titleDraft.trim() || `会话 ${new Date().toLocaleTimeString()}`;
     const model = modelDraft.trim();
+    // ADR-028：仅对声明 `multi_provider` 的显式运行时透传 provider_id；
+    // 自动路由/Codex/DSH 保持旧单供应商路径（由核心按协议端点注入）。
+    const selectedRuntimeInfo = selectedRuntime
+      ? runtimes.find((runtime) => runtime.id === selectedRuntime)
+      : undefined;
+    const runtimeSupportsMultiProvider =
+      !autoRoute && (selectedRuntimeInfo?.capabilities.includes("multi_provider") ?? false);
     // M7-09/ADR-026：所选预设（清单刷新后已消失的 id 不再透传，避免无谓的
     // `preset_not_found`；服务端仍为权威校验方）。
     const selectedPresetId =
@@ -807,6 +876,10 @@ export function SessionWorkbench({
         ...(autoRoute ? {} : { runtime_id: selectedRuntime }),
         title,
         ...(model ? { model } : {}),
+        // ADR-028：模型选择器选中的 provider（显式消歧；仅 multi_provider 运行时）。
+        ...(model && selectedProviderId && runtimeSupportsMultiProvider
+          ? { provider_id: selectedProviderId }
+          : {}),
         // M3-10/ADR-010：会话级思考深度随 `session_create` 透传（缺省 2）。
         thinking_depth: thinkingDepth,
         // M6-01/ADR-014：会话级权限模式随 `session_create` 透传（缺省 workspace_write）。
@@ -844,6 +917,7 @@ export function SessionWorkbench({
     reportError,
     runtimes,
     selectedRuntime,
+    selectedProviderId,
     thinkingDepth,
     titleDraft,
   ]);
@@ -1088,46 +1162,72 @@ export function SessionWorkbench({
     : (projection.runs.at(-1)?.status ?? "无进行中 run");
 
   return (
-    <section className="workbench" data-testid="workbench">
+    <section
+      className={sideCollapsed ? "workbench side-collapsed" : "workbench"}
+      data-testid="workbench"
+      data-mode={mode}
+    >
       {/* T1 埋点锚点（M4-04 读取；`data-ms` 为空表示尚未创建会话）。 */}
       <span
         hidden
         data-testid="create-latency-ms"
         data-ms={createLatencyMs === null ? "" : String(createLatencyMs)}
       />
-      <TopBar
-        session={activeSession}
-        runId={projection.activeRunId}
-        runStatusText={runStatusText}
-        interruptible={interruptible}
-        onInterrupt={onInterrupt}
-        lastAck={lastAck}
-        runtimes={runtimes}
-        pendingCount={pendingPermissionCount}
-        rightOpen={rightOpen}
-        onToggleRight={() => setRightOpen((open) => !open)}
-        onExportSession={activeSession ? () => void onExportSession() : undefined}
-        exportBusy={exportBusy}
-        exportResult={exportResult?.result ?? null}
-        // M7-03/ADR-017：暂停/恢复（锚点 `session-pause-toggle`；有会话时渲染）。
-        pauseSupported={pauseSupported}
-        pauseDisabled={pauseDisabled}
-        onTogglePause={activeSession ? () => void onTogglePause() : undefined}
-        pauseBusy={pauseBusy}
-      />
-      {/* M7-04：标签页（UI-01 完整；锚点 `workbench-tabs` / `session-tab` /
-          `session-tab-badge` / `session-tab-close` / `split-toggle`）。 */}
-      <WorkbenchTabs
-        sessions={tabSessions}
-        activeSessionId={activeSessionId}
-        splitSessionId={splitSession?.id ?? null}
-        onActivate={onActivateTab}
-        onClose={onCloseTab}
-        onToggleSplit={onToggleSplit}
-        splitEnabled={splitEnabled}
-      />
-      <div className="workbench-columns" data-split={String(splitSession !== null)}>
-        <aside className="workbench-sidebar">
+
+      {/* ===== 左侧栏（原型 .side：模式切换 / 新建 / 搜索 / 工作区 / 会话 / 用户） ===== */}
+      <aside className={sideCollapsed ? "side collapsed" : "side"} data-testid="sidebar">
+        <div className="side-inner">
+          <div className="side-top">
+            <div className="mode-row">
+              <div className="mode" role="tablist" aria-label="工作模式">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={mode === "agent"}
+                  className={mode === "agent" ? "on" : ""}
+                  data-testid="mode-agent"
+                  onClick={() => setMode("agent")}
+                >
+                  ◈ Agent
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={mode === "chat"}
+                  className={mode === "chat" ? "on" : ""}
+                  data-testid="mode-chat"
+                  onClick={() => setMode("chat")}
+                >
+                  ▢ Chat
+                </button>
+              </div>
+              <button
+                type="button"
+                className="side-collapse"
+                title="折叠侧栏"
+                aria-label="折叠侧栏"
+                data-testid="side-collapse"
+                onClick={() => setSideCollapsed(true)}
+              >
+                <svg viewBox="0 0 24 24">
+                  <rect x="3" y="4" width="18" height="16" rx="2" />
+                  <path d="M9 4v16" />
+                </svg>
+              </button>
+            </div>
+            <button
+              type="button"
+              className={createOpen ? "newbtn active" : "newbtn"}
+              data-testid="new-session-open"
+              aria-expanded={createOpen}
+              onClick={() => setCreateOpen((open) => !open)}
+            >
+              ＋ 新建会话
+            </button>
+          </div>
+
+          <div className="ws-list">
+            <div className="workbench-sidebar side-sessions">
           {/* M7-08/ADR-026 §2.1：工作区树（分组/计数/折叠 + 创建/改名/删除/改派；
               锚点 `workspace-tree` / `workspace-item` / `workspace-create`）。 */}
           <WorkspaceTree
@@ -1143,6 +1243,10 @@ export function SessionWorkbench({
           {/* M7-07/ADR-025 §2.1-2：会话搜索（Ctrl+K；锚点 `session-search` /
               `session-search-result`）。空查询显示常规分组列表。 */}
           <div className="session-search">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="11" cy="11" r="7" />
+              <path d="M21 21l-4.35-4.35" />
+            </svg>
             <input
               ref={searchInputRef}
               type="search"
@@ -1341,72 +1445,14 @@ export function SessionWorkbench({
             </ul>
           )}
 
-          <h2 className="workbench-title">运行时</h2>
-          {/* M7-02/ADR-022：自动路由开关（缺省关闭 = 手动指定优先；开启后新建会话
-              不带 runtime_id，由固定优先级常量路由；无候选回 no_candidate_runtime）。 */}
-          <button
-            type="button"
-            role="switch"
-            aria-checked={autoRoute}
-            className={autoRoute ? "runtime-auto-route active" : "runtime-auto-route"}
-            data-testid="runtime-auto-route"
-            data-auto={String(autoRoute)}
-            onClick={() => setAutoRoute((value) => !value)}
+          <div
+            className={createOpen ? "session-create" : "session-create collapsed"}
+            data-testid="session-create-form"
+            data-open={String(createOpen)}
           >
-            自动路由（默认关闭；按固定优先级选择运行时）
-          </button>
-          <div className="runtime-selector" data-testid="runtime-selector" role="radiogroup">
-            {runtimes.map((runtime) => (
-              <button
-                key={runtime.id}
-                type="button"
-                role="radio"
-                aria-checked={!autoRoute && runtime.id === selectedRuntime}
-                data-testid="runtime-option"
-                data-runtime-id={runtime.id}
-                data-status={runtime.status}
-                data-selected={String(!autoRoute && runtime.id === selectedRuntime)}
-                // M3-03 DoD3：disabled 运行时不可选（不可创建会话；D5）。
-                disabled={runtime.status === "disabled"}
-                className={
-                  runtime.id === selectedRuntime && !autoRoute
-                    ? "runtime-option selected"
-                    : "runtime-option"
-                }
-                onClick={() => {
-                  // 手动选择运行时即退出自动路由（手动优先；ADR-022 §2.1#1）。
-                  setAutoRoute(false);
-                  setSelectedRuntime(runtime.id);
-                }}
-              >
-                <span className="runtime-name">{runtime.name}</span>
-                <span className="runtime-status">{RUNTIME_STATUS_LABELS[runtime.status]}</span>
-                {runtime.status_reason ? (
-                  <span className="runtime-reason" data-testid="runtime-reason">
-                    {runtime.status_reason}
-                  </span>
-                ) : null}
-                <span className="runtime-capabilities" data-testid="runtime-capabilities">
-                  {runtime.capabilities.map((capability) => (
-                    <span
-                      key={capability}
-                      className="capability-badge"
-                      data-testid="capability-badge"
-                    >
-                      {capability}
-                    </span>
-                  ))}
-                </span>
-              </button>
-            ))}
-            {runtimes.length === 0 ? (
-              <p className="runtime-empty" data-testid="runtime-list-empty">
-                无可用运行时（适配器注册随打包里程碑落地）
-              </p>
-            ) : null}
-          </div>
-
-          <div className="session-create" data-testid="session-create-form">
+            <p className="session-create-runtime">
+              Agent：{autoRoute ? "自动路由" : selectedRuntimeInfo?.name ?? "未选择（在输入区 Agent 选择器切换）"}
+            </p>
             <input
               type="text"
               data-testid="session-title-input"
@@ -1442,7 +1488,171 @@ export function SessionWorkbench({
               新建会话
             </button>
           </div>
-        </aside>
+            </div>
+          </div>
+
+          {statusSlot ? <div className="side-status">{statusSlot}</div> : null}
+
+          <div className="user-area">
+            <button
+              type="button"
+              className="user-btn"
+              data-testid="user-menu-toggle"
+              aria-expanded={userMenuOpen}
+              onClick={() => setUserMenuOpen((open) => !open)}
+            >
+              <span className="avatar">用</span>
+              <span className="nm">用户</span>
+              <span className="ge">⚙</span>
+            </button>
+            <div
+              className={userMenuOpen ? "user-menu show" : "user-menu"}
+              data-testid="user-menu"
+            >
+              {onOpenSettings ? (
+                <button
+                  type="button"
+                  data-testid="settings-open"
+                  onClick={() => {
+                    setUserMenuOpen(false);
+                    onOpenSettings();
+                  }}
+                >
+                  ⚙ &nbsp;设置
+                </button>
+              ) : null}
+              {onOpenBackup ? (
+                <button
+                  type="button"
+                  data-testid="backup-open"
+                  onClick={() => {
+                    setUserMenuOpen(false);
+                    onOpenBackup();
+                  }}
+                >
+                  ⛁ &nbsp;备份与恢复
+                </button>
+              ) : null}
+              {onOpenDiagnostics ? (
+                <button
+                  type="button"
+                  data-testid="diagnostics-open"
+                  onClick={() => {
+                    setUserMenuOpen(false);
+                    onOpenDiagnostics();
+                  }}
+                >
+                  ⤓ &nbsp;诊断
+                </button>
+              ) : null}
+              {onOpenAudit ? (
+                <button
+                  type="button"
+                  data-testid="audit-open"
+                  onClick={() => {
+                    setUserMenuOpen(false);
+                    onOpenAudit();
+                  }}
+                >
+                  ☷ &nbsp;审计
+                </button>
+              ) : null}
+              {onOpenAbout ? (
+                <button
+                  type="button"
+                  data-testid="about-open"
+                  onClick={() => {
+                    setUserMenuOpen(false);
+                    onOpenAbout();
+                  }}
+                >
+                  ◈ &nbsp;关于
+                </button>
+              ) : null}
+              {appVersion || protocolVersion || dataDir ? (
+                <>
+                  <hr />
+                  <div className="user-meta">
+                    {appVersion ? (
+                      <span data-testid="app-version">版本 {appVersion}</span>
+                    ) : null}
+                    {protocolVersion ? (
+                      <span data-testid="protocol-version">
+                        线协议 v{protocolVersion.major}.{protocolVersion.minor}
+                      </span>
+                    ) : null}
+                    {dataDir ? (
+                      <span data-testid="app-data-dir" title={dataDir}>
+                        数据目录：{dataDir}
+                      </span>
+                    ) : null}
+                  </div>
+                </>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      {sideCollapsed ? (
+        <button
+          type="button"
+          className="side-reopen show"
+          title="展开侧栏"
+          aria-label="展开侧栏"
+          data-testid="side-reopen"
+          onClick={() => setSideCollapsed(false)}
+        >
+          <svg viewBox="0 0 24 24">
+            <rect x="3" y="4" width="18" height="16" rx="2" />
+            <path d="M9 4v16" />
+          </svg>
+        </button>
+      ) : null}
+
+      {/* ===== 中栏（原型 .center：会话头 / 标签 / 消息流 / 输入区） ===== */}
+      <div className="center">
+        <TopBar
+          session={activeSession}
+          runId={projection.activeRunId}
+          runStatusText={runStatusText}
+          interruptible={interruptible}
+          onInterrupt={onInterrupt}
+          lastAck={lastAck}
+          runtimes={runtimes}
+          pendingCount={pendingPermissionCount}
+          onExportSession={activeSession ? () => void onExportSession() : undefined}
+          exportBusy={exportBusy}
+          exportResult={exportResult?.result ?? null}
+          // M7-03/ADR-017：暂停/恢复（锚点 `session-pause-toggle`；有会话时渲染）。
+          pauseSupported={pauseSupported}
+          pauseDisabled={pauseDisabled}
+          onTogglePause={activeSession ? () => void onTogglePause() : undefined}
+          pauseBusy={pauseBusy}
+        />
+        {/* M7-04：标签页（UI-01 完整；锚点 `workbench-tabs` / `session-tab` /
+            `session-tab-badge` / `session-tab-close` / `split-toggle`）。 */}
+        <WorkbenchTabs
+          sessions={tabSessions}
+          activeSessionId={activeSessionId}
+          splitSessionId={splitSession?.id ?? null}
+          onActivate={onActivateTab}
+          onClose={onCloseTab}
+          onToggleSplit={onToggleSplit}
+          splitEnabled={splitEnabled}
+        />
+
+        <div className="chat-ph" data-testid="chat-placeholder">
+          <div className="chat-card">
+            <div className="em">◫</div>
+            <h3>多 Agent 聊天室</h3>
+            <p>同时与多个 Agent 对话、@mention 路由、多运行时协作。</p>
+            <p>
+              当前阶段：<b className="chat-phase">P2 路线图</b> · 尚未开放
+            </p>
+            <div className="tag">P0 占位 · 切换回 Agent 继续工作</div>
+          </div>
+        </div>
 
         <div className="workbench-main-pair" data-split={String(splitSession !== null)}>
           <div
@@ -1466,7 +1676,7 @@ export function SessionWorkbench({
             />
           ) : null}
 
-          <div className="message-stream" data-testid="message-stream">
+          <div className="msgs message-stream" data-testid="message-stream">
             <VirtualList
               items={projection.bubbles}
               itemHeight={streamItemHeight}
@@ -1483,6 +1693,11 @@ export function SessionWorkbench({
                 const interruptedByDegraded =
                   runView?.status === "cancelled" &&
                   runView.cancelReason === "persist_degraded";
+                // 失败原因（适配器 run.failed.message；如 Claude `api_error` 的
+                // api_error_status / 服务端返回详情）。展示截断文本，完整内容见 title。
+                const errorDetail = runView?.errorMessage?.replace(/\s+/g, " ").trim() ?? "";
+                const errorDetailShort =
+                  errorDetail.length > 160 ? `${errorDetail.slice(0, 160)}…` : errorDetail;
                 return (
                   <article
                     className={`message-bubble message-${bubble.role}`}
@@ -1503,6 +1718,9 @@ export function SessionWorkbench({
                         <Markdown text={bubble.text} />
                       )}
                     </div>
+                    {bubble.role === "user" ? (
+                      <span className="message-meta">已发送</span>
+                    ) : null}
                     {bubble.streaming ? (
                       <span className="message-streaming" data-testid="streaming-indicator">
                         生成中…
@@ -1519,9 +1737,12 @@ export function SessionWorkbench({
                           data-testid="run-outcome"
                           data-status={runView?.status}
                           data-code={runView?.errorCode ?? ""}
+                          title={errorDetail.length > 0 ? errorDetail : undefined}
                         >
                           {runView?.status === "failed"
-                            ? `运行失败：${runView.errorCode ?? "run_failed"}`
+                            ? `运行失败：${runView.errorCode ?? "run_failed"}${
+                                errorDetailShort ? ` · ${errorDetailShort}` : ""
+                              }`
                             : interruptedByDegraded
                               ? "已中断（存储降级）"
                               : "已中断"}
@@ -1614,7 +1835,21 @@ export function SessionWorkbench({
             </p>
           ) : null}
 
-          <div className="composer" data-testid="composer" ref={composerRef}>
+          {/* 原型：权限请求以卡片形式出现在会话流中（常驻挂载以同步 pending 计数）。 */}
+          <div
+            className="permission-inline"
+            data-empty={String(!activeSessionId || pendingPermissionCount === 0)}
+          >
+            <PermissionPanel
+              ipc={permissionIpc}
+              sessionId={activeSessionId}
+              events={eventsState.events}
+              onPendingCount={setPendingPermissionCount}
+            />
+          </div>
+
+          <div className="input-area">
+          <div className="composer input-box" data-testid="composer" ref={composerRef}>
             {/* M7-06/ADR-024 A-3：随消息附带的文件引用（拖拽 / `@` 入口；锚点
                 `file-reference`）。**引用 ≠ 预授权**：Agent 读取仍走 fs.read 权限门。 */}
             <div
@@ -1654,83 +1889,9 @@ export function SessionWorkbench({
                 </ul>
               )}
             </div>
-            {/* M3-10/ADR-010：思考深度 5 档滑块（关闭/低/高/极高/最大，默认高）；
-                运行时未声明 `thinking_depth` 能力时滑块置灰 + tooltip。 */}
-            <div className="thinking-control">
-              <button
-                type="button"
-                className="thinking-toggle"
-                data-testid="thinking-toggle"
-                data-value={thinkingDepth}
-                data-enabled={thinkingSupported}
-                title={thinkingSupported ? "思考深度" : THINKING_DEPTH_UNSUPPORTED_HINT}
-                aria-label="思考深度"
-                aria-expanded={thinkingOpen}
-                onClick={() => setThinkingOpen((open) => !open)}
-              >
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M9.5 2A2.5 2.5 0 0112 4.5v15a2.5 2.5 0 01-4.96.44 2.5 2.5 0 01-2.96-3.08 3 3 0 01-.34-5.58 2.5 2.5 0 011.32-4.24 2.5 2.5 0 011.98-3A2.5 2.5 0 019.5 2z" />
-                  <path d="M14.5 2A2.5 2.5 0 0012 4.5v15a2.5 2.5 0 004.96.44 2.5 2.5 0 002.96-3.08 3 3 0 00.34-5.58 2.5 2.5 0 00-1.32-4.24 2.5 2.5 0 00-1.98-3A2.5 2.5 0 0014.5 2z" />
-                </svg>
-                <span data-testid="thinking-current">
-                  {THINKING_DEPTH_LABELS[thinkingDepth]}
-                </span>
-              </button>
-              {!thinkingSupported ? (
-                <p
-                  className="thinking-disabled-hint"
-                  data-testid="thinking-disabled-hint"
-                  data-enabled="false"
-                  role="note"
-                >
-                  {THINKING_DEPTH_UNSUPPORTED_HINT}
-                </p>
-              ) : null}
-              {thinkingOpen ? (
-                <div
-                  className="thinking-popover"
-                  data-testid="thinking-popover"
-                  data-enabled={thinkingSupported}
-                >
-                  <div className="thinking-head">
-                    <span>思考深度</span>
-                    <span className="thinking-value">
-                      {THINKING_DEPTH_LABELS[thinkingDepth]}
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    min={THINKING_DEPTH_MIN}
-                    max={THINKING_DEPTH_MAX}
-                    step={1}
-                    value={thinkingDepth}
-                    data-testid="thinking-slider"
-                    data-value={thinkingDepth}
-                    data-enabled={thinkingSupported}
-                    disabled={!thinkingSupported}
-                    aria-label="思考深度"
-                    onChange={(event) => setThinkingDepth(Number(event.target.value))}
-                  />
-                  <div className="thinking-ticks">
-                    {THINKING_DEPTH_TICKS.map((value) => (
-                      <button
-                        key={value}
-                        type="button"
-                        data-value={value}
-                        data-active={value === thinkingDepth}
-                        disabled={!thinkingSupported}
-                        onClick={() => setThinkingDepth(value)}
-                      >
-                        {THINKING_DEPTH_LABELS[value]}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-            </div>
             <textarea
               data-testid="composer-input"
-              placeholder="输入消息（Ctrl+Enter 发送）"
+              placeholder="输入消息…（@ 引用文件；Ctrl+Enter 发送）"
               value={draft}
               // M7-03/ADR-017：paused 态发送被拒（session_paused，草稿保留；UI-UX §3.3）。
               disabled={!activeSessionId || degraded || activeSession?.status === "paused"}
@@ -1748,15 +1909,96 @@ export function SessionWorkbench({
                 }
               }}
             />
-            <div className="composer-toolbar">
-              {/* M3-11：输入区模型选择器（仅启用供应商的启用模型；作用于新建会话）。 */}
-              <ModelSelector
-                ipc={providersIpcProp}
-                value={selectedModelId}
-                onChange={onSelectModel}
-                sessionModel={activeSession?.model ?? null}
-                disabled={degraded}
-              />
+            <div className="input-bar composer-toolbar">
+              {/* M3-10/ADR-010：思考深度 5 档滑块（关闭/低/高/极高/最高，默认高）；
+                  运行时未声明 `thinking_depth` 能力时滑块置灰 + tooltip。 */}
+              <div className="thinking-control">
+                <button
+                  type="button"
+                  className={thinkingSupported ? "thinking-toggle ic think-on" : "thinking-toggle ic"}
+                  data-testid="thinking-toggle"
+                  data-value={thinkingDepth}
+                  data-enabled={thinkingSupported}
+                  title={thinkingSupported ? "思考深度" : THINKING_DEPTH_UNSUPPORTED_HINT}
+                  aria-label="思考深度"
+                  aria-expanded={thinkingOpen}
+                  onClick={() => setThinkingOpen((open) => !open)}
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M9.5 2A2.5 2.5 0 0112 4.5v15a2.5 2.5 0 01-4.96.44 2.5 2.5 0 01-2.96-3.08 3 3 0 01-.34-5.58 2.5 2.5 0 011.32-4.24 2.5 2.5 0 011.98-3A2.5 2.5 0 019.5 2z" />
+                    <path d="M14.5 2A2.5 2.5 0 0012 4.5v15a2.5 2.5 0 004.96.44 2.5 2.5 0 002.96-3.08 3 3 0 00.34-5.58 2.5 2.5 0 00-1.32-4.24 2.5 2.5 0 00-1.98-3A2.5 2.5 0 0014.5 2z" />
+                  </svg>
+                  <span className="ic-label" data-testid="thinking-current">
+                    {THINKING_DEPTH_LABELS[thinkingDepth]}
+                  </span>
+                </button>
+                {!thinkingSupported ? (
+                  <p
+                    className="thinking-disabled-hint"
+                    data-testid="thinking-disabled-hint"
+                    data-enabled="false"
+                    role="note"
+                  >
+                    {THINKING_DEPTH_UNSUPPORTED_HINT}
+                  </p>
+                ) : null}
+                {thinkingOpen ? (
+                  <div
+                    className="thinking-popover ipop ipop-think"
+                    data-testid="thinking-popover"
+                    data-enabled={thinkingSupported}
+                  >
+                    <div className="thinking-head">
+                      <span>思考深度</span>
+                      <span className="thinking-value">
+                        {THINKING_DEPTH_LABELS[thinkingDepth]}
+                      </span>
+                    </div>
+                    <div className="thinking-range">
+                      <div
+                        className="thinking-bubble"
+                        style={{
+                          left: `calc(${thinkingPercent}% + ${(50 - thinkingPercent) * 0.16}px)`,
+                        }}
+                        aria-hidden="true"
+                      >
+                        {THINKING_DEPTH_LABELS[thinkingDepth]}
+                      </div>
+                      <input
+                        type="range"
+                        min={THINKING_DEPTH_MIN}
+                        max={THINKING_DEPTH_MAX}
+                        step={1}
+                        value={thinkingDepth}
+                        data-testid="thinking-slider"
+                        data-value={thinkingDepth}
+                        data-enabled={thinkingSupported}
+                        disabled={!thinkingSupported}
+                        aria-label="思考深度"
+                        aria-valuetext={THINKING_DEPTH_LABELS[thinkingDepth]}
+                        style={{
+                          background: `linear-gradient(to right, var(--ac) ${thinkingPercent}%, var(--bd2) ${thinkingPercent}%)`,
+                        }}
+                        onChange={(event) => setThinkingDepth(Number(event.target.value))}
+                      />
+                    </div>
+                    <div className="thinking-ticks">
+                      {THINKING_DEPTH_TICKS.map((value) => (
+                        <button
+                          key={value}
+                          type="button"
+                          data-value={value}
+                          data-active={value === thinkingDepth}
+                          disabled={!thinkingSupported}
+                          onClick={() => setThinkingDepth(value)}
+                        >
+                          {THINKING_DEPTH_LABELS[value]}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
               {/* M6-01/ADR-014：会话级权限模式选择器（无激活会话禁用 + 空态；
                   常驻边界声明 `permission-mode-boundary` 在弹层内，见组件）。 */}
               <PermissionModeSelector
@@ -1768,7 +2010,150 @@ export function SessionWorkbench({
               />
               <button
                 type="button"
+                className="ic"
+                data-testid="composer-attach"
+                title="添加文件引用（也可在空输入框按 @）"
+                aria-label="添加文件引用"
+                disabled={!activeSessionId || degraded}
+                onClick={() => void onPickReference()}
+              >
+                <svg viewBox="0 0 24 24">
+                  <path d="M21 11l-9 9a6 6 0 01-8.5-8.5l9-9a4 4 0 015.5 5.5l-9 9a2 2 0 01-2.8-2.8l8-8" />
+                </svg>
+              </button>
+              <div className="input-spacer" />
+              {/* 原型 agent picker：运行时选择 + 运行时状态管理（常驻 DOM，未展开时隐藏）。 */}
+              <div className="picker agent-picker" data-testid="agent-picker">
+                <button
+                  type="button"
+                  className="picker-btn"
+                  data-testid="agent-picker-toggle"
+                  aria-expanded={agentPickerOpen}
+                  title="选择 Agent 运行时"
+                  onClick={() => setAgentPickerOpen((open) => !open)}
+                >
+                  <span
+                    className="picker-mi"
+                    style={{ background: autoRoute ? "var(--ac)" : runtimeAccentOf(selectedRuntimeInfo) }}
+                  >
+                    {autoRoute ? "A" : runtimeAbbrOf(selectedRuntimeInfo)}
+                  </span>
+                  <span className="agent-picker-label">
+                    {autoRoute ? "自动路由" : selectedRuntimeInfo?.name ?? "选择 Agent"}
+                  </span>
+                  <span className="ar">▾</span>
+                </button>
+                <div
+                  className={agentPickerOpen ? "dropdown agent-dd show" : "dropdown agent-dd"}
+                  data-testid="agent-picker-menu"
+                >
+                  <div className="agent-dd-head">Agent 运行时</div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={autoRoute}
+                    className={autoRoute ? "agent-auto-route on" : "agent-auto-route"}
+                    data-testid="runtime-auto-route"
+                    data-auto={String(autoRoute)}
+                    onClick={() => setAutoRoute((value) => !value)}
+                  >
+                    <span>自动路由（按固定优先级）</span>
+                    {autoRoute ? <span className="agent-check">✓</span> : null}
+                  </button>
+                  <div
+                    className="runtime-selector agent-list"
+                    data-testid="runtime-selector"
+                    role="radiogroup"
+                  >
+                    {runtimes.map((runtime) => (
+                      <button
+                        key={runtime.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={!autoRoute && runtime.id === selectedRuntime}
+                        data-testid="runtime-option"
+                        data-runtime-id={runtime.id}
+                        data-status={runtime.status}
+                        data-selected={String(!autoRoute && runtime.id === selectedRuntime)}
+                        disabled={runtime.status === "disabled"}
+                        className={
+                          runtime.id === selectedRuntime && !autoRoute
+                            ? "runtime-option agent-option selected"
+                            : "runtime-option agent-option"
+                        }
+                        onClick={() => {
+                          setAutoRoute(false);
+                          setSelectedRuntime(runtime.id);
+                          setAgentPickerOpen(false);
+                        }}
+                      >
+                        <span
+                          className="picker-mi"
+                          style={{ background: runtimeAccentOf(runtime) }}
+                        >
+                          {runtimeAbbrOf(runtime)}
+                        </span>
+                        <span className="runtime-name">{runtime.name}</span>
+                        <span className="runtime-status">
+                          {RUNTIME_STATUS_LABELS[runtime.status]}
+                        </span>
+                        {runtime.status_reason ? (
+                          <span className="runtime-reason" data-testid="runtime-reason">
+                            {runtime.status_reason}
+                          </span>
+                        ) : null}
+                        {runtime.id === selectedRuntime && !autoRoute ? (
+                          <span className="agent-check">✓</span>
+                        ) : null}
+                        <span
+                          className="runtime-capabilities"
+                          data-testid="runtime-capabilities"
+                        >
+                          {runtime.capabilities.map((capability) => (
+                            <span
+                              key={capability}
+                              className="capability-badge"
+                              data-testid="capability-badge"
+                            >
+                              {capability}
+                            </span>
+                          ))}
+                        </span>
+                      </button>
+                    ))}
+                    {runtimes.length === 0 ? (
+                      <p className="runtime-empty" data-testid="runtime-list-empty">
+                        无可用运行时（适配器注册随打包里程碑落地）
+                      </p>
+                    ) : null}
+                  </div>
+                  <hr />
+                  <details className="agent-runtime-details">
+                    <summary>运行时状态</summary>
+                    <RuntimePanel
+                      runtimes={runtimes}
+                      ipc={permissionIpc}
+                      onRefresh={refreshRuntimes}
+                    />
+                  </details>
+                </div>
+              </div>
+              {/* M3-11：输入区模型选择器（仅启用供应商的启用模型；作用于新建会话）。 */}
+              <ModelSelector
+                ipc={providersIpcProp}
+                value={selectedModelId}
+                onChange={onSelectModel}
+                onProviderChange={onModelProviderChange}
+                providerValue={selectedProviderId}
+                sessionModel={activeSession?.model ?? null}
+                disabled={degraded}
+              />
+              <button
+                type="button"
+                className="send"
                 data-testid="composer-send"
+                aria-label="发送"
+                title="发送"
                 disabled={
                   !activeSessionId ||
                   degraded ||
@@ -1778,7 +2163,9 @@ export function SessionWorkbench({
                 }
                 onClick={() => void onSend()}
               >
-                发送
+                <svg viewBox="0 0 24 24">
+                  <path d="M5 12h14M13 6l6 6-6 6" />
+                </svg>
               </button>
             </div>
             {thinkingWarning ? (
@@ -1800,6 +2187,7 @@ export function SessionWorkbench({
                 存储降级（只读）：发送已禁用；修复磁盘/目录/权限后重启应用。
               </p>
             ) : null}
+          </div>
           </div>
 
           {error ? (
@@ -1829,32 +2217,79 @@ export function SessionWorkbench({
             />
           ) : null}
         </div>
-
-        {/* M3-03：右栏（S-04 运行时状态 + S-03 权限待办）；<1280px 由 CSS 折叠为抽屉，
-            `right-panel-toggle` 控制 data-open（断点行为见 styles.css）。 */}
-        <aside
-          className="workbench-right"
-          data-testid="right-panel"
-          data-open={String(rightOpen)}
-        >
-          <RuntimePanel runtimes={runtimes} ipc={permissionIpc} onRefresh={refreshRuntimes} />
-          <PermissionPanel
-            ipc={permissionIpc}
-            sessionId={activeSessionId}
-            events={eventsState.events}
-            onPendingCount={setPendingPermissionCount}
-          />
-          {/* M3-09 S-11：文件引用面板（只读；会话文件/项目文件；ADR-010 决策 1）。 */}
-          <FilePanel
-            ipc={artifactsIpcProp}
-            sessionId={activeSessionId}
-            workspaceRoot={activeSession?.workspace_root ?? null}
-          />
-          {onOpenDiagnostics ? (
-            <DiagnosticsEntry ipc={diagnosticsIpcProp} onOpen={onOpenDiagnostics} />
-          ) : null}
-        </aside>
       </div>
+
+      {/* ===== 右栏（原型 .right：文件 / 改动；折叠按钮浮于右上） ===== */}
+      <aside
+        className={rightOpen ? "right" : "right collapsed"}
+        data-testid="right-panel"
+        data-open={String(rightOpen)}
+      >
+        <div className="right-inner">
+          <div className="r-head">
+            <div className="r-tabs" role="tablist" aria-label="右栏分区">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={rightTab === "files"}
+                className={rightTab === "files" ? "r-tab on" : "r-tab"}
+                data-testid="right-tab-files"
+                onClick={() => setRightTab("files")}
+              >
+                <svg viewBox="0 0 24 24">
+                  <path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
+                </svg>
+                文件
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={rightTab === "changes"}
+                className={rightTab === "changes" ? "r-tab on" : "r-tab"}
+                data-testid="right-tab-changes"
+                onClick={() => setRightTab("changes")}
+              >
+                <svg viewBox="0 0 24 24">
+                  <path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8z" />
+                  <path d="M14 3v5h5" />
+                </svg>
+                改动
+              </button>
+            </div>
+          </div>
+
+          <div className="r-pane" hidden={rightTab !== "files"}>
+            {/* M3-09 S-11：文件引用面板（只读；会话文件/项目文件；ADR-010 决策 1）。 */}
+            <FilePanel
+              ipc={artifactsIpcProp}
+              sessionId={activeSessionId}
+              workspaceRoot={activeSession?.workspace_root ?? null}
+            />
+          </div>
+
+          <div className="r-pane" hidden={rightTab !== "changes"}>
+            <div className="r-body">
+              <p className="r-empty">改动视图（P1）</p>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      {/* 原型 .panel-toggle：固定在右上角，折叠/展开右栏时位置不漂移。 */}
+      <button
+        type="button"
+        className="panel-toggle"
+        data-testid="right-panel-toggle"
+        aria-expanded={rightOpen}
+        aria-label={rightOpen ? "折叠右侧面板" : "展开右侧面板"}
+        title={rightOpen ? "折叠右侧面板" : "展开右侧面板"}
+        onClick={() => setRightOpen((open) => !open)}
+      >
+        <svg viewBox="0 0 24 24">
+          <rect x="3" y="4" width="18" height="16" rx="2" />
+          <path d="M15 4v16" />
+        </svg>
+      </button>
     </section>
   );
 }

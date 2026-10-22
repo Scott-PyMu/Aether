@@ -123,6 +123,29 @@ impl Fixture {
         updated_at: i64,
         key: Option<&str>,
     ) {
+        self.insert_provider_with_endpoints(
+            id,
+            provider_type,
+            base_url,
+            "{}",
+            enabled,
+            updated_at,
+            key,
+        );
+    }
+
+    /// ADR-028：带显式协议端点的供应商登记。
+    #[allow(clippy::too_many_arguments)]
+    fn insert_provider_with_endpoints(
+        &self,
+        id: &str,
+        provider_type: &str,
+        base_url: Option<&str>,
+        endpoints: &str,
+        enabled: bool,
+        updated_at: i64,
+        key: Option<&str>,
+    ) {
         let api_key_ref = key.map(|_| format!("keychain://aether/provider/{id}"));
         if let Some(value) = key {
             self.secrets.put(id, value);
@@ -132,6 +155,7 @@ impl Fixture {
             name: format!("供应商 {id}"),
             provider_type: provider_type.to_owned(),
             base_url: base_url.map(str::to_owned),
+            endpoints: endpoints.to_owned(),
             api_key_ref,
             enabled,
             is_builtin: false,
@@ -216,6 +240,31 @@ fn claude_code_selection_prefers_latest_enabled_provider_and_injects_env() {
     // 不注入其他运行时的密钥变量。
     assert!(get(&envs, ENV_OPENAI_API_KEY).is_none());
     assert!(get(&envs, ENV_DEEPSEEK_API_KEY).is_none());
+}
+
+#[test]
+fn claude_code_can_use_deepseek_provider_via_anthropic_endpoint() {
+    let fixture = Fixture::open();
+    fixture.insert_provider_with_endpoints(
+        "01J00000000000000000000E09",
+        "deepseek",
+        Some("https://api.deepseek.com"),
+        r#"{"anthropic":"https://api.deepseek.com/anthropic","openai":"https://api.deepseek.com"}"#,
+        true,
+        30,
+        Some("deepseek-key"),
+    );
+    let envs = fixture.spawn_env("claude-code");
+    assert_eq!(
+        get(&envs, ENV_ANTHROPIC_API_KEY).as_deref(),
+        Some("deepseek-key")
+    );
+    assert_eq!(
+        get(&envs, ENV_ANTHROPIC_BASE_URL).as_deref(),
+        Some("https://api.deepseek.com/anthropic"),
+        "Claude Code 必须使用 DeepSeek 的 Anthropic 兼容端点：{envs:?}"
+    );
+    assert!(get(&envs, ENV_OPENAI_API_KEY).is_none());
 }
 
 #[test]
@@ -320,6 +369,7 @@ fn no_match_or_disabled_or_unreadable_key_yields_no_injection() {
         name: "缺失密钥".to_owned(),
         provider_type: "anthropic".to_owned(),
         base_url: Some("https://missing.example.com".to_owned()),
+        endpoints: "{}".to_owned(),
         api_key_ref: Some(format!("keychain://aether/provider/{provider_id}")),
         enabled: true,
         is_builtin: false,

@@ -1,4 +1,4 @@
-﻿//! M3-10 集成测试：思考深度（会话级参数；ADR-010 决策 2/4）。
+//! M3-10 集成测试：思考深度（会话级参数；ADR-010 决策 2/4）。
 //!
 //! 覆盖（实施计划 v1.17 §4 M3-10 DoD2/3/4 的集成面；真实 Mock 适配器进程）：
 //! - DoD2 透传：`session_create`/`session_send` 带 `thinking_depth` → 适配器经
@@ -218,6 +218,7 @@ impl Harness {
             thinking_depth,
             permission_mode: None,
             preset_id: None,
+            provider_id: None,
         })
     }
 

@@ -31,6 +31,7 @@ fn provider(id: &str, created_at: i64) -> ProviderRecord {
         name: format!("Provider {id}"),
         provider_type: "custom".to_owned(),
         base_url: Some("https://api.example.com".to_owned()),
+        endpoints: "{}".to_owned(),
         api_key_ref: Some(format!("keychain://aether/provider/{id}")),
         enabled: true,
         is_builtin: false,
@@ -96,8 +97,15 @@ fn dod1_provider_tables_match_adr_010_and_seed_builtins() {
             ),
             ("created_at".to_owned(), "INTEGER".to_owned(), 1, None),
             ("updated_at".to_owned(), "INTEGER".to_owned(), 1, None),
+            // ADR-028：协议端点 JSON；既有库经 0009 增量迁移。
+            (
+                "endpoints".to_owned(),
+                "TEXT".to_owned(),
+                1,
+                Some("'{}'".to_owned())
+            ),
         ],
-        "providers 列定义必须与 ADR-010 附录 A 一致"
+        "providers 列定义必须与 ADR-010 附录 A / ADR-028 一致"
     );
     assert_eq!(
         columns(connection, "provider_models"),

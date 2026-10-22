@@ -95,8 +95,8 @@ async fn migration_0006_adds_runtime_enabled_with_default_and_is_idempotent() {
         let applied = migrate_with(&mut connection, EMBEDDED_MIGRATIONS).unwrap();
         assert_eq!(
             applied.iter().map(|item| item.version).collect::<Vec<_>>(),
-            vec![6, 7, 8],
-            "增量应用 0006（本任务）、0007（M7-09 presets）与 0008（M7-07 FTS5）"
+            vec![6, 7, 8, 9],
+            "增量应用 0006（本任务）、0007（M7-09 presets）、0008（M7-07 FTS5）与 0009（ADR-028 端点）"
         );
         // 列断言：NOT NULL DEFAULT 1。
         let (notnull, default, kind): (i64, Option<String>, String) = connection
@@ -129,8 +129,8 @@ async fn migration_0006_adds_runtime_enabled_with_default_and_is_idempotent() {
         let applied = migrate(&mut connection).unwrap();
         assert_eq!(
             applied.last().map(|item| item.version),
-            Some(8),
-            "新库应用到最新（0008）"
+            Some(9),
+            "新库应用到最新（0009）"
         );
     }
 }

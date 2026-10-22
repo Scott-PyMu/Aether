@@ -40,6 +40,13 @@ export const PERMISSION_MODE_LABELS: Record<PermissionMode, string> = {
   danger_full_access: "完全权限",
 };
 
+/** 输入区图标按钮的短标签（弹层内保留完整标签与默认档说明）。 */
+const PERMISSION_MODE_SHORT_LABELS: Record<PermissionMode, string> = {
+  read_only: "仅查看",
+  workspace_write: "工作区内修改",
+  danger_full_access: "完全权限",
+};
+
 /**
  * 常驻边界声明（ADR-014 附录 F-3 定稿；R14：弹层内常驻一行，不随档位切换而消失）。
  *
@@ -74,7 +81,15 @@ export function PermissionModeSelector({
     >
       <button
         type="button"
-        className="permission-mode-toggle"
+        className={`permission-mode-toggle ic ${
+          value === "read_only"
+            ? "perm-read"
+            : value === "danger_full_access"
+              ? "perm-full"
+              : value === "workspace_write"
+                ? "perm-write"
+                : ""
+        }`}
         data-testid="permission-mode-toggle"
         aria-label="权限模式"
         aria-expanded={visible}
@@ -82,9 +97,26 @@ export function PermissionModeSelector({
         title="权限模式（会话级；变更仅影响后续工具调用决策）"
         onClick={() => setOpen((current) => !current)}
       >
-        <span data-testid="permission-mode-current">
-          {value !== null ? PERMISSION_MODE_LABELS[value] : "无会话"}
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z" />
+          <path d="M9 12l2 2 4-4" />
+        </svg>
+        <span className="ic-label" data-testid="permission-mode-current">
+          {value !== null ? PERMISSION_MODE_SHORT_LABELS[value] : "无会话"}
         </span>
+        <span
+          className="dot"
+          style={{
+            background:
+              value === "read_only"
+                ? "var(--bl)"
+                : value === "danger_full_access"
+                  ? "var(--er)"
+                  : value === "workspace_write"
+                    ? "var(--wn)"
+                    : "var(--tx3)",
+          }}
+        />
       </button>
 
       {noSession ? (
@@ -95,12 +127,12 @@ export function PermissionModeSelector({
 
       {/* 弹层内容始终渲染（`hidden` 控制显隐）——常驻边界声明可随时断言。 */}
       <div
-        className="permission-mode-popover"
+        className="permission-mode-popover ipop ipop-perm"
         data-testid="permission-mode-popover"
         data-open={String(visible)}
         hidden={!visible}
       >
-        <div className="permission-mode-head">权限模式</div>
+        <div className="permission-mode-head ipop-title">Agent 权限</div>
         <div className="permission-mode-list" role="radiogroup" aria-label="权限模式">
           {PERMISSION_MODE_ORDER.map((mode) => (
             <button
@@ -117,7 +149,19 @@ export function PermissionModeSelector({
                 setOpen(false);
               }}
             >
-              {PERMISSION_MODE_LABELS[mode]}
+              <span
+                className="pdot"
+                style={{
+                  background:
+                    mode === "read_only"
+                      ? "var(--bl)"
+                      : mode === "danger_full_access"
+                        ? "var(--er)"
+                        : "var(--wn)",
+                }}
+              />
+              <span className="pt">{PERMISSION_MODE_LABELS[mode]}</span>
+              {mode === value ? <span className="ck">✓</span> : null}
             </button>
           ))}
         </div>

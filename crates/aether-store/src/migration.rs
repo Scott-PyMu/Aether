@@ -71,6 +71,12 @@ pub const EMBEDDED_MIGRATIONS: &[MigrationFile] = &[
         name: "0008_session_search_fts.sql",
         bytes: include_bytes!("../../../migrations/0008_session_search_fts.sql"),
     },
+    // ADR-028/M7-10：供应商协议端点（providers.endpoints JSON；不存密钥）。
+    MigrationFile {
+        version: 9,
+        name: "0009_provider_endpoints.sql",
+        bytes: include_bytes!("../../../migrations/0009_provider_endpoints.sql"),
+    },
 ];
 
 /// 迁移文件 sha256（小写十六进制）。

@@ -94,3 +94,7 @@ export {
   renderReferenceBlock,
   type SessionReference,
 } from "./references";
+export {
+  CredentialClient,
+  type BrokerCredential,
+} from "./credential";

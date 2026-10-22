@@ -1,4 +1,4 @@
-﻿//! M7-03：`session_pause` / `session_resume` 命令层与真实夹具进程（ADR-017；DoD1–DoD3）。
+//! M7-03：`session_pause` / `session_resume` 命令层与真实夹具进程（ADR-017；DoD1–DoD3）。
 //!
 //! 环境：`AETHER_FIXTURE_BIN=<aether-adapter-fixture>`（缺省 → SKIP；`AETHER_REQUIRE_FIXTURE=1`
 //! 时缺失视为失败——经 `pnpm verify:m7-03` 构建并注入）。
@@ -184,6 +184,7 @@ fn create_session(h: &Harness, runtime_id: &str) -> String {
             thinking_depth: None,
             permission_mode: None,
             preset_id: None,
+            provider_id: None,
         })
         .expect("创建会话");
     created["id"].as_str().expect("会话 id").to_owned()

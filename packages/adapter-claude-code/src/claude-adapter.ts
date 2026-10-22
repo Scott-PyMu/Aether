@@ -18,6 +18,7 @@
 
 import {
   Adapter,
+  CredentialClient,
   ERROR_CODES,
   RpcError,
   composePromptWithReferences,
@@ -25,6 +26,7 @@ import {
   parseReferences,
   ulid,
   type AdapterRuntimeInfo,
+  type BrokerCredential,
   type EnvelopeContext,
 } from "@aether/adapter-sdk";
 import { randomUUID } from "node:crypto";
@@ -64,6 +66,8 @@ export const RUNTIME_CAPABILITIES: readonly string[] = [
   "thinking_depth",
   // M7-03/ADR-017：受控中断 + Mode R 原生恢复（`--session-id`/`--resume`，ADR-005）。
   "pause_resume",
+  // ADR-028：按会话 provider 向核心凭据 broker 取数（同一适配器并发多供应商）。
+  "multi_provider",
 ];
 
 /** CLI stdout 无法解析的行：连续达到该阈值 → 该 run 判不健康（口径同 D6 连续无效帧 20 次）。 */
@@ -149,6 +153,8 @@ interface ClaudeSession {
    * 每次 CLI 调用以 `--append-system-prompt-file` 下发（`undefined` = 无系统提示词）。
    */
   systemPromptFile?: string;
+  /** ADR-028：会话选中的供应商 id（broker 按需取凭据；缺省 = 旧单供应商 env）。 */
+  providerId?: string;
   lastInit: ClaudeInitEvent | null;
   clientMsgIds: Map<string, string>;
   runs: Map<string, ClaudeRunState>;
@@ -175,6 +181,8 @@ export interface ClaudeAdapterOptions {
   spawnFn?: SpawnFn;
   killTreeFn?: KillTreeFn;
   runtimeVersion?: string;
+  /** ADR-028：凭据 broker 客户端（缺省从 `AETHER_CREDENTIAL_BROKER` 构造；测试可注入）。 */
+  credentialClient?: Pick<CredentialClient, "get"> | null;
 }
 
 /** 默认 run 硬超时（常量级；核心断流看门狗 120s 在其之前生效）。 */
@@ -188,10 +196,15 @@ export class ClaudeCodeAdapter {
   private readonly options: ClaudeAdapterOptions;
   private readonly sessions = new Map<string, ClaudeSession>();
   private readonly startedAt = Date.now();
+  private readonly credentialClient: Pick<CredentialClient, "get"> | null;
 
   constructor(options: ClaudeAdapterOptions) {
     this.options = options;
     this.runTimeoutMs = options.runTimeoutMs ?? DEFAULT_RUN_TIMEOUT_MS;
+    this.credentialClient =
+      options.credentialClient === undefined
+        ? CredentialClient.fromEnv()
+        : options.credentialClient;
     this.runtime = {
       name: RUNTIME_NAME,
       version: options.runtimeVersion ?? ADAPTER_VERSION,
@@ -276,6 +289,7 @@ export class ClaudeCodeAdapter {
       thinking_depth?: unknown;
       permission_mode?: unknown;
       system_prompt?: unknown;
+      provider_id?: unknown;
     };
     const requested = input.native_id;
     if (requested !== undefined && !isUuid(requested)) {
@@ -298,6 +312,10 @@ export class ClaudeCodeAdapter {
     const systemPromptFile = systemPrompt !== undefined
       ? materializeSystemPromptFile(systemPrompt)
       : undefined;
+    const providerId =
+      typeof input.provider_id === "string" && input.provider_id.length > 0
+        ? input.provider_id
+        : undefined;
     const session: ClaudeSession = {
       id: nativeId,
       nativeId,
@@ -307,6 +325,7 @@ export class ClaudeCodeAdapter {
       ...(thinkingDepth !== undefined ? { thinkingDepth } : {}),
       ...(permissionMode !== undefined ? { permissionMode } : {}),
       ...(systemPromptFile !== undefined ? { systemPromptFile } : {}),
+      ...(providerId !== undefined ? { providerId } : {}),
       lastInit: null,
       clientMsgIds: new Map(),
       runs: new Map(),
@@ -324,7 +343,7 @@ export class ClaudeCodeAdapter {
     };
   }
 
-  private onSend(params: unknown): Record<string, unknown> {
+  private async onSend(params: unknown): Promise<Record<string, unknown>> {
     const input = (params ?? {}) as {
       session_id?: unknown;
       client_msg_id?: unknown;
@@ -370,6 +389,36 @@ export class ClaudeCodeAdapter {
     const thinkingBudget = thinkingBudgetForDepth(thinkingDepth);
     // M7-06/ADR-024 A-3：统一映射 = 消息前缀引用块（核心不读内容；引用 ≠ 预授权）。
     const prompt = composePromptWithReferences(input.text, parseReferences(input.references));
+    // ADR-028：会话选中 provider 时，从核心 broker 取当前 run 的凭据；
+    // 只覆盖本次 CLI 子进程 env，不缓存。broker 未配置时显式失败，避免静默
+    // 回退到可能属于其他供应商的单供应商 env。
+    let providerEnv: NodeJS.ProcessEnv | undefined;
+    if (session.providerId !== undefined) {
+      if (this.credentialClient === null) {
+        throw new RpcError(
+          ERROR_CODES.INTERNAL_ERROR,
+          "凭据 broker 未配置：无法为当前会话获取供应商密钥（请重启应用或检查运行时环境）",
+        );
+      }
+      try {
+        const credential: BrokerCredential = await this.credentialClient.get(
+          session.providerId,
+          "anthropic",
+          "claude-code",
+        );
+        providerEnv = {
+          ...(credential.base_url !== undefined
+            ? { ANTHROPIC_BASE_URL: credential.base_url }
+            : {}),
+          [credential.auth_env]: credential.api_key,
+        };
+      } catch (error) {
+        throw new RpcError(
+          ERROR_CODES.INTERNAL_ERROR,
+          `凭据 broker 获取失败：${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
     run.cli = new ClaudeCliRun({
       config: {
         ...this.options.cli,
@@ -395,6 +444,7 @@ export class ClaudeCodeAdapter {
       onStderrLine: (line) => this.options.stderr?.(`[claude-cli] ${line}`),
       ...(this.options.spawnFn ? { spawnFn: this.options.spawnFn } : {}),
       ...(this.options.killTreeFn ? { killTreeFn: this.options.killTreeFn } : {}),
+      ...(providerEnv !== undefined ? { env: providerEnv } : {}),
     });
     session.clientMsgIds.set(clientMsgId, runId);
     session.runs.set(runId, run);

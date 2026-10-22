@@ -22,6 +22,7 @@
  * - `settings-backup-encryption`（`backup.encryption.enabled`，缺省 `true`）；
  *   关闭后手动/自动备份产出 P0 `.db` 形态；开启且主密钥不可用时备份暂停并告警。
  */
+import { APP_VERSION } from "@aether/protocol";
 import { useCallback, useEffect, useState } from "react";
 
 import { PresetsPage } from "./PresetsPage";
@@ -337,56 +338,73 @@ export function SettingsPage({
   return (
     <div className="overlay" data-testid="overlay-settings">
       <section
-        className="settings-page"
+        className="settings-page modal"
         data-testid="settings-page"
         role="dialog"
         aria-modal="true"
       >
-        <header className="settings-header">
-          <h2>设置</h2>
-          <button type="button" data-testid="overlay-back" onClick={onBack}>
-            返回工作台
+        <div className="modal-h">
+          <h3>设置</h3>
+          <button
+            type="button"
+            className="modal-close"
+            data-testid="overlay-back"
+            aria-label="关闭设置"
+            onClick={onBack}
+          >
+            ×
           </button>
-        </header>
+        </div>
 
-        <nav className="settings-subnav" aria-label="设置分类">
-          <button
-            type="button"
-            data-testid="settings-tab-general"
-            data-active={String(tab === "general")}
-            className={tab === "general" ? "settings-tab on" : "settings-tab"}
-            onClick={() => setTab("general")}
-          >
-            基本设置
-          </button>
-          <button
-            type="button"
-            data-testid="settings-tab-providers"
-            data-active={String(tab === "providers")}
-            className={tab === "providers" ? "settings-tab on" : "settings-tab"}
-            onClick={() => setTab("providers")}
-          >
-            模型与供应商配置
-          </button>
-          <button
-            type="button"
-            data-testid="settings-tab-rules"
-            data-active={String(tab === "rules")}
-            className={tab === "rules" ? "settings-tab on" : "settings-tab"}
-            onClick={() => setTab("rules")}
-          >
-            权限规则
-          </button>
-          <button
-            type="button"
-            data-testid="settings-tab-presets"
-            data-active={String(tab === "presets")}
-            className={tab === "presets" ? "settings-tab on" : "settings-tab"}
-            onClick={() => setTab("presets")}
-          >
-            Agent 预设
-          </button>
-        </nav>
+        <div className="settings-body">
+          <nav className="settings-nav settings-subnav" aria-label="设置分类">
+            <button
+              type="button"
+              data-testid="settings-tab-general"
+              data-active={String(tab === "general")}
+              className={tab === "general" ? "settings-tab on" : "settings-tab"}
+              onClick={() => setTab("general")}
+            >
+              基本设置
+            </button>
+            <button
+              type="button"
+              data-testid="settings-tab-providers"
+              data-active={String(tab === "providers")}
+              className={tab === "providers" ? "settings-tab on" : "settings-tab"}
+              onClick={() => setTab("providers")}
+            >
+              模型与供应商配置
+            </button>
+            <button
+              type="button"
+              data-testid="settings-tab-rules"
+              data-active={String(tab === "rules")}
+              className={tab === "rules" ? "settings-tab on" : "settings-tab"}
+              onClick={() => setTab("rules")}
+            >
+              权限规则
+            </button>
+            <button
+              type="button"
+              data-testid="settings-tab-presets"
+              data-active={String(tab === "presets")}
+              className={tab === "presets" ? "settings-tab on" : "settings-tab"}
+              onClick={() => setTab("presets")}
+            >
+              Agent 预设
+            </button>
+            {onOpenAbout ? (
+              <>
+                <hr />
+                <button type="button" onClick={onOpenAbout}>
+                  关于 Aether
+                </button>
+              </>
+            ) : null}
+          </nav>
+
+          <div className="settings-content">
 
         {tab === "providers" ? <ProvidersPage ipc={providersIpc} /> : null}
 
@@ -633,6 +651,13 @@ export function SettingsPage({
             {error}
           </p>
         ) : null}
+          </div>
+        </div>
+
+        <div className="settings-foot">
+          <span>Aether v{APP_VERSION} · Apache-2.0</span>
+          <span>P0 三运行时：Claude Code / Codex / DeepSeek Harness</span>
+        </div>
       </section>
     </div>
   );
