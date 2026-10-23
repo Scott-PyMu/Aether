@@ -25,6 +25,9 @@ import {
   type AdapterRuntimeInfo,
   type BrokerCredential,
   type EnvelopeContext,
+  type JsonRpcPeer,
+  type ProviderCatalog,
+  type ProviderCatalogClient,
 } from "@aether/adapter-sdk";
 import { cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
@@ -197,6 +200,8 @@ export interface CodexAdapterOptions {
   credentialClient?: Pick<CredentialClient, "get"> | null;
   /** ADR-028 v0.9：per-session CODEX_HOME 根目录（缺省 = legacy home 的同级目录）。 */
   sessionHomesDir?: string;
+  /** ADR-028 v0.9：`provider.catalog.get` 客户端工厂（生产 main 注入）。 */
+  catalogClientFactory?: (peer: JsonRpcPeer) => ProviderCatalogClient;
 }
 
 export class CodexAdapter {
@@ -208,6 +213,7 @@ export class CodexAdapter {
   private readonly sessions = new Map<string, CodexSession>();
   private readonly store: CodexSessionStore;
   private readonly credentialClient: Pick<CredentialClient, "get"> | null;
+  private readonly catalogClient: ProviderCatalogClient | null;
   private readonly sessionLocks = new Map<string, Promise<void>>();
   private storeWarning: string | null = null;
   private readonly startedAt = Date.now();
@@ -239,6 +245,7 @@ export class CodexAdapter {
       writeLine: options.writeLine,
       stderr: options.stderr,
     });
+    this.catalogClient = options.catalogClientFactory?.(this.adapter.peer) ?? null;
     this.registerHandlers();
   }
 
@@ -338,6 +345,9 @@ export class CodexAdapter {
       typeof input.provider_id === "string" && input.provider_id.length > 0
         ? input.provider_id
         : undefined;
+    if (providerId !== undefined) {
+      await this.ensureCatalogSelection(providerId, model);
+    }
     const existing = this.sessions.get(alias);
     if (
       providerId !== undefined &&
@@ -472,6 +482,7 @@ export class CodexAdapter {
     let providerEnv: NodeJS.ProcessEnv = {};
     let sessionHome: string | undefined = session.home;
     if (session.providerId !== undefined) {
+      await this.ensureCatalogSelection(session.providerId, session.model);
       const credential = await this.requireCredential(session.providerId);
       if (credential.base_url === undefined) {
         throw new RpcError(
@@ -599,6 +610,43 @@ export class CodexAdapter {
       env.CODEX_HOME = targetHome;
     }
     return { ...env, ...extra, CODEX_HOME: extra.CODEX_HOME ?? env.CODEX_HOME };
+  }
+
+  /** ADR-028 v0.9：目录查询校验（provider 启用 + model 归属/启用）。 */
+  private async ensureCatalogSelection(
+    providerId: string,
+    model: string | undefined,
+  ): Promise<void> {
+    if (this.catalogClient === null) return;
+    let catalog: ProviderCatalog;
+    try {
+      catalog = await this.catalogClient.fetch();
+    } catch (error) {
+      throw new RpcError(
+        ERROR_CODES.INTERNAL_ERROR,
+        `供应商目录查询失败：${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    const provider = catalog.providers.find(
+      (entry) => entry.id === providerId && entry.enabled,
+    );
+    if (provider === undefined) {
+      throw new RpcError(
+        ERROR_CODES.INVALID_PARAMS,
+        `供应商不存在或已停用：${providerId}`,
+      );
+    }
+    if (model !== undefined) {
+      const owned = provider.models.some(
+        (entry) => entry.id === model && entry.enabled,
+      );
+      if (!owned) {
+        throw new RpcError(
+          ERROR_CODES.INVALID_PARAMS,
+          `模型 ${model} 不属于供应商 ${providerId} 或未启用`,
+        );
+      }
+    }
   }
 
   private async requireCredential(providerId: string): Promise<BrokerCredential> {

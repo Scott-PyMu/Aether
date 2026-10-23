@@ -28,6 +28,9 @@ import {
   type AdapterRuntimeInfo,
   type BrokerCredential,
   type EnvelopeContext,
+  type JsonRpcPeer,
+  type ProviderCatalog,
+  type ProviderCatalogClient,
 } from "@aether/adapter-sdk";
 import { randomUUID } from "node:crypto";
 
@@ -183,6 +186,8 @@ export interface ClaudeAdapterOptions {
   runtimeVersion?: string;
   /** ADR-028：凭据 broker 客户端（缺省从 `AETHER_CREDENTIAL_BROKER` 构造；测试可注入）。 */
   credentialClient?: Pick<CredentialClient, "get"> | null;
+  /** ADR-028 v0.9：`provider.catalog.get` 客户端工厂（生产 main 注入；测试缺省不查询）。 */
+  catalogClientFactory?: (peer: JsonRpcPeer) => ProviderCatalogClient;
 }
 
 /** 默认 run 硬超时（常量级；核心断流看门狗 120s 在其之前生效）。 */
@@ -197,6 +202,7 @@ export class ClaudeCodeAdapter {
   private readonly sessions = new Map<string, ClaudeSession>();
   private readonly startedAt = Date.now();
   private readonly credentialClient: Pick<CredentialClient, "get"> | null;
+  private readonly catalogClient: ProviderCatalogClient | null;
 
   constructor(options: ClaudeAdapterOptions) {
     this.options = options;
@@ -216,6 +222,7 @@ export class ClaudeCodeAdapter {
       writeLine: options.writeLine,
       stderr: options.stderr,
     });
+    this.catalogClient = options.catalogClientFactory?.(this.adapter.peer) ?? null;
     this.registerHandlers();
   }
 
@@ -280,7 +287,7 @@ export class ClaudeCodeAdapter {
       });
   }
 
-  private onCreateSession(params: unknown): Record<string, unknown> {
+  private async onCreateSession(params: unknown): Promise<Record<string, unknown>> {
     const input = (params ?? {}) as {
       title?: unknown;
       workspace?: unknown;
@@ -316,6 +323,9 @@ export class ClaudeCodeAdapter {
       typeof input.provider_id === "string" && input.provider_id.length > 0
         ? input.provider_id
         : undefined;
+    if (providerId !== undefined) {
+      await this.ensureCatalogSelection(providerId, model);
+    }
     const session: ClaudeSession = {
       id: nativeId,
       nativeId,
@@ -394,6 +404,7 @@ export class ClaudeCodeAdapter {
     // 回退到可能属于其他供应商的单供应商 env。
     let providerEnv: NodeJS.ProcessEnv | undefined;
     if (session.providerId !== undefined) {
+      await this.ensureCatalogSelection(session.providerId, session.model);
       if (this.credentialClient === null) {
         throw new RpcError(
           ERROR_CODES.INTERNAL_ERROR,
@@ -455,6 +466,46 @@ export class ClaudeCodeAdapter {
     run.cli.start();
     void this.awaitRun(session, run);
     return { accepted: true, run_id: runId };
+  }
+
+  /**
+   * ADR-028 v0.9：目录查询校验（provider 启用 + model 归属/启用）。
+   * 未注入目录客户端（单测）→ 跳过；生产 main 必须注入。
+   */
+  private async ensureCatalogSelection(
+    providerId: string,
+    model: string | undefined,
+  ): Promise<void> {
+    if (this.catalogClient === null) return;
+    let catalog: ProviderCatalog;
+    try {
+      catalog = await this.catalogClient.fetch();
+    } catch (error) {
+      throw new RpcError(
+        ERROR_CODES.INTERNAL_ERROR,
+        `供应商目录查询失败：${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    const provider = catalog.providers.find(
+      (entry) => entry.id === providerId && entry.enabled,
+    );
+    if (provider === undefined) {
+      throw new RpcError(
+        ERROR_CODES.INVALID_PARAMS,
+        `供应商不存在或已停用：${providerId}`,
+      );
+    }
+    if (model !== undefined) {
+      const owned = provider.models.some(
+        (entry) => entry.id === model && entry.enabled,
+      );
+      if (!owned) {
+        throw new RpcError(
+          ERROR_CODES.INVALID_PARAMS,
+          `模型 ${model} 不属于供应商 ${providerId} 或未启用`,
+        );
+      }
+    }
   }
 
   private onInterrupt(params: unknown): Record<string, unknown> {

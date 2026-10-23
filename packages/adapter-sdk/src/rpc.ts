@@ -122,17 +122,20 @@ export class JsonRpcPeer {
       const hasId = "id" in frame && frame.id !== null && frame.id !== undefined;
       if (hasId) {
         const id = frame.id as number | string;
-        try {
-          const result = await this.options.onRequest(method, params);
-          await this.reply(id, result ?? null);
-        } catch (error) {
-          if (error instanceof RpcError) {
-            await this.replyError(id, error.code, error.message, error.data);
-          } else {
-            const detail = error instanceof Error ? error.message : String(error);
-            await this.replyError(id, ERROR_CODES.INTERNAL_ERROR, detail);
-          }
-        }
+        // ADR-028 v0.9：请求处理器**异步分发**——处理器可能需要向核心发起
+        // `provider.catalog.get` 并等待响应；若在读循环内 await，响应帧无法被读取
+        // （双向请求死锁）。
+        void Promise.resolve()
+          .then(() => this.options.onRequest(method, params))
+          .then((result) => this.reply(id, result ?? null))
+          .catch(async (error: unknown) => {
+            if (error instanceof RpcError) {
+              await this.replyError(id, error.code, error.message, error.data);
+            } else {
+              const detail = error instanceof Error ? error.message : String(error);
+              await this.replyError(id, ERROR_CODES.INTERNAL_ERROR, detail);
+            }
+          });
       } else {
         await this.options.onNotification(method, params);
       }

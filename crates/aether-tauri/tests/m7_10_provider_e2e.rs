@@ -538,10 +538,25 @@ fn run_e2e() {
         let second_id = second["id"].as_str().expect("session id");
         let ack_a = h.send(first_id, "chat", None, None).expect("并发发送 A");
         let ack_b = h.send(second_id, "chat", None, None).expect("并发发送 B");
-        assert_eq!(
-            h.wait_run(ack_a["run_id"].as_str().expect("run id")),
-            RunStatus::Succeeded
-        );
+        let status_a = h.wait_run(ack_a["run_id"].as_str().expect("run id"));
+        if status_a != RunStatus::Succeeded {
+            eprintln!(
+                "{runtime_id} run A failed: {:?}",
+                h.runtime.block_on(
+                    h.reads
+                        .run(&RunId::new(ack_a["run_id"].as_str().expect("run id").to_owned()).expect("run id"))
+                )
+            );
+            eprintln!(
+                "{runtime_id} events: {:?}",
+                h.backend.messages_page(&aether_tauri::ipc::dto::MessagesPageRequest {
+                    session_id: first_id.to_owned(),
+                    last_seq: None,
+                    limit: Some(200),
+                })
+            );
+        }
+        assert_eq!(status_a, RunStatus::Succeeded);
         assert_eq!(
             h.wait_run(ack_b["run_id"].as_str().expect("run id")),
             RunStatus::Succeeded

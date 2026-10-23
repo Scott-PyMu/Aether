@@ -22,6 +22,7 @@
 import { readFileSync } from "node:fs";
 
 import { isUlid, type LineWriter } from "@aether/adapter-sdk";
+import { fetchProviderCatalog } from "@aether/adapter-sdk";
 
 import { DEFAULT_DSH_VERSION_PIN, validateProviderConfig } from "./dsh-plugin";
 import { DshAdapter, DEFAULT_RUN_TIMEOUT_MS, type DshCliConfig } from "./dsh-adapter";
@@ -177,6 +178,9 @@ export async function runCli(streams: CliStreams): Promise<void> {
     ...(options.permissionTimeoutMs !== undefined
       ? { permissionTimeoutMs: options.permissionTimeoutMs }
       : {}),
+    catalogClientFactory: (peer) => ({
+      fetch: () => fetchProviderCatalog(peer),
+    }),
   });
   try {
     await adapter.run();

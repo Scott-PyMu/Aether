@@ -16,6 +16,7 @@
  */
 
 import { isUlid, type LineWriter } from "@aether/adapter-sdk";
+import { fetchProviderCatalog } from "@aether/adapter-sdk";
 
 import { CodexAdapter, DEFAULT_RUN_TIMEOUT_MS } from "./codex-adapter";
 import type { CodexCliConfig } from "./codex-cli";
@@ -151,6 +152,9 @@ export async function runCli(streams: CliStreams): Promise<void> {
     cli: options.cli,
     ...(options.stateDir !== undefined ? { stateDir: options.stateDir } : {}),
     ...(options.runTimeoutMs !== undefined ? { runTimeoutMs: options.runTimeoutMs } : {}),
+    catalogClientFactory: (peer) => ({
+      fetch: () => fetchProviderCatalog(peer),
+    }),
   });
   try {
     await adapter.run();

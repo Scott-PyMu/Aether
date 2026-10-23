@@ -22,6 +22,9 @@ import {
   type AdapterRuntimeInfo,
   type BrokerCredential,
   type EnvelopeContext,
+  type JsonRpcPeer,
+  type ProviderCatalog,
+  type ProviderCatalogClient,
 } from "@aether/adapter-sdk";
 import { cpSync, existsSync, mkdirSync, readdirSync, copyFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -277,6 +280,8 @@ export interface DshAdapterOptions {
   credentialClient?: Pick<CredentialClient, "get"> | null;
   /** ADR-028 v0.9：per-session DSH_HOME 根目录（缺省 = legacy home 的同级目录）。 */
   sessionHomesDir?: string;
+  /** ADR-028 v0.9：`provider.catalog.get` 客户端工厂（生产 main 注入）。 */
+  catalogClientFactory?: (peer: JsonRpcPeer) => ProviderCatalogClient;
 }
 
 interface DshRunState {
@@ -365,6 +370,7 @@ export class DshAdapter {
   /** ADR-028 v0.9：provider 会话 → 独立 ACP 进程/profile（按会话隔离）。 */
   private readonly providerServers = new Map<string, ProviderServer>();
   private readonly credentialClient: Pick<CredentialClient, "get"> | null;
+  private readonly catalogClient: ProviderCatalogClient | null;
   /**
    * M7-09/ADR-027：系统提示词侧信道目录（`<deltaDir>/prompts`；初始化时确定，
    * 经 `AETHER_DSH_PROMPT_DIR` 传给注入插件）。
@@ -393,6 +399,7 @@ export class DshAdapter {
       writeLine: options.writeLine,
       stderr: options.stderr,
     });
+    this.catalogClient = options.catalogClientFactory?.(this.adapter.peer) ?? null;
     this.registerHandlers();
   }
 
@@ -640,8 +647,44 @@ export class DshAdapter {
     return this.server;
   }
 
-  private async requireCredential(providerId: string): Promise<BrokerCredential> {
-    if (this.credentialClient === null) {
+  /** ADR-028 v0.9：目录查询校验（provider 启用 + model 归属/启用）。 */
+  private async ensureCatalogSelection(
+    providerId: string,
+    model: string | undefined,
+  ): Promise<void> {
+    if (this.catalogClient === null) return;
+    let catalog: ProviderCatalog;
+    try {
+      catalog = await this.catalogClient.fetch();
+    } catch (error) {
+      throw new RpcError(
+        ERROR_CODES.INTERNAL_ERROR,
+        `供应商目录查询失败：${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    const provider = catalog.providers.find(
+      (entry) => entry.id === providerId && entry.enabled,
+    );
+    if (provider === undefined) {
+      throw new RpcError(
+        ERROR_CODES.INVALID_PARAMS,
+        `供应商不存在或已停用：${providerId}`,
+      );
+    }
+    if (model !== undefined) {
+      const owned = provider.models.some(
+        (entry) => entry.id === model && entry.enabled,
+      );
+      if (!owned) {
+        throw new RpcError(
+          ERROR_CODES.INVALID_PARAMS,
+          `模型 ${model} 不属于供应商 ${providerId} 或未启用`,
+        );
+      }
+    }
+  }
+
+  private async requireCredential(providerId: string): Promise<BrokerCredential> {    if (this.credentialClient === null) {
       throw new RpcError(
         ERROR_CODES.INTERNAL_ERROR,
         "凭据 broker 未接线：多供应商会话不可用（不回退单供应商 env）",
@@ -842,6 +885,9 @@ export class DshAdapter {
       typeof input.provider_id === "string" && input.provider_id.length > 0
         ? input.provider_id
         : undefined;
+    if (providerId !== undefined) {
+      await this.ensureCatalogSelection(providerId, model);
+    }
     const existingSession =
       typeof requested === "string" ? this.sessions.get(requested) : undefined;
     if (
@@ -1128,7 +1174,7 @@ export class DshAdapter {
     }
   }
 
-  private onSend(params: unknown): Record<string, unknown> {
+  private async onSend(params: unknown): Promise<Record<string, unknown>> {
     const input = (params ?? {}) as {
       session_id?: unknown;
       client_msg_id?: unknown;
@@ -1144,6 +1190,9 @@ export class DshAdapter {
     }
     if (typeof input.text !== "string") {
       throw new RpcError(ERROR_CODES.INVALID_PARAMS, "session.send 缺少 text");
+    }
+    if (session.providerId !== undefined) {
+      await this.ensureCatalogSelection(session.providerId, session.model);
     }
     if (!this.serverFor(session) || this.serverFor(session)?.isClosed === true) {
       throw new RpcError(ERROR_CODES.INTERNAL_ERROR, "DSH ACP 未连接");

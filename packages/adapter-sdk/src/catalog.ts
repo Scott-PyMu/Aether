@@ -30,6 +30,11 @@ export interface ProviderCatalog {
   providers: ProviderCatalogEntry[];
 }
 
+/** 适配器侧目录客户端（生产 = `fetchProviderCatalog(peer)`；测试可注入替身）。 */
+export interface ProviderCatalogClient {
+  fetch(): Promise<ProviderCatalog>;
+}
+
 /** 目录查询地图错误：统一为既定应用语义（不新增 Aether 错误码）。 */
 export class CatalogError extends Error {
   constructor(

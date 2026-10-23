@@ -105,6 +105,7 @@ export {
   PROVIDER_CATALOG_METHOD,
   PROVIDER_CATALOG_TIMEOUT_MS,
   type ProviderCatalog,
+  type ProviderCatalogClient,
   type ProviderCatalogEntry,
   type ProviderCatalogModel,
 } from "./catalog";

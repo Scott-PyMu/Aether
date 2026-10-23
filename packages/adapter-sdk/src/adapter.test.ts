@@ -30,6 +30,8 @@ function makeAdapter(options: {
   return { adapter, written, stderr };
 }
 
+const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
 describe("Adapter（D6）", () => {
   it("run 先发 hello（protocol 1.0 + runtime 信息）", async () => {
     const { adapter, written } = makeAdapter({ lines: [] });
@@ -59,6 +61,7 @@ describe("Adapter（D6）", () => {
       handler: { initialize: () => ({ capabilities: ["tools.list"] }) },
     });
     await adapter.run();
+    await flush();
     const frames = written.map((line) => JSON.parse(line));
     expect(frames[1]).toEqual({ jsonrpc: "2.0", id: 1, result: { capabilities: ["tools.list"] } });
     expect(frames[2].error.code).toBe(-32601);
@@ -163,6 +166,7 @@ describe("Adapter（D6）", () => {
     });
     adapter.handle("health.ping", () => ({ status: "ok" }));
     await adapter.run();
+    await flush();
     expect(written).toHaveLength(2);
   });
 });

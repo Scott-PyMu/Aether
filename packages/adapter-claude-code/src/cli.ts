@@ -17,6 +17,7 @@
  */
 
 import { isUlid, type LineWriter } from "@aether/adapter-sdk";
+import { fetchProviderCatalog } from "@aether/adapter-sdk";
 
 import {
   ClaudeCodeAdapter,
@@ -156,6 +157,9 @@ export async function runCli(streams: CliStreams): Promise<void> {
     exit: (code) => streams.exit(code),
     cli: options.cli,
     ...(options.runTimeoutMs !== undefined ? { runTimeoutMs: options.runTimeoutMs } : {}),
+    catalogClientFactory: (peer) => ({
+      fetch: () => fetchProviderCatalog(peer),
+    }),
   });
   try {
     await adapter.run();

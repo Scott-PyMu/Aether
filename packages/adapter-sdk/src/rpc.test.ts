@@ -27,6 +27,8 @@ function memoryPeer(handler?: (method: string, params: unknown) => unknown) {
   return { peer, written, requests, notifications, responses };
 }
 
+const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
 describe("JsonRpcPeer", () => {
   it("发送通知帧", async () => {
     const { peer, written } = memoryPeer();
@@ -61,10 +63,12 @@ describe("JsonRpcPeer", () => {
       return { ok: true };
     });
     expect(await peer.handleLine('{"jsonrpc":"2.0","id":1,"method":"ping"}')).toBe(true);
+    await flush();
     expect(requests).toEqual([{ method: "ping", params: null }]);
     expect(JSON.parse(written[0]!)).toEqual({ jsonrpc: "2.0", id: 1, result: { ok: true } });
 
     await peer.handleLine('{"jsonrpc":"2.0","id":"abc","method":"boom","params":{"x":1}}');
+    await flush();
     expect(JSON.parse(written[1]!)).toEqual({
       jsonrpc: "2.0",
       id: "abc",
@@ -77,6 +81,7 @@ describe("JsonRpcPeer", () => {
       throw new Error("unexpected");
     });
     await peer.handleLine('{"jsonrpc":"2.0","id":2,"method":"x"}');
+    await flush();
     expect(JSON.parse(written[0]!).error.code).toBe(-32603);
   });
 
