@@ -98,3 +98,18 @@ export {
   CredentialClient,
   type BrokerCredential,
 } from "./credential";
+export {
+  CatalogError,
+  catalogProvider,
+  fetchProviderCatalog,
+  PROVIDER_CATALOG_METHOD,
+  PROVIDER_CATALOG_TIMEOUT_MS,
+  type ProviderCatalog,
+  type ProviderCatalogEntry,
+  type ProviderCatalogModel,
+} from "./catalog";
+export {
+  BROKER_ENV_KEY,
+  stripBrokerEnv,
+  stripBrokerEnvInPlace,
+} from "./child-env";

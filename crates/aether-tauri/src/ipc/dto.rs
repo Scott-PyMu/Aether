@@ -49,8 +49,9 @@ pub enum SessionStatus {
 /// M5-01/P1 批次登记（ADR-018 附录 A-6；登记先行，功能随各 P1 任务落地）：
 /// `backup.auto.enabled` / `backup.auto.frequency` / `backup.auto.retention` /
 /// `backup.encryption.enabled`（ADR-020 / M5-02、M5-03）、`events.retention.enabled` /
-/// `events.retention.days`（ADR-021 / M5-04）、`ui.layout`（M7-04 布局持久化落点；
-/// 键名/类型/缺省值/语义/迁移影响见 ADR-018 附录 A-6）。
+/// `events.retention.days`（ADR-021 / M5-04）、`ui.layout`（M7-04 布局持久化落点）、
+/// `ui.provider_selection`（ADR-028 v0.9 全局供应商记忆：JSON 对象字符串 ≤64KiB）。
+/// 键名/类型/缺省值/语义/迁移影响见 ADR-018 附录 A-6。
 pub const SETTINGS_KEY_ALLOWLIST: &[&str] = &[
     "backup.reminder",
     "backup.auto.enabled",
@@ -60,6 +61,7 @@ pub const SETTINGS_KEY_ALLOWLIST: &[&str] = &[
     "events.retention.enabled",
     "events.retention.days",
     "ui.layout",
+    "ui.provider_selection",
 ];
 
 #[derive(Debug, Deserialize, specta::Type)]
@@ -73,6 +75,9 @@ pub struct SessionCreateRequest {
     pub title: String,
     #[serde(default)]
     pub workspace_id: Option<String>,
+    /// ADR-028 v0.9：会话级模型（三官方运行时语义必填；缺失 →
+    /// `invalid_value("请选择模型")`；旧会话 `sessions.model` 空/失效/不属于时可一次性
+    /// `session_send.model` 补选）。
     #[serde(default)]
     pub model: Option<String>,
     /// ADR-028：会话级供应商 id（可选；`None` = 由模型解析/旧单供应商路径）。
@@ -126,10 +131,7 @@ impl CommandRequest for SessionCreateRequest {
         }
         if let Some(provider_id) = &self.provider_id {
             if !is_ulid(provider_id) {
-                return Err(IpcError::invalid_format(
-                    "provider_id",
-                    "必须是 26 位 ULID",
-                ));
+                return Err(IpcError::invalid_format("provider_id", "必须是 26 位 ULID"));
             }
         }
         if let Some(thinking_depth) = self.thinking_depth {
@@ -310,6 +312,14 @@ pub struct SessionSendRequest {
     /// 失败 `artifact_path_rejected`；**引用 ≠ 预授权**，读取仍走 `fs.read` 权限门）。
     #[serde(default)]
     pub references: Vec<ReferenceEntry>,
+    /// ADR-028 v0.9：旧会话补选供应商（仅 `sessions.config.aether.provider_id` 为空时
+    /// 生效；已选会话再传 → `invalid_value`）。不新增命令。
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    /// ADR-028 v0.9：旧会话补选模型（`sessions.model` 空/失效/不属于时允许一次性补选；
+    /// 已选且有效再传 → `invalid_value`）。
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 /// 引用条目（D6 `session.send.references` 载荷形态；ADR-024 附录 A-3）。
@@ -341,10 +351,7 @@ impl SessionSendRequest {
             let kind = aether_core::ReferenceKind::from_code(&entry.kind).ok_or_else(|| {
                 IpcError::invalid_enum(
                     "references[].kind",
-                    format!(
-                        "引用类型非法（{}）；合法值：file / directory",
-                        entry.kind
-                    ),
+                    format!("引用类型非法（{}）；合法值：file / directory", entry.kind),
                 )
             })?;
             resolved.push(aether_core::MessageReference {
@@ -372,6 +379,14 @@ impl CommandRequest for SessionSendRequest {
         if let Some(thinking_depth) = self.thinking_depth {
             validate::validate_thinking_depth(thinking_depth, "thinking_depth")?;
         }
+        if let Some(provider_id) = &self.provider_id {
+            if !is_ulid(provider_id) {
+                return Err(IpcError::invalid_format("provider_id", "必须是 26 位 ULID"));
+            }
+        }
+        if let Some(model) = &self.model {
+            validate::validate_model(model, "model")?;
+        }
         if self.references.len() > MAX_SESSION_REFERENCES {
             return Err(IpcError::too_large(
                 "references",
@@ -382,15 +397,11 @@ impl CommandRequest for SessionSendRequest {
             ));
         }
         for entry in &self.references {
-            if entry.kind.is_empty()
-                || aether_core::ReferenceKind::from_code(&entry.kind).is_none()
+            if entry.kind.is_empty() || aether_core::ReferenceKind::from_code(&entry.kind).is_none()
             {
                 return Err(IpcError::invalid_enum(
                     "references[].kind",
-                    format!(
-                        "引用类型非法（{}）；合法值：file / directory",
-                        entry.kind
-                    ),
+                    format!("引用类型非法（{}）；合法值：file / directory", entry.kind),
                 ));
             }
             // 路径 canonicalize + 可访问性校验（失败 `artifact_path_rejected`）。
@@ -761,10 +772,7 @@ fn validate_provider_endpoints(endpoints: &BTreeMap<String, String>) -> Result<(
         return Err(IpcError::invalid_value("endpoints 最多 8 项"));
     }
     for (protocol, url) in endpoints {
-        if !matches!(
-            protocol.as_str(),
-            "anthropic" | "openai" | "google" | "dsh"
-        ) {
+        if !matches!(protocol.as_str(), "anthropic" | "openai" | "google" | "dsh") {
             return Err(IpcError::invalid_enum(
                 "endpoints",
                 format!("未知协议端点：{protocol}"),
@@ -1579,9 +1587,8 @@ impl AuditQueryRequest {
             from_ts: self.from_ts,
             to_ts: self.to_ts,
             limit: self.limit.map(|value| value as usize),
-            offset: usize::try_from(self.offset.unwrap_or(0)).map_err(|_| {
-                IpcError::out_of_range("offset", "超出本机分页寻址范围")
-            })?,
+            offset: usize::try_from(self.offset.unwrap_or(0))
+                .map_err(|_| IpcError::out_of_range("offset", "超出本机分页寻址范围"))?,
         })
     }
 }
@@ -1901,10 +1908,7 @@ pub struct SessionWorkspaceAssignRequest {
 impl CommandRequest for SessionWorkspaceAssignRequest {
     fn validate(&self) -> Result<(), IpcError> {
         if !is_ulid(&self.session_id) {
-            return Err(IpcError::invalid_format(
-                "session_id",
-                "必须是 26 位 ULID",
-            ));
+            return Err(IpcError::invalid_format("session_id", "必须是 26 位 ULID"));
         }
         if !is_ulid(&self.workspace_id) {
             return Err(IpcError::invalid_format(

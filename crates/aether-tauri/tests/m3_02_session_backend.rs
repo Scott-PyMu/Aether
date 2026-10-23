@@ -461,8 +461,10 @@ fn session_create_persists_model_and_send_interrupt_dispose_are_wired() {
             text: "hello workbench".to_owned(),
             client_msg_id: "01J8ZQ5R0N7W9Y8X6V4T2S0K1N".to_owned(),
             thinking_depth: None,
-        references: Vec::new(),
-            })
+            references: Vec::new(),
+            provider_id: None,
+            model: None,
+        })
         .expect("session_send");
     let run_id = ack["run_id"].as_str().expect("run_id").to_owned();
     assert_eq!(ack["queued"], false);

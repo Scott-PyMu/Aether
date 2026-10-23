@@ -216,8 +216,10 @@ fn send_message(h: &Harness, session_id: &str, client_id: &str) -> Value {
             text: "hi".to_owned(),
             client_msg_id: client_id.to_owned(),
             thinking_depth: None,
-        references: Vec::new(),
-            })
+            references: Vec::new(),
+            provider_id: None,
+            model: None,
+        })
         .expect("发送")
 }
 
@@ -300,8 +302,11 @@ fn gate_injection_queueing_health_and_fifo_advance() {
         acks[4]["run_id"].as_str().expect("run id"),
         "推进的必须是 FIFO 队首（第 5 个 run）"
     );
-    assert!(wait_until(Duration::from_secs(5), || run_status(&h, &first_run)
-        == Some(RunStatus::Succeeded)));
+    assert!(wait_until(Duration::from_secs(5), || run_status(
+        &h, &first_run
+    ) == Some(
+        RunStatus::Succeeded
+    )));
     let gate_after = gate(&h);
     assert_eq!(gate_after.active, 4, "推进后仍不超卖");
     assert_eq!(gate_after.queued, 1);
@@ -357,7 +362,10 @@ fn waiting_slot_and_queued_interrupt_follow_a6_matrix() {
         let ack = send_message(&h, &session_id, &client_id(index));
         busy_runs.push(ack["run_id"].as_str().expect("run id").to_owned());
     }
-    assert!(wait_until(Duration::from_secs(10), || h.executor.call_count() == 4));
+    assert!(wait_until(Duration::from_secs(10), || h
+        .executor
+        .call_count()
+        == 4));
 
     // 会话 A：第 1 条 → 闸门排队（position 1）；会话 B：第 1 条 → position 2。
     let session_a = create_session(&h, "session-a");
@@ -379,8 +387,10 @@ fn waiting_slot_and_queued_interrupt_follow_a6_matrix() {
             text: "third".to_owned(),
             client_msg_id: client_id(103),
             thinking_depth: None,
-        references: Vec::new(),
-            })
+            references: Vec::new(),
+            provider_id: None,
+            model: None,
+        })
         .expect_err("等待槽已满");
     assert!(error.message.contains("session_busy"), "{}", error.message);
 
@@ -391,7 +401,10 @@ fn waiting_slot_and_queued_interrupt_follow_a6_matrix() {
         report.interrupted_run.as_ref().map(|run| run.to_string()),
         Some(a1["run_id"].as_str().expect("run id").to_owned())
     );
-    assert_eq!(report.cancelled_waiting_run, None, "等待槽不连带清空（A-6）");
+    assert_eq!(
+        report.cancelled_waiting_run, None,
+        "等待槽不连带清空（A-6）"
+    );
     assert_eq!(
         run_status(&h, a1["run_id"].as_str().expect("id")),
         Some(RunStatus::Cancelled)
@@ -464,7 +477,10 @@ fn dispose_clears_queued_runs_and_fifo() {
         let ack = send_message(&h, &session_id, &client_id(index));
         busy_runs.push(ack["run_id"].as_str().expect("run id").to_owned());
     }
-    assert!(wait_until(Duration::from_secs(10), || h.executor.call_count() == 4));
+    assert!(wait_until(Duration::from_secs(10), || h
+        .executor
+        .call_count()
+        == 4));
 
     let session_a = create_session(&h, "dispose-a");
     let a1 = send_message(&h, &session_a, &client_id(100));
@@ -473,7 +489,10 @@ fn dispose_clears_queued_runs_and_fifo() {
     assert_eq!(gate(&h).queued, 1);
 
     let sid = SessionId::new(session_a.clone()).expect("id");
-    let status = h.runtime.block_on(h.manager.dispose(&sid)).expect("dispose");
+    let status = h
+        .runtime
+        .block_on(h.manager.dispose(&sid))
+        .expect("dispose");
     assert_eq!(status, SessionStatus::Cancelled);
     assert_eq!(
         run_status(&h, a1["run_id"].as_str().expect("id")),
@@ -509,7 +528,10 @@ fn run_retry_respects_gate() {
         let ack = send_message(&h, &session_id, &client_id(index));
         busy_runs.push(ack["run_id"].as_str().expect("run id").to_owned());
     }
-    assert!(wait_until(Duration::from_secs(10), || h.executor.call_count() == 4));
+    assert!(wait_until(Duration::from_secs(10), || h
+        .executor
+        .call_count()
+        == 4));
 
     // 会话 C 的第 1 条（排队后被 interrupt 取消 → 可重试）。
     let session_c = create_session(&h, "retry-c");
@@ -565,7 +587,10 @@ fn ten_concurrent_runs_fit_default_cap() {
     for index in 0..10 {
         let session_id = create_session(&h, &format!("t3-{index}"));
         let ack = send_message(&h, &session_id, &client_id(index));
-        assert!(ack.get("queue").is_none(), "第 {index} 个 run 不应排队：{ack}");
+        assert!(
+            ack.get("queue").is_none(),
+            "第 {index} 个 run 不应排队：{ack}"
+        );
         run_ids.push(ack["run_id"].as_str().expect("id").to_owned());
     }
     assert!(
@@ -589,7 +614,10 @@ fn ten_concurrent_runs_fit_default_cap() {
         gate(&h)
     );
     for run_id in &run_ids {
-        assert!(wait_until(Duration::from_secs(5), || run_status(&h, run_id)
-            == Some(RunStatus::Succeeded)));
+        assert!(wait_until(Duration::from_secs(5), || run_status(
+            &h, run_id
+        ) == Some(
+            RunStatus::Succeeded
+        )));
     }
 }

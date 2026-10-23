@@ -211,8 +211,10 @@ fn run_retry_uses_terminal_guard_and_replays_per_mode_r_and_n() {
             text: "hello".to_owned(),
             client_msg_id: "01J8ZQ5R0N7W9Y8X6V4T2S0K01".to_owned(),
             thinking_depth: None,
-        references: Vec::new(),
-            })
+            references: Vec::new(),
+            provider_id: None,
+            model: None,
+        })
         .expect("session_send");
     let first_run = RunId::new(first["run_id"].as_str().expect("run_id").to_owned()).unwrap();
     assert!(
@@ -239,8 +241,10 @@ fn run_retry_uses_terminal_guard_and_replays_per_mode_r_and_n() {
             text: "fail-once".to_owned(),
             client_msg_id: "01J8ZQ5R0N7W9Y8X6V4T2S0K02".to_owned(),
             thinking_depth: None,
-        references: Vec::new(),
-            })
+            references: Vec::new(),
+            provider_id: None,
+            model: None,
+        })
         .expect("session_send(fail)");
     let failing_run = RunId::new(failing["run_id"].as_str().unwrap().to_owned()).unwrap();
     assert!(
@@ -307,8 +311,10 @@ fn run_retry_uses_terminal_guard_and_replays_per_mode_r_and_n() {
             text: "again".to_owned(),
             client_msg_id: "01J8ZQ5R0N7W9Y8X6V4T2S0K03".to_owned(),
             thinking_depth: None,
-        references: Vec::new(),
-            })
+            references: Vec::new(),
+            provider_id: None,
+            model: None,
+        })
         .expect("session_send(again)");
     let resumed_run = RunId::new(resumed["run_id"].as_str().unwrap().to_owned()).unwrap();
     assert!(
@@ -352,8 +358,10 @@ fn run_retry_uses_terminal_guard_and_replays_per_mode_r_and_n() {
             text: "long".to_owned(),
             client_msg_id: "01J8ZQ5R0N7W9Y8X6V4T2S0K04".to_owned(),
             thinking_depth: None,
-        references: Vec::new(),
-            })
+            references: Vec::new(),
+            provider_id: None,
+            model: None,
+        })
         .expect("session_send(long)");
     let long_run = RunId::new(long["run_id"].as_str().unwrap().to_owned()).unwrap();
     assert!(

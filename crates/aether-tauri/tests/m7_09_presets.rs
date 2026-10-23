@@ -21,7 +21,8 @@ use std::time::{Duration, Instant};
 
 use aether_adapters::supervisor::{RuntimeManifest, RuntimeSpec, Supervisor};
 use aether_control::{
-    EventPipeline, LifecycleConfig, PermissionConfig, PermissionService, SessionManager, SystemClock,
+    EventPipeline, LifecycleConfig, PermissionConfig, PermissionService, SessionManager,
+    SystemClock,
 };
 use aether_core::{PresetId, RuntimeId, Session, SessionId};
 use aether_security::PolicyEngine;
@@ -52,7 +53,9 @@ fn mock_binary() -> Option<PathBuf> {
             if std::env::var("AETHER_REQUIRE_MOCK_ADAPTER").as_deref() == Ok("1") {
                 panic!("AETHER_REQUIRE_MOCK_ADAPTER=1 但 AETHER_MOCK_ADAPTER 未设置");
             }
-            eprintln!("SKIP：AETHER_MOCK_ADAPTER 未设置（运行 pnpm verify:m7-09 构建 Mock 后执行）");
+            eprintln!(
+                "SKIP：AETHER_MOCK_ADAPTER 未设置（运行 pnpm verify:m7-09 构建 Mock 后执行）"
+            );
             None
         }
     }
@@ -139,7 +142,15 @@ impl Harness {
             ]);
         }
         let spec = RuntimeSpec::with_fresh_token(manifest);
-        Self::assemble(dir, workspace, session_log, None, None, spec, adapter.is_some())
+        Self::assemble(
+            dir,
+            workspace,
+            session_log,
+            None,
+            None,
+            spec,
+            adapter.is_some(),
+        )
     }
 
     /// 真实运行时（Claude Code 适配器 bundle）经 `rpc-tap.mjs` 透明代理注册：
@@ -189,7 +200,10 @@ impl Harness {
                 ),
                 (
                     "FAKE_CLAUDE_HOME".to_owned(),
-                    dir.path().join("fake-claude-home").to_string_lossy().to_string(),
+                    dir.path()
+                        .join("fake-claude-home")
+                        .to_string_lossy()
+                        .to_string(),
                 ),
             ]);
         let spec = RuntimeSpec::with_fresh_token(manifest);
@@ -267,7 +281,8 @@ impl Harness {
         workspace: TempDir,
         session_log: Option<PathBuf>,
         tap_log: Option<PathBuf>,
-        cli_invocations: Option<PathBuf>,        spec: RuntimeSpec,
+        cli_invocations: Option<PathBuf>,
+        spec: RuntimeSpec,
         warmup: bool,
     ) -> Self {
         let runtime = new_runtime();
@@ -377,7 +392,10 @@ impl Harness {
                 Some(&canonical),
             )
             .expect("workspace_set");
-        value["workspace_id"].as_str().expect("workspace_id").to_owned()
+        value["workspace_id"]
+            .as_str()
+            .expect("workspace_id")
+            .to_owned()
     }
 
     fn create_session(&self, preset_id: Option<&str>) -> Value {
@@ -441,7 +459,10 @@ fn preset_commands_full_cycle() {
     let listed = harness.list_presets();
     assert_eq!(listed.len(), 3, "内置播种 3 条");
     assert_eq!(
-        listed.iter().map(|item| item["id"].as_str().unwrap()).collect::<Vec<_>>(),
+        listed
+            .iter()
+            .map(|item| item["id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
         vec![BUILTIN_DEFAULT, BUILTIN_CODE, BUILTIN_REVIEW]
     );
     assert_eq!(listed[0]["name"], "默认助手");
@@ -535,14 +556,19 @@ fn preset_commands_full_cycle() {
     assert_eq!(harness.list_presets().len(), 3);
     let error = harness
         .backend
-        .preset_delete(&PresetDeleteRequest { preset_id: custom_id })
+        .preset_delete(&PresetDeleteRequest {
+            preset_id: custom_id,
+        })
         .unwrap_err();
     assert_eq!(error.code.as_str(), "preset_not_found");
 
     // 审计动作齐备（ADR-026 附录 A-3）。
     let actions = harness.audit_actions();
     for expected in ["preset.created", "preset.updated", "preset.deleted"] {
-        assert!(actions.contains(&expected.to_owned()), "缺少审计动作 {expected}: {actions:?}");
+        assert!(
+            actions.contains(&expected.to_owned()),
+            "缺少审计动作 {expected}: {actions:?}"
+        );
     }
 
     harness.shutdown();
@@ -552,11 +578,8 @@ fn preset_commands_full_cycle() {
 #[test]
 fn session_create_composes_preset_before_memory_and_echoes_source() {
     let harness = Harness::open(None);
-    std::fs::write(
-        harness.workspace.path().join("AGENTS.md"),
-        "工作区约定内容",
-    )
-    .expect("写入记忆文件");
+    std::fs::write(harness.workspace.path().join("AGENTS.md"), "工作区约定内容")
+        .expect("写入记忆文件");
     harness.bind_workspace(harness.workspace.path());
 
     // 选预设：合成结果 = 预设块 + 记忆块（预设置前，两块完整保留）。
@@ -565,7 +588,10 @@ fn session_create_composes_preset_before_memory_and_echoes_source() {
     assert_eq!(summary["preset_name"], "代码专家");
     let system_prompt = summary["system_prompt"].as_str().expect("system_prompt");
     let preset_marker = format!("<!-- aether:preset:{BUILTIN_CODE} -->");
-    assert!(system_prompt.starts_with(&preset_marker), "预设块置前：{system_prompt}");
+    assert!(
+        system_prompt.starts_with(&preset_marker),
+        "预设块置前：{system_prompt}"
+    );
     assert!(
         system_prompt.contains("你是资深软件工程师"),
         "预设提示词完整保留"
@@ -676,11 +702,8 @@ fn mock_adapter_observes_composed_prompt_delivery() {
         return;
     };
     let harness = Harness::open(Some(&binary));
-    std::fs::write(
-        harness.workspace.path().join("AGENTS.md"),
-        "工作区约定内容",
-    )
-    .expect("写入记忆文件");
+    std::fs::write(harness.workspace.path().join("AGENTS.md"), "工作区约定内容")
+        .expect("写入记忆文件");
     harness.bind_workspace(harness.workspace.path());
 
     let summary = harness.create_session(Some(BUILTIN_REVIEW));
@@ -694,6 +717,8 @@ fn mock_adapter_observes_composed_prompt_delivery() {
             client_msg_id: ulid::Ulid::new().to_string(),
             thinking_depth: None,
             references: Vec::new(),
+            provider_id: None,
+            model: None,
         })
         .expect("session_send");
     let run_id = ack["run_id"].as_str().unwrap().to_owned();
@@ -701,7 +726,12 @@ fn mock_adapter_observes_composed_prompt_delivery() {
     assert!(
         wait_until(Duration::from_secs(30), || {
             matches!(
-                harness.runtime.block_on(harness.reads.run(&run_id)).ok().flatten().map(|run| run.status),
+                harness
+                    .runtime
+                    .block_on(harness.reads.run(&run_id))
+                    .ok()
+                    .flatten()
+                    .map(|run| run.status),
                 Some(aether_core::RunStatus::Succeeded)
                     | Some(aether_core::RunStatus::Failed)
                     | Some(aether_core::RunStatus::Cancelled)
@@ -712,7 +742,9 @@ fn mock_adapter_observes_composed_prompt_delivery() {
     );
 
     assert!(
-        wait_until(Duration::from_secs(10), || !harness.session_log_records().is_empty()),
+        wait_until(Duration::from_secs(10), || !harness
+            .session_log_records()
+            .is_empty()),
         "Mock 必须记录 session.create"
     );
     let record = harness
@@ -723,9 +755,15 @@ fn mock_adapter_observes_composed_prompt_delivery() {
     assert_eq!(record["has_system_prompt"], true);
     let prompt = record["system_prompt"].as_str().unwrap();
     let preset_marker = format!("<!-- aether:preset:{BUILTIN_REVIEW} -->");
-    assert!(prompt.contains(&preset_marker), "适配器收到预设块：{prompt}");
+    assert!(
+        prompt.contains(&preset_marker),
+        "适配器收到预设块：{prompt}"
+    );
     assert!(prompt.contains("严格的代码审查者"));
-    assert!(prompt.contains("# 工作区约定"), "适配器收到记忆块：{prompt}");
+    assert!(
+        prompt.contains("# 工作区约定"),
+        "适配器收到记忆块：{prompt}"
+    );
     assert!(
         prompt.find(&preset_marker).unwrap() < prompt.find("# 工作区约定").unwrap(),
         "下发顺序：预设块 → 记忆块"
@@ -756,9 +794,7 @@ fn mock_adapter_observes_composed_prompt_delivery() {
 #[test]
 fn real_claude_adapter_receives_composed_prompt_over_wire() {
     if std::env::var("AETHER_M7_09_REAL").as_deref() != Ok("1") {
-        eprintln!(
-            "SKIP：AETHER_M7_09_REAL 未设置（opt-in 真实运行时断言；DoD4「≥1 真实运行时」）"
-        );
+        eprintln!("SKIP：AETHER_M7_09_REAL 未设置（opt-in 真实运行时断言；DoD4「≥1 真实运行时」）");
         return;
     }
     let Some(bundle) = std::env::var_os("AETHER_CLAUDE_ADAPTER").map(PathBuf::from) else {
@@ -766,11 +802,8 @@ fn real_claude_adapter_receives_composed_prompt_over_wire() {
         return;
     };
     let harness = Harness::open_real_adapter(&bundle);
-    std::fs::write(
-        harness.workspace.path().join("AGENTS.md"),
-        "工作区约定内容",
-    )
-    .expect("写入记忆文件");
+    std::fs::write(harness.workspace.path().join("AGENTS.md"), "工作区约定内容")
+        .expect("写入记忆文件");
     harness.bind_workspace(harness.workspace.path());
 
     let summary = harness.create_session_for("claude-code", Some(BUILTIN_CODE));
@@ -782,6 +815,8 @@ fn real_claude_adapter_receives_composed_prompt_over_wire() {
         client_msg_id: ulid::Ulid::new().to_string(),
         thinking_depth: None,
         references: Vec::new(),
+        provider_id: None,
+        model: None,
     });
     let tap_log = harness.tap_log.clone().expect("tap log 路径");
     let contains_create = || {
@@ -799,17 +834,21 @@ fn real_claude_adapter_receives_composed_prompt_over_wire() {
     let frame = text
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .find(|value| {
-            value["direction"] == "request" && value["method"] == "session.create"
-        })
+        .find(|value| value["direction"] == "request" && value["method"] == "session.create")
         .expect("session.create 请求帧");
     let prompt = frame["params"]["system_prompt"]
         .as_str()
         .expect("system_prompt 随 session.create 下发");
     let preset_marker = format!("<!-- aether:preset:{BUILTIN_CODE} -->");
-    assert!(prompt.contains(&preset_marker), "真实运行时收到预设块：{prompt}");
+    assert!(
+        prompt.contains(&preset_marker),
+        "真实运行时收到预设块：{prompt}"
+    );
     assert!(prompt.contains("你是资深软件工程师"));
-    assert!(prompt.contains("# 工作区约定"), "真实运行时收到记忆块：{prompt}");
+    assert!(
+        prompt.contains("# 工作区约定"),
+        "真实运行时收到记忆块：{prompt}"
+    );
     assert!(
         prompt.find(&preset_marker).unwrap() < prompt.find("# 工作区约定").unwrap(),
         "下发顺序：预设块 → 记忆块"
@@ -895,11 +934,8 @@ fn real_codex_adapter_passes_composed_prompt_to_cli() {
         return;
     };
     let harness = Harness::open_real_codex_adapter(&bundle);
-    std::fs::write(
-        harness.workspace.path().join("AGENTS.md"),
-        "工作区约定内容",
-    )
-    .expect("写入记忆文件");
+    std::fs::write(harness.workspace.path().join("AGENTS.md"), "工作区约定内容")
+        .expect("写入记忆文件");
     harness.bind_workspace(harness.workspace.path());
 
     let summary = harness.create_session_for("codex", Some(BUILTIN_REVIEW));
@@ -911,6 +947,8 @@ fn real_codex_adapter_passes_composed_prompt_to_cli() {
         client_msg_id: ulid::Ulid::new().to_string(),
         thinking_depth: None,
         references: Vec::new(),
+        provider_id: None,
+        model: None,
     });
 
     // 线协议侧：适配器收到合成提示词（预设块 → 记忆块）。
@@ -934,8 +972,14 @@ fn real_codex_adapter_passes_composed_prompt_to_cli() {
         .as_str()
         .expect("system_prompt 随 session.create 下发");
     let preset_marker = format!("<!-- aether:preset:{BUILTIN_REVIEW} -->");
-    assert!(prompt.contains(&preset_marker), "Codex 收到预设块：{prompt}");
-    assert!(prompt.contains("# 工作区约定"), "Codex 收到记忆块：{prompt}");
+    assert!(
+        prompt.contains(&preset_marker),
+        "Codex 收到预设块：{prompt}"
+    );
+    assert!(
+        prompt.contains("# 工作区约定"),
+        "Codex 收到记忆块：{prompt}"
+    );
 
     // CLI 侧：适配器把提示词映射为 `-c developer_instructions=<TOML 字符串>`。
     let cli_invocations = harness
@@ -972,7 +1016,10 @@ fn real_codex_adapter_passes_composed_prompt_to_cli() {
     // 值为 JSON 基本字符串（与 TOML 基本字符串等价）：直接按 JSON 字符串解码。
     let decoded: String =
         serde_json::from_str(encoded).expect("developer_instructions 为 TOML/JSON 基本字符串编码");
-    assert_eq!(decoded, prompt, "CLI developer_instructions 必须与线协议载荷一致");
+    assert_eq!(
+        decoded, prompt,
+        "CLI developer_instructions 必须与线协议载荷一致"
+    );
     assert!(
         !invocation["prompt"]
             .as_str()

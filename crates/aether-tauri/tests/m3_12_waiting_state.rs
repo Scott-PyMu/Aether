@@ -225,9 +225,8 @@ impl Harness {
     fn bind(&self, root: &Path) -> Value {
         // 夹具走长名形态（同 m3_08 口径，规避 CI 临时目录 8.3 短名对根校验的误伤）。
         let root_text = plain(&std::fs::canonicalize(root).expect("canonicalize 工作区根"));
-        let canonical =
-            aether_tauri::ipc::path::validate_workspace_root(root_text.as_str())
-                .expect("工作区根校验");
+        let canonical = aether_tauri::ipc::path::validate_workspace_root(root_text.as_str())
+            .expect("工作区根校验");
         self.backend
             .workspace_set(
                 &WorkspaceSetRequest {
@@ -264,7 +263,9 @@ impl Harness {
                 text: text.to_owned(),
                 client_msg_id: client_msg_id.to_owned(),
                 thinking_depth: None,
-            references: Vec::new(),
+                references: Vec::new(),
+                provider_id: None,
+                model: None,
             })
             .expect("session_send");
         ack["run_id"].as_str().expect("run_id").to_owned()

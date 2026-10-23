@@ -13,16 +13,18 @@
 
 import {
   Adapter,
+  CredentialClient,
   ERROR_CODES,
   RpcError,
   composePromptWithReferences,
   parseReferences,
   ulid,
   type AdapterRuntimeInfo,
+  type BrokerCredential,
   type EnvelopeContext,
 } from "@aether/adapter-sdk";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { cpSync, existsSync, mkdirSync, readdirSync, copyFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 import { DshAcpClient, AcpError, type AcpUpdateParams } from "./dsh-acp-client";
 import { DeltaChannel, DeltaReconciler, type DeltaFrame } from "./dsh-delta";
@@ -67,6 +69,8 @@ export const RUNTIME_CAPABILITIES: readonly string[] = [
   // M7-03/ADR-017：受控中断 + Mode R 原生恢复（ACP `session/resume`；
   // M2-11 真实证据：`real-dsh-*` Mode R PASS）。
   "pause_resume",
+  // ADR-028 v0.9：会话级多供应商（per-session DSH_HOME/profile + 按 run 取凭据）。
+  "multi_provider",
 ];
 
 /** DSH ACP 思考/推理配置项 id（`category=thought_level`；0.2.1-rc.2 实测）。 */
@@ -269,6 +273,10 @@ export interface DshAdapterOptions {
   runTimeoutMs?: number;
   permissionTimeoutMs?: number;
   runtimeVersion?: string;
+  /** ADR-028 v0.9：凭据客户端（缺省 = 从 `AETHER_CREDENTIAL_BROKER` 构造）。 */
+  credentialClient?: Pick<CredentialClient, "get"> | null;
+  /** ADR-028 v0.9：per-session DSH_HOME 根目录（缺省 = legacy home 的同级目录）。 */
+  sessionHomesDir?: string;
 }
 
 interface DshRunState {
@@ -310,6 +318,10 @@ interface DshSession {
   modelOptionEntries?: DshModelOptionEntry[];
   /** ACP 侧当前已生效的模型选项 value（同值跳过；未设置过为 undefined）。 */
   appliedModelValue?: string;
+  /** ADR-028 v0.9：会话级供应商 id 与 per-session profile（隔离 DSH_HOME）。 */
+  providerId?: string;
+  providerHome?: string;
+  providerPromptDir?: string;
   clientMsgIds: Map<string, string>;
   runs: Map<string, DshRunState>;
   observedTools: Set<string>;
@@ -323,6 +335,16 @@ interface PendingPermission {
 interface PluginHello {
   contract: string;
   dshVersion: string | null;
+}
+
+/** ADR-028 v0.9：每 provider 会话独立的 DSH ACP 进程/profile（禁止并发共享）。 */
+interface ProviderServer {
+  home: string;
+  profile: string;
+  promptDir: string;
+  deltaFile: string;
+  server: DshAcpClient;
+  channel: DeltaChannel;
 }
 
 export class DshAdapter {
@@ -340,6 +362,9 @@ export class DshAdapter {
   private server: DshAcpClient | null = null;
   private channel: DeltaChannel | null = null;
   private pluginHello: PluginHello | null = null;
+  /** ADR-028 v0.9：provider 会话 → 独立 ACP 进程/profile（按会话隔离）。 */
+  private readonly providerServers = new Map<string, ProviderServer>();
+  private readonly credentialClient: Pick<CredentialClient, "get"> | null;
   /**
    * M7-09/ADR-027：系统提示词侧信道目录（`<deltaDir>/prompts`；初始化时确定，
    * 经 `AETHER_DSH_PROMPT_DIR` 传给注入插件）。
@@ -353,6 +378,10 @@ export class DshAdapter {
     this.options = options;
     this.runTimeoutMs = options.runTimeoutMs ?? DEFAULT_RUN_TIMEOUT_MS;
     this.permissionTimeoutMs = options.permissionTimeoutMs ?? DEFAULT_PERMISSION_TIMEOUT_MS;
+    this.credentialClient =
+      options.credentialClient === undefined
+        ? CredentialClient.fromEnv()
+        : options.credentialClient;
     this.runtime = {
       name: RUNTIME_NAME,
       version: options.runtimeVersion ?? ADAPTER_VERSION,
@@ -602,6 +631,196 @@ export class DshAdapter {
     return this.performCreateSession(params);
   }
 
+  // ===== ADR-028 v0.9：provider 会话的 per-session ACP/profile =====
+
+  private serverFor(session: DshSession): DshAcpClient | null {
+    if (session.providerId !== undefined) {
+      return this.providerServers.get(session.id)?.server ?? null;
+    }
+    return this.server;
+  }
+
+  private async requireCredential(providerId: string): Promise<BrokerCredential> {
+    if (this.credentialClient === null) {
+      throw new RpcError(
+        ERROR_CODES.INTERNAL_ERROR,
+        "凭据 broker 未接线：多供应商会话不可用（不回退单供应商 env）",
+      );
+    }
+    try {
+      return await this.credentialClient.get(providerId, "dsh", "deepseek-harness");
+    } catch (error) {
+      throw new RpcError(
+        ERROR_CODES.INTERNAL_ERROR,
+        `获取供应商凭据失败：${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  private sessionHomeRoot(): string {
+    return (
+      this.options.sessionHomesDir ??
+      join(dirname(this.options.cli.home), "aether-dsh-sessions")
+    );
+  }
+
+  /**
+   * 首次 provider 会话：创建 per-session `DSH_HOME`/profile，复制/采用 legacy profile
+   * 原生状态（legacy 不动），物化插件 + overlay patch + 独立 ACP 进程。
+   */
+  private async ensureProviderServer(
+    sessionKey: string,
+    providerId: string,
+    model: string | undefined,
+    copyState: boolean,
+  ): Promise<ProviderServer> {
+    const existing = this.providerServers.get(sessionKey);
+    if (existing !== undefined) {
+      return existing;
+    }
+    const cli = this.options.cli;
+    const home = join(this.sessionHomeRoot(), sessionKey);
+    const profileDir = join(home, "profiles", cli.profile);
+    const legacyProfileDir = join(cli.home, "profiles", cli.profile);
+    if (!existsSync(profileDir)) {
+      mkdirSync(profileDir, { recursive: true });
+      if (copyState && existsSync(legacyProfileDir)) {
+        try {
+          cpSync(legacyProfileDir, profileDir, {
+            recursive: true,
+            force: false,
+            errorOnExist: false,
+            filter: (source) =>
+              !source.endsWith("aether-dsh-acp.patch.yml") &&
+              !source.includes("aether-dsh-sessions"),
+          });
+        } catch (error) {
+          rmSync(home, { recursive: true, force: true });
+          throw new RpcError(
+            ERROR_CODES.INTERNAL_ERROR,
+            `复制 DSH 原生会话状态失败（已清理新目录）：${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
+      // 顶层会话状态文件（DSH 的 session 索引/settings；不含 delta/插件产物）。
+      if (copyState) {
+        try {
+          for (const entry of readdirSync(cli.home, { withFileTypes: true })) {
+            if (!entry.isFile()) continue;
+            if (entry.name.startsWith("aether-dsh-") || entry.name.endsWith(".jsonl")) continue;
+            copyFileSync(join(cli.home, entry.name), join(home, entry.name));
+          }
+        } catch {
+          // 顶层状态复制失败不影响 profile（会话恢复退化由核心处理）。
+        }
+      }
+    }
+    try {
+      materializePlugin(profileDir);
+      materializePromptPlugin(profileDir);
+    } catch (error) {
+      rmSync(home, { recursive: true, force: true });
+      throw new RpcError(
+        ERROR_CODES.INTERNAL_ERROR,
+        `DSH provider profile 插件注入失败：${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    const credential = await this.requireCredential(providerId);
+    if (credential.base_url === undefined) {
+      throw new RpcError(
+        ERROR_CODES.INTERNAL_ERROR,
+        `供应商 ${providerId} 缺少 dsh 协议端点（无法物化 profile）`,
+      );
+    }
+    // DSH 版本门闩（每个 per-session ACP 进程独立校验；不静默降级）。
+    const version = cli.dshVersion ?? resolveDshVersion(cli.bin);
+    const latch = checkVersionLatch(version, cli.versionPin);
+    if (!latch.ok) {
+      rmSync(home, { recursive: true, force: true });
+      throw new RpcError(ERROR_CODES.VERSION_MISMATCH, latch.detail);
+    }
+    const providerKey = dshProviderKey(providerId);
+    const providerConfig = {
+      providers: {
+        [providerKey]: {
+          displayName: providerId,
+          apiKeyEnv: credential.auth_env,
+          api: "openai-completions",
+          baseURL: credential.base_url,
+          models: [],
+        },
+      },
+    };
+    const patchPath = writePatchFile(home, cli.profile, {
+      provider: providerKey,
+      ...(model !== undefined ? { model } : {}),
+      providerConfig,
+    });
+    const deltaDir = join(home, "aether-bridge");
+    const promptDir = join(deltaDir, "prompts");
+    mkdirSync(promptDir, { recursive: true });
+    const deltaFile = join(deltaDir, `delta-${process.pid}-${Date.now()}.jsonl`);
+    const channel = new DeltaChannel(deltaFile, {
+      onFrame: (frame) => this.onDeltaFrame(frame),
+      onMalformedLine: (line) =>
+        this.options.stderr?.(`[dsh-delta] 无法解析的帧：${line.slice(0, 200)}`),
+    });
+    channel.start();
+    const server = new DshAcpClient({
+      bin: cli.bin,
+      ...(cli.nodeBin !== undefined ? { nodeBin: cli.nodeBin } : {}),
+      profile: cli.profile,
+      patchPath,
+      home,
+      workspace: cli.workspace,
+      deltaFile,
+      extraArgs: cli.extraArgs,
+      env: {
+        [PROMPT_DIR_ENV]: promptDir,
+        [credential.auth_env]: credential.api_key,
+      },
+      onUpdate: (params) => this.onAcpUpdate(params),
+      onPermissionRequest: (params, requestId) => this.onPermissionRequest(params, requestId),
+      onStderr: (line) => this.options.stderr?.(line),
+      onClose: (detail) => this.onServerClosed(detail),
+    });
+    try {
+      await server.request(
+        "initialize",
+        {
+          protocolVersion: 1,
+          clientCapabilities: {},
+          clientInfo: { name: "aether-adapter-dsh", version: ADAPTER_VERSION },
+        },
+        10_000,
+      );
+    } catch (error) {
+      await server.close(2_000);
+      channel.stop();
+      rmSync(home, { recursive: true, force: true });
+      throw new RpcError(
+        ERROR_CODES.INTERNAL_ERROR,
+        `DSH provider ACP initialize 失败（已清理 profile）：${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    const state: ProviderServer = {
+      home,
+      profile: cli.profile,
+      promptDir,
+      deltaFile,
+      server,
+      channel,
+    };
+    this.providerServers.set(sessionKey, state);
+    return state;
+  }
+
   private async performCreateSession(params: unknown): Promise<Record<string, unknown>> {
     await this.ensureInitialized();
     const input = (params ?? {}) as {
@@ -611,6 +830,7 @@ export class DshAdapter {
       native_id?: unknown;
       thinking_depth?: unknown;
       system_prompt?: unknown;
+      provider_id?: unknown;
     };
     const requested = input.native_id;
     if (requested !== undefined && (typeof requested !== "string" || requested.length === 0)) {
@@ -618,16 +838,50 @@ export class DshAdapter {
     }
     const model = typeof input.model === "string" && input.model.length > 0 ? input.model : undefined;
     const thinkingDepth = parseThinkingDepth(input.thinking_depth);
-    const server = this.server;
+    const providerId =
+      typeof input.provider_id === "string" && input.provider_id.length > 0
+        ? input.provider_id
+        : undefined;
+    const existingSession =
+      typeof requested === "string" ? this.sessions.get(requested) : undefined;
+    if (
+      providerId !== undefined &&
+      existingSession !== undefined &&
+      [...existingSession.runs.values()].some((run) => !run.finished)
+    ) {
+      throw new RpcError(
+        ERROR_CODES.SESSION_NOT_FOUND,
+        "会话有在途 run：禁止切换供应商/复制状态（session_busy）",
+      );
+    }
+    const providerKey = requested ?? ulid();
+    const providerServer =
+      providerId !== undefined
+        ? await this.ensureProviderServer(
+            providerKey,
+            providerId,
+            model,
+            typeof requested === "string",
+          )
+        : null;    const server = providerServer?.server ?? this.server;
     if (!server) throw new RpcError(ERROR_CODES.INTERNAL_ERROR, "DSH ACP 未连接");
+    const promptDir = providerServer?.promptDir ?? this.promptDir;
+    const createParams = {
+      cwd: this.options.cli.workspace,
+      mcpServers: [] as unknown[],
+      ...(providerId !== undefined
+        ? { provider: dshProviderKey(providerId), ...(model !== undefined ? { model } : {}) }
+        : {}),
+    };
     let sessionId: string;
     let resumed = false;
     let configOptions: unknown;
     try {
       if (typeof requested === "string") {
         const result = (await this.requestWithProviderWait(
+          server,
           "session/resume",
-          { sessionId: requested, cwd: this.options.cli.workspace, mcpServers: [] },
+          { sessionId: requested, ...createParams },
           15_000,
         )) as { sessionId?: string; configOptions?: unknown } | null;
         sessionId = result?.sessionId ?? requested;
@@ -635,8 +889,9 @@ export class DshAdapter {
         resumed = true;
       } else {
         const result = (await this.requestWithProviderWait(
+          server,
           "session/new",
-          { cwd: this.options.cli.workspace, mcpServers: [] },
+          createParams,
           30_000,
         )) as { sessionId?: string; configOptions?: unknown } | null;
         if (!result?.sessionId) {
@@ -655,6 +910,10 @@ export class DshAdapter {
       }
       throw error;
     }
+    // per-session ACP 进程按 sessionId 复用（provider 会话 id = 会话键）。
+    if (providerServer !== null) {
+      this.providerServers.set(sessionId, providerServer);
+    }
     const reasoningValues = dshReasoningValuesFrom(configOptions);
     // M7-06/ADR-024 DoD4：`session/new|resume` 广告的模型选项（provider×model）。
     const modelOptionEntries = modelOptionEntriesFrom(configOptions);
@@ -669,8 +928,8 @@ export class DshAdapter {
     // = 注入是否生效（null=未下发 / true=侧信道写入成功 / false=写入失败或目录缺失）。
     let systemPromptEffective: boolean | null = null;
     if (systemPrompt !== undefined) {
-      if (this.promptDir !== null) {
-        const file = promptFilePath(this.promptDir, sessionId);
+      if (promptDir !== null) {
+        const file = promptFilePath(promptDir, sessionId);
         try {
           writeFileSync(file, systemPrompt, "utf8");
           systemPromptFile = file;
@@ -687,10 +946,10 @@ export class DshAdapter {
         systemPromptEffective = false;
         this.options.stderr?.("[dsh] 侧信道目录未初始化：系统提示词注入跳过（继续会话）");
       }
-    } else if (this.promptDir !== null) {
+    } else if (promptDir !== null) {
       // 恢复会话但核心未下发提示词：清理上次进程可能残留的同 id 侧信道文件，
       // 避免旧提示词在下一次组装时被意外注入。
-      removePromptFile(promptFilePath(this.promptDir, sessionId));
+      removePromptFile(promptFilePath(promptDir, sessionId));
     }
     const session: DshSession = {
       id: sessionId,
@@ -702,6 +961,10 @@ export class DshAdapter {
       ...(modelOptionEntries.length > 0 ? { modelOptionEntries } : {}),
       ...(systemPrompt !== undefined ? { systemPrompt } : {}),
       ...(systemPromptFile !== undefined ? { systemPromptFile } : {}),
+      ...(providerId !== undefined ? { providerId } : {}),
+      ...(providerServer !== null
+        ? { providerHome: providerServer.home, providerPromptDir: providerServer.promptDir }
+        : {}),
       clientMsgIds: new Map(),
       runs: new Map(),
       observedTools: new Set(),
@@ -741,10 +1004,10 @@ export class DshAdapter {
     model: string,
     source: string,
   ): Promise<void> {
-    const envProviderId = process.env.AETHER_PROVIDER_ID;
+    const providerId = session.providerId ?? process.env.AETHER_PROVIDER_ID;
     const preferredProvider =
-      envProviderId !== undefined && envProviderId.length > 0
-        ? dshProviderKey(envProviderId)
+      providerId !== undefined && providerId.length > 0
+        ? dshProviderKey(providerId)
         : undefined;
     const entry = resolveModelOption(session.modelOptionEntries ?? [], model, preferredProvider);
     if (entry === undefined) {
@@ -754,23 +1017,23 @@ export class DshAdapter {
       return;
     }
     if (entry.value === session.appliedModelValue) return;
-    if (await this.setModelOption(session.id, entry.value, source)) {
+    if (await this.setModelOption(session, entry.value, source)) {
       session.appliedModelValue = entry.value;
     }
   }
 
   /** `session/set_config_option`（M7-06：`model`；失败仅诊断，不阻断 run）。 */
   private async setModelOption(
-    sessionId: string,
+    session: DshSession,
     value: string,
     source: string,
   ): Promise<boolean> {
-    const server = this.server;
+    const server = this.serverFor(session);
     if (!server || server.isClosed) return false;
     try {
       await server.request(
         "session/set_config_option",
-        { sessionId, configId: DSH_MODEL_CONFIG_ID, value },
+        { sessionId: session.id, configId: DSH_MODEL_CONFIG_ID, value },
         MODEL_SET_TIMEOUT_MS,
       );
       return true;
@@ -799,7 +1062,7 @@ export class DshAdapter {
     if (depth === undefined) return;
     const value = dshReasoningValueForDepth(depth, session.reasoningValues ?? []);
     if (value === undefined || value === session.appliedReasoningValue) return;
-    if (await this.setReasoningEffort(session.id, value, source)) {
+    if (await this.setReasoningEffort(session, value, source)) {
       session.appliedReasoningValue = value;
     }
   }
@@ -809,16 +1072,16 @@ export class DshAdapter {
    * 失败仅写 stderr 诊断，不阻断 run（能力门非阻断语义）。
    */
   private async setReasoningEffort(
-    sessionId: string,
+    session: DshSession,
     value: string,
     source: string,
   ): Promise<boolean> {
-    const server = this.server;
+    const server = this.serverFor(session);
     if (!server || server.isClosed) return false;
     try {
       await server.request(
         "session/set_config_option",
-        { sessionId, configId: DSH_REASONING_CONFIG_ID, value },
+        { sessionId: session.id, configId: DSH_REASONING_CONFIG_ID, value },
         REASONING_SET_TIMEOUT_MS,
       );
       return true;
@@ -836,12 +1099,11 @@ export class DshAdapter {
    * 做有界重试（≤ [`SESSION_PROVIDER_WAIT_MS`]），其余错误立即上抛。
    */
   private async requestWithProviderWait(
+    server: DshAcpClient,
     method: string,
     params: unknown,
     timeoutMs: number,
   ): Promise<unknown> {
-    const server = this.server;
-    if (!server) throw new RpcError(ERROR_CODES.INTERNAL_ERROR, "DSH ACP 未连接");
     const deadline = Date.now() + SESSION_PROVIDER_WAIT_MS;
     for (;;) {
       try {
@@ -883,7 +1145,7 @@ export class DshAdapter {
     if (typeof input.text !== "string") {
       throw new RpcError(ERROR_CODES.INVALID_PARAMS, "session.send 缺少 text");
     }
-    if (!this.server || this.server.isClosed) {
+    if (!this.serverFor(session) || this.serverFor(session)?.isClosed === true) {
       throw new RpcError(ERROR_CODES.INTERNAL_ERROR, "DSH ACP 未连接");
     }
     const clientMsgId =
@@ -929,7 +1191,7 @@ export class DshAdapter {
     text: string,
     thinkingOverride?: number,
   ): Promise<void> {
-    const server = this.server;
+    const server = this.serverFor(session);
     if (!server) return;
     try {
       // M3-10/ADR-010：覆盖仅本次 run（不回写会话级 `session.thinkingDepth`）；本次生效值
@@ -948,7 +1210,11 @@ export class DshAdapter {
     } catch (error) {
       run.promptError = error instanceof Error ? error.message : String(error);
     }
-    this.channel?.poll();
+    const channel =
+      session.providerId !== undefined
+        ? this.providerServers.get(session.id)?.channel
+        : this.channel;
+    channel?.poll();
     await this.finalizeRun(run);
   }
 
@@ -1004,18 +1270,19 @@ export class DshAdapter {
     for (const item of active) {
       item.interrupted = true;
     }
-    this.server?.notify("session/cancel", { sessionId: session.id });
+    const server = this.serverFor(session);
+    server?.notify("session/cancel", { sessionId: session.id });
     const settle = this.waitSettle(run, INTERRUPT_SETTLE_TIMEOUT_MS);
     return settle.then(async (settled) => {
       if (!settled) {
         // 协议级取消未生效（≤5s）→ 整树回收兜底（D5）。
-        await this.server?.kill();
+        await server?.kill();
       }
       return { interrupted: true, run_id: run.runId };
     });
   }
 
-  private onDispose(params: unknown): Promise<Record<string, unknown>> {
+  private async onDispose(params: unknown): Promise<Record<string, unknown>> {
     const input = (params ?? {}) as { session_id?: unknown };
     const sessionId = typeof input.session_id === "string" ? input.session_id : "";
     const session = this.sessions.get(sessionId);
@@ -1026,11 +1293,23 @@ export class DshAdapter {
     for (const run of session.runs.values()) {
       run.interrupted = true;
     }
-    this.server?.request("session/close", { sessionId: session.id }, 5_000).catch(() => undefined);
+    this.serverFor(session)
+      ?.request("session/close", { sessionId: session.id }, 5_000)
+      .catch(() => undefined);
     // M7-09/ADR-027：会话销毁即清理侧信道提示词文件（不保留用户提示词副本）。
     removePromptFile(session.systemPromptFile);
     this.sessions.delete(sessionId);
     this.releaseRuns(session);
+    // ADR-028 v0.9：dispose 清理 per-session DSH profile + 独立 ACP 进程；legacy 不动。
+    if (session.providerId !== undefined) {
+      const provider = this.providerServers.get(session.id);
+      if (provider !== undefined) {
+        this.providerServers.delete(session.id);
+        provider.channel.stop();
+        await provider.server.close(2_000);
+        rmSync(provider.home, { recursive: true, force: true });
+      }
+    }
     return Promise.resolve({ disposed: true, residual_channels: this.residualChannels() });
   }
 
@@ -1054,7 +1333,7 @@ export class DshAdapter {
       cancelled.push(run.runId);
     }
     if (cancelled.length > 0) {
-      this.server?.notify("session/cancel", { sessionId: session.id });
+      this.serverFor(session)?.notify("session/cancel", { sessionId: session.id });
     }
     return { paused: true, session_id: session.id, cancelled_runs: cancelled };
   }
@@ -1074,6 +1353,12 @@ export class DshAdapter {
     }
     this.sessions.clear();
     this.pendingPermissions.clear();
+    for (const [sessionId, provider] of this.providerServers) {
+      this.providerServers.delete(sessionId);
+      provider.channel.stop();
+      await provider.server.close(2_000);
+      rmSync(provider.home, { recursive: true, force: true });
+    }
     await this.cleanupServer();
     this.adapter.stop();
     this.options.exit?.(0);

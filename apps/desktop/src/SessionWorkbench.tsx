@@ -44,7 +44,18 @@ import { permissionIpc as productionPermissionIpc, type PermissionIpc } from "./
 import { PermissionModeSelector } from "./PermissionModeSelector";
 import { PermissionPanel } from "./PermissionPanel";
 import { presetsIpc as productionPresetsIpc, type PresetEntry, type PresetsIpc } from "./presets";
-import { providersIpc as productionProvidersIpc, type ProvidersIpc } from "./providers";
+import {
+  firstEnabledModel,
+  parseProviderSelectionMemory,
+  providerSupportsRuntime,
+  providersForRuntime,
+  providersIpc as productionProvidersIpc,
+  rememberedProvider,
+  requiresProviderSelection,
+  type ProviderEntry,
+  type ProviderSelectionMemory,
+  type ProvidersIpc,
+} from "./providers";
 import { RuntimePanel } from "./RuntimePanel";
 import {
   normalizePermissionMode,
@@ -76,7 +87,11 @@ import {
   groupSessions,
   SESSION_GROUP_TITLES,
 } from "./sessionGroups";
-import { settingsIpc as productionSettingsIpc, type SettingsIpc } from "./settings";
+import {
+  settingsIpc as productionSettingsIpc,
+  UI_PROVIDER_SELECTION_KEY,
+  type SettingsIpc,
+} from "./settings";
 import { SplitPane } from "./SplitPane";
 import { TopBar } from "./TopBar";
 import { generateUlid } from "./ulid";
@@ -291,6 +306,15 @@ export function SessionWorkbench({
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   /** ADR-028：选择器选中的模型所属供应商（新建会话透传 `provider_id`）。 */
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
+  /** ADR-028 v0.9：供应商目录（运行时过滤/记忆预填/旧会话补选共用）。 */
+  const [providerCatalog, setProviderCatalog] = useState<ProviderEntry[]>([]);
+  /** ADR-028 v0.9：全局供应商记忆（`ui.provider_selection`；runtime → provider_id）。 */
+  const [providerMemory, setProviderMemory] = useState<ProviderSelectionMemory>({});
+  /** 目录/记忆是否已加载（预填仅在加载完成后执行一次，不覆盖用户后续选择）。 */
+  const [providerCatalogLoaded, setProviderCatalogLoaded] = useState(false);
+  /** ADR-028 v0.9：旧会话补选草稿（仅 provider 为空时允许 provider 切换）。 */
+  const [reselectProviderId, setReselectProviderId] = useState<string | null>(null);
+  const [reselectModelId, setReselectModelId] = useState<string | null>(null);
   const [titleDraft, setTitleDraft] = useState("");
   /**
    * M7-09/ADR-026：Agent 预设清单（新建会话入口可选；读取失败静默降级为空清单——
@@ -378,6 +402,25 @@ export function SessionWorkbench({
     () => sessions.find((session) => session.id === activeSessionId) ?? null,
     [sessions, activeSessionId],
   );
+  /** ADR-028 v0.9：活动会话的供应商/模型状态（只读、补选与优先级）。 */
+  const activeRequiresProvider =
+    activeSession?.provider_state !== undefined &&
+    requiresProviderSelection(activeSession.runtime_id);
+  const activeProviderState = activeSession?.provider_state ?? "missing";
+  const activeModelState = activeSession?.model_state ?? "missing";
+  const activeProvider = activeSession?.provider_id
+    ? (providerCatalog.find((provider) => provider.id === activeSession.provider_id) ?? null)
+    : null;
+  const activeProviderModels = activeProvider?.models.filter((model) => model.enabled) ?? [];
+  const reselectOptions = useMemo(
+    () =>
+      activeSession
+        ? providersForRuntime(providerCatalog, activeSession.runtime_id)
+        : [],
+    [activeSession, providerCatalog],
+  );
+  const selectionRunInFlight =
+    activeSession?.status === "running" || activeSession?.status === "waiting_permission";
   // M7-04：布局恢复（settings `ui.layout`；损坏回退默认布局，ADR-018 附录 A-6）。
   // 仅在挂载时读取一次；后续由显式操作写回（失败静默，不阻断工作台）。
   // 注意：无持久化布局（首次运行）时**不覆盖**已发生的 P0 自动选中；读取与
@@ -421,6 +464,25 @@ export function SessionWorkbench({
       active = false;
     };
   }, [presetsIpcProp, presetsVersion]);
+  // ADR-028 v0.9：供应商目录 + 全局供应商记忆（读取失败静默降级：不自动选择）。
+  useEffect(() => {
+    let active = true;
+    void Promise.all([
+      providersIpcProp.list().catch(() => [] as ProviderEntry[]),
+      settingsIpcProp
+        .get(UI_PROVIDER_SELECTION_KEY)
+        .then((result) => parseProviderSelectionMemory(result.value))
+        .catch(() => ({}) as ProviderSelectionMemory),
+    ]).then(([providers, memory]) => {
+      if (!active) return;
+      setProviderCatalog(providers);
+      setProviderMemory(memory);
+      setProviderCatalogLoaded(true);
+    });
+    return () => {
+      active = false;
+    };
+  }, [providersIpcProp, settingsIpcProp]);
   /** M7-04：打开的标签会话（按标签顺序；过滤已不存在的会话）。 */
   const tabSessions = useMemo(() => {
     const byId = new Map(sessions.map((session) => [session.id, session]));
@@ -442,6 +504,14 @@ export function SessionWorkbench({
     () => runtimes.find((runtime) => runtime.id === selectedRuntime) ?? null,
     [runtimes, selectedRuntime],
   );
+  /** ADR-028 v0.9：新建会话的供应商选择与必选提示（静态能力，不依赖 hello/ready）。 */
+  const createRequiresProvider = autoRoute || requiresProviderSelection(selectedRuntime);
+  const availableCreateProviders = useMemo(
+    () => providersForRuntime(providerCatalog, autoRoute ? null : selectedRuntime),
+    [autoRoute, providerCatalog, selectedRuntime],
+  );
+  const createProviderMissing = createRequiresProvider && !selectedProviderId;
+  const createModelMissing = createRequiresProvider && modelDraft.trim().length === 0;
   const thinkingSupported = supportsThinkingDepth(selectedRuntimeInfo);
   const thinkingPercent =
     (thinkingDepth / THINKING_DEPTH_MAX) * 100;
@@ -829,6 +899,56 @@ export function SessionWorkbench({
     setSelectedProviderId(providerId);
   }, []);
 
+  /** ADR-028 v0.9：显式选择供应商（新建会话）；默认带出该供应商首个启用模型。 */
+  const onSelectCreateProvider = useCallback(
+    (providerId: string) => {
+      setSelectedProviderId(providerId);
+      const provider = providerCatalog.find((entry) => entry.id === providerId) ?? null;
+      const model = firstEnabledModel(provider);
+      setSelectedModelId(model?.model_id ?? null);
+      setModelDraft(model?.model_id ?? "");
+    },
+    [providerCatalog],
+  );
+
+  /** ADR-028 v0.9：旧会话补选供应商（仅 provider 为空时显示；带出首个模型）。 */
+  const onSelectReselectProvider = useCallback(
+    (providerId: string) => {
+      setReselectProviderId(providerId || null);
+      const provider = providerCatalog.find((entry) => entry.id === providerId) ?? null;
+      const model = firstEnabledModel(provider);
+      setReselectModelId(model?.model_id ?? null);
+    },
+    [providerCatalog],
+  );
+
+  /** ADR-028 v0.9：切换运行时 → 记忆预填（失效不自动回退；无记忆保持空选择）。 */
+  const lastPrefillRuntime = useRef<string>("");
+  useEffect(() => {
+    if (autoRoute) {
+      lastPrefillRuntime.current = "";
+      return;
+    }
+    if (!providerCatalogLoaded || !selectedRuntime || lastPrefillRuntime.current === selectedRuntime) {
+      return;
+    }
+    lastPrefillRuntime.current = selectedRuntime;
+    const remembered = rememberedProvider(providerCatalog, selectedRuntime, providerMemory);
+    if (remembered !== null) {
+      setSelectedProviderId(remembered.id);
+      const model = firstEnabledModel(remembered);
+      if (model !== null) {
+        setSelectedModelId(model.model_id);
+        setModelDraft(model.model_id);
+      }
+    } else {
+      // 供应商失效/无记忆：不自动选择（ADR-028：不得自动回退到其他 provider）。
+      setSelectedProviderId(null);
+      setSelectedModelId(null);
+      setModelDraft("");
+    }
+  }, [autoRoute, providerCatalog, providerCatalogLoaded, providerMemory, selectedRuntime]);
+
   /** M3-11：手动输入模型（保留 UI-05 路径）；与选择器选择不一致时清空选择态。 */
   const onModelDraftChange = useCallback((value: string) => {
     setModelDraft(value);
@@ -856,13 +976,31 @@ export function SessionWorkbench({
     }
     const title = titleDraft.trim() || `会话 ${new Date().toLocaleTimeString()}`;
     const model = modelDraft.trim();
-    // ADR-028：仅对声明 `multi_provider` 的显式运行时透传 provider_id；
-    // 自动路由/Codex/DSH 保持旧单供应商路径（由核心按协议端点注入）。
-    const selectedRuntimeInfo = selectedRuntime
-      ? runtimes.find((runtime) => runtime.id === selectedRuntime)
-      : undefined;
-    const runtimeSupportsMultiProvider =
-      !autoRoute && (selectedRuntimeInfo?.capabilities.includes("multi_provider") ?? false);
+    // ADR-028 v0.9：三官方运行时（以及自动路由）新建会话 provider + model 必选；
+    // 无有效选择时前端先拒绝（后端仍为权威校验方）。
+    const requiresProvider = autoRoute || requiresProviderSelection(selectedRuntime);
+    if (requiresProvider) {
+      if (!selectedProviderId) {
+        setErrorCode(null);
+        setError("请选择供应商");
+        return;
+      }
+      if (!model) {
+        setErrorCode(null);
+        setError("请选择模型");
+        return;
+      }
+      const provider = providerCatalog.find((entry) => entry.id === selectedProviderId);
+      if (
+        !provider ||
+        !provider.enabled ||
+        (!autoRoute && !providerSupportsRuntime(provider, selectedRuntime))
+      ) {
+        setErrorCode("invalid_value");
+        setError("供应商不可用（已停用/已删除/不支持当前运行时协议）；请重新选择");
+        return;
+      }
+    }
     // M7-09/ADR-026：所选预设（清单刷新后已消失的 id 不再透传，避免无谓的
     // `preset_not_found`；服务端仍为权威校验方）。
     const selectedPresetId =
@@ -876,10 +1014,9 @@ export function SessionWorkbench({
         ...(autoRoute ? {} : { runtime_id: selectedRuntime }),
         title,
         ...(model ? { model } : {}),
-        // ADR-028：模型选择器选中的 provider（显式消歧；仅 multi_provider 运行时）。
-        ...(model && selectedProviderId && runtimeSupportsMultiProvider
-          ? { provider_id: selectedProviderId }
-          : {}),
+        // ADR-028 v0.9：显式消歧 provider + model（三官方运行时/自动路由必选；
+        // 其他运行时仅在用户显式选择时透传，由核心按能力校验）。
+        ...(selectedProviderId ? { provider_id: selectedProviderId } : {}),
         // M3-10/ADR-010：会话级思考深度随 `session_create` 透传（缺省 2）。
         thinking_depth: thinkingDepth,
         // M6-01/ADR-014：会话级权限模式随 `session_create` 透传（缺省 workspace_write）。
@@ -887,6 +1024,19 @@ export function SessionWorkbench({
         // M7-09/ADR-026：预设随 `session_create` 透传（合成提示词由核心完成）。
         ...(selectedPresetId ? { preset_id: selectedPresetId } : {}),
       });
+      // ADR-028 v0.9：首次成功创建后写入全局记忆（runtime → provider；跨工作区）。
+      if (requiresProvider && selectedProviderId) {
+        const runtimeKey = created.runtime_id || selectedRuntime;
+        if (runtimeKey) {
+          const next = { ...providerMemory, [runtimeKey]: selectedProviderId };
+          setProviderMemory(next);
+          void settingsIpcProp
+            .set(UI_PROVIDER_SELECTION_KEY, JSON.stringify(next))
+            .catch(() => {
+              // 记忆写入失败不阻断创建（下次需重新选择）。
+            });
+        }
+      }
       // M3-10：同步判定路径非阻断警告（delta 等；延迟判定路径无警告，以回显为准）。
       setThinkingWarning(thinkingWarningOf(created.warnings));
       // T1 埋点（M4-04 验收读取）：会话创建 P50<500ms / P95<2s 的 UI 侧锚点。
@@ -913,9 +1063,12 @@ export function SessionWorkbench({
     modelDraft,
     permissionMode,
     presets,
+    providerCatalog,
+    providerMemory,
     refreshSessions,
     reportError,
     runtimes,
+    settingsIpcProp,
     selectedRuntime,
     selectedProviderId,
     thinkingDepth,
@@ -930,11 +1083,36 @@ export function SessionWorkbench({
     sendInFlight.current = true;
     setSending(true);
     clearError();
+    // ADR-028 v0.9：只读（provider 失效）禁止发送；旧会话 provider/model 补选经
+    // `session_send.provider_id/model` 承载（不新增命令）。
+    if (activeRequiresProvider && activeSession?.provider_state === "invalid") {
+      sendInFlight.current = false;
+      setSending(false);
+      setErrorCode("invalid_value");
+      setError("供应商已停用/删除：当前会话只读（可中断在途任务），请重选供应商或新建会话");
+      return;
+    }
+    const selection: { provider_id?: string; model?: string } = {};
+    if (activeRequiresProvider && !activeSession?.provider_id) {
+      if (reselectProviderId) {
+        selection.provider_id = reselectProviderId;
+      }
+    }
+    if (
+      activeRequiresProvider &&
+      activeSession &&
+      (!activeSession.provider_id || activeSession.model_state !== "active")
+    ) {
+      if (reselectModelId) {
+        selection.model = reselectModelId;
+      }
+    }
     try {
       const ack = await ipc.sendMessage({
         session_id: activeSessionId,
         text,
         client_msg_id: generateUlid(),
+        ...selection,
         // M3-10/ADR-010：本次 run 覆盖（仅本次 run，不回写会话级值）。
         thinking_depth: thinkingDepth,
         // M7-06/ADR-024：随消息附带的文件引用（空数组省略字段）。
@@ -942,6 +1120,8 @@ export function SessionWorkbench({
       });
       setThinkingWarning(thinkingWarningOf(ack.warnings));
       setDraft("");
+      setReselectProviderId(null);
+      setReselectModelId(null);
       // M7-06：引用为一次性上下文（不落库、不跨 run；发送成功后清空）。
       setPendingReferences([]);
       setLastAck({
@@ -973,6 +1153,8 @@ export function SessionWorkbench({
       setSending(false);
     }
   }, [
+    activeRequiresProvider,
+    activeSession,
     activeSessionId,
     clearError,
     draft,
@@ -980,6 +1162,8 @@ export function SessionWorkbench({
     pendingReferences,
     refreshSessions,
     reportError,
+    reselectModelId,
+    reselectProviderId,
     thinkingDepth,
   ]);
 
@@ -1141,6 +1325,14 @@ export function SessionWorkbench({
       if (retryingRunId !== null) {
         return;
       }
+      if (
+        activeRequiresProvider &&
+        (activeProviderState === "invalid" || activeModelState !== "active")
+      ) {
+        setErrorCode("invalid_value");
+        setError("供应商失效或模型失效/缺失：请先补选后再重试");
+        return;
+      }
       setRetryingRunId(runId);
       clearError();
       try {
@@ -1152,7 +1344,17 @@ export function SessionWorkbench({
         setRetryingRunId(null);
       }
     },
-    [clearError, ipc, refreshSessions, reportError, retryingRunId],
+    [
+      activeModelState,
+      activeProviderState,
+      activeRequiresProvider,
+      activeSession,
+      clearError,
+      ipc,
+      refreshSessions,
+      reportError,
+      retryingRunId,
+    ],
   );
 
   const interruptible =
@@ -1460,10 +1662,60 @@ export function SessionWorkbench({
               value={titleDraft}
               onChange={(event) => setTitleDraft(event.target.value)}
             />
+            {createRequiresProvider ? (
+              <select
+                data-testid="session-provider-select"
+                data-context="create"
+                data-provider-id={selectedProviderId ?? ""}
+                data-disabled={String(availableCreateProviders.length === 0)}
+                data-invalid={String(
+                  selectedProviderId !== null &&
+                    !availableCreateProviders.some(
+                      (provider) => provider.id === selectedProviderId,
+                    ),
+                )}
+                aria-label="供应商"
+                value={selectedProviderId ?? ""}
+                disabled={availableCreateProviders.length === 0}
+                onChange={(event) => onSelectCreateProvider(event.target.value)}
+              >
+                <option value="">
+                  {availableCreateProviders.length === 0
+                    ? "无可用供应商（请先在设置中配置并启用）"
+                    : "选择供应商"}
+                </option>
+                {availableCreateProviders.map((provider) => (
+                  <option key={provider.id} value={provider.id}>
+                    {provider.name}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+            {createProviderMissing ? (
+              <p
+                className="provider-required-notice"
+                data-testid="provider-required-notice"
+                data-state="missing"
+                data-field="provider"
+                role="status"
+              >
+                请选择供应商
+              </p>
+            ) : createModelMissing ? (
+              <p
+                className="provider-required-notice"
+                data-testid="provider-required-notice"
+                data-state="missing"
+                data-field="model"
+                role="status"
+              >
+                请选择模型
+              </p>
+            ) : null}
             <input
               type="text"
               data-testid="session-model-input"
-              placeholder="会话级模型（可选，覆盖全局默认）"
+              placeholder={createRequiresProvider ? "模型（必选）" : "会话级模型（可选，覆盖全局默认）"}
               value={modelDraft}
               onChange={(event) => onModelDraftChange(event.target.value)}
             />
@@ -1484,7 +1736,12 @@ export function SessionWorkbench({
                 </option>
               ))}
             </select>
-            <button type="button" data-testid="session-create-submit" onClick={onCreateSession}>
+            <button
+              type="button"
+              data-testid="session-create-submit"
+              disabled={createProviderMissing || createModelMissing}
+              onClick={onCreateSession}
+            >
               新建会话
             </button>
           </div>
@@ -1666,6 +1923,119 @@ export function SessionWorkbench({
             </p>
           ) : null}
 
+          {activeSession && activeRequiresProvider ? (
+            <div className="session-provider-bar">
+              <span
+                data-testid="session-provider-current"
+                data-provider-id={activeSession.provider_id ?? ""}
+                data-state={
+                  activeProviderState === "invalid"
+                    ? "readonly"
+                    : activeProviderState === "active"
+                      ? "active"
+                      : "invalid"
+                }
+                data-model-state={activeModelState}
+              >
+                供应商：{activeSession.provider_name ?? activeSession.provider_id ?? "未选择"} · 模型：
+                {activeSession.model ?? "未选择"}
+              </span>
+              {activeProviderState === "invalid" ? (
+                <p
+                  className="session-provider-readonly"
+                  data-testid="session-provider-readonly"
+                  data-reason={
+                    activeSession.provider_id
+                      ? activeSession.provider_name
+                        ? "provider_disabled"
+                        : "provider_deleted"
+                      : "provider_missing"
+                  }
+                  role="alert"
+                >
+                  供应商已停用/删除：当前会话只读（可查看历史、可中断在途任务）；禁止发送/重试/恢复及补选。
+                </p>
+              ) : null}
+              {activeProviderState !== "invalid" && !activeSession.provider_id ? (
+                <>
+                  <select
+                    data-testid="session-provider-select"
+                    data-context="reselect"
+                    data-provider-id={reselectProviderId ?? ""}
+                    data-busy={selectionRunInFlight ? "run_in_flight" : undefined}
+                    data-disabled={String(selectionRunInFlight)}
+                    aria-label="补选供应商"
+                    value={reselectProviderId ?? ""}
+                    disabled={selectionRunInFlight || reselectOptions.length === 0}
+                    onChange={(event) => onSelectReselectProvider(event.target.value)}
+                  >
+                    <option value="">
+                      {reselectOptions.length === 0 ? "无可用供应商" : "补选供应商"}
+                    </option>
+                    {reselectOptions.map((provider) => (
+                      <option key={provider.id} value={provider.id}>
+                        {provider.name}
+                      </option>
+                    ))}
+                  </select>
+                  {!reselectProviderId ? (
+                    <p
+                      className="provider-required-notice"
+                      data-testid="provider-required-notice"
+                      data-state="missing"
+                      data-field="provider"
+                      role="status"
+                    >
+                      请选择供应商
+                    </p>
+                  ) : null}
+                </>
+              ) : null}
+              {activeProviderState !== "invalid" &&
+              activeSession.provider_id &&
+              activeModelState !== "active" ? (
+                <>
+                  <select
+                    data-testid="session-model-reselect"
+                    data-model-state={activeModelState}
+                    data-busy={selectionRunInFlight ? "run_in_flight" : undefined}
+                    aria-label="补选模型"
+                    value={reselectModelId ?? ""}
+                    disabled={selectionRunInFlight || activeProviderModels.length === 0}
+                    onChange={(event) => setReselectModelId(event.target.value || null)}
+                  >
+                    <option value="">
+                      {activeProviderModels.length === 0 ? "无可用模型" : "补选模型"}
+                    </option>
+                    {activeProviderModels.map((model) => (
+                      <option key={model.id} value={model.model_id}>
+                        {model.display_name}
+                      </option>
+                    ))}
+                  </select>
+                  {!reselectModelId ? (
+                    <p
+                      className="provider-required-notice"
+                      data-testid="provider-required-notice"
+                      data-state="missing"
+                      data-field="model"
+                      role="status"
+                    >
+                      请选择模型
+                    </p>
+                  ) : null}
+                </>
+              ) : null}
+              {selectionRunInFlight &&
+              !activeSession.provider_id &&
+              reselectProviderId ? (
+                <p className="provider-required-notice" data-state="invalid" data-field="provider">
+                  当前任务仍在运行，暂不能补选供应商/模型，请等当前任务结束后重试。
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
           {activeSessionId ? (
             <HistoryOverflowNotice
               store={store}
@@ -1755,7 +2125,10 @@ export function SessionWorkbench({
                           disabled={
                             degraded ||
                             retryingRunId !== null ||
-                            activeSession?.status === "paused"
+                            activeSession?.status === "paused" ||
+                            (activeRequiresProvider &&
+                              (activeProviderState === "invalid" ||
+                                activeModelState !== "active"))
                           }
                           onClick={() => void onRetryRun(bubble.runId as string)}
                         >
@@ -2159,7 +2532,18 @@ export function SessionWorkbench({
                   degraded ||
                   sending ||
                   draft.trim().length === 0 ||
-                  activeSession?.status === "paused"
+                  activeSession?.status === "paused" ||
+                  (activeRequiresProvider && activeProviderState === "invalid") ||
+                  (activeRequiresProvider &&
+                    !activeSession?.provider_id &&
+                    !reselectProviderId) ||
+                  (activeRequiresProvider &&
+                    activeSession?.provider_id !== undefined &&
+                    activeModelState !== "active" &&
+                    !reselectModelId) ||
+                  (selectionRunInFlight &&
+                    !activeSession?.provider_id &&
+                    reselectProviderId !== null)
                 }
                 onClick={() => void onSend()}
               >

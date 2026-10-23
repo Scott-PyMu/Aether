@@ -115,6 +115,14 @@ export interface SessionSummary {
   title: string;
   status: SessionStatus;
   model?: string | null;
+  /** ADR-028 v0.9：会话级供应商回显（未选省略）。 */
+  provider_id?: string | null;
+  /** ADR-028 v0.9：供应商名称（已删除时省略）。 */
+  provider_name?: string | null;
+  /** ADR-028 v0.9：供应商状态（active|invalid|missing）。 */
+  provider_state?: "active" | "invalid" | "missing";
+  /** ADR-028 v0.9：模型状态（active|invalid|missing）。 */
+  model_state?: "active" | "invalid" | "missing";
   /** M3-10：会话级思考深度（0–4；`session_create` 生效值回显）。 */
   thinking_depth?: number | null;
   /** M6-01/ADR-014：会话级权限模式（缺省 `workspace_write`；`session_list` 回显）。 */
@@ -308,6 +316,10 @@ export interface SessionIpc {
     thinking_depth?: number;
     /** M7-06/ADR-024：随消息附带的文件引用（≤32；引用 ≠ 预授权）。 */
     references?: SessionReference[];
+    /** ADR-028 v0.9：旧会话补选供应商（仅 provider_id 为空时允许）。 */
+    provider_id?: string;
+    /** ADR-028 v0.9：旧会话一次性补选模型（model 空/失效/不属于时允许）。 */
+    model?: string;
   }): Promise<SessionSendResult>;
   interruptSession(sessionId: string): Promise<SessionInterruptReport>;
   /** M7-03/ADR-017：暂停会话（受控中断 + `paused`；`pause_resume` 能力门）。 */

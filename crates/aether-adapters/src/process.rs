@@ -147,6 +147,14 @@ impl AdapterProcess {
 
     /// 取走 stdio 并建立线协议连接（仅允许一次）。
     pub fn connect(&mut self) -> Result<AdapterConnection, ProcessError> {
+        self.connect_with_catalog(None)
+    }
+
+    /// ADR-028 v0.9：建立连接并注入 `provider.catalog.get` 只读数据源。
+    pub fn connect_with_catalog(
+        &mut self,
+        catalog_source: Option<Arc<dyn crate::connection::ProviderCatalogSource>>,
+    ) -> Result<AdapterConnection, ProcessError> {
         if self.connected {
             return Err(ProcessError::MissingPipes("已建立过连接".to_owned()));
         }
@@ -161,7 +169,12 @@ impl AdapterProcess {
             .take()
             .ok_or_else(|| ProcessError::MissingPipes("stdout 不可用".to_owned()))?;
         self.connected = true;
-        Ok(AdapterConnection::spawn(stdout, stdin))
+        Ok(AdapterConnection::spawn_with_catalog(
+            stdout,
+            stdin,
+            crate::protocol::INVALID_FRAME_UNHEALTHY_THRESHOLD,
+            catalog_source,
+        ))
     }
 
     /// 进程 ID（诊断/台账用；spawn 时缓存，退出后仍可查询）。

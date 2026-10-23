@@ -27,6 +27,43 @@ import type {
   SessionIpc,
   SessionSummary,
 } from "./session";
+import type { ProviderEntry, ProvidersIpc } from "./providers";
+
+const PROVIDER_A = "01J0000000000000000000P09";
+
+function fakeProvidersIpc(): ProvidersIpc {
+  const provider: ProviderEntry = {
+    id: PROVIDER_A,
+    name: "Anthropic",
+    type: "anthropic",
+    base_url: "https://api.anthropic.com",
+    endpoints: { anthropic: "https://api.anthropic.com" },
+    api_key_ref: null,
+    enabled: true,
+    is_builtin: false,
+    created_at: 1,
+    updated_at: 1,
+    models: [
+      {
+        id: "01J0000000000000000000M09",
+        model_id: "claude-opus",
+        display_name: "Claude Opus",
+        enabled: true,
+      },
+    ],
+  };
+  return {
+    list: vi.fn(async () => [provider]),
+    create: vi.fn(),
+    update: vi.fn(),
+    remove: vi.fn(),
+    toggle: vi.fn(),
+    addModel: vi.fn(),
+    toggleModel: vi.fn(),
+    test: vi.fn(),
+    fetchModels: vi.fn(),
+  } as unknown as ProvidersIpc;
+}
 
 const BUILTIN_ID = "01J00000000000000000000P01";
 const CUSTOM_ID = "01J00000000000000000000C01";
@@ -287,6 +324,7 @@ describe("M7-09 新建会话入口（session-preset-select）", () => {
         store={store}
         ipc={fakeSessionIpc(createSession)}
         presetsIpc={fakePresetsIpc()}
+        providersIpc={fakeProvidersIpc()}
         activePresetId={BUILTIN_ID}
       />,
     );
@@ -295,6 +333,14 @@ describe("M7-09 新建会话入口（session-preset-select）", () => {
     await waitFor(() => {
       expect(runtimeOption.getAttribute("data-selected")).toBe("true");
     }, WAIT);
+
+    const providerSelect = (await screen.findByTestId(
+      "session-provider-select",
+      {},
+      WAIT,
+    )) as HTMLSelectElement;
+    await waitFor(() => expect(providerSelect.options.length).toBe(2), WAIT);
+    fireEvent.change(providerSelect, { target: { value: PROVIDER_A } });
 
     fireEvent.click(screen.getByTestId("session-create-submit"));
     await waitFor(() => {

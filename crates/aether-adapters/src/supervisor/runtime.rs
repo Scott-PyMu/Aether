@@ -18,18 +18,18 @@ use super::admission::{AdmissionDecision, AdmissionPolicy, RuntimeManifest};
 use super::backoff::{CrashDecision, RestartPolicy, CRASH_WINDOW};
 use super::clock::{SharedClock, SystemTimeSource};
 use super::heartbeat::{HeartbeatConfig, HeartbeatMonitor, HeartbeatVerdict};
-use super::provider_env::SpawnEnvSource;
 use super::ledger::{
     cmdline_hash, AdapterLedger, CleanupReport, LedgerRecord, LedgerVerdict, ProcessProbe,
     TreeKiller,
 };
+use super::provider_env::SpawnEnvSource;
 use super::resources::{ResourceConfig, ResourceMonitor, SysinfoSampler, RESOURCE_SAMPLE_INTERVAL};
 use super::state::{
     now_ms, AuditKind, AuditRecord, ResourceEvent, ResourceLimitKind, StateCore, StatusChange,
     SupervisorObserver,
 };
 use super::termination::{run_termination, TerminationBudget, TerminationReport};
-use crate::connection::{AdapterConnection, RequestError};
+use crate::connection::{AdapterConnection, ProviderCatalogSource, RequestError};
 use crate::process::{AdapterProcess, ProcessTerminationTarget};
 use crate::protocol::{code, DisabledInfo, DisabledReason, Method, HANDSHAKE_TIMEOUT};
 
@@ -84,6 +84,8 @@ pub struct RuntimeSpec {
     /// 供应商消费映射的 spawn 环境注入点（M7-06/ADR-024：密钥仅经 env 一次性注入；
     /// `None` = 不注入，适配器按各自官方默认运行）。
     pub env_source: Option<Arc<dyn SpawnEnvSource>>,
+    /// ADR-028 v0.9：`provider.catalog.get` 只读目录数据源（adapter → core）。
+    pub catalog_source: Option<Arc<dyn ProviderCatalogSource>>,
 }
 
 impl std::fmt::Debug for RuntimeSpec {
@@ -96,6 +98,13 @@ impl std::fmt::Debug for RuntimeSpec {
                 "env_source",
                 &self.env_source.as_ref().map(|_| "<SpawnEnvSource>"),
             )
+            .field(
+                "catalog_source",
+                &self
+                    .catalog_source
+                    .as_ref()
+                    .map(|_| "<ProviderCatalogSource>"),
+            )
             .finish()
     }
 }
@@ -107,6 +116,7 @@ impl RuntimeSpec {
             launch_token: launch_token.into(),
             artifacts_dir: None,
             env_source: None,
+            catalog_source: None,
         }
     }
 
@@ -117,6 +127,7 @@ impl RuntimeSpec {
             launch_token: new_launch_token(),
             artifacts_dir: None,
             env_source: None,
+            catalog_source: None,
         }
     }
 
@@ -129,6 +140,12 @@ impl RuntimeSpec {
     /// 附加供应商消费映射的 spawn 环境注入点（M7-06/ADR-024；每次 spawn 现取）。
     pub fn with_env_source(mut self, env_source: Arc<dyn SpawnEnvSource>) -> Self {
         self.env_source = Some(env_source);
+        self
+    }
+
+    /// 附加 `provider.catalog.get` 只读目录数据源（ADR-028 v0.9）。
+    pub fn with_catalog_source(mut self, catalog_source: Arc<dyn ProviderCatalogSource>) -> Self {
+        self.catalog_source = Some(catalog_source);
         self
     }
 }
@@ -283,6 +300,8 @@ pub struct RuntimeSupervisor {
     /// `state` 为异步互斥（启动/握手期间可能长时间持锁），健康查询不能等待；
     /// 每次状态转移在 `transition_locked` 内同步刷新本缓存（临界区仅赋值）。
     summary: std::sync::Mutex<(RuntimeStatus, Option<DisabledReason>)>,
+    /// ADR-028 v0.9：`provider.catalog.get` 数据源（每次 spawn 新连接注入）。
+    catalog_source: Option<Arc<dyn ProviderCatalogSource>>,
 }
 
 impl RuntimeSupervisor {
@@ -295,6 +314,7 @@ impl RuntimeSupervisor {
         probe: Arc<dyn ProcessProbe>,
     ) -> Self {
         let clock: SharedClock = Arc::new(SystemTimeSource::new());
+        let catalog_source = spec.catalog_source.clone();
         Self {
             runtime_id: runtime_id.clone(),
             spec,
@@ -313,6 +333,7 @@ impl RuntimeSupervisor {
                 ready_since_ms: None,
             }),
             summary: std::sync::Mutex::new((RuntimeStatus::Cold, None)),
+            catalog_source,
         }
     }
 
@@ -501,7 +522,7 @@ impl RuntimeSupervisor {
             }
         }
 
-        let connection = match process.connect() {
+        let connection = match process.connect_with_catalog(self.catalog_source.clone()) {
             Ok(connection) => Arc::new(connection),
             Err(error) => {
                 self.terminate_process(&mut process, None).await;
@@ -774,10 +795,7 @@ impl RuntimeSupervisor {
     /// 偏好（`runtimes.enabled=0`）由命令层在调用本方法**之前**写入（失败即命令失败，
     /// ADR-015 §2.1#5「偏好写序（失败关闭）」）；本方法只负责状态与进程。
     /// `disabled` 上再禁用 → [`SupervisorError::DisableNotAllowed`]（不转移）。
-    pub async fn disable(
-        &self,
-        detail: Option<String>,
-    ) -> Result<DisableOutcome, SupervisorError> {
+    pub async fn disable(&self, detail: Option<String>) -> Result<DisableOutcome, SupervisorError> {
         let mut state = self.state.lock().await;
         let status = state.fsm.status();
         if status == RuntimeStatus::Disabled {

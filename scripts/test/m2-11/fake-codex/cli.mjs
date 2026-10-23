@@ -81,8 +81,23 @@ async function main() {
   // M3-10：调用观测（仅当显式设置记录文件时；argv 含 `-c model_reasoning_effort=...`）。
   // M7-06：追加 `prompt`（stdin 全文）——引用块注入观测口径。
   const invocationFile = process.env.FAKE_CODEX_INVOCATION_FILE;
+  const envFile = process.env.FAKE_CODEX_ENV_FILE;
   const { resume, threadRef } = parseInvocation(argv);
   const prompt = readFileSync(0, "utf8");
+  if (envFile) {
+    try {
+      appendFileSync(
+        envFile,
+        `${JSON.stringify({
+          CODEX_HOME: process.env.CODEX_HOME,
+          OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+          AETHER_CREDENTIAL_BROKER: process.env.AETHER_CREDENTIAL_BROKER,
+        })}\n`,
+      );
+    } catch {
+      /* 观测文件可选 */
+    }
+  }
   if (invocationFile) {
     try {
       appendFileSync(invocationFile, `${JSON.stringify({ argv, prompt })}\n`);

@@ -15,8 +15,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
+  endpointPreview,
   OFFICIAL_PROVIDER_PRESETS,
   PROVIDER_ENDPOINT_PRESETS,
+  PROVIDER_ENDPOINT_RISK_NOTICE,
   providerAbbr,
   providerColor,
   providerDesc,
@@ -465,6 +467,30 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
               <div className="preview-hint">
                 预览：<b>{previewPath}</b>
               </div>
+              {(["anthropic", "openai", "dsh"] as const).map((protocol) => {
+                const preview = endpointPreview(
+                  {
+                    type: formType,
+                    base_url: formBaseUrl,
+                    endpoints: formEndpoints,
+                  },
+                  protocol,
+                );
+                if (preview === null) {
+                  return null;
+                }
+                return (
+                  <p
+                    key={protocol}
+                    className="preview-hint"
+                    data-testid="provider-endpoint-preview"
+                    data-protocol={protocol}
+                    data-source={preview.source}
+                  >
+                    {protocol} 端点：<b>{preview.url}</b>
+                  </p>
+                );
+              })}
               <input
                 type="text"
                 className="form-input"
@@ -550,6 +576,13 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
               </div>
               <p className="preview-hint">
                 Claude Code 使用 Anthropic 端点；Codex 使用 OpenAI 端点；端点不是密钥，可随时修改。
+              </p>
+              <p
+                className="preview-hint provider-endpoint-risk"
+                data-testid="provider-endpoint-risk"
+                role="note"
+              >
+                {PROVIDER_ENDPOINT_RISK_NOTICE}
               </p>
             </div>
 

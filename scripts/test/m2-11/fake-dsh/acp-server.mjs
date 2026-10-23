@@ -30,6 +30,7 @@ import { dirname, join } from "node:path";
 const HOME = process.env.DSH_HOME || process.cwd();
 const DELTA_FILE = process.env.AETHER_DSH_DELTA_FILE || "";
 const PID_FILE = process.env.FAKE_DSH_PID_FILE || "";
+const ENV_FILE = process.env.FAKE_DSH_ENV_FILE || "";
 const VERSION = process.env.FAKE_DSH_VERSION || "0.1.5-rc.2";
 const TICK_MS = Number(process.env.FAKE_DSH_TICK_MS ?? 10);
 // M3-10：`reasoning_effort` 广告值（provider 默认 `""` + 具体 effort；按需可用 env 覆盖）。
@@ -461,6 +462,20 @@ function main() {
   if (PID_FILE) {
     mkdirSync(dirname(PID_FILE), { recursive: true });
     appendFileSync(PID_FILE, `${process.pid}\n`);
+  }
+  if (ENV_FILE) {
+    try {
+      appendFileSync(
+        ENV_FILE,
+        `${JSON.stringify({
+          DSH_HOME: HOME,
+          DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY,
+          AETHER_CREDENTIAL_BROKER: process.env.AETHER_CREDENTIAL_BROKER,
+        })}\n`,
+      );
+    } catch {
+      /* 观测文件可选 */
+    }
   }
   if (process.env.FAKE_DSH_NO_PLUGIN_HELLO !== "1") {
     delta({ type: "hello", contract: "aether-dsh-stream@1", dshVersion: VERSION });

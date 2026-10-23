@@ -116,8 +116,12 @@ fn harness(fixture: &Path) -> Harness {
         write,
         pipeline,
         ..
-    } = boot_core_full(dir.path(), &handle, Arc::new(StaticRuntimeSummaries::unwired()))
-        .expect("启动核心（存储 + 管线）");
+    } = boot_core_full(
+        dir.path(),
+        &handle,
+        Arc::new(StaticRuntimeSummaries::unwired()),
+    )
+    .expect("启动核心（存储 + 管线）");
     let supervisor = Arc::new(
         boot_supervisor(
             vec![
@@ -130,7 +134,10 @@ fn harness(fixture: &Path) -> Harness {
     );
     let startup = run_supervisor_startup(&supervisor, &handle).expect("启动序列尾段");
     for (runtime_id, outcome) in &startup.warmups {
-        assert!(outcome.is_ready(), "{runtime_id} 预热必须 Ready：{outcome:?}");
+        assert!(
+            outcome.is_ready(),
+            "{runtime_id} 预热必须 Ready：{outcome:?}"
+        );
     }
     let executor = Arc::new(AdapterRunExecutor::new(
         Arc::clone(&supervisor),
@@ -197,8 +204,10 @@ fn send(h: &Harness, session_id: &str, text: &str, client_msg_id: &str) -> Value
             text: text.to_owned(),
             client_msg_id: client_msg_id.to_owned(),
             thinking_depth: None,
-        references: Vec::new(),
-            })
+            references: Vec::new(),
+            provider_id: None,
+            model: None,
+        })
         .expect("发送消息")
 }
 
@@ -233,7 +242,10 @@ fn run_status(h: &Harness, run_id: &str) -> Option<RunStatus> {
 fn session_events(h: &Harness, session_id: &str) -> Vec<aether_core::EventEnvelope> {
     let mut events = h
         .runtime
-        .block_on(h.reads.events_latest(&aether_core::SessionId::new(session_id).unwrap(), 500))
+        .block_on(
+            h.reads
+                .events_latest(&aether_core::SessionId::new(session_id).unwrap(), 500),
+        )
         .expect("事件读取");
     events.sort_by_key(|event| event.seq);
     events
@@ -290,7 +302,11 @@ fn pause_unsupported_runtime_is_rejected_without_transition() {
         changes_before,
         "零状态转移"
     );
-    assert_eq!(pause_dispatch_count(&h), dispatches_before, "零 session.pause 下发");
+    assert_eq!(
+        pause_dispatch_count(&h),
+        dispatches_before,
+        "零 session.pause 下发"
+    );
     // resume 同样受能力门约束。
     let error = resume(&h, &session_id).expect_err("未声明能力 resume 也拒绝");
     assert_eq!(error.code.as_str(), "pause_unsupported");
@@ -310,7 +326,8 @@ fn pause_interrupts_and_resume_replays_through_fixture() {
     let ack = send(&h, &session_id, "long-once", "01J8ZQ5R0N7W9Y8X6V4T2S0K30");
     let run_id = ack["run_id"].as_str().expect("run id").to_owned();
     assert!(
-        wait_until(Duration::from_secs(10), || Some(RunStatus::Running) == run_status(&h, &run_id)),
+        wait_until(Duration::from_secs(10), || Some(RunStatus::Running)
+            == run_status(&h, &run_id)),
         "run 应在执行中"
     );
     assert!(wait_until(Duration::from_secs(10), || {
@@ -341,8 +358,10 @@ fn pause_interrupts_and_resume_replays_through_fixture() {
             text: "暂停中".to_owned(),
             client_msg_id: "01J8ZQ5R0N7W9Y8X6V4T2S0K31".to_owned(),
             thinking_depth: None,
-        references: Vec::new(),
-            })
+            references: Vec::new(),
+            provider_id: None,
+            model: None,
+        })
         .expect_err("paused 态发送必须拒绝");
     assert_eq!(error.code.as_str(), "invalid_value");
     assert!(error.message.contains("session_paused"));

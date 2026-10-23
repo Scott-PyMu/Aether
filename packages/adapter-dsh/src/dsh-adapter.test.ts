@@ -69,6 +69,12 @@ class Harness {
       ...(options.permissionTimeoutMs !== undefined
         ? { permissionTimeoutMs: options.permissionTimeoutMs }
         : {}),
+      ...(options.credentialClient !== undefined
+        ? { credentialClient: options.credentialClient }
+        : {}),
+      ...(options.sessionHomesDir !== undefined
+        ? { sessionHomesDir: options.sessionHomesDir }
+        : {}),
     });
   }
 
@@ -739,5 +745,129 @@ describe("M7-09/ADR-027 系统提示词侧信道", () => {
     expect(failed.system_prompt_effective).toBe(false);
     await harness.requestResult("session.dispose", { session_id: String(failed.session_id) });
     await harness.shutdown();
+  });
+});
+
+describe("DshAdapter: per-session provider（ADR-028 v0.9）", () => {
+  it("旧会话补选复制会话状态；两会话 DSH_HOME/patch/密钥隔离且不继承 broker token", {
+    timeout: 120_000,
+  }, async () => {
+    const envFile = join(mkdtempSync(join(tmpdir(), "fake-dsh-env-")), "env.jsonl");
+    const previousEnvFile = process.env.FAKE_DSH_ENV_FILE;
+    process.env.FAKE_DSH_ENV_FILE = envFile;
+    const home = mkdtempSync(join(tmpdir(), "fake-dsh-legacy-"));
+    const homes = mkdtempSync(join(tmpdir(), "fake-dsh-sessions-"));
+    const calls: string[] = [];
+    try {
+      const harness = new Harness(
+        {
+          sessionHomesDir: homes,
+          credentialClient: {
+            get: async (providerId: string, protocol: string) => {
+              calls.push(`${providerId}:${protocol}`);
+              if (providerId === "01J0000000000000000000PA") {
+                return {
+                  base_url: "https://a.example.com/open/v1",
+                  api_key: "fake-key-a",
+                  auth_env: "DEEPSEEK_API_KEY",
+                };
+              }
+              if (providerId === "01J0000000000000000000PB") {
+                return {
+                  base_url: "https://b.example.com/open/v1",
+                  api_key: "fake-key-b",
+                  auth_env: "DEEPSEEK_API_KEY",
+                };
+              }
+              throw new Error(`unknown provider ${providerId}`);
+            },
+          },
+        },
+        home,
+      );
+      await harness.start();
+      await harness.requestResult("initialize", {});
+      const legacy = await harness.requestResult("session.create", {});
+      const nativeId = String(legacy["native_id"]);
+      const legacySend = await harness.requestResult("session.send", {
+        session_id: nativeId,
+        client_msg_id: "m7-10-dsh-legacy",
+        text: "remember:DSH-THREAD-SECRET",
+      });
+      expect(await harness.waitTerminal(String(legacySend["run_id"]))).toBe("run.completed");
+
+      const reselected = await harness.requestResult("session.create", {
+        native_id: nativeId,
+        provider_id: "01J0000000000000000000PA",
+        model: "fake-model-2",
+      });
+      expect(reselected["resumed"]).toBe(true);
+      const recall = await harness.requestResult("session.send", {
+        session_id: nativeId,
+        client_msg_id: "m7-10-dsh-recall",
+        text: "recall",
+      });
+      expect(await harness.waitTerminal(String(recall["run_id"]))).toBe("run.completed");
+      const completed = harness
+        .runEvents(String(recall["run_id"]))
+        .find((frame) => frame.params?.type === "message.completed");
+      expect(JSON.stringify(completed?.params)).toContain("DSH-THREAD-SECRET");
+
+      const homeA = join(homes, nativeId);
+      expect(existsSync(join(homeA, "aether-dsh-acp.patch.yml"))).toBe(true);
+      expect(readFileSync(join(homeA, "aether-dsh-acp.patch.yml"), "utf8")).toContain(
+        "https://a.example.com/open/v1",
+      );
+
+      const second = await harness.requestResult("session.create", {
+        provider_id: "01J0000000000000000000PB",
+        model: "fake-model",
+      });
+      const secondId = String(second["session_id"]);
+      const secondSend = await harness.requestResult("session.send", {
+        session_id: secondId,
+        client_msg_id: "m7-10-dsh-second",
+        text: "chat",
+      });
+      expect(await harness.waitTerminal(String(secondSend["run_id"]))).toBe("run.completed");
+
+      const records = readFileSync(envFile, "utf8")
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => JSON.parse(line) as Record<string, string | undefined>);
+      const aHome = records.find(
+        (record) =>
+          typeof record.DSH_HOME === "string" &&
+          readFileSync(join(record.DSH_HOME, "aether-dsh-acp.patch.yml"), "utf8").includes(
+            "https://a.example.com/open/v1",
+          ),
+      )?.DSH_HOME;
+      const bHome = records.find(
+        (record) =>
+          typeof record.DSH_HOME === "string" &&
+          readFileSync(join(record.DSH_HOME, "aether-dsh-acp.patch.yml"), "utf8").includes(
+            "https://b.example.com/open/v1",
+          ),
+      )?.DSH_HOME;
+      expect(aHome).toBeTruthy();
+      expect(bHome).toBeTruthy();
+      expect(aHome).not.toBe(bHome);
+      const aRecord = records.find((record) => record.DSH_HOME === aHome);
+      const bRecord = records.find((record) => record.DSH_HOME === bHome);
+      expect(aRecord?.DEEPSEEK_API_KEY).toBe("fake-key-a");
+      expect(bRecord?.DEEPSEEK_API_KEY).toBe("fake-key-b");
+      for (const record of records) {
+        expect(record.AETHER_CREDENTIAL_BROKER).toBeUndefined();
+      }
+      expect(calls).toContain("01J0000000000000000000PA:dsh");
+      expect(calls).toContain("01J0000000000000000000PB:dsh");
+
+      await harness.requestResult("session.dispose", { session_id: secondId });
+      expect(bHome !== undefined && existsSync(bHome)).toBe(false);
+      expect(existsSync(home)).toBe(true);
+    } finally {
+      if (previousEnvFile === undefined) delete process.env.FAKE_DSH_ENV_FILE;
+      else process.env.FAKE_DSH_ENV_FILE = previousEnvFile;
+    }
   });
 });

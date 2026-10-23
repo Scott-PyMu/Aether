@@ -61,6 +61,19 @@ pub fn expected_provider_type(runtime_id: &str) -> Option<&'static str> {
     }
 }
 
+/// ADR-028：运行时 → 协议映射（runtime → protocol 白名单/兼容表）。
+///
+/// 表为补偿措施，不改变“应用级共享 token”的信任模型；`None` = 非官方运行时。
+#[must_use]
+pub fn runtime_protocol(runtime_id: &str) -> Option<&'static str> {
+    match runtime_id {
+        "claude-code" => Some("anthropic"),
+        "codex" => Some("openai"),
+        "deepseek-harness" => Some("dsh"),
+        _ => None,
+    }
+}
+
 /// ADR-028：读取 provider 的协议端点（`{}`/缺失 → `None`，由调用方回退 `base_url`）。
 fn protocol_endpoint(provider: &aether_store::ProviderRecord, protocol: &str) -> Option<String> {
     let parsed: serde_json::Value = serde_json::from_str(&provider.endpoints).ok()?;
@@ -72,24 +85,15 @@ fn protocol_endpoint(provider: &aether_store::ProviderRecord, protocol: &str) ->
         .map(str::to_owned)
 }
 
-/// ADR-028 过渡：运行时协议可用性（显式端点优先；无端点时回退到旧类型规则）。
+/// ADR-028：运行时协议可用性（显式端点 / base_url / 官方默认可解析）。
 pub(crate) fn provider_supports_protocol(
     provider: &aether_store::ProviderRecord,
     runtime_id: &str,
 ) -> bool {
-    match runtime_id {
-        "claude-code" => {
-            provider.provider_type == "anthropic"
-                || protocol_endpoint(provider, "anthropic").is_some()
-        }
-        "codex" => {
-            provider.provider_type == "openai" || protocol_endpoint(provider, "openai").is_some()
-        }
-        "deepseek-harness" => {
-            provider.provider_type == "deepseek" || protocol_endpoint(provider, "dsh").is_some()
-        }
-        _ => false,
-    }
+    let Some(protocol) = runtime_protocol(runtime_id) else {
+        return false;
+    };
+    resolve_protocol_base_url(provider, protocol).is_ok()
 }
 
 /// DSH provider 条目模型清单上限（env 体积护栏；常量级调参记任务证据）。
@@ -231,7 +235,10 @@ impl ProviderEnvHook {
                 let mut envs = vec![
                     (ENV_OPENAI_API_KEY.to_owned(), key),
                     (ENV_AETHER_PROVIDER_ID.to_owned(), provider_id),
-                    (ENV_AETHER_PROVIDER_ENV_KEY.to_owned(), ENV_OPENAI_API_KEY.to_owned()),
+                    (
+                        ENV_AETHER_PROVIDER_ENV_KEY.to_owned(),
+                        ENV_OPENAI_API_KEY.to_owned(),
+                    ),
                 ];
                 if let Some(base_url) = protocol_endpoint(provider, "openai")
                     .or(base_url)
@@ -257,7 +264,10 @@ impl ProviderEnvHook {
                 let mut envs = vec![
                     (ENV_DEEPSEEK_API_KEY.to_owned(), key),
                     (ENV_AETHER_PROVIDER_ID.to_owned(), provider_id.clone()),
-                    (ENV_AETHER_PROVIDER_ENV_KEY.to_owned(), ENV_DEEPSEEK_API_KEY.to_owned()),
+                    (
+                        ENV_AETHER_PROVIDER_ENV_KEY.to_owned(),
+                        ENV_DEEPSEEK_API_KEY.to_owned(),
+                    ),
                 ];
                 if let Some(base_url) = protocol_endpoint(provider, "dsh")
                     .or(base_url)
@@ -276,10 +286,7 @@ impl ProviderEnvHook {
                     items.sort_by(|left, right| left.model_id.cmp(&right.model_id));
                     items.truncate(DSH_MODELS_ENV_CAP);
                     if let Some(first) = items.first() {
-                        envs.push((
-                            ENV_AETHER_PROVIDER_MODEL.to_owned(),
-                            first.model_id.clone(),
-                        ));
+                        envs.push((ENV_AETHER_PROVIDER_MODEL.to_owned(), first.model_id.clone()));
                     }
                     let payload: Vec<serde_json::Value> = items
                         .iter()
@@ -309,8 +316,9 @@ pub struct ProviderCredential {
     pub auth_env: String,
 }
 
-/// `protocol` → 适配器子进程认证 env 名。
-fn auth_env_for(protocol: &str) -> Option<&'static str> {
+/// `protocol` → 适配器子进程认证 env 名（派生字段，不进入目录响应）。
+#[must_use]
+pub fn auth_env_for(protocol: &str) -> Option<&'static str> {
     match protocol {
         "anthropic" => Some(ENV_ANTHROPIC_API_KEY),
         "openai" => Some(ENV_OPENAI_API_KEY),
@@ -319,28 +327,124 @@ fn auth_env_for(protocol: &str) -> Option<&'static str> {
     }
 }
 
-/// ADR-028：协议端点解析（显式 endpoints 优先；DeepSeek 的 Anthropic 端点可回退追加）。
-fn resolve_protocol_base_url(
+/// ADR-028：协议端点解析（显式 endpoints 优先；其次 `base_url`；最后官方默认）。
+///
+/// - `base_url` 先去除尾部 `/`；
+/// - DeepSeek 的 Anthropic 补全仅在路径未以 `/anthropic` 结尾时追加；
+/// - 内置 OpenAI 历史 `base_url` 缺 `/v1` 且无显式 `endpoints.openai` → 补全；
+/// - 其他类型（如 Google）没有统一官方默认：必须显式配置端点（含 `base_url`）。
+pub fn resolve_protocol_base_url(
     provider: &aether_store::ProviderRecord,
     protocol: &str,
-) -> Option<String> {
+) -> Result<Option<String>, String> {
     if let Some(endpoint) = protocol_endpoint(provider, protocol) {
-        return Some(endpoint);
+        return Ok(Some(endpoint.trim_end_matches('/').to_owned()));
     }
-    let base = provider.base_url.as_deref()?.trim();
-    if base.is_empty() {
-        return None;
+    let base = provider
+        .base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.trim_end_matches('/').to_owned());
+    // `base_url` 按类型/协议回退（其他类型如 Google 必须显式 `endpoints.<protocol>`，
+    // 避免把 Gemini 原生根误当作 Anthropic/OpenAI 兼容端点）。
+    let base_usable = match provider.provider_type.as_str() {
+        "custom" => true,
+        _ => matches!(
+            (protocol, provider.provider_type.as_str()),
+            ("anthropic", "anthropic" | "deepseek")
+                | ("openai", "openai" | "deepseek")
+                | ("dsh", "deepseek")
+        ),
+    };
+    let base = match base {
+        Some(_base) if !base_usable => None,
+        Some(base) if protocol == "anthropic" && provider.provider_type == "deepseek" => {
+            if base.ends_with("/anthropic") {
+                Some(base)
+            } else {
+                Some(format!("{base}/anthropic"))
+            }
+        }
+        Some(base) if protocol == "openai" => {
+            // 内置 OpenAI 历史值缺 `/v1`（0003 seed 不改）：解析层补全，避免把主机根
+            // 当作完整端点（ADR-028 §2.1-3）。
+            if provider.provider_type == "openai"
+                && base == "https://api.openai.com"
+                && protocol_endpoint(provider, "openai").is_none()
+            {
+                Some(format!("{base}/v1"))
+            } else {
+                Some(base)
+            }
+        }
+        other => other,
+    };
+    if base.is_some() {
+        return Ok(base);
     }
-    if protocol == "anthropic"
-        && provider.provider_type == "deepseek"
-        && !base.trim_end_matches('/').ends_with("/anthropic")
-    {
-        return Some(format!("{}/anthropic", base.trim_end_matches('/')));
+    let default = match (protocol, provider.provider_type.as_str()) {
+        ("anthropic", "anthropic") => Some("https://api.anthropic.com"),
+        ("anthropic", "deepseek") => Some("https://api.deepseek.com/anthropic"),
+        ("openai", "openai") => Some("https://api.openai.com/v1"),
+        ("openai", "deepseek") => Some("https://api.deepseek.com"),
+        ("dsh", "deepseek") => Some("https://api.deepseek.com"),
+        _ => None,
+    };
+    match default {
+        Some(default) => Ok(Some(default.to_owned())),
+        None => Err(format!(
+            "供应商 {} 未配置协议 {protocol} 的端点（其他类型必须显式配置 base_url/endpoints）",
+            provider.id
+        )),
     }
-    Some(base.to_owned())
 }
 
 impl ProviderEnvHook {
+    /// ADR-028：broker 是否已接线（未接线时 multi_provider 会话创建必须失败
+    /// `core_not_ready`，不得回退单供应商 env）。
+    #[must_use]
+    pub fn broker_available(&self) -> bool {
+        self.broker.get().is_some()
+    }
+
+    /// ADR-028：`session_create` 的可解析性预检（broker 可用、provider 存在/启用、
+    /// 协议兼容、端点可解析、`api_key_ref` 存在且可读；读取后立即丢弃）。
+    pub async fn preflight_credential(
+        &self,
+        provider_id: &str,
+        protocol: &str,
+    ) -> Result<(), String> {
+        if !self.broker_available() {
+            return Err(
+                "凭据 broker 未接线（multi_provider 不可用；不回退单供应商 env）".to_owned(),
+            );
+        }
+        self.resolve_credential(provider_id, protocol)
+            .await
+            .map(|_| ())
+    }
+
+    /// ADR-028：按 `provider_id + runtime_id` 读取单供应商凭据（broker 调用）。
+    ///
+    /// 校验 runtime → protocol 白名单与 provider → protocol 兼容性；不兼容 → 拒绝，
+    /// 不返回 key。
+    pub async fn resolve_credential_for_runtime(
+        &self,
+        provider_id: &str,
+        runtime_id: &str,
+        protocol: &str,
+    ) -> Result<ProviderCredential, String> {
+        let expected = runtime_protocol(runtime_id)
+            .ok_or_else(|| format!("凭据 broker 请求方不是官方运行时：{runtime_id}"))?;
+        if expected != protocol {
+            return Err(format!(
+                "运行时 {runtime_id} 与协议 {protocol} 不兼容（期望 {expected}）"
+            ));
+        }
+        self.resolve_credential(provider_id, protocol).await
+    }
+
     /// ADR-028：按 `provider_id + protocol` 读取单供应商凭据（broker 调用）。
     ///
     /// 密钥只在此调用期间进入内存；调用方负责写入当前 CLI 子进程 env，不缓存/不落盘。
@@ -361,7 +465,7 @@ impl ProviderEnvHook {
         if !provider.enabled {
             return Err(format!("供应商已停用：{provider_id}"));
         }
-        let base_url = resolve_protocol_base_url(&provider, protocol);
+        let base_url = resolve_protocol_base_url(&provider, protocol)?;
         let auth_env = auth_env_for(protocol)
             .ok_or_else(|| format!("未知协议：{protocol}"))?
             .to_owned();
@@ -391,9 +495,16 @@ impl ProviderEnvHook {
 impl SpawnEnvSource for ProviderEnvHook {
     fn spawn_env<'a>(&'a self, runtime_id: &'a str) -> SpawnEnvFuture<'a> {
         Box::pin(async move {
-            let mut envs = self.resolve(runtime_id).await;
-            // ADR-028：broker 地址/token 与单供应商 env 并行注入；适配器按会话选择。
-            if let Some(info) = self.broker.get() {
+            // ADR-028 v0.9：P1 三官方运行时永不进入 legacy 自动选择——无论 broker
+            // 是否接线，都不再向官方适配器注入任何供应商密钥环境变量（broker 未接线
+            // 时 multi_provider 会话创建直接 `core_not_ready`，不得回退单供应商 env）。
+            let broker = self.broker.get();
+            let mut envs = if runtime_protocol(runtime_id).is_some() {
+                Vec::new()
+            } else {
+                self.resolve(runtime_id).await
+            };
+            if let Some(info) = broker {
                 match serde_json::to_string(info) {
                     Ok(text) => envs.push((ENV_CREDENTIAL_BROKER.to_owned(), text)),
                     Err(error) => tracing::warn!(
@@ -404,5 +515,113 @@ impl SpawnEnvSource for ProviderEnvHook {
             }
             envs
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+
+    fn provider(
+        provider_type: &str,
+        base_url: Option<&str>,
+        endpoints: &str,
+        enabled: bool,
+    ) -> aether_store::ProviderRecord {
+        aether_store::ProviderRecord {
+            id: "01J0000000000000000000T01".to_owned(),
+            name: "测试供应商".to_owned(),
+            provider_type: provider_type.to_owned(),
+            base_url: base_url.map(str::to_owned),
+            endpoints: endpoints.to_owned(),
+            api_key_ref: None,
+            enabled,
+            is_builtin: false,
+            created_at: 1,
+            updated_at: 1,
+        }
+    }
+
+    #[test]
+    fn runtime_protocol_table_is_static_and_official_only() {
+        assert_eq!(runtime_protocol("claude-code"), Some("anthropic"));
+        assert_eq!(runtime_protocol("codex"), Some("openai"));
+        assert_eq!(runtime_protocol("deepseek-harness"), Some("dsh"));
+        assert_eq!(runtime_protocol("mock"), None);
+        assert_eq!(auth_env_for("anthropic"), Some(ENV_ANTHROPIC_API_KEY));
+        assert_eq!(auth_env_for("openai"), Some(ENV_OPENAI_API_KEY));
+        assert_eq!(auth_env_for("dsh"), Some(ENV_DEEPSEEK_API_KEY));
+        assert_eq!(auth_env_for("unknown"), None);
+    }
+
+    #[test]
+    fn endpoint_resolution_prefers_explicit_then_base_url_then_official_default() {
+        // DeepSeek 显式 provider + {} endpoints → Claude Code Anthropic 默认端点。
+        let deepseek = provider("deepseek", Some("https://api.deepseek.com"), "{}", true);
+        assert_eq!(
+            resolve_protocol_base_url(&deepseek, "anthropic").unwrap(),
+            Some("https://api.deepseek.com/anthropic".to_owned())
+        );
+        // 显式端点优先于 base_url。
+        let explicit = provider(
+            "deepseek",
+            Some("https://api.deepseek.com"),
+            r#"{"anthropic":"https://gateway.example.com/anthropic/"}"#,
+            true,
+        );
+        assert_eq!(
+            resolve_protocol_base_url(&explicit, "anthropic").unwrap(),
+            Some("https://gateway.example.com/anthropic".to_owned())
+        );
+        // 内置 OpenAI 历史值缺 /v1 且无显式端点 → 解析层补全。
+        let openai = provider("openai", Some("https://api.openai.com"), "{}", true);
+        assert_eq!(
+            resolve_protocol_base_url(&openai, "openai").unwrap(),
+            Some("https://api.openai.com/v1".to_owned())
+        );
+        // OpenAI 无 base_url → 官方默认。
+        let openai_default = provider("openai", None, "{}", true);
+        assert_eq!(
+            resolve_protocol_base_url(&openai_default, "openai").unwrap(),
+            Some("https://api.openai.com/v1".to_owned())
+        );
+        // 其他类型（Google）无统一默认 → 必须显式配置。
+        let google = provider("google", None, "{}", true);
+        assert!(resolve_protocol_base_url(&google, "anthropic").is_err());
+        // Google 显式 OpenAI 兼容端点可解析。
+        let google_openai = provider(
+            "google",
+            None,
+            r#"{"openai":"https://generativelanguage.googleapis.com/v1beta/openai"}"#,
+            true,
+        );
+        assert_eq!(
+            resolve_protocol_base_url(&google_openai, "openai").unwrap(),
+            Some("https://generativelanguage.googleapis.com/v1beta/openai".to_owned())
+        );
+        // provider → protocol 兼容性：Google 原生 base_url 不得当作 Anthropic 端点。
+        let google_base = provider(
+            "google",
+            Some("https://generativelanguage.googleapis.com"),
+            "{}",
+            true,
+        );
+        assert!(!provider_supports_protocol(&google_base, "claude-code"));
+    }
+
+    #[test]
+    fn spawn_env_with_broker_does_not_inject_any_provider_key() {
+        let hook = ProviderEnvHook::new(std::path::PathBuf::from("."));
+        hook.set_broker_info(BrokerInfo {
+            endpoint: "test-endpoint".to_owned(),
+            token: "test-token".to_owned(),
+        });
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let envs = runtime.block_on(hook.spawn_env("claude-code"));
+        assert_eq!(envs.len(), 1, "仅 broker env：{envs:?}");
+        assert_eq!(envs[0].0, ENV_CREDENTIAL_BROKER);
+        assert!(!envs[0].1.contains("test-key"));
     }
 }

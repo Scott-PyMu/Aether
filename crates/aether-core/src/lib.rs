@@ -14,9 +14,10 @@ pub mod ids;
 pub mod session_state;
 
 pub use domain::{
-    LogLevel, Message, MessageReference, MessageRole, PermissionDecision, PermissionMode,
-    PermissionScope, PermissionStatus, Preset, ReferenceKind, Run, RunStatus, Runtime,
-    RuntimeStatus, Session, SessionStatus, TokenUsage, Workspace, PAUSE_RESUME_CAPABILITY,
+    static_capabilities, supports_multi_provider, LogLevel, Message, MessageReference, MessageRole,
+    PermissionDecision, PermissionMode, PermissionScope, PermissionStatus, Preset, ReferenceKind,
+    Run, RunStatus, Runtime, RuntimeStatus, Session, SessionStatus, TokenUsage, Workspace,
+    MULTI_PROVIDER_CAPABILITY, MULTI_PROVIDER_RUNTIMES, PAUSE_RESUME_CAPABILITY,
     PRESET_NAME_MAX_CHARS, PRESET_PROMPT_MARKER_PREFIX, PRESET_PROMPT_MARKER_SUFFIX,
     PRESET_SYSTEM_PROMPT_MAX_BYTES, THINKING_DEPTH_CAPABILITY, THINKING_DEPTH_DEFAULT,
     THINKING_DEPTH_MAX, THINKING_DEPTH_MIN,

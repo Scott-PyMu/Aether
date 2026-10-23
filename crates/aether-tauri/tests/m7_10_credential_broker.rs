@@ -210,4 +210,59 @@ fn broker_returns_provider_credential_and_rejects_bad_token() {
     let parsed: serde_json::Value = serde_json::from_str(unofficial.trim()).expect("响应 JSON");
     assert_eq!(parsed["ok"], false);
     assert!(parsed["api_key"].as_str().is_none());
+
+    // ADR-028 v0.9：runtime_id 必填。
+    let missing_runtime = runtime.block_on(async {
+        exchange(
+            &info,
+            &serde_json::json!({
+                "token": info.token,
+                "provider_id": provider_id,
+                "protocol": "anthropic",
+            })
+            .to_string(),
+        )
+        .await
+    });
+    let parsed: serde_json::Value =
+        serde_json::from_str(missing_runtime.trim()).expect("响应 JSON");
+    assert_eq!(parsed["ok"], false);
+    assert!(parsed["api_key"].as_str().is_none());
+
+    // ADR-028 v0.9：runtime → protocol 不兼容（codex 请求 anthropic）→ 拒绝且不返回 key。
+    let wrong_protocol = runtime.block_on(async {
+        exchange(
+            &info,
+            &serde_json::json!({
+                "token": info.token,
+                "provider_id": provider_id,
+                "protocol": "anthropic",
+                "runtime_id": "codex",
+            })
+            .to_string(),
+        )
+        .await
+    });
+    let parsed: serde_json::Value = serde_json::from_str(wrong_protocol.trim()).expect("响应 JSON");
+    assert_eq!(parsed["ok"], false);
+    assert!(parsed["api_key"].as_str().is_none());
+
+    // 密钥轮换：同一 broker 实例下一次请求读取新值（不缓存）。
+    secrets.put(&reference, "deepseek-rotated-key");
+    let rotated = runtime.block_on(async {
+        exchange(
+            &info,
+            &serde_json::json!({
+                "token": info.token,
+                "provider_id": provider_id,
+                "protocol": "anthropic",
+                "runtime_id": "claude-code",
+            })
+            .to_string(),
+        )
+        .await
+    });
+    let parsed: serde_json::Value = serde_json::from_str(rotated.trim()).expect("响应 JSON");
+    assert_eq!(parsed["ok"], true);
+    assert_eq!(parsed["api_key"], "deepseek-rotated-key");
 }

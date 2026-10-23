@@ -29,8 +29,8 @@ struct BrokerRequest {
     token: String,
     provider_id: String,
     protocol: String,
-    #[serde(default)]
-    runtime_id: Option<String>,
+    /// ADR-028 v0.9：`runtime_id` **必填**（仅作标签与范围收窄，不构成强认证）。
+    runtime_id: String,
 }
 
 #[derive(Serialize)]
@@ -123,6 +123,8 @@ async fn create_listener(endpoint: &str) -> std::io::Result<Listener> {
     use tokio::net::windows::named_pipe::ServerOptions;
     ServerOptions::new()
         .first_pipe_instance(true)
+        // 仅本机可连接（ADR-028 §2.3；管道继承进程当前用户默认 DACL）。
+        .reject_remote_clients(true)
         .create(endpoint)
 }
 
@@ -130,7 +132,9 @@ async fn create_listener(endpoint: &str) -> std::io::Result<Listener> {
 async fn accept(listener: &mut Listener, endpoint: &str) -> std::io::Result<Listener> {
     use tokio::net::windows::named_pipe::ServerOptions;
     listener.connect().await?;
-    let next = ServerOptions::new().create(endpoint)?;
+    let next = ServerOptions::new()
+        .reject_remote_clients(true)
+        .create(endpoint)?;
     Ok(std::mem::replace(listener, next))
 }
 
@@ -203,12 +207,12 @@ async fn process_request(line: &str, hook: &ProviderEnvHook, token: &str) -> Bro
     if request.token != token {
         return BrokerResponse::error("凭据 broker token 无效");
     }
-    let runtime_id = request.runtime_id.as_deref().unwrap_or("");
+    let runtime_id = request.runtime_id.as_str();
     if !OFFICIAL_RUNTIMES.contains(&runtime_id) {
         return BrokerResponse::error("凭据 broker 请求方不是官方运行时");
     }
     let result = hook
-        .resolve_credential(&request.provider_id, &request.protocol)
+        .resolve_credential_for_runtime(&request.provider_id, runtime_id, &request.protocol)
         .await;
     match &result {
         Ok(_) => tracing::info!(

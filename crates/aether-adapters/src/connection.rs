@@ -11,6 +11,8 @@
 //! 重启/退避/熔断等监督语义属 M1-10，本模块只暴露状态与原因。
 
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -35,6 +37,95 @@ pub const OUTBOUND_QUEUE_CAPACITY: usize = 256;
 pub const NOTIFICATION_QUEUE_CAPACITY: usize = 1024;
 /// 记录错误行数上限（诊断用）。
 pub const RECORDED_ERRORS_LIMIT: usize = 64;
+
+/// ADR-028 v0.9：`provider.catalog.get` 的 adapter → core 只读数据源。
+///
+/// 核心侧由命令层注入（`ReadPool` 读取供应商/模型目录），只返回非机密字段；
+/// 不向适配器返回 `api_key` / `api_key_ref` / token。
+pub trait ProviderCatalogSource: Send + Sync + 'static {
+    fn catalog<'a>(
+        &'a self,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, CatalogError>> + Send + 'a>>;
+}
+
+/// 目录查询错误（映射为 JSON-RPC 标准码 + `error.data.aether_code`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogError {
+    /// JSON-RPC 标准码（`-32601` / `-32602` / `-32603`）。
+    pub code: i64,
+    /// `error.data.aether_code`（仅 `core_not_ready` / `invalid_value`）。
+    pub aether_code: &'static str,
+    pub message: String,
+}
+
+impl CatalogError {
+    #[must_use]
+    pub fn method_not_found(message: impl Into<String>) -> Self {
+        Self {
+            code: code::METHOD_NOT_FOUND,
+            aether_code: "core_not_ready",
+            message: message.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn invalid_params(message: impl Into<String>) -> Self {
+        Self {
+            code: code::INVALID_PARAMS,
+            aether_code: "invalid_value",
+            message: message.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self {
+            code: code::INTERNAL_ERROR,
+            aether_code: "core_not_ready",
+            message: message.into(),
+        }
+    }
+}
+
+/// 目录查询超时（ADR-028 §2.1-6：5s）。
+pub const CATALOG_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
+/// 目录查询方法名（D6 只读方法；不新增 IPC 命令）。
+pub const PROVIDER_CATALOG_METHOD: &str = "provider.catalog.get";
+
+/// 目录查询在途合并（coalesce）：同一连接同一时刻最多 1 个在途查询。
+struct CatalogGate {
+    source: Arc<dyn ProviderCatalogSource>,
+    inflight: AsyncMutex<Option<tokio::sync::broadcast::Sender<Result<Value, CatalogError>>>>,
+}
+
+impl CatalogGate {
+    async fn query(&self) -> Result<Value, CatalogError> {
+        let mut inflight = self.inflight.lock().await;
+        if let Some(sender) = inflight.as_ref() {
+            let mut receiver = sender.subscribe();
+            drop(inflight);
+            loop {
+                match receiver.recv().await {
+                    Ok(result) => return result,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        return Err(CatalogError::internal("目录查询在途任务已关闭"));
+                    }
+                }
+            }
+        }
+        let (sender, _) = tokio::sync::broadcast::channel(1);
+        *inflight = Some(sender.clone());
+        drop(inflight);
+        let result = tokio::time::timeout(CATALOG_QUERY_TIMEOUT, self.source.catalog())
+            .await
+            .unwrap_or_else(|_| Err(CatalogError::internal("目录查询超时（5s）")));
+        let mut inflight = self.inflight.lock().await;
+        *inflight = None;
+        let _ = sender.send(result.clone());
+        result
+    }
+}
 
 /// 适配器 → 核心通知。
 #[derive(Debug, Clone, PartialEq)]
@@ -223,6 +314,20 @@ impl AdapterConnection {
         R: AsyncRead + Send + Unpin + 'static,
         W: AsyncWrite + Send + Unpin + 'static,
     {
+        Self::spawn_with_catalog(reader, writer, invalid_frame_threshold, None)
+    }
+
+    /// ADR-028 v0.9：带 `provider.catalog.get` 数据源建立连接。
+    pub fn spawn_with_catalog<R, W>(
+        reader: R,
+        writer: W,
+        invalid_frame_threshold: u32,
+        catalog_source: Option<Arc<dyn ProviderCatalogSource>>,
+    ) -> Self
+    where
+        R: AsyncRead + Send + Unpin + 'static,
+        W: AsyncWrite + Send + Unpin + 'static,
+    {
         let (outbound, outbound_rx) = mpsc::channel(OUTBOUND_QUEUE_CAPACITY);
         let (notifications_tx, notifications) = mpsc::channel(NOTIFICATION_QUEUE_CAPACITY);
         let (state_tx, state) = watch::channel(ConnectionState::Connecting);
@@ -232,6 +337,12 @@ impl AdapterConnection {
         let dropped_notifications = Arc::new(AtomicU64::new(0));
         let recorded_errors = Arc::new(Mutex::new(Vec::new()));
         let hello_seen = Arc::new(OnceLock::new());
+        let catalog = catalog_source.map(|source| {
+            Arc::new(CatalogGate {
+                source,
+                inflight: AsyncMutex::new(None),
+            })
+        });
 
         let reader_ctx = Arc::new(ReaderContext {
             state_tx,
@@ -244,6 +355,7 @@ impl AdapterConnection {
             recorded_errors: Arc::clone(&recorded_errors),
             hello_seen: Arc::clone(&hello_seen),
             invalid_frame_threshold,
+            catalog,
         });
 
         // 读侧限流：保证缓冲上限 = 2MiB 帧上限 + READ_CHUNK_BYTES（D6）。
@@ -495,6 +607,7 @@ struct ReaderContext {
     recorded_errors: Arc<Mutex<Vec<String>>>,
     hello_seen: Arc<OnceLock<Hello>>,
     invalid_frame_threshold: u32,
+    catalog: Option<Arc<CatalogGate>>,
 }
 
 impl ReaderContext {
@@ -626,6 +739,83 @@ impl ReaderContext {
             self.record_error("回 -32601 失败：出站队列满或已关闭".to_owned());
         }
     }
+
+    fn reply_error(&self, id: &Value, error: &CatalogError) {
+        self.reply_error_with_data(
+            id,
+            error.code,
+            &error.message,
+            Some(json!({ "aether_code": error.aether_code })),
+        );
+    }
+
+    fn reply_error_with_data(&self, id: &Value, code: i64, message: &str, data: Option<Value>) {
+        let mut error = json!({ "code": code, "message": message });
+        if let Some(data) = data {
+            error["data"] = data;
+        }
+        let frame = json!({ "jsonrpc": "2.0", "id": id, "error": error }).to_string();
+        if self.outbound.try_send(Outbound::Frame(frame)).is_err() {
+            self.record_error("回目录查询错误帧失败：出站队列满或已关闭".to_owned());
+        }
+    }
+
+    fn spawn_catalog_query(
+        &self,
+        id: Value,
+        params: Option<Value>,
+        gate: Arc<CatalogGate>,
+        outbound: mpsc::Sender<Outbound>,
+    ) {
+        tokio::spawn(async move {
+            let reply = async {
+                match params {
+                    Some(Value::Object(map)) if map.is_empty() => {}
+                    _ => {
+                        return Err(CatalogError::invalid_params(
+                            "provider.catalog.get 参数必须为空对象 {}",
+                        ))
+                    }
+                }
+                gate.query().await
+            }
+            .await;
+            let frame = match reply {
+                Ok(result) => {
+                    let text = json!({ "jsonrpc": "2.0", "id": id, "result": result }).to_string();
+                    if text.len() > crate::framing::MAX_FRAME_BYTES {
+                        let error =
+                            CatalogError::internal("目录响应超过 2MiB（未截断；分页需另立 ADR）");
+                        json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "error": {
+                                "code": error.code,
+                                "message": error.message,
+                                "data": { "aether_code": error.aether_code },
+                            },
+                        })
+                        .to_string()
+                    } else {
+                        text
+                    }
+                }
+                Err(error) => json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": {
+                        "code": error.code,
+                        "message": error.message,
+                        "data": { "aether_code": error.aether_code },
+                    },
+                })
+                .to_string(),
+            };
+            if outbound.send(Outbound::Frame(frame)).await.is_err() {
+                // 连接已关闭：丢弃迟到响应（ADR-028 §2.1-6 断连清理）。
+            }
+        });
+    }
 }
 
 async fn read_loop<R>(mut framed: FramedRead<R, AetherLineCodec>, ctx: Arc<ReaderContext>)
@@ -705,8 +895,23 @@ async fn dispatch_frame(raw: RawLine, ctx: &ReaderContext) -> bool {
             }
         }
         (Some(id), Some(name)) => {
-            // 适配器 → 核心请求：MVP 无反向方法，回 -32601 不断连（D6 前向兼容）。
-            ctx.reply_method_not_found(&id, name);
+            // ADR-028 v0.9：唯一登记的 adapter → core 只读请求 `provider.catalog.get`
+            // （其余反向方法仍回 -32601 不断连，D6 前向兼容）。
+            if name == PROVIDER_CATALOG_METHOD {
+                let params = object.get("params").cloned();
+                match &ctx.catalog {
+                    Some(gate) => {
+                        ctx.spawn_catalog_query(id, params, Arc::clone(gate), ctx.outbound.clone());
+                    }
+                    None => {
+                        let error =
+                            CatalogError::method_not_found("provider.catalog.get 未接线（旧核心）");
+                        ctx.reply_error(&id, &error);
+                    }
+                }
+            } else {
+                ctx.reply_method_not_found(&id, name);
+            }
             ctx.clear_invalid_streak();
             true
         }
@@ -880,6 +1085,140 @@ mod tests {
             AdapterConnection::spawn_with_threshold(read, write, threshold),
             Peer::new(peer_side),
         )
+    }
+
+    fn connected_with_catalog(
+        threshold: u32,
+        source: Arc<dyn ProviderCatalogSource>,
+    ) -> (AdapterConnection, Peer) {
+        let (core_side, peer_side) = tokio::io::duplex(256 * 1024);
+        let (read, write) = tokio::io::split(core_side);
+        (
+            AdapterConnection::spawn_with_catalog(read, write, threshold, Some(source)),
+            Peer::new(peer_side),
+        )
+    }
+
+    struct TestCatalog {
+        calls: AtomicU64,
+        result: Result<Value, CatalogError>,
+        delay: Option<Duration>,
+    }
+
+    impl ProviderCatalogSource for TestCatalog {
+        fn catalog<'a>(
+            &'a self,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<Value, CatalogError>> + Send + 'a>,
+        > {
+            Box::pin(async move {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                if let Some(delay) = self.delay {
+                    tokio::time::sleep(delay).await;
+                }
+                self.result.clone()
+            })
+        }
+    }
+
+    fn catalog_request(id: &str, params: Value) -> Value {
+        json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": PROVIDER_CATALOG_METHOD,
+            "params": params,
+        })
+    }
+
+    #[tokio::test]
+    async fn provider_catalog_get_returns_non_secret_payload_and_coalesces() {
+        let source = Arc::new(TestCatalog {
+            calls: AtomicU64::new(0),
+            result: Ok(json!({
+                "providers": [{
+                    "id": "01J0000000000000000000P01",
+                    "name": "DeepSeek",
+                    "type": "deepseek",
+                    "enabled": true,
+                    "endpoints": {"anthropic": "https://api.deepseek.com/anthropic"},
+                    "models": [{"id": "deepseek-flash", "display_name": "Flash", "enabled": true}],
+                }],
+            })),
+            delay: Some(Duration::from_millis(80)),
+        });
+        let (conn, mut peer) = connected_with_catalog(20, source.clone());
+        peer.hello().await;
+        conn.handshake_with_timeout(Duration::from_secs(2))
+            .await
+            .unwrap();
+
+        // 两个并发请求复用同一在途结果（coalesce，不排队）。
+        peer.send_value(catalog_request("a:1", json!({}))).await;
+        peer.send_value(catalog_request("a:2", json!({}))).await;
+        let first = peer.next_value().await;
+        let second = peer.next_value().await;
+        let text = format!("{first}{second}");
+        assert!(text.contains("deepseek-flash"));
+        assert!(!text.contains("api_key"));
+        assert!(!text.contains("token"));
+        assert_eq!(
+            source.calls.load(Ordering::SeqCst),
+            1,
+            "并发请求必须 coalesce"
+        );
+        assert!(matches!(
+            conn.state(),
+            ConnectionState::Ready(_) | ConnectionState::Degraded { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn provider_catalog_get_maps_params_and_internal_errors_without_disconnect() {
+        let source = Arc::new(TestCatalog {
+            calls: AtomicU64::new(0),
+            result: Err(CatalogError::internal("目录读取失败")),
+            delay: None,
+        });
+        let (conn, mut peer) = connected_with_catalog(20, source.clone());
+        peer.hello().await;
+        conn.handshake_with_timeout(Duration::from_secs(2))
+            .await
+            .unwrap();
+
+        peer.send_value(catalog_request("a:1", json!({"unexpected": true})))
+            .await;
+        let invalid = peer.next_value().await;
+        assert_eq!(invalid["error"]["code"], code::INVALID_PARAMS);
+        assert_eq!(invalid["error"]["data"]["aether_code"], "invalid_value");
+
+        peer.send_value(catalog_request("a:2", json!({}))).await;
+        let internal = peer.next_value().await;
+        assert_eq!(internal["error"]["code"], code::INTERNAL_ERROR);
+        assert_eq!(internal["error"]["data"]["aether_code"], "core_not_ready");
+
+        // 错误帧不得断连（仍可继续请求；无效帧计数不增加）。
+        assert!(matches!(conn.state(), ConnectionState::Ready(_)));
+        assert_eq!(conn.invalid_frames_total(), 0);
+    }
+
+    #[tokio::test]
+    async fn provider_catalog_get_oversize_returns_error_frame_not_truncated() {
+        let huge = "x".repeat(crate::framing::MAX_FRAME_BYTES + 16);
+        let source = Arc::new(TestCatalog {
+            calls: AtomicU64::new(0),
+            result: Ok(json!({ "providers": [], "padding": huge })),
+            delay: None,
+        });
+        let (conn, mut peer) = connected_with_catalog(20, source);
+        peer.hello().await;
+        conn.handshake_with_timeout(Duration::from_secs(2))
+            .await
+            .unwrap();
+        peer.send_value(catalog_request("a:1", json!({}))).await;
+        let response = peer.next_value().await;
+        assert_eq!(response["error"]["code"], code::INTERNAL_ERROR);
+        assert_eq!(response["error"]["data"]["aether_code"], "core_not_ready");
+        assert!(matches!(conn.state(), ConnectionState::Ready(_)));
     }
 
     async fn wait_until<F: Fn() -> bool>(condition: F) {

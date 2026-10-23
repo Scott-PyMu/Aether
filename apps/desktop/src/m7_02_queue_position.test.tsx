@@ -21,9 +21,56 @@ import type {
   SessionStatus,
   SessionSummary,
 } from "./session";
+import type { ProviderEntry, ProvidersIpc } from "./providers";
 
 const SESSION = "01J8ZQ5R0N7W9Y8X6V4T2S0K1A";
 const RUN_1 = "01J8ZQ5R0N7W9Y8X6V4T2S0K1R";
+const PROVIDER_A = "01J0000000000000000000P02";
+
+function fakeProvidersIpc(): ProvidersIpc {
+  const provider: ProviderEntry = {
+    id: PROVIDER_A,
+    name: "DeepSeek",
+    type: "deepseek",
+    base_url: "https://api.deepseek.com",
+    endpoints: {
+      anthropic: "https://api.deepseek.com/anthropic",
+      openai: "https://api.deepseek.com",
+    },
+    api_key_ref: null,
+    enabled: true,
+    is_builtin: false,
+    created_at: 1,
+    updated_at: 1,
+    models: [
+      {
+        id: "01J0000000000000000000M02",
+        model_id: "deepseek-flash",
+        display_name: "DeepSeek Flash",
+        enabled: true,
+      },
+    ],
+  };
+  return {
+    list: vi.fn(async () => [provider]),
+    create: vi.fn(),
+    update: vi.fn(),
+    remove: vi.fn(),
+    toggle: vi.fn(),
+    addModel: vi.fn(),
+    toggleModel: vi.fn(),
+    test: vi.fn(),
+    fetchModels: vi.fn(),
+  } as unknown as ProvidersIpc;
+}
+
+async function selectProvider(): Promise<void> {
+  const select = (await screen.findByTestId("session-provider-select")) as HTMLSelectElement;
+  await waitFor(() => {
+    expect(select.querySelectorAll("option").length).toBeGreaterThan(1);
+  });
+  fireEvent.change(select, { target: { value: PROVIDER_A } });
+}
 
 let idCounter = 0;
 
@@ -169,7 +216,13 @@ describe("M7-02 自动路由（ADR-022 §2.1#1/#4）", () => {
       ],
       createSession,
     });
-    render(<SessionWorkbench store={newStore()} ipc={ipc} />);
+    render(
+      <SessionWorkbench
+        store={newStore()}
+        ipc={ipc}
+        providersIpc={fakeProvidersIpc()}
+      />,
+    );
     await screen.findAllByTestId("runtime-option");
 
     // 默认关闭；开启后 create 不带 runtime_id（后端自动路由）。
@@ -177,6 +230,7 @@ describe("M7-02 自动路由（ADR-022 §2.1#1/#4）", () => {
     expect(toggle.getAttribute("data-auto")).toBe("false");
     fireEvent.click(toggle);
     expect(screen.getByTestId("runtime-auto-route").getAttribute("data-auto")).toBe("true");
+    await selectProvider();
     fireEvent.click(screen.getByTestId("session-create-submit"));
     await waitFor(() => expect(createSession).toHaveBeenCalledTimes(1));
     const autoInput = createSession.mock.calls[0]?.[0] as Record<string, unknown>;
@@ -187,6 +241,7 @@ describe("M7-02 自动路由（ADR-022 §2.1#1/#4）", () => {
     expect(screen.getByTestId("runtime-auto-route").getAttribute("data-auto")).toBe("true");
     fireEvent.click(screen.getAllByTestId("runtime-option")[1]!);
     expect(screen.getByTestId("runtime-auto-route").getAttribute("data-auto")).toBe("false");
+    await selectProvider();
     fireEvent.click(screen.getByTestId("session-create-submit"));
     await waitFor(() => expect(createSession).toHaveBeenCalledTimes(2));
     expect(createSession.mock.calls[1]?.[0]).toMatchObject({ runtime_id: "codex" });
@@ -202,8 +257,15 @@ describe("M7-02 自动路由（ADR-022 §2.1#1/#4）", () => {
         };
       },
     });
-    render(<SessionWorkbench store={newStore()} ipc={ipc} />);
+    render(
+      <SessionWorkbench
+        store={newStore()}
+        ipc={ipc}
+        providersIpc={fakeProvidersIpc()}
+      />,
+    );
     await screen.findAllByTestId("runtime-option");
+    await selectProvider();
     fireEvent.click(screen.getByTestId("session-create-submit"));
     const error = await screen.findByTestId("workbench-error");
     expect(error.getAttribute("data-code")).toBe("no_candidate_runtime");

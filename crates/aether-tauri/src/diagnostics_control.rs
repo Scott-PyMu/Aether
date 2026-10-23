@@ -57,6 +57,10 @@ pub const EVENTS_RETENTION_DAYS_KEY: &str = "events.retention.days";
 pub const UI_LAYOUT_KEY: &str = "ui.layout";
 /// `ui.layout` 的最大字节数（登记口径 ≤64KiB）。
 pub const UI_LAYOUT_MAX_BYTES: usize = 64 * 1024;
+/// 设置键：全局供应商选择记忆（ADR-028 v0.9；JSON 对象字符串，缺省 `{}`）。
+pub const UI_PROVIDER_SELECTION_KEY: &str = "ui.provider_selection";
+/// `ui.provider_selection` 的最大字节数（登记口径 ≤64KiB）。
+pub const UI_PROVIDER_SELECTION_MAX_BYTES: usize = 64 * 1024;
 /// 未备份提醒阈值（D13：7 天）。
 pub const BACKUP_REMINDER_THRESHOLD_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 /// 诊断包文件名前缀（`aether-diagnostics-<ts>.json`）。
@@ -236,20 +240,10 @@ impl DiagnosticsControlBackend {
             BACKUP_AUTO_RETENTION_KEY => validate_setting_int_range(key, value, 1, 100)?,
             EVENTS_RETENTION_DAYS_KEY => validate_setting_int_range(key, value, 7, 365)?,
             UI_LAYOUT_KEY => {
-                let valid = value.as_str().is_some_and(|layout| {
-                    layout.len() <= UI_LAYOUT_MAX_BYTES
-                        && serde_json::from_str::<Value>(layout)
-                            .is_ok_and(|parsed| parsed.is_object())
-                });
-                if !valid {
-                    return Err(IpcError::at_field(
-                        IpcErrorCode::InvalidValue,
-                        "value",
-                        format!(
-                            "设置键 {key} 的值必须是 ≤{UI_LAYOUT_MAX_BYTES} 字节的 JSON 对象字符串"
-                        ),
-                    ));
-                }
+                validate_json_object_setting(key, value, UI_LAYOUT_MAX_BYTES)?;
+            }
+            UI_PROVIDER_SELECTION_KEY => {
+                validate_json_object_setting(key, value, UI_PROVIDER_SELECTION_MAX_BYTES)?;
             }
             _ => {}
         }
@@ -515,9 +509,29 @@ pub(crate) fn default_setting_value(key: &str) -> Value {
         BACKUP_AUTO_FREQUENCY_KEY => Value::String("daily".to_owned()),
         BACKUP_AUTO_RETENTION_KEY => Value::from(10),
         EVENTS_RETENTION_DAYS_KEY => Value::from(30),
-        UI_LAYOUT_KEY => Value::String("{}".to_owned()),
+        UI_LAYOUT_KEY | UI_PROVIDER_SELECTION_KEY => Value::String("{}".to_owned()),
         _ => Value::Null,
     }
+}
+
+/// JSON 对象字符串键校验（`ui.layout` / `ui.provider_selection`；≤上限字节且为对象）。
+fn validate_json_object_setting(
+    key: &str,
+    value: &Value,
+    max_bytes: usize,
+) -> Result<(), IpcError> {
+    let valid = value.as_str().is_some_and(|text| {
+        text.len() <= max_bytes
+            && serde_json::from_str::<Value>(text).is_ok_and(|parsed| parsed.is_object())
+    });
+    if !valid {
+        return Err(IpcError::at_field(
+            IpcErrorCode::InvalidValue,
+            "value",
+            format!("设置键 {key} 的值必须是 ≤{max_bytes} 字节的 JSON 对象字符串"),
+        ));
+    }
+    Ok(())
 }
 
 /// 整数区间校验（M5-01/ADR-018 附录 A-6：类型错 → `invalid_type`；越界 → `out_of_range`）。
@@ -784,7 +798,7 @@ mod tests {
 
     #[test]
     fn p1_settings_keys_are_registered_with_defaults() {
-        // ADR-018 附录 A-6：8 个登记键均有非 Null 缺省值，且类型与登记一致。
+        // ADR-018 附录 A-6 + ADR-028 v0.9：9 个登记键均有非 Null 缺省值，且类型与登记一致。
         for key in crate::ipc::dto::SETTINGS_KEY_ALLOWLIST {
             let default = default_setting_value(key);
             assert!(!default.is_null(), "登记键 {key} 缺少缺省值");
@@ -795,8 +809,8 @@ mod tests {
         }
         assert_eq!(
             crate::ipc::dto::SETTINGS_KEY_ALLOWLIST.len(),
-            8,
-            "M5-01 批次后设置键共 8 个（ADR-018 附录 A-6）"
+            9,
+            "ADR-028 v0.9 后设置键共 9 个（`ui.provider_selection` 新增）"
         );
     }
 
@@ -825,6 +839,17 @@ mod tests {
         let error = validate(UI_LAYOUT_KEY, &json!("[]")).expect_err("必须为对象");
         assert_eq!(error.code, IpcErrorCode::InvalidValue);
         let error = validate(UI_LAYOUT_KEY, &json!("{")).expect_err("非法 JSON");
+        assert_eq!(error.code, IpcErrorCode::InvalidValue);
+
+        // ADR-028 v0.9：全局供应商记忆（对象字符串；损坏/非对象拒绝）。
+        assert!(validate(
+            UI_PROVIDER_SELECTION_KEY,
+            &json!(r#"{"claude-code":"01J0000000000000000000P01"}"#)
+        )
+        .is_ok());
+        let error = validate(UI_PROVIDER_SELECTION_KEY, &json!("[]")).expect_err("必须为对象");
+        assert_eq!(error.code, IpcErrorCode::InvalidValue);
+        let error = validate(UI_PROVIDER_SELECTION_KEY, &json!("{")).expect_err("非法 JSON");
         assert_eq!(error.code, IpcErrorCode::InvalidValue);
     }
 }

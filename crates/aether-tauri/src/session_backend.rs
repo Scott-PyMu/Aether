@@ -129,6 +129,18 @@ pub struct SessionSummary {
     pub title: String,
     pub status: crate::ipc::dto::SessionStatus,
     pub model: Option<String>,
+    /// ADR-028 v0.9：会话级供应商回显（`sessions.config.aether.provider_id`；未选省略）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<String>,
+    /// ADR-028 v0.9：供应商名称回显（供应商已删除时省略）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_name: Option<String>,
+    /// ADR-028 v0.9：供应商状态（`active|invalid|missing`；`invalid` = 停用/删除，
+    /// UI 只读并禁用所有补选）。
+    pub provider_state: String,
+    /// ADR-028 v0.9：模型状态（`active|invalid|missing`；provider 空时 model 在任一
+    /// 启用供应商中**存在且启用** → active，否则 invalid）。
+    pub model_state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking_depth: Option<u8>,
     /// 会话级权限模式（M6-01/ADR-014 决策 3；`SessionSummary` 回显档位）。
@@ -174,6 +186,16 @@ impl SessionSummary {
             title: session.title.clone(),
             status: session_status_to_dto(session.status),
             model: session.model.clone(),
+            provider_id: session
+                .config
+                .get("aether")
+                .and_then(|value| value.get("provider_id"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned),
+            provider_name: None,
+            provider_state: "missing".to_owned(),
+            model_state: "missing".to_owned(),
             thinking_depth: Some(session.thinking_depth),
             permission_mode: Some(session.permission_mode.as_str().to_owned()),
             preset_id: session.preset_id.as_ref().map(|id| id.as_str().to_owned()),
@@ -211,6 +233,82 @@ impl SessionSummary {
         }
         self
     }
+
+    /// ADR-028 v0.9：按当前供应商/模型目录回显 `provider_state` / `model_state`。
+    #[must_use]
+    pub fn with_provider_selection(
+        mut self,
+        providers: &[aether_store::ProviderRecord],
+        models: &[aether_store::ProviderModelRecord],
+    ) -> Self {
+        let (name, provider_state, model_state) = provider_selection_state(
+            self.provider_id.as_deref(),
+            self.model.as_deref(),
+            providers,
+            models,
+        );
+        self.provider_name = name;
+        self.provider_state = provider_state.to_owned();
+        self.model_state = model_state.to_owned();
+        self
+    }
+}
+
+/// 供应商/模型状态判定（ADR-028 v0.9 §2.1-4 回显状态）。
+///
+/// - `provider_state`：未选 → `missing`；存在且启用 → `active`；停用/删除 → `invalid`；
+/// - `model_state`：provider 已选 → 仅该 provider 的启用模型算 `active`；provider 空 →
+///   任一启用 provider 中**存在且启用** → `active`，否则 `invalid`；无 model → `missing`；
+/// - provider 失效优先：`provider_state=invalid` 时 `model_state=invalid`（UI 只读，
+///   禁用所有补选）。
+fn provider_selection_state(
+    provider_id: Option<&str>,
+    model: Option<&str>,
+    providers: &[aether_store::ProviderRecord],
+    models: &[aether_store::ProviderModelRecord],
+) -> (Option<String>, &'static str, &'static str) {
+    let model = model.filter(|value| !value.is_empty());
+    let Some(provider_id) = provider_id.filter(|value| !value.is_empty()) else {
+        let model_state = match model {
+            None => "missing",
+            Some(model) => {
+                if providers.iter().any(|provider| {
+                    provider.enabled
+                        && models.iter().any(|candidate| {
+                            candidate.provider_id == provider.id
+                                && candidate.model_id == model
+                                && candidate.enabled
+                        })
+                }) {
+                    "active"
+                } else {
+                    "invalid"
+                }
+            }
+        };
+        return (None, "missing", model_state);
+    };
+    let Some(provider) = providers.iter().find(|item| item.id == provider_id) else {
+        return (None, "invalid", "invalid");
+    };
+    if !provider.enabled {
+        return (Some(provider.name.clone()), "invalid", "invalid");
+    }
+    let model_state = match model {
+        None => "missing",
+        Some(model) => {
+            if models.iter().any(|candidate| {
+                candidate.provider_id == provider_id
+                    && candidate.model_id == model
+                    && candidate.enabled
+            }) {
+                "active"
+            } else {
+                "invalid"
+            }
+        }
+    };
+    (Some(provider.name.clone()), "active", model_state)
 }
 
 /// 能力门同步判定（ADR-010 决策 2）：runtime ready 且未声明 `thinking_depth` 能力时
@@ -325,6 +423,8 @@ pub struct SessionBackend {
     providers: Option<ProviderControl>,
     /// Agent 预设命令执行体（M7-09；`None` = 未接线 → 预设命令回 `core_not_ready`）。
     presets: Option<PresetControl>,
+    /// ADR-028 v0.9：供应商凭据预检（broker 可用性 + key 可读；读取后立即丢弃）。
+    provider_env: Option<Arc<crate::provider_env::ProviderEnvHook>>,
     /// 当前工作区绑定（M3-08；`None` = 未绑定）。
     workspace: Arc<Mutex<Option<WorkspaceBinding>>>,
     /// 数据目录（M7-08 `workspaces_list` 合成组「默认（数据目录）」的根路径展示）。
@@ -354,6 +454,7 @@ impl SessionBackend {
             write: None,
             providers: None,
             presets: None,
+            provider_env: None,
             workspace: Arc::new(Mutex::new(None)),
             data_dir: None,
             handle,
@@ -404,6 +505,16 @@ impl SessionBackend {
     #[must_use]
     pub fn with_presets(mut self, presets: PresetControl) -> Self {
         self.presets = Some(presets);
+        self
+    }
+
+    /// 注入供应商凭据预检（ADR-028 v0.9：`session_create` fail-fast + 旧会话补选）。
+    #[must_use]
+    pub fn with_provider_env(
+        mut self,
+        provider_env: Arc<crate::provider_env::ProviderEnvHook>,
+    ) -> Self {
+        self.provider_env = Some(provider_env);
         self
     }
 
@@ -550,13 +661,25 @@ impl IpcBackend for SessionBackend {
                 let capabilities = match runtime.connection().await {
                     Some(connection) => match connection.state() {
                         ConnectionState::Ready(hello) | ConnectionState::Degraded { hello, .. } => {
-                            hello.runtime.capabilities
+                            let mut capabilities = hello.runtime.capabilities;
+                            for capability in aether_core::static_capabilities(&id) {
+                                if !capabilities.iter().any(|item| item == capability) {
+                                    capabilities.push((*capability).to_owned());
+                                }
+                            }
+                            capabilities
                         }
                         ConnectionState::Connecting | ConnectionState::Disconnected(_) => {
-                            Vec::new()
+                            aether_core::static_capabilities(&id)
+                                .iter()
+                                .map(|capability| (*capability).to_owned())
+                                .collect()
                         }
                     },
-                    None => Vec::new(),
+                    None => aether_core::static_capabilities(&id)
+                        .iter()
+                        .map(|capability| (*capability).to_owned())
+                        .collect(),
                 };
                 let enabled = preferences.get(&id).copied().unwrap_or(manifest.enabled);
                 let active_sessions = active_work.get(&id).copied().unwrap_or(0);
@@ -636,6 +759,14 @@ impl IpcBackend for SessionBackend {
                     presets.insert(key, preset.name);
                 }
             }
+            let providers = reads
+                .providers()
+                .await
+                .map_err(|error| IpcError::internal(format!("供应商读取失败：{error}")))?;
+            let provider_models = reads
+                .provider_models()
+                .await
+                .map_err(|error| IpcError::internal(format!("供应商模型读取失败：{error}")))?;
             let summaries = sessions
                 .iter()
                 .map(|session| {
@@ -651,7 +782,7 @@ impl IpcBackend for SessionBackend {
                     {
                         summary.preset_name = Some(name.clone());
                     }
-                    Ok(summary)
+                    Ok(summary.with_provider_selection(&providers, &provider_models))
                 })
                 .collect::<Result<Vec<_>, IpcError>>()?;
             serde_json::to_value(summaries)
@@ -670,9 +801,18 @@ impl IpcBackend for SessionBackend {
                 .search_sessions(&phrase, limit, offset)
                 .await
                 .map_err(|error| IpcError::internal(format!("会话检索失败：{error}")))?;
+            let providers = reads
+                .providers()
+                .await
+                .map_err(|error| IpcError::internal(format!("供应商读取失败：{error}")))?;
+            let provider_models = reads
+                .provider_models()
+                .await
+                .map_err(|error| IpcError::internal(format!("供应商模型读取失败：{error}")))?;
             let mut items = Vec::with_capacity(hits.len());
             for hit in hits {
-                let summary = SessionSummary::from_session(&hit.session, None)?;
+                let summary = SessionSummary::from_session(&hit.session, None)?
+                    .with_provider_selection(&providers, &provider_models);
                 let mut value = serde_json::to_value(summary)
                     .map_err(|error| IpcError::internal(format!("会话检索序列化失败：{error}")))?;
                 if let Some(object) = value.as_object_mut() {
@@ -732,6 +872,7 @@ impl IpcBackend for SessionBackend {
         let workspace_id = request.workspace_id.clone();
         let model = request.model.clone();
         let provider_id_request = request.provider_id.clone();
+        let provider_env = self.provider_env.clone();
         let thinking_depth_request = request.thinking_depth_value()?;
         let permission_mode = request.permission_mode_value()?.unwrap_or_default();
         let preset_id = request.preset_id.clone();
@@ -835,13 +976,30 @@ impl IpcBackend for SessionBackend {
                 let (version, capabilities, connection_ready) = match runtime.connection().await {
                     Some(connection) => match connection.state() {
                         ConnectionState::Ready(hello) | ConnectionState::Degraded { hello, .. } => {
-                            (hello.runtime.version, hello.runtime.capabilities, true)
+                            let mut capabilities = hello.runtime.capabilities.clone();
+                            // ADR-028 v0.9：`runtimes_list.capabilities` = hello ∪ 核心静态表。
+                            for capability in aether_core::static_capabilities(&runtime_id) {
+                                if !capabilities.iter().any(|item| item == capability) {
+                                    capabilities.push((*capability).to_owned());
+                                }
+                            }
+                            (hello.runtime.version, capabilities, true)
                         }
                         ConnectionState::Connecting | ConnectionState::Disconnected(_) => {
-                            (manifest.version.clone(), Vec::new(), false)
+                            let mut capabilities = Vec::new();
+                            for capability in aether_core::static_capabilities(&runtime_id) {
+                                capabilities.push((*capability).to_owned());
+                            }
+                            (manifest.version.clone(), capabilities, false)
                         }
                     },
-                    None => (manifest.version.clone(), Vec::new(), false),
+                    None => {
+                        let mut capabilities = Vec::new();
+                        for capability in aether_core::static_capabilities(&runtime_id) {
+                            capabilities.push((*capability).to_owned());
+                        }
+                        (manifest.version.clone(), capabilities, false)
+                    }
                 };
                 let now = now_ms();
                 let runtime_row = Runtime {
@@ -950,20 +1108,16 @@ impl IpcBackend for SessionBackend {
             } else {
                 thinking_depth_request.unwrap_or(THINKING_DEPTH_DEFAULT)
             };
-            // ADR-028：仅显式 provider_id 进入多供应商校验；缺省保持旧单供应商路径
-            // （不按模型隐式解析，避免 broker 不可用时改变既有会话行为）。
-            // 仅声明 `multi_provider` 的运行时接受会话级 provider；其余运行时保持旧路径
-            // （Codex/DSH 的 per-session provider 为 Phase 2/3，避免传了被忽略而串 key）。
-            let supports_multi_provider = runtime
-                .capabilities
-                .iter()
-                .any(|capability| capability == "multi_provider");
+            // ADR-028 v0.9：`multi_provider` 为**核心静态能力**，不以 hello/runtime ready
+            // 为判定门禁（ADR-028 §3-1）。
+            let supports_multi_provider = aether_core::supports_multi_provider(runtime.id.as_str());
             let provider_id = resolve_session_provider(
                 reads.as_ref(),
                 runtime.id.as_str(),
                 provider_id_request.as_deref(),
                 model.as_deref(),
                 supports_multi_provider,
+                provider_env.as_deref(),
             )
             .await?;
             let session = manager
@@ -1005,8 +1159,20 @@ impl IpcBackend for SessionBackend {
             let workspace_root = resolved_workspace
                 .as_ref()
                 .map(|workspace| workspace.root_path.clone());
+            let (providers, provider_models) = match &reads {
+                Some(reads) => (
+                    reads.providers().await.map_err(|error| {
+                        IpcError::internal(format!("供应商读取失败：{error}"))
+                    })?,
+                    reads.provider_models().await.map_err(|error| {
+                        IpcError::internal(format!("供应商模型读取失败：{error}"))
+                    })?,
+                ),
+                None => (Vec::new(), Vec::new()),
+            };
             let summary = SessionSummary::from_session(&session, workspace_root)?
                 .with_preset(preset.as_ref())
+                .with_provider_selection(&providers, &provider_models)
                 .with_warnings(warnings);
             serde_json::to_value(summary)
                 .map_err(|error| IpcError::internal(format!("会话序列化失败：{error}")))
@@ -1649,26 +1815,163 @@ impl IpcBackend for SessionBackend {
         let manager = self.manager_required()?.clone();
         let reads = self.reads.clone();
         let supervisor = self.supervisor.clone();
+        let executor = self.executor.clone();
+        let write = self.write.clone();
+        let provider_env = self.provider_env.clone();
         let session_id = request.session_id.clone();
         let text = request.text.clone();
         let client_msg_id = request.client_msg_id.clone();
+        let request_provider = request.provider_id.clone();
+        let request_model = request.model.clone();
         let thinking_override = request.thinking_depth_value()?;
         // M7-06/ADR-024：引用在命令层已校验（canonicalize + 可访问性）；此处解析为
         // 内核形态（canonical 路径 + kind）随 `session.send` 透传。
         let references = request.resolved_references()?;
         self.call(async move {
             let session_id = parse_session_id(&session_id)?;
+            let session_row = match &reads {
+                Some(reads) => reads
+                    .session(&session_id)
+                    .await
+                    .map_err(|error| IpcError::internal(format!("会话读取失败：{error}")))?,
+                None => None,
+            };
+            // ADR-028 v0.9：三官方运行时旧会话补选（21 行真相表；未列组合默认拒绝）。
+            if let (Some(reads), Some(session)) = (&reads, &session_row) {
+                if aether_core::supports_multi_provider(session.runtime_id.as_str()) {
+                    let providers = reads
+                        .providers()
+                        .await
+                        .map_err(|error| IpcError::internal(format!("供应商读取失败：{error}")))?;
+                    let models = reads.provider_models().await.map_err(|error| {
+                        IpcError::internal(format!("供应商模型读取失败：{error}"))
+                    })?;
+                    let plan = plan_session_selection(
+                        session,
+                        &providers,
+                        &models,
+                        request_provider.as_deref(),
+                        request_model.as_deref(),
+                    )?;
+                    if let Some(plan) = plan {
+                        // 补选仅空闲/无在途 run；有在途 run → `session_busy`（不排队）。
+                        // 第 21 行已在 plan 内先返回 `invalid_value`（优先级见 ADR）。
+                        if reads
+                            .session_has_active_run(&session_id)
+                            .await
+                            .map_err(|error| {
+                                IpcError::internal(format!("在途 run 检查失败：{error}"))
+                            })?
+                        {
+                            return Err(selection_busy_error());
+                        }
+                        let (provider_id, new_model) = match &plan {
+                            SelectionPlan::Provider { provider_id, model } => {
+                                (provider_id.clone(), model.clone())
+                            }
+                            SelectionPlan::Model { model } => (
+                                session_provider_id(session)
+                                    .map(str::to_owned)
+                                    .ok_or_else(|| IpcError::invalid_value("请选择供应商"))?,
+                                Some(model.clone()),
+                            ),
+                        };
+                        // 校验目标（provider 启用 + model 归属/启用）——失败不准备、
+                        // 不持久化、保持只读。
+                        let target_model = new_model.as_deref().or(session.model.as_deref());
+                        if let Some(model) = target_model {
+                            validate_selection_target(&provider_id, model, &providers, &models)?;
+                        } else {
+                            return Err(IpcError::invalid_value("请选择模型"));
+                        }
+                        // 创建前同等预检（broker + key 可读 + 端点）；失败不准备、不持久化。
+                        let protocol =
+                            crate::provider_env::runtime_protocol(session.runtime_id.as_str())
+                                .ok_or_else(|| {
+                                    IpcError::invalid_value("运行时没有可用的供应商协议")
+                                })?;
+                        let Some(provider_env) = provider_env.as_ref() else {
+                            return Err(IpcError::core_not_ready(
+                                "凭据 broker 未接线：旧会话补选失败（不回退单供应商 env）",
+                            ));
+                        };
+                        provider_env
+                            .preflight_credential(&provider_id, protocol)
+                            .await
+                            .map_err(|error| {
+                                if error.contains("broker") || error.contains("未接线") {
+                                    IpcError::core_not_ready(error)
+                                } else {
+                                    IpcError::invalid_value(error)
+                                }
+                            })?;
+                        // 准备成功判定 = 配置物化 + 原生状态采用 + 适配器 ack；
+                        // 失败 → `core_not_ready`，不持久化、不重建原生会话。
+                        let executor = executor.as_ref().ok_or_else(|| {
+                            IpcError::core_not_ready("执行器未接线：无法准备旧会话补选（不持久化）")
+                        })?;
+                        executor
+                            .prepare_session_selection(
+                                &session_id,
+                                &provider_id,
+                                new_model.as_deref(),
+                            )
+                            .await
+                            .map_err(|error| {
+                                IpcError::core_not_ready(format!(
+                                    "适配器准备失败（未持久化，保持只读）：{}",
+                                    error.message
+                                ))
+                            })?;
+                        let write = write.as_ref().ok_or_else(|| {
+                            IpcError::core_not_ready(
+                                "存储写路径未接线：补选成功后无法持久化（不发送）",
+                            )
+                        })?;
+                        let mut config = session.config.clone();
+                        let Some(object) = config.as_object_mut() else {
+                            return Err(IpcError::internal(
+                                "会话 config 不是 JSON 对象（不变量破坏）",
+                            ));
+                        };
+                        let aether = object
+                            .entry("aether".to_owned())
+                            .or_insert_with(|| json!({}));
+                        let Some(aether) = aether.as_object_mut() else {
+                            return Err(IpcError::internal(
+                                "会话 config.aether 不是 JSON 对象（不变量破坏）",
+                            ));
+                        };
+                        aether.insert("provider_id".to_owned(), Value::String(provider_id.clone()));
+                        let persisted_model = new_model.or_else(|| session.model.clone());
+                        let outcome = write
+                            .execute(StoreCommand::UpdateSessionSelection {
+                                session_id: session_id.clone(),
+                                config,
+                                model: persisted_model,
+                                updated_at: now_ms(),
+                            })
+                            .await
+                            .map_err(|error| {
+                                IpcError::internal(format!("补选持久化失败：{error}"))
+                            })?;
+                        if let StoreOutcome::Applied { affected } = outcome {
+                            if affected == 0 {
+                                return Err(IpcError::internal(
+                                    "补选持久化未影响任何行（不变量破坏）",
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
             // M3-10/ADR-010 能力门（同步判定路径，尽力而为）：run 执行前的 runtime
             // ready 快照；未 ready（cold/starting）→ 延迟判定（不产生响应警告，
             // run 启动时由执行器按同一门再判定）。覆盖请求仅影响本次 run。
             let warnings = match (&reads, &supervisor) {
-                (Some(reads), Some(supervisor)) => {
+                (Some(_reads), Some(supervisor)) => {
                     let mut warnings = None;
-                    if let Some(session) = reads
-                        .session(&session_id)
-                        .await
-                        .map_err(|error| IpcError::internal(format!("会话读取失败：{error}")))?
-                    {
+                    if let Some(session) = session_row {
                         if let Some(runtime) = supervisor.get(session.runtime_id.as_str()) {
                             if let Some(connection) = runtime.connection().await {
                                 let (capabilities, ready) = match connection.state() {
@@ -1788,6 +2091,8 @@ impl IpcBackend for SessionBackend {
                 .await
                 .map_err(|error| IpcError::internal(format!("会话读取失败：{error}")))?
                 .ok_or_else(|| IpcError::session_not_found(session_id.as_str()))?;
+            // ADR-028 v0.9：provider 失效只读；model 失效/缺失补选前拒绝恢复。
+            ensure_session_writable(&reads, &session).await?;
             ensure_pause_supported(&supervisor, &session.runtime_id).await?;
             ensure_runtime_available(&reads, &supervisor, &session.runtime_id).await?;
             let report = manager
@@ -1830,10 +2135,26 @@ impl IpcBackend for SessionBackend {
     /// 按 `sessions.config.native_id` 与适配器能力决定）。产生新 run 且旧 run 保留审计。
     fn run_retry(&self, request: &crate::ipc::dto::RunRetryRequest) -> Result<Value, IpcError> {
         let manager = self.manager_required()?.clone();
+        let reads = self.reads.clone();
         let run_id = request.run_id.clone();
         self.call(async move {
             let run_id = aether_core::RunId::new(run_id)
                 .map_err(|error| IpcError::internal(format!("run_id 非法：{error}")))?;
+            // ADR-028 v0.9：provider 失效只读 → 拒绝 run_retry；model 空/失效 →
+            // 补选前拒绝（不自动重建/切换）。
+            if let Some(reads) = &reads {
+                let run = reads
+                    .run(&run_id)
+                    .await
+                    .map_err(|error| IpcError::internal(format!("run 读取失败：{error}")))?
+                    .ok_or_else(|| IpcError::invalid_value("run 不存在；无法重试"))?;
+                let session = reads
+                    .session(&run.session_id)
+                    .await
+                    .map_err(|error| IpcError::internal(format!("会话读取失败：{error}")))?
+                    .ok_or_else(|| IpcError::session_not_found(run.session_id.as_str()))?;
+                ensure_session_writable(reads, &session).await?;
+            }
             let ack = manager
                 .retry_run(&run_id)
                 .await
@@ -2740,16 +3061,18 @@ async fn ensure_pause_supported(
     }
 }
 
-/// ADR-028：校验显式会话级供应商（存在 + 启用 + 模型归属 + 运行时协议端点 + 能力）。
+/// ADR-028 v0.9：校验会话级供应商（三官方运行时 `provider_id` + `model` 语义必填）。
 ///
-/// 显式 `provider_id`：存在 + 启用 + 运行时协议端点 +（可选）模型归属且启用；
-/// 任一不满足 → `invalid_value`（创建前拒绝，不推迟到 CLI/API 层）。
+/// 校验：provider 存在/启用、模型必填且属于该 provider 并启用、运行时协议端点可解析、
+/// provider → protocol 兼容、broker 可用且 `api_key_ref` 可读（预检读取后立即丢弃）。
+/// 任一失败 → 创建前拒绝，无部分会话；不自动选择默认 provider。
 async fn resolve_session_provider(
     reads: Option<&ReadPool>,
     runtime_id: &str,
     requested: Option<&str>,
     model: Option<&str>,
     supports_multi_provider: bool,
+    broker: Option<&crate::provider_env::ProviderEnvHook>,
 ) -> Result<Option<String>, IpcError> {
     if !supports_multi_provider {
         return if requested.is_some() {
@@ -2760,13 +3083,16 @@ async fn resolve_session_provider(
             Ok(None)
         };
     }
-    // 缺省 = 旧单供应商路径（不按模型隐式选 provider，避免 broker 不可用时
-    // 把既有会话从可用 env 路径推到失败）。
-    let Some(provider_id) = requested else {
-        return Ok(None);
+    let Some(provider_id) = requested.filter(|value| !value.is_empty()) else {
+        return Err(IpcError::invalid_value("请选择供应商"));
+    };
+    let Some(model) = model.filter(|value| !value.is_empty()) else {
+        return Err(IpcError::invalid_value("请选择模型"));
     };
     let Some(reads) = reads else {
-        return Err(IpcError::invalid_value("存储未就绪：无法校验 provider_id"));
+        return Err(IpcError::core_not_ready(
+            "存储未就绪：无法校验 provider_id/model",
+        ));
     };
     let provider = reads
         .provider(provider_id)
@@ -2778,26 +3104,232 @@ async fn resolve_session_provider(
             "供应商已停用：{provider_id}"
         )));
     }
-    if !crate::provider_env::provider_supports_protocol(&provider, runtime_id) {
+    let models = reads
+        .provider_models()
+        .await
+        .map_err(|error| IpcError::internal(format!("读取供应商模型失败：{error}")))?;
+    let owned = models
+        .iter()
+        .any(|entry| entry.provider_id == provider_id && entry.model_id == model && entry.enabled);
+    if !owned {
         return Err(IpcError::invalid_value(format!(
-            "供应商 {provider_id} 未配置运行时 {runtime_id} 所需协议端点"
+            "模型 {model} 不属于供应商 {provider_id} 或未启用"
         )));
     }
-    if let Some(model) = model {
-        let models = reads
-            .provider_models()
-            .await
-            .map_err(|error| IpcError::internal(format!("读取供应商模型失败：{error}")))?;
-        let owned = models.iter().any(|entry| {
+    let protocol = crate::provider_env::runtime_protocol(runtime_id).ok_or_else(|| {
+        IpcError::invalid_value(format!("运行时 {runtime_id} 没有可用的供应商协议"))
+    })?;
+    crate::provider_env::resolve_protocol_base_url(&provider, protocol).map_err(|error| {
+        IpcError::invalid_value(format!(
+            "供应商 {provider_id} 未配置运行时 {runtime_id} 所需协议端点：{error}"
+        ))
+    })?;
+    let Some(broker) = broker else {
+        return Err(IpcError::core_not_ready(
+            "凭据 broker 未接线：multi_provider 会话创建失败（不回退单供应商 env）",
+        ));
+    };
+    broker
+        .preflight_credential(provider_id, protocol)
+        .await
+        .map_err(|error| {
+            if error.contains("broker") || error.contains("未接线") {
+                IpcError::core_not_ready(error)
+            } else {
+                IpcError::invalid_value(error)
+            }
+        })?;
+    Ok(Some(provider_id.to_owned()))
+}
+
+/// 旧会话补选计划（ADR-028 v0.9 21 行真相表）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SelectionPlan {
+    /// 补选 provider（`model` = 一次性覆盖；`None` = 沿用会话现有有效 model）。
+    Provider {
+        provider_id: String,
+        model: Option<String>,
+    },
+    /// 仅一次性补选 model（provider 不变）。
+    Model { model: String },
+}
+
+/// 会话当前选择的 provider id（`sessions.config.aether.provider_id`）。
+fn session_provider_id(session: &aether_core::Session) -> Option<&str> {
+    session
+        .config
+        .get("aether")
+        .and_then(|value| value.get("provider_id"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+}
+
+/// 补选并发错误文案（ADR-028 v0.9：不复用等待队列满文案；业务码保留 `session_busy`）。
+pub const SESSION_SELECTION_BUSY_MESSAGE: &str =
+    "当前任务仍在运行，暂不能补选供应商/模型，请等当前任务结束后重试。（session_busy）";
+
+fn selection_busy_error() -> IpcError {
+    IpcError::invalid_value(SESSION_SELECTION_BUSY_MESSAGE)
+}
+
+fn readonly_selection_error() -> IpcError {
+    IpcError::invalid_value(
+        "供应商已停用/删除：当前会话只读（可查看历史、可中断在途任务），禁止发送/重试/恢复及补选",
+    )
+}
+
+/// 21 行真相表（ADR-028 v0.9 §2.1-4；未列组合默认拒绝）。
+///
+/// 返回 `Ok(None)` = 正常发送；`Ok(Some(plan))` = 补选后发送；`Err` = 拒绝。
+fn plan_session_selection(
+    session: &aether_core::Session,
+    providers: &[aether_store::ProviderRecord],
+    models: &[aether_store::ProviderModelRecord],
+    request_provider: Option<&str>,
+    request_model: Option<&str>,
+) -> Result<Option<SelectionPlan>, IpcError> {
+    let request_provider = request_provider.filter(|value| !value.is_empty());
+    let request_model = request_model.filter(|value| !value.is_empty());
+    let session_model = session.model.as_deref().filter(|value| !value.is_empty());
+    let session_provider = session_provider_id(session);
+    let model_active_for = |provider_id: &str, model: &str| {
+        models.iter().any(|entry| {
             entry.provider_id == provider_id && entry.model_id == model && entry.enabled
-        });
-        if !owned {
-            return Err(IpcError::invalid_value(format!(
-                "模型 {model} 不属于供应商 {provider_id} 或未启用"
-            )));
+        })
+    };
+    let provider_active = |provider_id: &str| {
+        providers
+            .iter()
+            .any(|provider| provider.id == provider_id && provider.enabled)
+    };
+    let model_anywhere = |model: &str| {
+        providers
+            .iter()
+            .any(|provider| provider.enabled && model_active_for(&provider.id, model))
+    };
+    let session_model_state = match session_provider {
+        Some(provider_id) if !provider_active(provider_id) => "invalid",
+        Some(provider_id) => match session_model {
+            None => "missing",
+            Some(model) if model_active_for(provider_id, model) => "active",
+            Some(_) => "invalid",
+        },
+        None => match session_model {
+            None => "missing",
+            Some(model) if model_anywhere(model) => "active",
+            Some(_) => "invalid",
+        },
+    };
+    match session_provider {
+        Some(provider_id) => {
+            // 第 21 行：provider 失效 → 只读；**优先于并发检查**返回 invalid_value。
+            if !provider_active(provider_id) {
+                return Err(readonly_selection_error());
+            }
+            match (request_provider, request_model) {
+                // 第 13/17/20 行：provider 已选，禁止切换（即使 model 任意）。
+                (Some(_), _) => Err(IpcError::invalid_value(
+                    "会话已选择供应商，禁止运行期切换供应商（provider 已选且 model 有效）",
+                )),
+                // 第 14 行：model 有效时禁止运行期修改。
+                (None, Some(_)) if session_model_state == "active" => Err(IpcError::invalid_value(
+                    "会话模型有效，禁止运行期修改模型（禁止运行期切换）",
+                )),
+                // 第 15/18 行：model 空/失效/不属于 → 一次性补选。
+                (None, Some(model)) => Ok(Some(SelectionPlan::Model {
+                    model: model.to_owned(),
+                })),
+                // 第 16/19 行：需要补选 model 但未提供。
+                (None, None) if session_model_state != "active" => {
+                    Err(IpcError::invalid_value("请选择模型（模型缺失或已失效）"))
+                }
+                // 第 12 行：正常发送。
+                (None, None) => Ok(None),
+            }
+        }
+        None => {
+            // 第 4/8/11 行：无 provider 且未携带 provider → 拒绝（含“旧会话正常 send”）。
+            let Some(provider_id) = request_provider else {
+                return Err(IpcError::invalid_value("请选择供应商"));
+            };
+            match (request_model, session_model_state) {
+                // 第 1/6/9 行：补选 provider（+ model 覆盖/沿用/修复失效）。
+                (Some(model), _) => Ok(Some(SelectionPlan::Provider {
+                    provider_id: provider_id.to_owned(),
+                    model: Some(model.to_owned()),
+                })),
+                // 第 2/10 行：补选 provider 但 model 缺失/失效 → 拒绝。
+                (None, "active") => Ok(Some(SelectionPlan::Provider {
+                    provider_id: provider_id.to_owned(),
+                    model: None,
+                })),
+                (None, _) => Err(IpcError::invalid_value("请选择模型")),
+            }
         }
     }
-    Ok(Some(provider_id.to_owned()))
+}
+
+/// 补选目标校验（provider 有效、model 属于该 provider 并启用）。
+fn validate_selection_target(
+    provider_id: &str,
+    model: &str,
+    providers: &[aether_store::ProviderRecord],
+    models: &[aether_store::ProviderModelRecord],
+) -> Result<(), IpcError> {
+    if !providers
+        .iter()
+        .any(|provider| provider.id == provider_id && provider.enabled)
+    {
+        return Err(IpcError::invalid_value(format!(
+            "供应商不存在或已停用：{provider_id}"
+        )));
+    }
+    if !models
+        .iter()
+        .any(|entry| entry.provider_id == provider_id && entry.model_id == model && entry.enabled)
+    {
+        return Err(IpcError::invalid_value(format!(
+            "模型 {model} 不属于供应商 {provider_id} 或未启用"
+        )));
+    }
+    Ok(())
+}
+
+/// 旧会话/只读判定：官方运行时 provider 失效 → 拒绝；model 空/失效 → 拒绝补选前操作。
+async fn ensure_session_writable(
+    reads: &ReadPool,
+    session: &aether_core::Session,
+) -> Result<(), IpcError> {
+    if !aether_core::supports_multi_provider(session.runtime_id.as_str()) {
+        return Ok(());
+    }
+    let providers = reads
+        .providers()
+        .await
+        .map_err(|error| IpcError::internal(format!("供应商读取失败：{error}")))?;
+    let models = reads
+        .provider_models()
+        .await
+        .map_err(|error| IpcError::internal(format!("供应商模型读取失败：{error}")))?;
+    let Some(provider_id) = session_provider_id(session) else {
+        return Err(IpcError::invalid_value("请选择供应商"));
+    };
+    if !providers
+        .iter()
+        .any(|provider| provider.id == provider_id && provider.enabled)
+    {
+        return Err(readonly_selection_error());
+    }
+    let Some(model) = session.model.as_deref().filter(|value| !value.is_empty()) else {
+        return Err(IpcError::invalid_value("请选择模型（模型缺失或已失效）"));
+    };
+    if !models
+        .iter()
+        .any(|entry| entry.provider_id == provider_id && entry.model_id == model && entry.enabled)
+    {
+        return Err(IpcError::invalid_value("请选择模型（模型缺失或已失效）"));
+    }
+    Ok(())
 }
 
 /// 恢复前的运行时可用性复核（M7-03/ADR-017 §2.1-4①：`enabled=0` 或
@@ -2948,9 +3480,55 @@ mod tests {
 
     #[test]
     fn provider_id_validates_model_endpoint_and_capability() {
+        use std::sync::Arc;
+
+        use aether_security::{KeychainRef, SecretError, SecretStore, SecretValue, SecurityLevel};
         use aether_store::{
             ProviderModelRecord, ProviderRecord, StoreCommand, StoreRuntime, WriteQueueConfig,
         };
+
+        #[derive(Default)]
+        struct MemorySecrets {
+            values: std::sync::Mutex<std::collections::HashMap<String, String>>,
+        }
+        impl SecretStore for MemorySecrets {
+            fn level(&self) -> SecurityLevel {
+                SecurityLevel::OsKeychain
+            }
+            fn get(&self, reference: &KeychainRef) -> Result<SecretValue, SecretError> {
+                self.values
+                    .lock()
+                    .map_err(|_| SecretError::NotFound {
+                        reference: reference.clone(),
+                    })?
+                    .get(&reference.to_uri())
+                    .map(|value| SecretValue::new(value.clone()))
+                    .ok_or_else(|| SecretError::NotFound {
+                        reference: reference.clone(),
+                    })
+            }
+            fn set(&self, reference: &KeychainRef, value: &SecretValue) -> Result<(), SecretError> {
+                self.values
+                    .lock()
+                    .map_err(|_| SecretError::NotFound {
+                        reference: reference.clone(),
+                    })?
+                    .insert(reference.to_uri(), value.expose().to_owned());
+                Ok(())
+            }
+            fn delete(&self, reference: &KeychainRef) -> Result<(), SecretError> {
+                self.values
+                    .lock()
+                    .map_err(|_| SecretError::NotFound {
+                        reference: reference.clone(),
+                    })?
+                    .remove(&reference.to_uri())
+                    .map(|_| ())
+                    .ok_or_else(|| SecretError::NotFound {
+                        reference: reference.clone(),
+                    })
+            }
+        }
 
         let dir = tempfile::TempDir::new().unwrap();
         let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -2990,19 +3568,46 @@ mod tests {
             }))
             .unwrap();
 
-        assert_eq!(
-            runtime
-                .block_on(resolve_session_provider(
-                    Some(storage.reads()),
-                    "claude-code",
-                    None,
-                    Some("deepseek-flash"),
-                    true,
-                ))
-                .unwrap(),
-            None,
-            "缺省 provider_id 必须走旧单供应商路径，不按模型隐式解析"
+        let secrets = Arc::new(MemorySecrets::default());
+        let reference = KeychainRef::new("provider", provider_id).unwrap();
+        secrets
+            .set(&reference, &SecretValue::new("test-key".to_owned()))
+            .unwrap();
+        let hook = crate::provider_env::ProviderEnvHook::new(dir.path().to_path_buf());
+        hook.wire(
+            storage.reads().clone(),
+            Some(Arc::clone(&secrets) as Arc<dyn SecretStore>),
         );
+        hook.set_broker_info(crate::credential_broker::BrokerInfo {
+            endpoint: "test-endpoint".to_owned(),
+            token: "test-token".to_owned(),
+        });
+
+        // 三官方运行时语义必填：缺省 provider/model → 创建前拒绝。
+        let missing_provider = runtime
+            .block_on(resolve_session_provider(
+                Some(storage.reads()),
+                "claude-code",
+                None,
+                Some("deepseek-flash"),
+                true,
+                Some(&hook),
+            ))
+            .unwrap_err();
+        assert_eq!(missing_provider.code, IpcErrorCode::InvalidValue);
+        assert!(missing_provider.message.contains("请选择供应商"));
+        let missing_model = runtime
+            .block_on(resolve_session_provider(
+                Some(storage.reads()),
+                "claude-code",
+                Some(provider_id),
+                None,
+                true,
+                Some(&hook),
+            ))
+            .unwrap_err();
+        assert_eq!(missing_model.code, IpcErrorCode::InvalidValue);
+        assert!(missing_model.message.contains("请选择模型"));
         assert_eq!(
             runtime
                 .block_on(resolve_session_provider(
@@ -3011,6 +3616,7 @@ mod tests {
                     Some(provider_id),
                     Some("deepseek-flash"),
                     true,
+                    Some(&hook),
                 ))
                 .unwrap(),
             Some(provider_id.to_owned())
@@ -3023,6 +3629,7 @@ mod tests {
                 Some(provider_id),
                 Some("claude-opus"),
                 true,
+                Some(&hook),
             ))
             .unwrap_err();
         assert_eq!(wrong_model.code, IpcErrorCode::InvalidValue);
@@ -3034,6 +3641,7 @@ mod tests {
                 Some(provider_id),
                 Some("deepseek-flash"),
                 true,
+                Some(&hook),
             ))
             .unwrap_err();
         assert_eq!(wrong_protocol.code, IpcErrorCode::InvalidValue);
@@ -3045,9 +3653,278 @@ mod tests {
                 Some(provider_id),
                 None,
                 false,
+                Some(&hook),
             ))
             .unwrap_err();
         assert_eq!(unsupported.code, IpcErrorCode::InvalidValue);
         assert!(unsupported.message.contains("multi_provider"));
+        // broker 未接线 → core_not_ready（不得回退单供应商 env）。
+        let broker_missing = runtime
+            .block_on(resolve_session_provider(
+                Some(storage.reads()),
+                "claude-code",
+                Some(provider_id),
+                Some("deepseek-flash"),
+                true,
+                None,
+            ))
+            .unwrap_err();
+        assert_eq!(broker_missing.code, IpcErrorCode::CoreNotReady);
+    }
+
+    fn truth_table_fixture() -> (
+        aether_core::Session,
+        Vec<aether_store::ProviderRecord>,
+        Vec<aether_store::ProviderModelRecord>,
+    ) {
+        let session = aether_core::Session {
+            id: aether_core::SessionId::new("01J0000000000000000000T00").unwrap(),
+            runtime_id: aether_core::RuntimeId::new("claude-code").unwrap(),
+            workspace_id: None,
+            parent_session_id: None,
+            title: "真相表".to_owned(),
+            status: aether_core::SessionStatus::Idle,
+            model: None,
+            thinking_depth: aether_core::THINKING_DEPTH_DEFAULT,
+            permission_mode: aether_core::PermissionMode::default(),
+            preset_id: None,
+            system_prompt: None,
+            config: json!({}),
+            token_usage: aether_core::TokenUsage::default(),
+            created_at: 1,
+            updated_at: 1,
+            closed_at: None,
+        };
+        let provider_id = "01J0000000000000000000T01".to_owned();
+        let providers = vec![
+            aether_store::ProviderRecord {
+                id: provider_id.clone(),
+                name: "启用供应商".to_owned(),
+                provider_type: "anthropic".to_owned(),
+                base_url: Some("https://api.anthropic.com".to_owned()),
+                endpoints: "{}".to_owned(),
+                api_key_ref: None,
+                enabled: true,
+                is_builtin: false,
+                created_at: 1,
+                updated_at: 1,
+            },
+            aether_store::ProviderRecord {
+                id: "01J0000000000000000000T02".to_owned(),
+                name: "停用供应商".to_owned(),
+                provider_type: "anthropic".to_owned(),
+                base_url: None,
+                endpoints: "{}".to_owned(),
+                api_key_ref: None,
+                enabled: false,
+                is_builtin: false,
+                created_at: 1,
+                updated_at: 1,
+            },
+        ];
+        let models = vec![
+            aether_store::ProviderModelRecord {
+                id: "01J0000000000000000000T03".to_owned(),
+                provider_id,
+                model_id: "claude-opus".to_owned(),
+                display_name: "Opus".to_owned(),
+                enabled: true,
+                created_at: 1,
+            },
+            aether_store::ProviderModelRecord {
+                id: "01J0000000000000000000T04".to_owned(),
+                provider_id: "01J0000000000000000000T01".to_owned(),
+                model_id: "claude-disabled".to_owned(),
+                display_name: "Disabled".to_owned(),
+                enabled: false,
+                created_at: 1,
+            },
+        ];
+        (session, providers, models)
+    }
+
+    fn with_provider(
+        mut session: aether_core::Session,
+        provider_id: Option<&str>,
+    ) -> aether_core::Session {
+        session.config = match provider_id {
+            Some(provider_id) => json!({"aether": {"provider_id": provider_id}}),
+            None => json!({}),
+        };
+        session
+    }
+
+    #[test]
+    fn selection_truth_table_is_exhaustive_and_rejects_unlisted_combinations() {
+        let (base, providers, models) = truth_table_fixture();
+        let enabled = "01J0000000000000000000T01";
+        let disabled = "01J0000000000000000000T02";
+        let missing = "01J0000000000000000000T99";
+        let expect_provider = |session, model: Option<&str>| {
+            matches!(
+                plan_session_selection(
+                    &with_provider(session, None),
+                    &providers,
+                    &models,
+                    Some(enabled),
+                    model
+                )
+                .unwrap(),
+                Some(SelectionPlan::Provider { .. })
+            )
+        };
+        let expect_model = |session, model: &str| {
+            matches!(
+                plan_session_selection(&session, &providers, &models, None, Some(model)).unwrap(),
+                Some(SelectionPlan::Model { .. })
+            )
+        };
+        let error_of =
+            |session: &aether_core::Session, provider: Option<&str>, model: Option<&str>| {
+                plan_session_selection(session, &providers, &models, provider, model)
+                    .unwrap_err()
+                    .message
+            };
+
+        // 1：provider 空 + model 空 + send provider/model → 允许补选。
+        assert!(expect_provider(base.clone(), Some("claude-opus")));
+        // 2：provider 空 + model 空 + send provider only → 请选择模型。
+        assert!(error_of(&base, Some(enabled), None).contains("请选择模型"));
+        // 3/4：provider 空 + model 空 + 无 provider → 请选择供应商。
+        assert!(error_of(&base, None, Some("claude-opus")).contains("请选择供应商"));
+        assert!(error_of(&base, None, None).contains("请选择供应商"));
+        // 5：provider 空 + model 有效 + send provider only → 允许沿用 model。
+        let valid_model = aether_core::Session {
+            model: Some("claude-opus".to_owned()),
+            ..base.clone()
+        };
+        assert!(expect_provider(valid_model.clone(), None));
+        // 6：provider 空 + model 有效 + send provider/model → 允许覆盖。
+        assert!(expect_provider(valid_model.clone(), Some("claude-opus")));
+        // 7/8：provider 空 + model 有效 + 无 provider → 请选择供应商。
+        assert!(error_of(&valid_model, None, Some("claude-opus")).contains("请选择供应商"));
+        assert!(error_of(&valid_model, None, None).contains("请选择供应商"));
+        // 9：provider 空 + model 失效 + send provider/model → 允许。
+        let invalid_model = aether_core::Session {
+            model: Some("gone".to_owned()),
+            ..base.clone()
+        };
+        assert!(expect_provider(invalid_model.clone(), Some("claude-opus")));
+        // 10：provider 空 + model 失效 + send provider only → 请选择模型。
+        assert!(error_of(&invalid_model, Some(enabled), None).contains("请选择模型"));
+        // 11：provider 空 + model 失效 + 无 provider（任意 model）→ 请选择供应商。
+        assert!(error_of(&invalid_model, None, Some("claude-opus")).contains("请选择供应商"));
+        // 12：provider 有 + model 有效 + 无 send 字段 → 正常发送。
+        let selected = with_provider(
+            aether_core::Session {
+                model: Some("claude-opus".to_owned()),
+                ..base.clone()
+            },
+            Some(enabled),
+        );
+        assert!(
+            plan_session_selection(&selected, &providers, &models, None, None)
+                .unwrap()
+                .is_none()
+        );
+        // 13：provider 有 + model 有效 + send provider → 禁止切换。
+        assert!(error_of(&selected, Some(enabled), None).contains("禁止运行期切换供应商"));
+        // 14：provider 有 + model 有效 + send model → 禁止改 model。
+        assert!(error_of(&selected, None, Some("claude-opus")).contains("禁止运行期修改模型"));
+        // 15：provider 有 + model 空 + send model → 允许一次性补选。
+        let empty_model = with_provider(
+            aether_core::Session {
+                model: None,
+                ..base.clone()
+            },
+            Some(enabled),
+        );
+        assert!(expect_model(empty_model.clone(), "claude-opus"));
+        // 16：provider 有 + model 空 + 无 send model → 请选择模型。
+        assert!(error_of(&empty_model, None, None).contains("请选择模型"));
+        // 17：provider 有 + model 空 + send provider → 禁止切换。
+        assert!(error_of(&empty_model, Some(enabled), Some("claude-opus"))
+            .contains("禁止运行期切换供应商"));
+        // 18：provider 有 + model 失效 + send model → 允许补选。
+        let stale_model = with_provider(
+            aether_core::Session {
+                model: Some("claude-disabled".to_owned()),
+                ..base.clone()
+            },
+            Some(enabled),
+        );
+        assert!(expect_model(stale_model.clone(), "claude-opus"));
+        // 19：provider 有 + model 失效 + 无 send model → 请选择模型。
+        assert!(error_of(&stale_model, None, None).contains("请选择模型"));
+        // 20：provider 有 + model 失效 + send provider → 禁止切换。
+        assert!(error_of(&stale_model, Some(enabled), Some("claude-opus"))
+            .contains("禁止运行期切换供应商"));
+        // 21：provider 停用/删除 → 只读（优先于并发检查）。
+        let readonly = with_provider(
+            aether_core::Session {
+                model: Some("claude-opus".to_owned()),
+                ..base.clone()
+            },
+            Some(disabled),
+        );
+        assert!(error_of(&readonly, None, None).contains("只读"));
+        let deleted = with_provider(
+            aether_core::Session {
+                model: Some("claude-opus".to_owned()),
+                ..base.clone()
+            },
+            Some(missing),
+        );
+        assert!(error_of(&deleted, None, Some("claude-opus")).contains("只读"));
+        // 未列组合默认拒绝：provider 有 + 任意 send 字段组合均已覆盖；额外防护：
+        // provider 空 + model 空 + send provider（model 非法）等由目标校验拒绝。
+        let mut invalid_target = base.clone();
+        invalid_target.model = None;
+        // provider 空 + send provider/model（model 不属于）→ plan 允许，但目标校验拒绝。
+        assert!(
+            validate_selection_target(enabled, "claude-disabled", &providers, &models).is_err()
+        );
+    }
+
+    #[test]
+    fn provider_selection_state_handles_provider_empty_and_disabled_models() {
+        let (_, providers, models) = truth_table_fixture();
+        // provider 空 + model 在任一启用 provider 中存在且启用 → active。
+        assert_eq!(
+            provider_selection_state(None, Some("claude-opus"), &providers, &models).2,
+            "active"
+        );
+        // provider 空 + model 停用 → invalid（不得判 active）。
+        assert_eq!(
+            provider_selection_state(None, Some("claude-disabled"), &providers, &models).2,
+            "invalid"
+        );
+        // provider 空 + model 不存在 → invalid。
+        assert_eq!(
+            provider_selection_state(None, Some("gone"), &providers, &models).2,
+            "invalid"
+        );
+        // provider 有效但 model 不属于 → invalid。
+        assert_eq!(
+            provider_selection_state(
+                Some("01J0000000000000000000T01"),
+                Some("gone"),
+                &providers,
+                &models
+            )
+            .2,
+            "invalid"
+        );
+        // provider 失效 → invalid（UI 只读）。
+        assert_eq!(
+            provider_selection_state(
+                Some("01J0000000000000000000T02"),
+                Some("claude-opus"),
+                &providers,
+                &models
+            )
+            .1,
+            "invalid"
+        );
     }
 }

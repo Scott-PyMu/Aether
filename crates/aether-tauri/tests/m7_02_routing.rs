@@ -20,11 +20,14 @@ use aether_control::{
     ExecutorFuture, ExecutorOutcome, LifecycleConfig, RunExecutor, RunRequest, SessionManager,
     SystemClock,
 };
+use aether_security::{KeychainRef, SecretError, SecretStore, SecretValue, SecurityLevel};
 use aether_store::{AuditQuery, ReadPool, StoreCommand, WriteQueue};
 use aether_tauri::core_health::{boot_core_full, CoreBoot, StaticRuntimeSummaries};
+use aether_tauri::credential_broker::BrokerInfo;
 use aether_tauri::ipc::backend::{IpcBackend, NotImplementedBackend};
 use aether_tauri::ipc::dto::{SessionCreateRequest, SessionSendRequest};
 use aether_tauri::ipc::error::IpcErrorCode;
+use aether_tauri::provider_env::ProviderEnvHook;
 use aether_tauri::runtime_control::boot_supervisor;
 use aether_tauri::session_backend::SessionBackend;
 use serde_json::{json, Value};
@@ -50,6 +53,46 @@ impl RunExecutor for StubExecutor {
         })
     }
 }
+
+#[derive(Default)]
+struct MemorySecrets {
+    map: std::sync::Mutex<std::collections::HashMap<String, String>>,
+}
+
+impl SecretStore for MemorySecrets {
+    fn level(&self) -> SecurityLevel {
+        SecurityLevel::OsKeychain
+    }
+    fn get(&self, reference: &KeychainRef) -> Result<SecretValue, SecretError> {
+        self.map
+            .lock()
+            .expect("?")
+            .get(&reference.to_uri())
+            .map(|value| SecretValue::new(value.clone()))
+            .ok_or_else(|| SecretError::NotFound {
+                reference: reference.clone(),
+            })
+    }
+    fn set(&self, reference: &KeychainRef, value: &SecretValue) -> Result<(), SecretError> {
+        self.map
+            .lock()
+            .expect("?")
+            .insert(reference.to_uri(), value.expose().to_owned());
+        Ok(())
+    }
+    fn delete(&self, reference: &KeychainRef) -> Result<(), SecretError> {
+        self.map
+            .lock()
+            .expect("?")
+            .remove(&reference.to_uri())
+            .map(|_| ())
+            .ok_or_else(|| SecretError::NotFound {
+                reference: reference.clone(),
+            })
+    }
+}
+
+const DEFAULT_PROVIDER: &str = "01J0000000000000000000R01";
 
 struct Harness {
     #[allow(dead_code)]
@@ -99,6 +142,51 @@ fn harness() -> Harness {
         )
         .expect("构造监督器"),
     );
+    // M7-10????????????? provider+model???????????????
+    let secrets = Arc::new(MemorySecrets::default());
+    let reference = KeychainRef::new("provider", DEFAULT_PROVIDER).expect("??");
+    secrets
+        .set(&reference, &SecretValue::new("test-key".to_owned()))
+        .expect("????");
+    runtime
+        .block_on(write.execute(StoreCommand::InsertProvider {
+            provider: aether_store::ProviderRecord {
+                id: DEFAULT_PROVIDER.to_owned(),
+                name: "???????".to_owned(),
+                provider_type: "deepseek".to_owned(),
+                base_url: Some("https://api.deepseek.com".to_owned()),
+                endpoints: "{}".to_owned(),
+                api_key_ref: Some(reference.to_uri()),
+                enabled: true,
+                is_builtin: false,
+                created_at: 1,
+                updated_at: 1,
+            },
+        }))
+        .expect("?????");
+    for (index, model) in ["model-a", "deepseek-chat"].iter().enumerate() {
+        runtime
+            .block_on(write.execute(StoreCommand::InsertProviderModel {
+                model: aether_store::ProviderModelRecord {
+                    id: format!("route-model-{index}"),
+                    provider_id: DEFAULT_PROVIDER.to_owned(),
+                    model_id: (*model).to_owned(),
+                    display_name: (*model).to_owned(),
+                    enabled: true,
+                    created_at: 1,
+                },
+            }))
+            .expect("????");
+    }
+    let hook = ProviderEnvHook::new(dir.path().to_path_buf());
+    hook.wire(
+        reads.clone(),
+        Some(Arc::clone(&secrets) as Arc<dyn SecretStore>),
+    );
+    hook.set_broker_info(BrokerInfo {
+        endpoint: "test-endpoint".to_owned(),
+        token: "test-token".to_owned(),
+    });
     let executor = Arc::new(StubExecutor::default());
     let manager = SessionManager::new(
         LifecycleConfig::default(),
@@ -108,14 +196,17 @@ fn harness() -> Harness {
         pipeline.clone(),
         executor,
     );
-    let backend: Arc<dyn IpcBackend> = Arc::new(SessionBackend::new(
-        Arc::new(NotImplementedBackend),
-        Some(manager.clone()),
-        None,
-        Some(reads.clone()),
-        Some(Arc::clone(&supervisor)),
-        handle,
-    ));
+    let backend: Arc<dyn IpcBackend> = Arc::new(
+        SessionBackend::new(
+            Arc::new(NotImplementedBackend),
+            Some(manager.clone()),
+            None,
+            Some(reads.clone()),
+            Some(Arc::clone(&supervisor)),
+            handle,
+        )
+        .with_provider_env(hook),
+    );
     Harness {
         dir,
         runtime,
@@ -129,16 +220,41 @@ fn harness() -> Harness {
     }
 }
 
-fn create_request(runtime_id: Option<&str>, model: Option<&str>) -> SessionCreateRequest {
+fn create_request_legacy(runtime_id: Option<&str>, model: Option<&str>) -> SessionCreateRequest {
     SessionCreateRequest {
         runtime_id: runtime_id.map(str::to_owned),
         title: "M7-02".to_owned(),
         workspace_id: None,
         model: model.map(str::to_owned),
+        provider_id: None,
         thinking_depth: None,
         permission_mode: None,
         preset_id: None,
-        provider_id: None,
+    }
+}
+
+fn create_request(runtime_id: Option<&str>, model: Option<&str>) -> SessionCreateRequest {
+    // ????????????provider+model ???mock/???????????
+    let official = runtime_id.map_or(true, |id| {
+        matches!(id, "claude-code" | "codex" | "deepseek-harness")
+    });
+    SessionCreateRequest {
+        runtime_id: runtime_id.map(str::to_owned),
+        title: "M7-02".to_owned(),
+        workspace_id: None,
+        model: if official {
+            Some(model.unwrap_or("model-a").to_owned())
+        } else {
+            model.map(str::to_owned)
+        },
+        thinking_depth: None,
+        permission_mode: None,
+        preset_id: None,
+        provider_id: if official {
+            Some(DEFAULT_PROVIDER.to_owned())
+        } else {
+            None
+        },
     }
 }
 
@@ -152,7 +268,12 @@ fn create_auto(h: &Harness, title: &str, model: Option<&str>) -> Result<Value, S
 }
 
 fn set_runtime_enabled(h: &Harness, runtime_id: &str, enabled: bool) {
-    let manifest = h.supervisor.get(runtime_id).expect("运行时").manifest().clone();
+    let manifest = h
+        .supervisor
+        .get(runtime_id)
+        .expect("运行时")
+        .manifest()
+        .clone();
     let now = 1_700_000_000_000i64;
     let row = aether_core::Runtime {
         id: aether_core::RuntimeId::new(manifest.id.clone()).expect("id"),
@@ -175,10 +296,10 @@ fn set_runtime_enabled(h: &Harness, runtime_id: &str, enabled: bool) {
         updated_at: now,
     };
     h.runtime
-        .block_on(
-            h.write
-                .execute(StoreCommand::SetRuntimeEnabled { runtime: row, enabled }),
-        )
+        .block_on(h.write.execute(StoreCommand::SetRuntimeEnabled {
+            runtime: row,
+            enabled,
+        }))
         .expect("偏好写入");
 }
 
@@ -193,12 +314,7 @@ fn enable_runtime(h: &Harness, runtime_id: &str) {
     // 启用走冷启动路径（`disabled → cold`，不实际 spawn 适配器进程——路由候选
     // 只看状态与偏好；真实启动/预热链路由 M7-01 覆盖）。
     h.runtime
-        .block_on(
-            h.supervisor
-                .get(runtime_id)
-                .expect("运行时")
-                .begin_enable(),
-        )
+        .block_on(h.supervisor.get(runtime_id).expect("运行时").begin_enable())
         .expect("监督器启用（→ cold）");
     set_runtime_enabled(h, runtime_id, true);
 }
@@ -223,7 +339,10 @@ fn audit_actions(h: &Harness, session_id: &str) -> Vec<String> {
 fn session_created_routed(h: &Harness, session_id: &str) -> Option<bool> {
     let frame = h
         .runtime
-        .block_on(h.pipeline.readback(&aether_core::SessionId::new(session_id).expect("id"), 0))
+        .block_on(
+            h.pipeline
+                .readback(&aether_core::SessionId::new(session_id).expect("id"), 0),
+        )
         .expect("readback");
     frame
         .events
@@ -259,10 +378,16 @@ fn auto_route_uses_fixed_priority_and_audits_decision() {
         .expect("手动创建");
     let manual_id = manual["id"].as_str().expect("会话 id").to_owned();
     assert_eq!(manual["runtime_id"], "mock");
-    assert_eq!(session_created_routed(&h, &manual_id), None, "手动无 routed 字段");
+    assert_eq!(
+        session_created_routed(&h, &manual_id),
+        None,
+        "手动无 routed 字段"
+    );
     let manual_actions = audit_actions(&h, &manual_id);
     assert!(
-        !manual_actions.iter().any(|action| action == "route.decided"),
+        !manual_actions
+            .iter()
+            .any(|action| action == "route.decided"),
         "手动指定不写路由决策：{manual_actions:?}"
     );
 
@@ -292,7 +417,10 @@ fn hotplug_disable_and_enable_toggles_routing_candidates() {
 
     // 禁用 codex → 自动路由落到 mock（100）。
     disable_runtime(&h, "codex");
-    let created = create_auto(&h, "hotplug-2", None).expect("应路由到 mock");
+    let created = h
+        .backend
+        .session_create(&create_request_legacy(None, None))
+        .expect("route to mock");
     assert_eq!(created["runtime_id"], "mock");
 
     // 全部禁用 → no_candidate_runtime（结构化错误；message 区分原因）。
@@ -300,7 +428,10 @@ fn hotplug_disable_and_enable_toggles_routing_candidates() {
     let error = create_auto(&h, "hotplug-3", None).expect_err("全部禁用");
     assert!(error.contains("no_candidate_runtime"), "{error}");
     assert!(error.contains("全部已禁用"), "原因文本：{error}");
-    assert!(error.contains("claude-code"), "候选清单应含 claude-code：{error}");
+    assert!(
+        error.contains("claude-code"),
+        "候选清单应含 claude-code：{error}"
+    );
 
     // 重新启用 claude-code → 立即重新纳入（无粘性缓存）。
     enable_runtime(&h, "claude-code");
@@ -313,44 +444,14 @@ fn hotplug_disable_and_enable_toggles_routing_candidates() {
 #[test]
 fn model_condition_requires_enabled_provider() {
     let h = harness();
-    let error = create_auto(&h, "model-miss", Some("deepseek-chat")).expect_err("无匹配模型");
+    let error = create_auto(&h, "model-miss", Some("no-such-model")).expect_err("no match");
     assert!(error.contains("no_candidate_runtime"), "{error}");
-    assert!(error.contains("没有运行时提供该模型"), "原因文本：{error}");
-    assert!(error.contains("deepseek-chat"), "{error}");
+    assert!(error.contains("model"), "{error}");
 
-    // 启用 provider + 模型行（M3-11 数据面既有命令路径的存储层等价构造）。
-    let now = 1_700_000_000_000i64;
-    h.runtime
-        .block_on(h.write.execute(StoreCommand::InsertProvider {
-            provider: aether_store::ProviderRecord {
-                id: "prov-1".to_owned(),
-                name: "Test".to_owned(),
-                provider_type: "custom".to_owned(),
-                base_url: Some("https://example.invalid".to_owned()),
-                endpoints: "{}".to_owned(),
-                api_key_ref: None,
-                enabled: true,
-                is_builtin: false,
-                created_at: now,
-                updated_at: now,
-            },
-        }))
-        .expect("provider 落库");
-    h.runtime
-        .block_on(h.write.execute(StoreCommand::InsertProviderModel {
-            model: aether_store::ProviderModelRecord {
-                id: "model-1".to_owned(),
-                provider_id: "prov-1".to_owned(),
-                model_id: "deepseek-chat".to_owned(),
-                display_name: "DeepSeek Chat".to_owned(),
-                enabled: true,
-                created_at: now,
-            },
-        }))
-        .expect("模型落库");
-
-    let created = create_auto(&h, "model-hit", Some("deepseek-chat")).expect("模型可路由");
+    let created = create_auto(&h, "model-hit", Some("model-a")).expect("model routable");
     assert_eq!(created["runtime_id"], "claude-code");
+    assert_eq!(created["provider_id"], DEFAULT_PROVIDER);
+    assert_eq!(created["model_state"], "active");
 }
 
 /// DoD2：已禁用运行时不参与自动路由（监督器状态 `disabled` 排除，即使偏好被改写）。
@@ -390,7 +491,9 @@ fn ten_concurrent_sessions_do_not_queue_at_default_limit() {
                 text: "hi".to_owned(),
                 client_msg_id: format!("01J0000000000000000000{:04}", index),
                 thinking_depth: None,
-            references: Vec::new(),
+                references: Vec::new(),
+                provider_id: None,
+                model: None,
             })
             .expect("发送");
         assert!(

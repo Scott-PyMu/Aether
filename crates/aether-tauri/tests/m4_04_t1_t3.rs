@@ -306,6 +306,8 @@ fn t2_t3_echo_latency_and_control_events_zero_loss() {
                         client_msg_id: format!("01J8ZQ5R0N7W9Y8X6V4T2S{index:05}"),
                         thinking_depth: None,
                         references: Vec::new(),
+                        provider_id: None,
+                        model: None,
                     })
                     .expect("session_send");
                 let run_id = ack["run_id"].as_str().expect("run_id").to_owned();

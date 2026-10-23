@@ -33,6 +33,29 @@ pub const THINKING_DEPTH_CAPABILITY: &str = "thinking_depth";
 /// 暂停/恢复适配器能力项（D6/D5/ADR-017：`hello.runtime.capabilities` 字符串项，
 /// 存在即支持；未声明或连接未就绪 → `pause_unsupported`，不产生假暂停）。
 pub const PAUSE_RESUME_CAPABILITY: &str = "pause_resume";
+/// 会话级多供应商能力项（ADR-028 v0.9：**核心静态清单**，不以 `hello`/runtime
+/// ready 为判定门禁；`runtimes_list.capabilities` = hello ∪ 静态表）。
+pub const MULTI_PROVIDER_CAPABILITY: &str = "multi_provider";
+/// 声明 `multi_provider` 的三官方运行时（ADR-028 §2.1-4；新增运行时须另立 ADR）。
+pub const MULTI_PROVIDER_RUNTIMES: [&str; 3] = ["claude-code", "codex", "deepseek-harness"];
+
+/// 官方运行时静态能力表（ADR-028 v0.9）。
+///
+/// 仅登记**不依赖适配器 hello/ready** 的能力项；其余能力仍以 `hello` 为准。
+/// 静态声明与适配器实现必须同批（ADR-028 §3-1）。
+#[must_use]
+pub fn static_capabilities(runtime_id: &str) -> &'static [&'static str] {
+    if MULTI_PROVIDER_RUNTIMES.contains(&runtime_id) {
+        return &[MULTI_PROVIDER_CAPABILITY];
+    }
+    &[]
+}
+
+/// 运行时是否由核心静态清单声明 `multi_provider`（不读 hello）。
+#[must_use]
+pub fn supports_multi_provider(runtime_id: &str) -> bool {
+    static_capabilities(runtime_id).contains(&MULTI_PROVIDER_CAPABILITY)
+}
 
 /// 会话状态（`sessions.status` CHECK 约束，D2/D8）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

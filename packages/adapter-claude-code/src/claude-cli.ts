@@ -14,6 +14,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { stripBrokerEnv } from "@aether/adapter-sdk";
+
 /** 适配器 CLI 配置（`--claude-bin` 等，见 `cli.ts`）。 */
 export interface ClaudeCliConfig {
   /** 可执行文件（默认 `claude`；测试指向 node/fake-cli）。 */
@@ -332,16 +334,14 @@ export class ClaudeCliRun {
     const normalized = normalizeCommand(config.bin, built);
     // M3-10/ADR-010：思考预算经 `MAX_THINKING_TOKENS` 环境变量注入。
     // ADR-028：provider env 只覆盖本次 CLI 子进程；broker token 不得继承给 CLI，
-    // 否则 CLI 可绕过适配器直接向 broker 请求任意 provider 凭据。
-    const baseEnv: NodeJS.ProcessEnv = { ...process.env };
-    delete baseEnv.AETHER_CREDENTIAL_BROKER;
-    const env: NodeJS.ProcessEnv = {
-      ...baseEnv,
+    // 否则 CLI 可绕过适配器直接向 broker 请求任意 provider 凭据（共享 `stripBrokerEnv`）。
+    const env: NodeJS.ProcessEnv = stripBrokerEnv({
+      ...process.env,
       ...(this.options.env ?? {}),
       ...(spec.thinkingBudget !== undefined
         ? { MAX_THINKING_TOKENS: String(spec.thinkingBudget) }
         : {}),
-    };
+    });
     delete env.AETHER_CREDENTIAL_BROKER;
     let child: ChildProcessWithoutNullStreams;
     try {

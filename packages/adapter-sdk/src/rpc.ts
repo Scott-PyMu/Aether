@@ -50,11 +50,52 @@ export interface JsonRpcPeerOptions {
   onResponse?: (id: number | string, result: unknown) => void;
 }
 
+interface PendingRequest {
+  resolve: (value: unknown) => void;
+  reject: (error: Error) => void;
+  timer: NodeJS.Timeout | null;
+}
+
 export class JsonRpcPeer {
+  private readonly pending = new Map<string, PendingRequest>();
+  private nextRequestId = 1;
+
   constructor(
     private readonly writeLine: (line: string) => Promise<void>,
     private readonly options: JsonRpcPeerOptions,
   ) {}
+
+  /**
+   * 适配器 → 核心请求（ADR-028 v0.9：仅登记 `provider.catalog.get`）。
+   *
+   * 请求 id 使用独立命名空间（`a:<n>` 字符串），与核心 → 适配器数字 id 按方向 +
+   * id 匹配，互不冲突；超时/断连清除待决表。
+   */
+  request(method: string, params: unknown, timeoutMs = 5_000): Promise<unknown> {
+    const id = `a:${this.nextRequestId}`;
+    this.nextRequestId += 1;
+    return new Promise<unknown>((resolve, reject) => {
+      const timer =
+        timeoutMs > 0
+          ? setTimeout(() => {
+              this.pending.delete(id);
+              reject(new RpcError(-32603, `${method} 超时（${timeoutMs}ms）`, {
+                aether_code: "core_not_ready",
+              }));
+            }, timeoutMs)
+          : null;
+      this.pending.set(id, { resolve, reject, timer });
+      void this.writeLine(
+        JSON.stringify({ jsonrpc: "2.0", id, method, params } as JsonRpcRequest),
+      ).catch((error: unknown) => {
+        const pending = this.pending.get(id);
+        if (!pending) return;
+        this.pending.delete(id);
+        if (pending.timer) clearTimeout(pending.timer);
+        pending.reject(error instanceof Error ? error : new Error(String(error)));
+      });
+    });
+  }
 
   /**
    * 处理一行帧；返回 `false` 表示帧非法（调用方自行计数/断连）。
@@ -99,7 +140,23 @@ export class JsonRpcPeer {
     }
 
     if ("id" in frame && ("result" in frame || "error" in frame)) {
-      this.options.onResponse?.(frame.id as number | string, frame.result);
+      const id = frame.id as number | string;
+      const pending = this.pending.get(String(id));
+      if (pending) {
+        this.pending.delete(String(id));
+        if (pending.timer) clearTimeout(pending.timer);
+        const error = frame.error as
+          | { code?: number; message?: string; data?: unknown }
+          | undefined;
+        if (error) {
+          pending.reject(
+            new RpcError(error.code ?? ERROR_CODES.INTERNAL_ERROR, error.message ?? "RPC 错误", error.data),
+          );
+        } else {
+          pending.resolve(frame.result);
+        }
+      }
+      this.options.onResponse?.(id, frame.result);
       return true;
     }
 

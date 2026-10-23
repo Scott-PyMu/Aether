@@ -321,3 +321,161 @@ export function findModelProvider(
     });
   return candidates[0] ?? null;
 }
+
+// ===== ADR-028 v0.9：三官方运行时供应商选择 / 端点 / 记忆 =====
+
+/** 核心静态 `multi_provider` 三官方运行时（与后端 `MULTI_PROVIDER_RUNTIMES` 对齐）。 */
+export const MULTI_PROVIDER_RUNTIMES = ["claude-code", "codex", "deepseek-harness"] as const;
+
+/** 运行时 → 协议（非官方运行时 → `null`）。 */
+export function runtimeProtocol(runtimeId: string | null | undefined): string | null {
+  switch (runtimeId) {
+    case "claude-code":
+      return "anthropic";
+    case "codex":
+      return "openai";
+    case "deepseek-harness":
+      return "dsh";
+    default:
+      return null;
+  }
+}
+
+/** 运行时是否受 M7-10 必选供应商/模型约束（静态清单，不依赖 hello/ready）。 */
+export function requiresProviderSelection(runtimeId: string | null | undefined): boolean {
+  return runtimeProtocol(runtimeId) !== null;
+}
+
+/**
+ * 供应商是否支持该运行时协议（显式端点优先；类型回退与核心解析一致：
+ * Anthropic/DeepSeek 支持 Anthropic；OpenAI/DeepSeek 支持 OpenAI；DeepSeek 支持 DSH；
+ * custom 可用显式端点/base_url）。
+ */
+export function providerSupportsRuntime(
+  provider: ProviderEntry,
+  runtimeId: string | null | undefined,
+): boolean {
+  const protocol = runtimeProtocol(runtimeId);
+  if (protocol === null) {
+    return false;
+  }
+  if (provider.endpoints?.[protocol]) {
+    return true;
+  }
+  if (provider.type === "custom") {
+    return Boolean(provider.base_url);
+  }
+  switch (protocol) {
+    case "anthropic":
+      return provider.type === "anthropic" || provider.type === "deepseek";
+    case "openai":
+      return provider.type === "openai" || provider.type === "deepseek";
+    case "dsh":
+      return provider.type === "deepseek";
+    default:
+      return false;
+  }
+}
+
+/** 运行时可用供应商（启用 + 协议兼容）；空 = 无有效选择。 */
+export function providersForRuntime(
+  providers: ProviderEntry[],
+  runtimeId: string | null | undefined,
+): ProviderEntry[] {
+  const enabled = providers.filter((provider) => provider.enabled);
+  if (!runtimeId) {
+    // 自动路由：运行时未定；展示全部启用供应商（最终由核心按候选运行时协议校验）。
+    return enabled;
+  }
+  return enabled.filter((provider) => providerSupportsRuntime(provider, runtimeId));
+}
+
+/** 全局记忆映射（`ui.provider_selection`：runtime → provider_id）。 */
+export type ProviderSelectionMemory = Record<string, string>;
+
+/** 解析设置值（字符串 JSON 对象；损坏/非对象 → `{}`）。 */
+export function parseProviderSelectionMemory(raw: unknown): ProviderSelectionMemory {
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    return {};
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return {};
+    }
+    const memory: ProviderSelectionMemory = {};
+    for (const [runtime, provider] of Object.entries(parsed)) {
+      if (typeof provider === "string" && provider.length > 0) {
+        memory[runtime] = provider;
+      }
+    }
+    return memory;
+  } catch {
+    return {};
+  }
+}
+
+/** 记忆值 + 目录 → 预填选择（失效记忆不自动回退；返回 `null` 表示需用户重选）。 */
+export function rememberedProvider(
+  providers: ProviderEntry[],
+  runtimeId: string | null | undefined,
+  memory: ProviderSelectionMemory,
+): ProviderEntry | null {
+  if (!runtimeId) return null;
+  const remembered = memory[runtimeId];
+  if (!remembered) return null;
+  return (
+    providersForRuntime(providers, runtimeId).find((provider) => provider.id === remembered) ??
+    null
+  );
+}
+
+/** 首个可用模型（供应商启用模型按列表顺序）。 */
+export function firstEnabledModel(provider: ProviderEntry | null): ProviderModel | null {
+  return provider?.models.find((model) => model.enabled) ?? null;
+}
+
+/** 协议端点预览（`data-source` = explicit|base_url|default）。 */
+export function endpointPreview(
+  provider: Pick<ProviderEntry, "type" | "base_url" | "endpoints">,
+  protocol: string,
+): { url: string; source: "explicit" | "base_url" | "default" } | null {
+  const explicit = provider.endpoints?.[protocol];
+  if (typeof explicit === "string" && explicit.trim().length > 0) {
+    return { url: explicit.trim(), source: "explicit" };
+  }
+  const base = provider.base_url?.trim().replace(/\/+$/, "");
+  if (base) {
+    if (protocol === "anthropic" && provider.type === "deepseek" && !base.endsWith("/anthropic")) {
+      return { url: `${base}/anthropic`, source: "base_url" };
+    }
+    if (protocol === "openai") {
+      if (provider.type === "openai" && base === "https://api.openai.com") {
+        return { url: `${base}/v1`, source: "base_url" };
+      }
+      if (provider.type === "custom" || provider.type === "openai" || provider.type === "deepseek") {
+        return { url: base, source: "base_url" };
+      }
+    }
+    if (protocol === "dsh" && provider.type === "deepseek") {
+      return { url: base, source: "base_url" };
+    }
+  }
+  switch (`${protocol}:${provider.type}`) {
+    case "anthropic:anthropic":
+      return { url: "https://api.anthropic.com", source: "default" };
+    case "anthropic:deepseek":
+      return { url: "https://api.deepseek.com/anthropic", source: "default" };
+    case "openai:openai":
+      return { url: "https://api.openai.com/v1", source: "default" };
+    case "openai:deepseek":
+    case "dsh:deepseek":
+      return { url: "https://api.deepseek.com", source: "default" };
+    default:
+      return null;
+  }
+}
+
+/** 端点风险提示（ADR-028 v0.9：不做 HTTPS/主机/可信保证，UI 必须提示）。 */
+export const PROVIDER_ENDPOINT_RISK_NOTICE =
+  "端点由用户填写，API Key 将发送至该地址；应用不做 HTTPS 强制、主机白名单或可信保证，请自行确认端点可信性。";

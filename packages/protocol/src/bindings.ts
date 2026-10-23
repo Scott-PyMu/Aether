@@ -662,6 +662,11 @@ export type SessionCreateRequest = {
 	runtime_id?: string | null,
 	title: string,
 	workspace_id?: string | null,
+	/**
+	 *  ADR-028 v0.9：会话级模型（三官方运行时语义必填；缺失 →
+	 *  `invalid_value("请选择模型")`；旧会话 `sessions.model` 空/失效/不属于时可一次性
+	 *  `session_send.model` 补选）。
+	 */
 	model?: string | null,
 	/**
 	 *  ADR-028：会话级供应商 id（可选；`None` = 由模型解析/旧单供应商路径）。
@@ -737,6 +742,16 @@ export type SessionSendRequest = {
 	 *  失败 `artifact_path_rejected`；**引用 ≠ 预授权**，读取仍走 `fs.read` 权限门）。
 	 */
 	references?: ReferenceEntry[],
+	/**
+	 *  ADR-028 v0.9：旧会话补选供应商（仅 `sessions.config.aether.provider_id` 为空时
+	 *  生效；已选会话再传 → `invalid_value`）。不新增命令。
+	 */
+	provider_id?: string | null,
+	/**
+	 *  ADR-028 v0.9：旧会话补选模型（`sessions.model` 空/失效/不属于时允许一次性补选；
+	 *  已选且有效再传 → `invalid_value`）。
+	 */
+	model?: string | null,
 };
 
 /**  会话状态过滤（与附录 C `sessions.status` CHECK 枚举一一对应）。 */
@@ -776,6 +791,20 @@ export type SessionSummary_Deserialize = {
 	title: string,
 	status: SessionStatus,
 	model: string | null,
+	/**  ADR-028 v0.9：会话级供应商回显（`sessions.config.aether.provider_id`；未选省略）。 */
+	provider_id: string | null,
+	/**  ADR-028 v0.9：供应商名称回显（供应商已删除时省略）。 */
+	provider_name: string | null,
+	/**
+	 *  ADR-028 v0.9：供应商状态（`active|invalid|missing`；`invalid` = 停用/删除，
+	 *  UI 只读并禁用所有补选）。
+	 */
+	provider_state: string,
+	/**
+	 *  ADR-028 v0.9：模型状态（`active|invalid|missing`；provider 空时 model 在任一
+	 *  启用供应商中**存在且启用** → active，否则 invalid）。
+	 */
+	model_state: string,
 	thinking_depth: number | null,
 	/**  会话级权限模式（M6-01/ADR-014 决策 3；`SessionSummary` 回显档位）。 */
 	permission_mode: string | null,
@@ -813,6 +842,20 @@ export type SessionSummary_Serialize = {
 	title: string,
 	status: SessionStatus,
 	model: string | null,
+	/**  ADR-028 v0.9：会话级供应商回显（`sessions.config.aether.provider_id`；未选省略）。 */
+	provider_id?: string | null,
+	/**  ADR-028 v0.9：供应商名称回显（供应商已删除时省略）。 */
+	provider_name?: string | null,
+	/**
+	 *  ADR-028 v0.9：供应商状态（`active|invalid|missing`；`invalid` = 停用/删除，
+	 *  UI 只读并禁用所有补选）。
+	 */
+	provider_state: string,
+	/**
+	 *  ADR-028 v0.9：模型状态（`active|invalid|missing`；provider 空时 model 在任一
+	 *  启用供应商中**存在且启用** → active，否则 invalid）。
+	 */
+	model_state: string,
 	thinking_depth?: number | null,
 	/**  会话级权限模式（M6-01/ADR-014 决策 3；`SessionSummary` 回显档位）。 */
 	permission_mode?: string | null,

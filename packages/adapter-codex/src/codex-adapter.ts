@@ -14,18 +14,21 @@
 
 import {
   Adapter,
+  CredentialClient,
   ERROR_CODES,
   RpcError,
   composePromptWithReferences,
   isUlid,
   parseReferences,
+  stripBrokerEnv,
   ulid,
   type AdapterRuntimeInfo,
+  type BrokerCredential,
   type EnvelopeContext,
 } from "@aether/adapter-sdk";
-import { mkdirSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import {
   CodexCliRun,
@@ -71,6 +74,8 @@ export const RUNTIME_CAPABILITIES: readonly string[] = [
   "thinking_depth",
   // M7-03/ADR-017：受控中断 + Mode R 原生恢复（`codex exec resume`，ADR-008 §3.3）。
   "pause_resume",
+  // ADR-028 v0.9：会话级多供应商（per-session CODEX_HOME + 按 run 取凭据）。
+  "multi_provider",
 ];
 
 /**
@@ -158,6 +163,10 @@ interface CodexSession {
    * 每次 run 以 `-c developer_instructions=…` 下发；超长时回退为提示词前缀块。
    */
   systemPrompt?: string;
+  /** ADR-028 v0.9：会话级供应商 id（broker 按 run 取凭据）。 */
+  providerId?: string;
+  /** ADR-028 v0.9：per-session `CODEX_HOME`（首次补选时创建并复制/采用原生状态）。 */
+  home?: string;
   clientMsgIds: Map<string, string>;
   runs: Map<string, CodexRunState>;
   observedTools: Set<string>;
@@ -184,6 +193,10 @@ export interface CodexAdapterOptions {
   spawnFn?: SpawnFn;
   killTreeFn?: KillTreeFn;
   runtimeVersion?: string;
+  /** ADR-028 v0.9：凭据客户端（缺省 = 从 `AETHER_CREDENTIAL_BROKER` 构造）。 */
+  credentialClient?: Pick<CredentialClient, "get"> | null;
+  /** ADR-028 v0.9：per-session CODEX_HOME 根目录（缺省 = legacy home 的同级目录）。 */
+  sessionHomesDir?: string;
 }
 
 export class CodexAdapter {
@@ -194,12 +207,18 @@ export class CodexAdapter {
   private readonly options: CodexAdapterOptions;
   private readonly sessions = new Map<string, CodexSession>();
   private readonly store: CodexSessionStore;
+  private readonly credentialClient: Pick<CredentialClient, "get"> | null;
+  private readonly sessionLocks = new Map<string, Promise<void>>();
   private storeWarning: string | null = null;
   private readonly startedAt = Date.now();
 
   constructor(options: CodexAdapterOptions) {
     this.options = options;
     this.runTimeoutMs = options.runTimeoutMs ?? DEFAULT_RUN_TIMEOUT_MS;
+    this.credentialClient =
+      options.credentialClient === undefined
+        ? CredentialClient.fromEnv()
+        : options.credentialClient;
     this.runtime = {
       name: RUNTIME_NAME,
       version: options.runtimeVersion ?? ADAPTER_VERSION,
@@ -285,7 +304,7 @@ export class CodexAdapter {
       });
   }
 
-  private onCreateSession(params: unknown): Record<string, unknown> {
+  private async onCreateSession(params: unknown): Promise<Record<string, unknown>> {
     const input = (params ?? {}) as {
       title?: unknown;
       workspace?: unknown;
@@ -294,6 +313,7 @@ export class CodexAdapter {
       thinking_depth?: unknown;
       permission_mode?: unknown;
       system_prompt?: unknown;
+      provider_id?: unknown;
     };
     const requested = input.native_id;
     if (requested !== undefined && !isAliasId(requested)) {
@@ -314,6 +334,48 @@ export class CodexAdapter {
         : undefined;
     const alias = isAliasId(requested) ? requested : ulid();
     const threadId = isAliasId(requested) ? this.store.lookup(requested) : null;
+    const providerId =
+      typeof input.provider_id === "string" && input.provider_id.length > 0
+        ? input.provider_id
+        : undefined;
+    const existing = this.sessions.get(alias);
+    if (
+      providerId !== undefined &&
+      existing !== undefined &&
+      [...existing.runs.values()].some((run) => !run.finished)
+    ) {
+      throw new RpcError(
+        ERROR_CODES.SESSION_NOT_FOUND,
+        "会话有在途 run：禁止切换供应商/复制状态（session_busy）",
+      );
+    }
+    let home: string | undefined;
+    if (providerId !== undefined) {
+      // ADR-028 v0.9：per-session CODEX_HOME；首次补选复制/采用 legacy 原生状态，
+      // 仅空闲/独占锁；失败清理新目录、本次 send 失败（核心不持久化）。
+      home = await this.withSessionLock(alias, async () => {
+        const target = existing?.home ?? this.sessionHome(alias);
+        // 新会话：仅创建空 per-session home；旧会话首次补选：复制/采用 legacy 原生状态。
+        this.prepareSessionHome(
+          target,
+          isAliasId(requested) && existing?.home === undefined,
+        );
+        const credential = await this.requireCredential(providerId);
+        if (credential.base_url === undefined) {
+          throw new RpcError(
+            ERROR_CODES.INTERNAL_ERROR,
+            `供应商 ${providerId} 缺少 openai 协议端点（无法物化 config.toml）`,
+          );
+        }
+        materializeCodexProviderConfig(
+          target,
+          providerId,
+          credential.base_url,
+          credential.auth_env,
+        );
+        return target;
+      });
+    }
     const session: CodexSession = {
       id: alias,
       alias,
@@ -323,6 +385,8 @@ export class CodexAdapter {
       ...(thinkingDepth !== undefined ? { thinkingDepth } : {}),
       ...(sandbox !== undefined ? { sandbox } : {}),
       ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+      ...(providerId !== undefined ? { providerId } : {}),
+      ...(home !== undefined ? { home } : {}),
       clientMsgIds: new Map(),
       runs: new Map(),
       observedTools: new Set(),
@@ -340,7 +404,7 @@ export class CodexAdapter {
     };
   }
 
-  private onSend(params: unknown): Record<string, unknown> {
+  private async onSend(params: unknown): Promise<Record<string, unknown>> {
     const input = (params ?? {}) as {
       session_id?: unknown;
       client_msg_id?: unknown;
@@ -402,6 +466,35 @@ export class CodexAdapter {
         );
       }
     }
+    // ADR-028 v0.9：每次 run 按 `provider_id + protocol` 取凭据（不缓存）；仅写入
+    // 本次 CLI 子进程 env。Codex 的 per-session CODEX_HOME 与 config.toml 已在
+    // `session.create` 准备（不含密钥值），此处只刷新端点/auth env。
+    let providerEnv: NodeJS.ProcessEnv = {};
+    let sessionHome: string | undefined = session.home;
+    if (session.providerId !== undefined) {
+      const credential = await this.requireCredential(session.providerId);
+      if (credential.base_url === undefined) {
+        throw new RpcError(
+          ERROR_CODES.INTERNAL_ERROR,
+          `供应商 ${session.providerId} 缺少 openai 协议端点`,
+        );
+      }
+      sessionHome = session.home ?? this.sessionHome(session.id);
+      if (session.home === undefined) {
+        this.prepareSessionHome(sessionHome, true);
+        session.home = sessionHome;
+      }
+      materializeCodexProviderConfig(
+        sessionHome,
+        session.providerId,
+        credential.base_url,
+        credential.auth_env,
+      );
+      providerEnv = {
+        CODEX_HOME: sessionHome,
+        [credential.auth_env]: credential.api_key,
+      };
+    }
     run.cli = new CodexCliRun({
       config: {
         ...this.options.cli,
@@ -416,7 +509,7 @@ export class CodexAdapter {
         timeoutMs: this.runTimeoutMs,
         ...(developerInstructions !== undefined ? { developerInstructions } : {}),
       },
-      env: this.cliEnv(),
+      env: this.cliEnv(providerEnv, sessionHome),
       onEvent: (event) => this.onCliEvent(session, run, event),
       onMalformedLine: (line) => this.onCliMalformedLine(run, line),
       onStderrLine: (line) => this.options.stderr?.(`[codex-cli] ${line}`),
@@ -463,6 +556,11 @@ export class CodexAdapter {
       void run.cli?.interrupt();
     }
     this.sessions.delete(sessionId);
+    this.sessionLocks.delete(sessionId);
+    // ADR-028 v0.9：dispose 清理 per-session CODEX_HOME；legacy home 不动。
+    if (session.home !== undefined) {
+      rmSync(session.home, { recursive: true, force: true });
+    }
     return { disposed: true };
   }
 
@@ -488,12 +586,90 @@ export class CodexAdapter {
     return { paused: true, session_id: session.id, cancelled_runs: cancelled };
   }
 
-  private cliEnv(): NodeJS.ProcessEnv {
-    const env: NodeJS.ProcessEnv = { ...process.env };
-    if (this.options.cli.home) {
-      env.CODEX_HOME = this.options.cli.home;
+  private cliEnv(extra: NodeJS.ProcessEnv = {}, home?: string): NodeJS.ProcessEnv {
+    const env = stripBrokerEnv(process.env);
+    // ADR-028 v0.9：provider 会话不使用 legacy 消费映射 env（避免串 provider）。
+    delete env.AETHER_PROVIDER_ID;
+    delete env.AETHER_PROVIDER_BASE_URL;
+    delete env.AETHER_PROVIDER_ENV_KEY;
+    delete env.AETHER_PROVIDER_MODELS;
+    delete env.AETHER_PROVIDER_MODEL;
+    const targetHome = home ?? this.options.cli.home ?? process.env.CODEX_HOME;
+    if (targetHome) {
+      env.CODEX_HOME = targetHome;
     }
-    return env;
+    return { ...env, ...extra, CODEX_HOME: extra.CODEX_HOME ?? env.CODEX_HOME };
+  }
+
+  private async requireCredential(providerId: string): Promise<BrokerCredential> {
+    if (this.credentialClient === null) {
+      throw new RpcError(
+        ERROR_CODES.INTERNAL_ERROR,
+        "凭据 broker 未接线：多供应商会话不可用（不回退单供应商 env）",
+      );
+    }
+    try {
+      return await this.credentialClient.get(providerId, "openai", "codex");
+    } catch (error) {
+      throw new RpcError(
+        ERROR_CODES.INTERNAL_ERROR,
+        `获取供应商凭据失败：${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  private legacyHome(): string {
+    return this.options.cli.home ?? process.env.CODEX_HOME ?? join(homedir(), ".codex");
+  }
+
+  private sessionHome(alias: string): string {
+    const root =
+      this.options.sessionHomesDir ??
+      join(dirname(this.legacyHome()), "aether-codex-sessions");
+    return join(root, alias);
+  }
+
+  /** 首次补选：复制/采用 legacy home 的 thread/session 状态（不复制 config.toml）。 */
+  private prepareSessionHome(target: string, copyState: boolean): void {
+    const legacy = this.legacyHome();
+    if (copyState && !existsSync(target)) {
+      mkdirSync(target, { recursive: true });
+      if (existsSync(legacy)) {
+        try {
+          cpSync(legacy, target, {
+            recursive: true,
+            force: false,
+            errorOnExist: false,
+            filter: (source) =>
+              !source.endsWith("config.toml") && !source.includes("aether-codex-sessions"),
+          });
+        } catch (error) {
+          rmSync(target, { recursive: true, force: true });
+          throw new RpcError(
+            ERROR_CODES.INTERNAL_ERROR,
+            `复制 Codex 原生 thread 状态失败（已清理新目录）：${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
+      return;
+    }
+    mkdirSync(target, { recursive: true });
+  }
+
+  /** 会话级串行锁（状态复制/配置物化不得并发写；ADR-028 §2.1-5）。 */
+  private async withSessionLock<T>(alias: string, work: () => Promise<T>): Promise<T> {
+    const previous = this.sessionLocks.get(alias) ?? Promise.resolve();
+    const run = previous.then(work, work);
+    this.sessionLocks.set(
+      alias,
+      run.then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
+    return run;
   }
 
   /**

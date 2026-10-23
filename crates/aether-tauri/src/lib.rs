@@ -21,8 +21,8 @@ pub mod backup_control;
 pub mod bindings;
 pub mod config;
 pub mod core_health;
-pub mod diagnostics_control;
 pub mod credential_broker;
+pub mod diagnostics_control;
 pub mod disk;
 pub mod event_bridge;
 pub mod ipc;
@@ -33,6 +33,7 @@ pub mod nav;
 pub mod permission_loop;
 pub mod picker;
 pub mod preset_control;
+pub mod provider_catalog;
 pub mod provider_connectivity;
 pub mod provider_control;
 pub mod provider_env;
@@ -249,6 +250,9 @@ fn build_backend(
     // M7-06/ADR-024：供应商消费映射 spawn 环境注入点（存储/密钥存储就绪后接线；
     // 每次 spawn 现取——无匹配 provider / 读取失败 → 不注入，不阻断启动）。
     let provider_env_hook = provider_env::ProviderEnvHook::new(data_dir.clone());
+    // ADR-028 v0.9：`provider.catalog.get` 数据源（adapter → core；存储就绪前返回
+    // core_not_ready，启动尾段接线）。
+    let provider_catalog = std::sync::Arc::new(provider_catalog::ProviderCatalog::new());
     let registry = runtime_registry::resolve_registry_dir(app)
         .as_deref()
         .map(runtime_registry::load_registry)
@@ -270,6 +274,8 @@ fn build_backend(
     let mut specs = registry.specs;
     for spec in &mut specs {
         spec.env_source = Some(provider_env_hook.clone());
+        spec.catalog_source = Some(provider_catalog.clone()
+            as std::sync::Arc<dyn aether_adapters::connection::ProviderCatalogSource>);
     }
     let supervisor: Option<std::sync::Arc<aether_adapters::supervisor::Supervisor>> =
         match runtime_control::boot_supervisor_with_observer(
@@ -547,11 +553,10 @@ fn build_backend(
     };
     if let Some(reads) = reads.as_ref() {
         provider_env_hook.wire(reads.clone(), boot_secrets.clone());
+        provider_catalog.wire(reads.clone());
     }
     // ADR-028：本地凭据 broker（仅本机通道；失败时适配器回退单供应商 env）。
-    if let Some(info) =
-        credential_broker::start(provider_env_hook.clone(), &data_dir, &handle)
-    {
+    if let Some(info) = credential_broker::start(provider_env_hook.clone(), &data_dir, &handle) {
         provider_env_hook.set_broker_info(info);
     }
 
@@ -702,6 +707,8 @@ fn build_backend(
     if let Some(service) = permission_service {
         session_backend = session_backend.with_permissions(service);
     }
+    // ADR-028 v0.9：供应商凭据预检（session_create fail-fast / 旧会话补选准备）。
+    session_backend = session_backend.with_provider_env(provider_env_hook.clone());
     // M7-08/ADR-026 §2.1-1：`workspaces_list` 合成组「默认（数据目录）」的根路径展示。
     session_backend = session_backend.with_data_dir(data_dir.clone());
     // M3-08：工作区写路径接线（`workspace_set` 落库）与启动恢复（最近绑定工作区 →

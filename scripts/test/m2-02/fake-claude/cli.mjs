@@ -252,6 +252,22 @@ async function main() {
       /* 诊断文件可选 */
     }
   }
+  const envFile = process.env.FAKE_CLAUDE_ENV_FILE;
+  if (envFile && envFile.length > 0) {
+    try {
+      appendFileSync(
+        envFile,
+        `${JSON.stringify({
+          ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+          ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL,
+          AETHER_CREDENTIAL_BROKER: process.env.AETHER_CREDENTIAL_BROKER,
+        })}\n`,
+        "utf8",
+      );
+    } catch {
+      /* 观测文件可选 */
+    }
+  }
   // M3-10：调用观测（仅当显式设置记录文件时；argv + MAX_THINKING_TOKENS 环境）。
   // M7-06：追加 `prompt`（stdin 全文）——引用块注入（`<aether-references>`）观测口径。
   const invocationFile = process.env.FAKE_CLAUDE_INVOCATION_FILE;

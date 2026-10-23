@@ -282,6 +282,14 @@ pub enum StoreCommand {
         config: serde_json::Value,
         updated_at: i64,
     },
+    /// 更新会话级供应商/模型选择（ADR-028 v0.9 旧会话补选：适配器准备成功后才持久化；
+    /// `config` 由调用方与既有配置合并后整体写入）。
+    UpdateSessionSelection {
+        session_id: SessionId,
+        config: serde_json::Value,
+        model: Option<String>,
+        updated_at: i64,
+    },
     /// 改写会话级思考深度（ADR-010 能力门延迟判定：runtime ready 后未声明
     /// `thinking_depth` 能力 → 按缺省 2 改写；M3-10）。
     UpdateSessionThinkingDepth {
@@ -655,6 +663,23 @@ pub(crate) fn apply_command(
                 .execute(
                     "UPDATE sessions SET config = ?2, updated_at = ?3 WHERE id = ?1",
                     params![session_id.as_str(), config, updated_at],
+                )
+                .map_err(txn_failed)?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::Applied { affected })
+        }
+        StoreCommand::UpdateSessionSelection {
+            session_id,
+            config,
+            model,
+            updated_at,
+        } => {
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            let config = json_text(config)?;
+            let affected = transaction
+                .execute(
+                    "UPDATE sessions SET config = ?2, model = ?3, updated_at = ?4 WHERE id = ?1",
+                    params![session_id.as_str(), config, model, updated_at],
                 )
                 .map_err(txn_failed)?;
             transaction.commit().map_err(txn_failed)?;

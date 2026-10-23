@@ -26,10 +26,10 @@ use aether_core::{EventEnvelope, EventPayload, RunStatus, SessionId};
 use aether_store::archive::{
     export_audit_archive, verify_archive_file, ARCHIVE_SOURCE_AUDIT_EXPORT,
 };
-use aether_store::{
-    AuditLogRecord, AuditQuery, ReadPool, Store, StoreCommand, StoreError,
+use aether_store::{AuditLogRecord, AuditQuery, ReadPool, Store, StoreCommand, StoreError};
+use aether_tauri::adapter_executor::{
+    AdapterRunExecutor, ToolCallAuditSink, AUDIT_ACTION_TOOL_CALL,
 };
-use aether_tauri::adapter_executor::{AdapterRunExecutor, ToolCallAuditSink, AUDIT_ACTION_TOOL_CALL};
 use aether_tauri::archive_control::ArchiveControlBackend;
 use aether_tauri::backup_control::SpaceProbe;
 use aether_tauri::core_health::{boot_core_full, CoreBoot, StaticRuntimeSummaries};
@@ -157,7 +157,11 @@ impl AuditFixture {
 
     fn insert_audit(&self, record: AuditLogRecord) {
         self.runtime
-            .block_on(self.boot.write.execute(StoreCommand::InsertAudit { record }))
+            .block_on(
+                self.boot
+                    .write
+                    .execute(StoreCommand::InsertAudit { record }),
+            )
             .expect("插入审计行");
     }
 
@@ -333,7 +337,9 @@ fn audit_export_is_verifiable_filtered_and_redacted() {
         "agent",
         "tool.call",
         Some("mock.read_file"),
-        Some(&format!("{{\"tool_call_id\":\"c2\",\"error\":\"{secret}\"}}")),
+        Some(&format!(
+            "{{\"tool_call_id\":\"c2\",\"error\":\"{secret}\"}}"
+        )),
         "failed",
         200,
     ));
@@ -366,7 +372,10 @@ fn audit_export_is_verifiable_filtered_and_redacted() {
 
     // 行形态：kind=audit + 白名单字段 + 脱敏 0 命中（D10；密钥不得落导出）。
     let text = std::fs::read_to_string(&path).expect("读取导出");
-    assert!(!text.contains(&secret) && !text.contains("sk-"), "导出不得含密钥样本");
+    assert!(
+        !text.contains(&secret) && !text.contains("sk-"),
+        "导出不得含密钥样本"
+    );
     assert!(text.contains("[REDACTED:api-key]"), "命中样本必须被替换");
     let lines: Vec<Value> = text
         .lines()
@@ -399,7 +408,10 @@ fn audit_export_is_verifiable_filtered_and_redacted() {
     assert_eq!(lines[3]["id"], "01J0000000000000000000R01");
     // detail 为 JSON 文本 → 按 JSON 输出；缺失 → null。
     assert_eq!(lines[3]["detail"]["tool_call_id"], "c1");
-    assert!(lines[2]["detail"]["error"].as_str().unwrap_or_default().contains("REDACTED"));
+    assert!(lines[2]["detail"]["error"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("REDACTED"));
     assert!(lines[1]["detail"].is_null());
 
     // 过滤导出：仅 SESSION_A 的 tool.call（= 2 行）。
@@ -782,17 +794,17 @@ fn retention_policy_never_deletes_audit_rows() {
     // 对照：白名单事件已被清理。
     let remaining = fixture
         .runtime
-        .block_on(fixture.boot.reads.events_page(
-            &SessionId::new(SESSION_A).unwrap(),
-            None,
-            50,
-        ))
+        .block_on(
+            fixture
+                .boot
+                .reads
+                .events_page(&SessionId::new(SESSION_A).unwrap(), None, 50),
+        )
         .expect("事件读取");
     assert!(
-        remaining.iter().all(|event| !matches!(
-            event.payload,
-            aether_core::EventPayload::Log(_)
-        )),
+        remaining
+            .iter()
+            .all(|event| !matches!(event.payload, aether_core::EventPayload::Log(_))),
         "白名单超窗事件应被清理（对照）"
     );
 
@@ -924,7 +936,9 @@ fn protocol_reported_tool_calls_are_fully_audited_end_to_end() {
                 text: text.to_owned(),
                 client_msg_id: ulid::Ulid::new().to_string(),
                 thinking_depth: None,
-            references: Vec::new(),
+                references: Vec::new(),
+                provider_id: None,
+                model: None,
             })
             .expect("session_send");
         let run_id = ack["run_id"].as_str().expect("run_id").to_owned();
@@ -1008,7 +1022,10 @@ fn protocol_reported_tool_calls_are_fully_audited_end_to_end() {
                 .and_then(|text| serde_json::from_str(text).ok())
                 .unwrap_or(Value::Null);
             (
-                detail["tool_call_id"].as_str().unwrap_or_default().to_owned(),
+                detail["tool_call_id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
                 row.result.clone().unwrap_or_default(),
             )
         })
@@ -1069,12 +1086,14 @@ fn terminal_tool_events(events: &[EventEnvelope]) -> Vec<(String, String)> {
     events
         .iter()
         .filter_map(|event| match &event.payload {
-            EventPayload::ToolCallCompleted(payload) => {
-                Some((payload.tool_call_id.as_str().to_owned(), "success".to_owned()))
-            }
-            EventPayload::ToolCallFailed(payload) => {
-                Some((payload.tool_call_id.as_str().to_owned(), "failed".to_owned()))
-            }
+            EventPayload::ToolCallCompleted(payload) => Some((
+                payload.tool_call_id.as_str().to_owned(),
+                "success".to_owned(),
+            )),
+            EventPayload::ToolCallFailed(payload) => Some((
+                payload.tool_call_id.as_str().to_owned(),
+                "failed".to_owned(),
+            )),
             _ => None,
         })
         .collect()

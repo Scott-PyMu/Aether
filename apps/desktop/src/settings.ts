@@ -13,7 +13,9 @@
  *   `false`；2GB 提示、增长 >500MB/月或 ≥5GB 自动置 `true`）/ 保留窗口（7–365 天，
  *   缺省 30）——M5-04/ADR-021；
  * - `ui.layout`：工作台多视图布局（JSON 对象字符串 ≤64KiB，缺省 `"{}"`；
- *   标签页/分屏/聚焦窗格；损坏回退默认布局）——M7-04/ADR-018 附录 A-6。
+ *   标签页/分屏/聚焦窗格；损坏回退默认布局）——M7-04/ADR-018 附录 A-6；
+ * - `ui.provider_selection`：全局供应商选择记忆（JSON 对象字符串 ≤64KiB，缺省 `"{}"`；
+ *   runtime → provider_id；跨工作区）——ADR-028 v0.9。
  *
  * 未登记键由核心返回 `invalid_enum`（默认拒绝）。工作区绑定键归 M3-08。
  */
@@ -35,6 +37,8 @@ export const EVENTS_RETENTION_ENABLED_KEY = "events.retention.enabled";
 export const EVENTS_RETENTION_DAYS_KEY = "events.retention.days";
 /** 工作台布局持久化设置键（M7-04/ADR-018 附录 A-6；JSON 对象字符串，缺省 `{}`）。 */
 export const UI_LAYOUT_KEY = "ui.layout";
+/** 全局供应商选择记忆（ADR-028 v0.9；JSON 对象字符串，缺省 `{}`；跨工作区）。 */
+export const UI_PROVIDER_SELECTION_KEY = "ui.provider_selection";
 
 /** 未备份提醒状态（`backup_list.reminder` 投影；核心时钟计算，可注入）。 */
 export interface BackupReminder {

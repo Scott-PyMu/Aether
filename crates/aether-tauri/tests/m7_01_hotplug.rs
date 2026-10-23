@@ -188,7 +188,10 @@ fn count_audit_rows(runtime: &tokio::runtime::Runtime, reads: &ReadPool, action:
         .unwrap_or(0)
 }
 
-fn harness_block_on<T>(runtime: &tokio::runtime::Runtime, future: impl std::future::Future<Output = T>) -> T {
+fn harness_block_on<T>(
+    runtime: &tokio::runtime::Runtime,
+    future: impl std::future::Future<Output = T>,
+) -> T {
     runtime.block_on(future)
 }
 
@@ -207,9 +210,12 @@ fn transitions_emit_persisted_events_and_startup_matrix_holds() {
     let runtime = new_runtime();
     let handle = runtime.handle().clone();
 
-    let boot: CoreBoot =
-        boot_core_full(&data_dir, &handle, Arc::new(StaticRuntimeSummaries::unwired()))
-            .expect("核心启动");
+    let boot: CoreBoot = boot_core_full(
+        &data_dir,
+        &handle,
+        Arc::new(StaticRuntimeSummaries::unwired()),
+    )
+    .expect("核心启动");
 
     // 事件桥替身（与生产同一 forward 循环；订阅先于预热）。
     let sink = Arc::new(RecordingSink::default());
@@ -282,7 +288,12 @@ fn transitions_emit_persisted_events_and_startup_matrix_holds() {
     let changes = recording.changes();
     let transitions: Vec<(String, String)> = changes
         .iter()
-        .map(|change| (change.from.as_str().to_owned(), change.to.as_str().to_owned()))
+        .map(|change| {
+            (
+                change.from.as_str().to_owned(),
+                change.to.as_str().to_owned(),
+            )
+        })
         .collect();
     assert_eq!(
         transitions,
@@ -371,13 +382,13 @@ fn disable_confirmation_closes_in_flight_runs_and_retry_replays() {
     let runtime = new_runtime();
     let handle = runtime.handle().clone();
 
-    let boot: CoreBoot =
-        boot_core_full(&data_dir, &handle, Arc::new(StaticRuntimeSummaries::unwired()))
-            .expect("核心启动");
-    let audit_observer = Arc::new(StoreAuditObserver::new(
-        boot.write.clone(),
-        handle.clone(),
-    ));
+    let boot: CoreBoot = boot_core_full(
+        &data_dir,
+        &handle,
+        Arc::new(StaticRuntimeSummaries::unwired()),
+    )
+    .expect("核心启动");
+    let audit_observer = Arc::new(StoreAuditObserver::new(boot.write.clone(), handle.clone()));
     // 两个官方运行时（mock + codex）：禁用 mock 不得影响 codex（隔离断言）。
     let codex_spec = RuntimeSpec::with_fresh_token(
         RuntimeManifest::new("codex", "Fixture Codex", &fixture)
@@ -395,12 +406,13 @@ fn disable_confirmation_closes_in_flight_runs_and_retry_replays() {
     let startup =
         run_supervisor_startup_with_prefs(&supervisor, &handle, &BTreeMap::new()).expect("启动");
     for (runtime_id, outcome) in &startup.warmups {
-        assert!(outcome.is_ready(), "{runtime_id} 预热必须 Ready：{outcome:?}");
+        assert!(
+            outcome.is_ready(),
+            "{runtime_id} 预热必须 Ready：{outcome:?}"
+        );
     }
-    let codex_pid_before = harness_block_on(
-        &runtime,
-        supervisor.get("codex").unwrap().current_pid(),
-    );
+    let codex_pid_before =
+        harness_block_on(&runtime, supervisor.get("codex").unwrap().current_pid());
 
     let executor = Arc::new(AdapterRunExecutor::new(
         Arc::clone(&supervisor),
@@ -447,16 +459,17 @@ fn disable_confirmation_closes_in_flight_runs_and_retry_replays() {
             provider_id: None,
         })
         .expect("session_create");
-    let session_id =
-        SessionId::new(created["id"].as_str().expect("会话 id").to_owned()).unwrap();
+    let session_id = SessionId::new(created["id"].as_str().expect("会话 id").to_owned()).unwrap();
     let active = backend
         .session_send(&SessionSendRequest {
             session_id: session_id.as_str().to_owned(),
             text: "long".to_owned(),
             client_msg_id: "01J8ZQ5R0N7W9Y8X6V4T2S0K11".to_owned(),
             thinking_depth: None,
-        references: Vec::new(),
-            })
+            references: Vec::new(),
+            provider_id: None,
+            model: None,
+        })
         .expect("session_send(long)");
     let active_run = RunId::new(active["run_id"].as_str().unwrap().to_owned()).unwrap();
     assert!(
@@ -495,8 +508,10 @@ fn disable_confirmation_closes_in_flight_runs_and_retry_replays() {
             text: "queued".to_owned(),
             client_msg_id: "01J8ZQ5R0N7W9Y8X6V4T2S0K12".to_owned(),
             thinking_depth: None,
-        references: Vec::new(),
-            })
+            references: Vec::new(),
+            provider_id: None,
+            model: None,
+        })
         .expect("session_send(queued)");
     assert_eq!(queued["queued"], true, "第二条消息必须排队");
     let queued_run = RunId::new(queued["run_id"].as_str().unwrap().to_owned()).unwrap();
@@ -535,12 +550,22 @@ fn disable_confirmation_closes_in_flight_runs_and_retry_replays() {
     assert_eq!(report["status"], "disabled");
     assert_eq!(report["status_reason"], "user_disabled");
     assert!(
-        report["detail"].as_str().unwrap_or("").contains("在途计数=3"),
+        report["detail"]
+            .as_str()
+            .unwrap_or("")
+            .contains("在途计数=3"),
         "回执 detail 必须含在途计数：{report}"
     );
     let preferences = harness_block_on(&runtime, boot.reads.runtime_preferences()).expect("偏好");
-    assert_eq!(preferences.get("mock"), Some(&false), "确认后偏好必须先写 0");
-    assert!(count_audit_rows(&runtime, &boot.reads, "runtime.disable") >= 1, "禁用动作审计");
+    assert_eq!(
+        preferences.get("mock"),
+        Some(&false),
+        "确认后偏好必须先写 0"
+    );
+    assert!(
+        count_audit_rows(&runtime, &boot.reads, "runtime.disable") >= 1,
+        "禁用动作审计"
+    );
 
     // 活跃 run 收口：adapter_disconnected / cli_exit（recoverable）。
     let closed = wait_until(Duration::from_secs(30), || {
@@ -610,11 +635,16 @@ fn disable_confirmation_closes_in_flight_runs_and_retry_replays() {
     );
 
     // ===== 重启用 → run_retry 重放 queued run（Mode R/N，ADR-005）=====
-    let report = control.enable("mock").expect("user_disabled 上 enable 必须可用");
+    let report = control
+        .enable("mock")
+        .expect("user_disabled 上 enable 必须可用");
     assert_eq!(report["outcome"], "ready");
     let preferences = harness_block_on(&runtime, boot.reads.runtime_preferences()).expect("偏好");
     assert_eq!(preferences.get("mock"), Some(&true), "启用成功必须写偏好 1");
-    assert!(count_audit_rows(&runtime, &boot.reads, "runtime.enable") >= 1, "启用动作审计");
+    assert!(
+        count_audit_rows(&runtime, &boot.reads, "runtime.enable") >= 1,
+        "启用动作审计"
+    );
 
     let retry = backend
         .run_retry(&RunRetryRequest {
@@ -656,11 +686,8 @@ fn ten_hotplug_cycles_leave_no_orphans_and_bounded_growth() {
 
     let spec = spec_for(&fixture, &log_path);
     let supervisor = Arc::new(
-        aether_tauri::runtime_control::boot_supervisor(
-            vec![spec],
-            Some(&ledger_path),
-        )
-        .expect("监督器"),
+        aether_tauri::runtime_control::boot_supervisor(vec![spec], Some(&ledger_path))
+            .expect("监督器"),
     );
     let startup =
         run_supervisor_startup_with_prefs(&supervisor, &handle, &BTreeMap::new()).expect("启动");
@@ -697,7 +724,10 @@ fn ten_hotplug_cycles_leave_no_orphans_and_bounded_growth() {
 
         let outcome = harness_block_on(&runtime, supervisor.runtime_enable("mock"))
             .unwrap_or_else(|error| panic!("第 {cycle} 轮 enable 失败：{error}"));
-        assert!(outcome.is_ready(), "第 {cycle} 轮启用必须 ready：{outcome:?}");
+        assert!(
+            outcome.is_ready(),
+            "第 {cycle} 轮启用必须 ready：{outcome:?}"
+        );
         let pid_after = harness_block_on(&runtime, runtime_mock.current_pid());
         assert!(
             pid_after.is_some() && pid_after != pid_before,

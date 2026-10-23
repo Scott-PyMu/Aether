@@ -234,8 +234,10 @@ impl Harness {
             text: text.to_owned(),
             client_msg_id: client_msg_id.to_owned(),
             thinking_depth,
-        references: Vec::new(),
-            })
+            references: Vec::new(),
+            provider_id: None,
+            model: None,
+        })
     }
 
     fn retry(&self, run_id: &str) -> Result<Value, aether_tauri::ipc::error::IpcError> {

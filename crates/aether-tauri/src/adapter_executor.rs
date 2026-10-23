@@ -105,12 +105,7 @@ impl ToolCallAuditSink {
     }
 
     /// 终态工具事件 → `tool.call` 审计行（非终态类型为 no-op）。
-    pub fn audit_terminal(
-        &self,
-        session_id: &SessionId,
-        run_id: &RunId,
-        envelope: &EventEnvelope,
-    ) {
+    pub fn audit_terminal(&self, session_id: &SessionId, run_id: &RunId, envelope: &EventEnvelope) {
         let (tool_call_id, tool_name, duration_ms, error) = match &envelope.payload {
             EventPayload::ToolCallCompleted(payload) => (
                 payload.tool_call_id.as_str().to_owned(),
@@ -246,9 +241,10 @@ fn error_info(code: &str, message: impl Into<String>) -> ErrorInfo {
 fn request_error_info(error: SessionClientError) -> ErrorInfo {
     match error {
         SessionClientError::Request(RequestError::Disconnected { detail })
-        | SessionClientError::Request(RequestError::QueueClosed { detail }) => {
-            error_info(ADAPTER_DISCONNECTED_CODE, format!("适配器连接断开：{detail}"))
-        }
+        | SessionClientError::Request(RequestError::QueueClosed { detail }) => error_info(
+            ADAPTER_DISCONNECTED_CODE,
+            format!("适配器连接断开：{detail}"),
+        ),
         other => error_info(ADAPTER_REQUEST_FAILED_CODE, other.to_string()),
     }
 }
@@ -555,14 +551,24 @@ impl AdapterRunExecutor {
     ///
     /// `thinking_depth` 为已过能力门的会话级生效值（`None` = 运行时未声明该能力，
     /// 不透传；ADR-010）。
+    ///
+    /// ADR-028 v0.9：`selection` 为旧会话补选目标（provider + 可选 model）；
+    /// `force_create=true` 时即使已有适配器会话映射也重新下发 `session.create`
+    /// （携带同一 `native_id`，由适配器复制/采用原生状态；不静默重建）。
     async fn ensure_adapter_session(
         &self,
         client: &AdapterSessionClient,
         session: &Session,
         thinking_depth: Option<u8>,
+        selection: Option<(&str, Option<&str>)>,
+        force_create: bool,
     ) -> Result<String, ErrorInfo> {
-        if let Some((_, adapter_session)) = lock(&self.adapter_sessions).get(&session.id).cloned() {
-            return Ok(adapter_session);
+        if !force_create {
+            if let Some((_, adapter_session)) =
+                lock(&self.adapter_sessions).get(&session.id).cloned()
+            {
+                return Ok(adapter_session);
+            }
         }
         let native_id = session
             .config
@@ -576,20 +582,28 @@ impl AdapterRunExecutor {
         // 运行时启动参数；仅新会话生效——在途会话判定参数不受后续档位变更影响）。
         // ADR-028：`provider_id` 从 `sessions.config.aether.provider_id` 读取，供
         // 适配器向 broker 按需取凭据；缺省 = 旧单供应商 env 路径。
-        let provider_id = session
-            .config
-            .get("aether")
-            .and_then(|value| value.get("provider_id"))
-            .and_then(Value::as_str);
+        let provider_id = match selection {
+            Some((provider_id, _)) => Some(provider_id.to_owned()),
+            None => session
+                .config
+                .get("aether")
+                .and_then(|value| value.get("provider_id"))
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        };
+        let model = match selection {
+            Some((_, Some(model))) => Some(model.to_owned()),
+            _ => session.model.clone(),
+        };
         let created = client
             .create_session_with_all_options(SessionCreateParams {
                 title: Some(&session.title),
                 native_id: native_id.as_deref(),
-                model: session.model.as_deref(),
+                model: model.as_deref(),
                 system_prompt: session.system_prompt.as_deref(),
                 thinking_depth,
                 permission_mode: Some(session.permission_mode.as_str()),
-                provider_id,
+                provider_id: provider_id.as_deref(),
             })
             .await
             .map_err(request_error_info)?;
@@ -626,6 +640,39 @@ impl AdapterRunExecutor {
             ),
         );
         Ok(created.session_id)
+    }
+
+    /// ADR-028 v0.9：旧会话补选的适配器准备（配置物化 + 原生状态采用 + ack）。
+    ///
+    /// 核心必须在**准备成功后**才持久化 provider/model；失败返回错误、不重建原生会话，
+    /// 由命令层保持只读且不写入 `sessions`。仅在会话空闲/无在途 run 时调用。
+    pub async fn prepare_session_selection(
+        &self,
+        session_id: &SessionId,
+        provider_id: &str,
+        model: Option<&str>,
+    ) -> Result<(), ErrorInfo> {
+        let session = self
+            .reads
+            .session(session_id)
+            .await
+            .map_err(|error| error_info("storage_error", error.to_string()))?
+            .ok_or_else(|| {
+                error_info(
+                    "session_not_found",
+                    format!("会话不存在：{}", session_id.as_str()),
+                )
+            })?;
+        let client = self.client_for(&session.runtime_id).await?;
+        let supported = connection_supports_thinking_depth(&client);
+        let depth = if supported {
+            Some(session.thinking_depth)
+        } else {
+            None
+        };
+        self.ensure_adapter_session(&client, &session, depth, Some((provider_id, model)), true)
+            .await
+            .map(|_| ())
     }
 
     async fn execute_inner(&self, request: &RunRequest) -> Result<ExecutorOutcome, ErrorInfo> {
@@ -698,7 +745,7 @@ impl AdapterRunExecutor {
             }
         }
         let adapter_session = self
-            .ensure_adapter_session(&client, &session, session_depth)
+            .ensure_adapter_session(&client, &session, session_depth, None, false)
             .await?;
         // 适配器侧幂等键（ADR-005「适配器侧对 client_msg_id 同样去重」）取**核心 run id**：
         // 每次派发（含 M3-06 `run_retry` 重放）都是一个新 run，必须产生新的适配器 run；

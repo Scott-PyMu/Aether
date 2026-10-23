@@ -6,6 +6,8 @@
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
+import { stripBrokerEnv } from "@aether/adapter-sdk";
+
 /** ACP `session/update` 参数（仅声明使用到的字段）。 */
 export interface AcpUpdateParams {
   sessionId?: string;
@@ -90,7 +92,7 @@ export class DshAcpClient {
     this.child = spawn(nodeBin, args, {
       cwd: options.workspace,
       env: {
-        ...process.env,
+        ...stripBrokerEnv(process.env),
         ...(options.env ?? {}),
         DSH_HOME: options.home,
         AETHER_DSH_DELTA_FILE: options.deltaFile,

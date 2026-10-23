@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -65,6 +65,12 @@ class Harness {
       cli,
       stateDir: this.stateDir,
       ...(options.runTimeoutMs !== undefined ? { runTimeoutMs: options.runTimeoutMs } : {}),
+      ...(options.credentialClient !== undefined
+        ? { credentialClient: options.credentialClient }
+        : {}),
+      ...(options.sessionHomesDir !== undefined
+        ? { sessionHomesDir: options.sessionHomesDir }
+        : {}),
     });
   }
 
@@ -677,6 +683,124 @@ describe("M7-09 系统提示词消费（ADR-026 §2.2-5）", () => {
     } finally {
       if (previous === undefined) delete process.env.FAKE_CODEX_INVOCATION_FILE;
       else process.env.FAKE_CODEX_INVOCATION_FILE = previous;
+    }
+  });
+});
+
+describe("CodexAdapter: per-session provider（ADR-028 v0.9）", () => {
+  it("旧会话补选复制 thread 状态；两会话 CODEX_HOME/config.toml/密钥隔离且不继承 broker token", {
+    timeout: 90_000,
+  }, async () => {
+    const envFile = join(mkdtempSync(join(tmpdir(), "fake-codex-env-")), "env.jsonl");
+    const previousEnvFile = process.env.FAKE_CODEX_ENV_FILE;
+    process.env.FAKE_CODEX_ENV_FILE = envFile;
+    const legacy = mkdtempSync(join(tmpdir(), "fake-codex-legacy-"));
+    const homes = mkdtempSync(join(tmpdir(), "fake-codex-homes-"));
+    const calls: string[] = [];
+    try {
+      const harness = new Harness(
+        {
+          sessionHomesDir: homes,
+          credentialClient: {
+            get: async (providerId: string, protocol: string) => {
+              calls.push(`${providerId}:${protocol}`);
+              if (providerId === "01J0000000000000000000PA") {
+                return {
+                  base_url: "https://a.example.com/v1",
+                  api_key: "fake-key-a",
+                  auth_env: "OPENAI_API_KEY",
+                };
+              }
+              if (providerId === "01J0000000000000000000PB") {
+                return {
+                  base_url: "https://b.example.com/v1",
+                  api_key: "fake-key-b",
+                  auth_env: "OPENAI_API_KEY",
+                };
+              }
+              throw new Error(`unknown provider ${providerId}`);
+            },
+          },
+        },
+        legacy,
+      );
+      await harness.start();
+      const created = await harness.requestResult("session.create", {});
+      const alias = String(created["native_id"]);
+      const legacyAck = await harness.requestResult("session.send", {
+        session_id: alias,
+        client_msg_id: "m7-10-legacy",
+        text: "remember:THREAD-SECRET",
+      });
+      expect(await harness.waitTerminal(String(legacyAck["run_id"]))).toBe("run.completed");
+
+      // 旧会话补选：同一 native_id + provider A → 复制/采用 legacy thread 状态。
+      const reselected = await harness.requestResult("session.create", {
+        native_id: alias,
+        provider_id: "01J0000000000000000000PA",
+        model: "model-a",
+      });
+      expect(reselected["resumed"]).toBe(true);
+      const recall = await harness.requestResult("session.send", {
+        session_id: alias,
+        client_msg_id: "m7-10-recall",
+        text: "recall",
+      });
+      expect(await harness.waitTerminal(String(recall["run_id"]))).toBe("run.completed");
+      const completed = harness
+        .runEvents(String(recall["run_id"]))
+        .find((frame) => frame.params?.type === "message.completed");
+      expect(JSON.stringify(completed?.params)).toContain("THREAD-SECRET");
+
+      const homeA = join(homes, alias);
+      expect(existsSync(join(homeA, "config.toml"))).toBe(true);
+      expect(readFileSync(join(homeA, "config.toml"), "utf8")).toContain(
+        "https://a.example.com/v1",
+      );
+
+      // 并发第二会话使用另一 provider → 独立 CODEX_HOME/config。
+      const second = await harness.requestResult("session.create", {
+        provider_id: "01J0000000000000000000PB",
+        model: "model-b",
+      });
+      const secondAlias = String(second["native_id"]);
+      const secondAck = await harness.requestResult("session.send", {
+        session_id: secondAlias,
+        client_msg_id: "m7-10-second",
+        text: "chat",
+      });
+      expect(await harness.waitTerminal(String(secondAck["run_id"]))).toBe("run.completed");
+      const homeB = join(homes, secondAlias);
+      expect(existsSync(join(homeB, "config.toml"))).toBe(true);
+      expect(homeA).not.toBe(homeB);
+      expect(readFileSync(join(homeB, "config.toml"), "utf8")).toContain(
+        "https://b.example.com/v1",
+      );
+      expect(readFileSync(join(homeA, "config.toml"), "utf8")).not.toContain(
+        "https://b.example.com/v1",
+      );
+
+      const records = readFileSync(envFile, "utf8")
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => JSON.parse(line) as Record<string, string | undefined>);
+      const aRecord = records.find((record) => record.CODEX_HOME === homeA);
+      const bRecord = records.find((record) => record.CODEX_HOME === homeB);
+      expect(aRecord?.OPENAI_API_KEY).toBe("fake-key-a");
+      expect(bRecord?.OPENAI_API_KEY).toBe("fake-key-b");
+      for (const record of records) {
+        expect(record.AETHER_CREDENTIAL_BROKER).toBeUndefined();
+      }
+      expect(calls).toContain("01J0000000000000000000PA:openai");
+      expect(calls).toContain("01J0000000000000000000PB:openai");
+
+      // dispose 清理 per-session 目录；legacy 不动。
+      await harness.requestResult("session.dispose", { session_id: secondAlias });
+      expect(existsSync(homeB)).toBe(false);
+      expect(existsSync(legacy)).toBe(true);
+    } finally {
+      if (previousEnvFile === undefined) delete process.env.FAKE_CODEX_ENV_FILE;
+      else process.env.FAKE_CODEX_ENV_FILE = previousEnvFile;
     }
   });
 });
