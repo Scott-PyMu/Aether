@@ -3,7 +3,8 @@
 | 项 | 内容 |
 |---|---|
 | 编号 | ADR-010 |
-| 状态 | **已批准（2026-09-24 全部文档评审通过）**（评审裁定附 7 项修订，见 §8 评审记录与 §9 变更记录；v0.4 为合入前一致性修订（警告交付口径 / DTO 归属）、v0.5 为合入后维护性修订（决策载体转「已合入」+ 复核 6 项收口）、v0.6 为评审通过收口，均不改决策；**已随批合入**设计文档 v1.10 / 实施计划 v1.17 / 需求文档 v0.7 / UI-UX 规格 v0.2） |
+| 版本 | v0.10（v0.7–v0.10 为 ADR-028 v0.4–v0.9 的横切登记，不单独批准） |
+| 状态 | **已批准（2026-09-24 全部文档评审通过）**（评审裁定附 7 项修订，见 §8 评审记录与 §9 变更记录；v0.4 为合入前一致性修订（警告交付口径 / DTO 归属）、v0.5 为合入后维护性修订（决策载体转「已合入」+ 复核 6 项收口）、v0.6 为评审通过收口、**v0.7–v0.10 为 ADR-028 v0.4–v0.9 的横切登记，随 ADR-028 复审/合入，不单独批准**，均不改决策；**已随批合入**设计文档 v1.10 / 实施计划 v1.17 / 需求文档 v0.7 / UI-UX 规格 v0.2） |
 | 决策日期 | 2026-09-24 |
 | 决策载体 | **已合入（2026-09-24 随批）**：《设计文档》v1.9 → **v1.10**；《实施计划与验收标准》v1.16 → **v1.17**；《需求文档》v0.6 → **v0.7**；《UI-UX 设计规格》v0.1 → **v0.2**（草案回流已完成，非冻结基线）；《ADR-006》附录 B 增行（错误码 +4）并**新增「警告码」子表**（登记位规则见决策 4 / 附录 B.3） |
 | 关联 | 设计文档 D3、D4、D6、D7、D9、D10、D12、§2.3、§4、附录 B/C/E；实施计划 M1-03/M1-06/M1-07/M1-09/M2-01/M2-02/M2-11/M3-01/M3-02/M3-05/M4-04、Gate 3、§1/§6/§7/§8；ADR-003/ADR-004（迁移策略与命令面先例）、ADR-005（payload 可选字段扩展先例）、ADR-006（命令/错误码/警告码登记规则）、ADR-007（`health` 命令登记先例）、ADR-009（响应契约与错误码登记先例） |
@@ -343,6 +344,10 @@ UI/UX v0.0.1 封板原型包含三项超出设计文档 v1.9 P0 范围的界面�
 | v0.4 | 2026-09-24 | 合入前一致性修订 2 项（不改决策）：① `warnings` 尽力而为交付口径（同步判定随响应；延迟判定不产生响应警告，以生效值回显 + UI 预判为准；不得阻塞响应）——决策 2/B.2/B.3/附录 C/D 与 M3-10 DoD 同步；② `SessionSummary` DTO 归属明确（M3-09 引入含 `workspace_root`、M3-10 追加 `thinking_depth`；并行先手/后手口径）——B.4/M3-09/M3-10 DoD 同步；§8 增复核记录 | （AI 复核，合入前） |
 | v0.5 | 2026-09-24 | 合入后维护性修订（不改决策）：决策载体行转「已合入（随批）」（设计 v1.10 / 计划 v1.17 / 需求 v0.7 / UI-UX v0.2 / ADR-006 v0.5）；§3.4 补记 UI-UX 回流已完成；§8 增合入后收口复核行；随批复核 6 项收口——设计文档「对应需求」升 v0.7（P1）、计划 §1.2 补 ADR-010 支路、G8 依赖口径补注（M3-10 另依赖 M2-11/M2-02）、需求 §8 P0 交付物补三项能力（记录更正 2026-09-24：裁定 3 落点 = 需求 §8——设计文档 §2.1 维持最小改动、不补三项）、M3-11 挂钩 §5-9 登记先行 | （AI 复核，合入后收口；含同日记录更正） |
 | v0.6 | 2026-09-24 | 评审通过收口（不改决策）：§8 增「评审（用户）通过」行；状态行标注「全部文档评审通过」；§3.1/§3.2/§3.3 与附录 D/E/F 的「拟定合入文本」标记转「已合入」；UI-UX 规格状态转「已评审通过」 | （文档维护，评审通过） |
+| v0.7 | 2026-10-22 | ADR-028 v0.4/v0.5 横切增量（不改既有决策）：附录 B.4 `SessionSummary` 追加可选 `provider_id` / `provider_name` / `provider_state`（M7-10；仅 IPC DTO，事件 payload 不变）；随 ADR-028 复审/合入，不单独批准 | 文档维护 |
+| v0.8 | 2026-10-23 | ADR-028 v0.6 横切增量：附录 B.4 `SessionSummary` 追加可选 `model_state`（active/invalid/missing；M7-10）；随 ADR-028 复审/合入，不单独批准 | 文档维护 |
+| v0.9 | 2026-10-23 | ADR-028 v0.7 横切增量：`model_state=invalid` 覆盖“不属于 provider”；随 ADR-028 复审/合入，不单独批准 | 文档维护 |
+| v0.10 | 2026-10-23 | ADR-028 v0.8/v0.9 横切增量：`model_state` 补 provider 空语义（model 在任一启用 provider 中存在且启用→active，否则 invalid）；随 ADR-028 复审/合入，不单独批准 | 文档维护 |
 
 ---
 
@@ -488,8 +493,14 @@ INSERT INTO providers (id, name, type, base_url, api_key_ref, enabled, is_builti
 | `created_at` / `updated_at` / `closed_at` | integer / integer / integer \| null | `sessions.*` | 既有（epoch 毫秒） |
 | `thinking_depth` | number（0–4）**可选** | `sessions.thinking_depth`（ADR-010 0003 增） | 会话级档位；归属 M3-10 |
 | `workspace_root` | string **可选**（未绑定工作区省略） | `sessions.workspace_id` → `workspaces.root_path`（canonicalize 结果） | UI 面（文件面板「项目文件」tab）；归属 M3-09 |
+| `provider_id` | string \| null **可选** | `sessions.config.aether.provider_id`（ADR-028 v0.4） | 当前供应商；旧会话未补选为空；归属 M7-10 |
+| `provider_name` | string \| null **可选** | `providers.name`（删除后为空） | UI 回显；停用/删除时可为空；归属 M7-10 |
+| `provider_state` | `active` \| `invalid` \| `readonly` **可选** | 派生（provider 启用/停用/删除/旧会话） | active=启用；invalid=停用/删除；readonly=旧会话无 `provider_id` 待补选；归属 M7-10 |
+| `model_state` | `active` \| `invalid` \| `missing` **可选** | 派生（model 启用/停用/删除/不属于 provider/无 model；provider 空时 model 在任一启用 provider 中**存在且启用**→active，否则 invalid） | active=启用；invalid=停用/删除/不属于；missing=无 model；归属 M7-10 |
 
 字段归属拆分（v0.4）：**M3-09 先引入 DTO（含 `workspace_root`），M3-10 在其上追加 `thinking_depth`**；两任务并行时以先落地者为 DTO 宿主，后落地者 rebase 后追加字段；两任务各自执行 T14 `git diff --exit-code` 校验。
+
+**ADR-028 v0.4–v0.10 增量（2026-10-22/2026-10-23）**：M7-10 追加可选 `provider_id` / `provider_name` / `provider_state` / `model_state`（仅 IPC `SessionSummary`；事件 payload 不变）；`model_state=invalid` 覆盖停用/删除/不属于 provider；`provider_id` 空时 model 在任一启用 provider 中**存在且启用** → active，否则 invalid；不改变既有字段语义。
 
 ## 附录 C：线协议登记（D6）
 

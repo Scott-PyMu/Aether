@@ -1,13 +1,13 @@
-# Aether UI/UX 设计规格 v0.8（v0.2 已评审通过；v0.3 为 M3-12 锚点登记；v0.4 为 M3-11 前置登记；v0.5 为 ADR-014 P1 锚点与权限模式登记；v0.6 为 ADR-015 热插拔锚点/文案/配色分色/计数登记；v0.7 为 M5-01 批次 ADR-017–ADR-026 锚点/文案/暂停状态/计数登记；v0.8 为 M7-04 标签页/分屏锚点与 C1 修订登记）
+# Aether UI/UX 设计规格 v0.14（v0.2 已评审通过；v0.3 为 M3-12 锚点登记；v0.4 为 M3-11 前置登记；v0.5 为 ADR-014 P1 锚点与权限模式登记；v0.6 为 ADR-015 热插拔锚点/文案/配色分色/计数登记；v0.7 为 M5-01 批次 ADR-017–ADR-026 锚点/文案/暂停状态/计数登记；v0.8 为 M7-04 标签页/分屏锚点与 C1 修订登记；v0.9 为 ADR-028 v0.4 多供应商选择/记忆/只读锚点与文案登记；v0.10 为 ADR-028 v0.5 复审整改；v0.11 为 ADR-028 v0.6 旧会话重选/model 状态；v0.12 为 ADR-028 v0.7 model 不属于 provider/21 行真相表文案；v0.13 为 ADR-028 v0.8 provider 空 model_state/UI 优先级；v0.14 为 ADR-028 v0.9 编辑性 P2 + 补选上下文文案（存在且启用/锚点日期/session_busy 文案））
 
 | 项 | 内容 |
 |---|---|
-| 文档 | Aether UI/UX 设计规格 v0.8（v0.2 已评审通过；v0.3 为 M3-12 锚点登记；v0.4 为 M3-11 前置登记；v0.5 为 ADR-014 P1 锚点与权限模式登记；v0.6 为 ADR-015 热插拔锚点/文案/配色分色/计数登记；v0.7 为 M5-01 批次 ADR-017–ADR-026 登记；**v0.8 为 M7-04 标签页/分屏锚点与 C1 修订登记（2026-10-18）**） |
-| 依据基线 | 《需求文档》v0.12（ADR-014 新增 SE-06 会话级权限模式；ADR-015 CP-01 注册口径补注）、《设计文档》**v1.16**（冻结，含 ADR-001–015、017–026）、《实施计划与验收标准》v1.24、`docs/P1-实施计划与验收标准.md` **v0.7**、`AGENTS.md`、ADR-010/ADR-011/ADR-014/ADR-015/ADR-017–ADR-026 |
+| 文档 | Aether UI/UX 设计规格 v0.14（v0.2 已评审通过；v0.3 为 M3-12 锚点登记；v0.4 为 M3-11 前置登记；v0.5 为 ADR-014 P1 锚点与权限模式登记；v0.6 为 ADR-015 热插拔锚点/文案/配色分色/计数登记；v0.7 为 M5-01 批次 ADR-017–ADR-026 登记；v0.8 为 M7-04 标签页/分屏锚点与 C1 修订登记（2026-10-18）；v0.9 为 ADR-028 v0.4 多供应商选择/全局记忆/失效只读/端点预览锚点与文案登记（2026-10-22）；v0.10 为 ADR-028 v0.5 复审整改（2026-10-23）；v0.11 为 ADR-028 v0.6 旧会话重选/model 状态（2026-10-23）；v0.12 为 ADR-028 v0.7 model 不属于/21 行真相表（2026-10-23）；v0.13 为 ADR-028 v0.8 provider 空 model_state/UI 优先级（2026-10-23）；**v0.14 为 ADR-028 v0.9 编辑性 P2 + 补选上下文文案：model_state“存在且启用”、锚点日期、`session_busy` 文案（2026-10-23）**） |
+| 依据基线 | 《需求文档》v0.18（ADR-028 v0.9 三官方运行时多供应商）、《设计文档》**v1.24**（设计基线冻结，含 ADR-001–015、017–028）、《实施计划与验收标准》v1.24、`docs/P1-实施计划与验收标准.md` **v0.13**、`AGENTS.md`、ADR-010/ADR-011/ADR-014/ADR-015/ADR-017–ADR-028 |
 | 参考对象 | Proma（proma-ai/Proma）信息组织范式；Hermes Studio / Ekko Studio（EKKOLearnAI/hermes-studio）界面范式（仅借鉴公开界面思路，不拷贝代码，A11/SE-05） |
 | 效力 | **本文件不构成冻结基线**。与设计文档冲突时以设计文档为准；本文件中的实现偏差须先提 ADR（AGENTS §3） |
-| 适用范围 | P0 前端（M3-01…M3-12）与 E2E；**P1 新增界面锚点按 ADR-014 / ADR-015 登记（P1 任务 M5–M8，§7.3）**；**M7-04 任务登记锚点（标签页/分屏）自 v0.8 冻结（§7.3）**；P1+ 其余仍仅作预留说明，不进入排期 |
-| 状态 | **已评审通过（2026-09-24，随 ADR-010 批次）**；v0.2 已回流 ADR-010（文件引用面板 / 思考深度 / 模型与供应商配置，M3-09/M3-10/M3-11）；**v0.3（2026-09-29）：按 ADR-011 决策 5 登记 M3-12 分组锚点契约并冻结（§7.3），依据基线同步计划 v1.18**；**v0.4（2026-09-30）：按 M3-11 DoD6 前置要求登记「模型选择器空态与手动输入共存口径」（ADR-010 §5-9；UI-05 回归防护；实施记录见 `docs/M3-11-证据.md`）**；**v0.5（2026-09-30，ADR-014 合入 / 拟合入）：① §7.3 P1 锚点增量 10 组（含 `permission-mode-boundary` 常驻文案，R14）；② §5 文案表 +2 错误码（`provider_unreachable` / `provider_auth_failed`，ADR-014 附录 C-5）；③ 废止 §5「连通性测试将在 P1 开放」行与 `provider-test-notice` 提示（语义相反，ADR-014 附录 F-2）；④ §2.4 增权限模式选择器（三档）与常驻边界声明（ADR-014 决策 3 / 附录 F-3）**；**v0.6（2026-10-08，ADR-015 合入 / 拟合入）：E-0 头部同步；E-1 §3.2 用户启停边与 `user_disabled` 呈现行；E-2 配色分色注（`user_disabled` 灰 / 故障类红，§4.4/§6.4 同步）；E-3/E-5 §5 文案表 +2（`user_disabled` / `runtime_busy`）；E-4 §7.3 锚点 +2（`runtime-toggle` / `runtime-disable-confirm`，注与计数十组 → 十二组）；E-6 §8#10 补注；E-7 §0.1 C10 计数 36 → 52**；**v0.7（2026-10-09，M5-01 批次 ADR-017–ADR-026 合入 / 拟合入）：① §0.1 C2 更新（P1 起 pause/resume 开放，能力未声明置灰；ADR-017）与 C10 计数 52 → 63（ADR-018）；② §5 文案表 +10（`paused` 状态行 + 9 个新错误码：`pause_unsupported`/`rule_not_found`/`no_candidate_runtime`/`provider_error`/`session_not_found`/`workspace_not_found`/`workspace_in_use`/`preset_not_found`/`builtin_preset_undeletable`）；③ §7.3 锚点 +3（`session-pause-toggle`（M7-03）/ `archive`（M5-05）/ `file-reference`（M7-06）；十二组 → **十五组**）；④ §2.4 增暂停语义常驻声明（ADR-017 A-8）；本文件仍不构成冻结基线（与设计文档冲突以设计文档为准）；「开放问题」未关闭前不得据此定稿**；**v0.8（2026-10-18，M7-04）：① §0.1 C1 修订——P1 起标签页/分屏在单窗口内开放（M7-04；多窗口仍不做）；② §2.1/§2.2 增标签栏与分屏窗格线框说明（布局持久化 = settings ui.layout，ADR-018 附录 A-6）；③ §7.3 登记并冻结 M7-04 锚点组（workbench-tabs / session-tab / session-tab-badge / split-toggle / split-pane 等）；④ §8#1 更新（标签/分屏 P1 已实现，多窗口仍不做）；⑤ §0.2「Chrome 风格 Tab 栏」处置同步为 P1 落地形态（工作台会话视图标签，非多标签窗口）** |
+| 适用范围 | P0 前端（M3-01…M3-12）与 E2E；**P1 新增界面锚点按 ADR-014 / ADR-015 / ADR-017–ADR-028 登记（P1 任务 M5–M8，§7.3）**；**M7-04 任务登记锚点（标签页/分屏）自 v0.8 冻结；M7-10 供应商选择/记忆/只读锚点自 v0.9 冻结（v0.10/v0.11/v0.12/v0.13/v0.14 扩展属性、不新增组）**；P1+ 其余仍仅作预留说明，不进入排期 |
+| 状态 | **已评审通过（2026-09-24，随 ADR-010 批次）**；v0.2 已回流 ADR-010（文件引用面板 / 思考深度 / 模型与供应商配置，M3-09/M3-10/M3-11）；**v0.3（2026-09-29）：按 ADR-011 决策 5 登记 M3-12 分组锚点契约并冻结（§7.3），依据基线同步计划 v1.18**；**v0.4（2026-09-30）：按 M3-11 DoD6 前置要求登记「模型选择器空态与手动输入共存口径」（ADR-010 §5-9；UI-05 回归防护；实施记录见 `docs/M3-11-证据.md`）**；**v0.5（2026-09-30，ADR-014 合入 / 拟合入）：① §7.3 P1 锚点增量 10 组（含 `permission-mode-boundary` 常驻文案，R14）；② §5 文案表 +2 错误码（`provider_unreachable` / `provider_auth_failed`，ADR-014 附录 C-5）；③ 废止 §5「连通性测试将在 P1 开放」行与 `provider-test-notice` 提示（语义相反，ADR-014 附录 F-2）；④ §2.4 增权限模式选择器（三档）与常驻边界声明（ADR-014 决策 3 / 附录 F-3）**；**v0.6（2026-10-08，ADR-015 合入 / 拟合入）：E-0 头部同步；E-1 §3.2 用户启停边与 `user_disabled` 呈现行；E-2 配色分色注（`user_disabled` 灰 / 故障类红，§4.4/§6.4 同步）；E-3/E-5 §5 文案表 +2（`user_disabled` / `runtime_busy`）；E-4 §7.3 锚点 +2（`runtime-toggle` / `runtime-disable-confirm`，注与计数十组 → 十二组）；E-6 §8#10 补注；E-7 §0.1 C10 计数 36 → 52**；**v0.7（2026-10-09，M5-01 批次 ADR-017–ADR-026 合入 / 拟合入）：① §0.1 C2 更新（P1 起 pause/resume 开放，能力未声明置灰；ADR-017）与 C10 计数 52 → 63（ADR-018）；② §5 文案表 +10（`paused` 状态行 + 9 个新错误码：`pause_unsupported`/`rule_not_found`/`no_candidate_runtime`/`provider_error`/`session_not_found`/`workspace_not_found`/`workspace_in_use`/`preset_not_found`/`builtin_preset_undeletable`）；③ §7.3 锚点 +3（`session-pause-toggle`（M7-03）/ `archive`（M5-05）/ `file-reference`（M7-06）；十二组 → **十五组**）；④ §2.4 增暂停语义常驻声明（ADR-017 A-8）；本文件仍不构成冻结基线（与设计文档冲突以设计文档为准）；「开放问题」未关闭前不得据此定稿**；**v0.8（2026-10-18，M7-04）：① §0.1 C1 修订——P1 起标签页/分屏在单窗口内开放（M7-04；多窗口仍不做）；② §2.1/§2.2 增标签栏与分屏窗格线框说明（布局持久化 = settings ui.layout，ADR-018 附录 A-6）；③ §7.3 登记并冻结 M7-04 锚点组（workbench-tabs / session-tab / session-tab-badge / split-toggle / split-pane 等）；④ §8#1 更新（标签/分屏 P1 已实现，多窗口仍不做）；⑤ §0.2「Chrome 风格 Tab 栏」处置同步为 P1 落地形态（工作台会话视图标签，非多标签窗口）**；**v0.9（2026-10-22，ADR-028 v0.4）：① §2.2 增三运行时供应商选择（全局记忆预填视为已选）；② §2.4 供应商失效/删除只读禁用发送；③ §2.5 当前供应商回显；④ §5 +4 条文案；⑤ §7.3 +5 锚点（15→20）；⑥ §8 增 M7-10 P1 行**；**v0.10（2026-10-23，ADR-028 v0.5）：① §2.2 provider+model 必选、自动路由过滤；② §2.4 旧会话重选/只读中断可用/矩阵；③ §3.3 只读中断；④ §5.1 文案补“可中断”；⑤ §7.3 `session-provider-select` 增 `data-context`、`provider-required-notice` 增 `data-field`（计数仍 20）；⑥ 版本记录 v0.10**；**v0.11（2026-10-23，ADR-028 v0.6）：① §2.4 旧会话适配器准备/失败回滚、model 空/失效补选；② §2.5 `data-model-state`；③ §5.1 +1 条 model 失效文案；④ §7.3 `session-provider-current` 增 `data-model-state`；⑤ 版本记录 v0.11**；**v0.12（2026-10-23，ADR-028 v0.7）：① §2.4/§5.1 model 不属于 provider 文案；② §2.5/§7.3 `data-model-state` 语义补“不属于”；③ §8 M7-10 行；④ 版本记录 v0.12**；**v0.13（2026-10-23，ADR-028 v0.8）：① §2.4 UI 优先级 provider 失效禁用所有补选；② §2.5 provider 空 model_state 语义；③ §5.1 文案优先级；④ 版本记录 v0.13**；**v0.14（2026-10-23，ADR-028 v0.9）：① §2.5/§3.3 provider 空 `model_state` 明确“存在且启用”；② §7.3 `session-provider-select` 锚点日期改 v0.14；③ §2.4/§5.1 补选 `session_busy` 上下文文案（不复用队列满文案）；④ 版本记录 v0.14** |
 
 **阅读顺序**：§0 硬约束与参考采纳 → §1 界面清单 → §2 线框 → §3 状态图 → §4 组件矩阵 → §5 文案表 → §6 Token/可访问性 → §7 E2E 选择器 → §8 范围冻结 → §9 开放问题。
 
@@ -183,10 +183,10 @@
 - **状态指示（线条语言）**：列表项左侧 3px 竖线着色（运行中=accent 且带脉冲点、等待审批=warning、失败=danger、其他=透明/弱边框）+ 右侧小字状态标签；不使用大色块徽标。颜色见 §6.4。
 - **交互**：
   - 切换：点击列表项 → 激活态（边框 + 背景提升），加载该会话消息基线（`messages_page` 最近一页）；**M7-04 起同时打开/聚焦对应标签**（标签语义见 §2.1）。
-  - 新建：表单（标题输入 ≤256 字符、模型输入（可选，自由文本）、运行时单选）→ `session_create` → 立即入列表并选中；T1 埋点锚点保留（`create-latency-ms`）。
+  - 新建：表单（标题输入 ≤256 字符、模型输入（自由文本兜底；选中 provider 后必填）、运行时单选、**供应商选择 + 模型选择**）→ `session_create` → 立即入列表并选中；T1 埋点锚点保留（`create-latency-ms`）。**供应商/模型选择（M7-10 / ADR-028 v0.9，三运行时均显示，不依赖 hello/ready）**：选项来自启用 provider（按运行时协议过滤；**自动路由时按“至少一个候选运行时支持该协议”过滤**）；默认值来自 settings `ui.provider_selection`（按 runtime 预填，**预填视为已选**）；成功创建后写入记忆；**三官方运行时选中 provider 后 `model` 必填（从该 provider 启用模型选择或手动输入且后端校验归属）**；无有效选择（无记忆/失效/未选模型）时创建按钮禁用 + `provider-required-notice`（`data-field="provider|model"`）；锚点 `session-provider-select`（`data-context="create"`）/ `provider-required-notice`。
   - 重命名/删除：**不设计**（D7 命令面无 rename/delete；`session_dispose` 仅关闭不删除）→ 见 §9。
   - 运行中会话置顶于「运行中」组内并显示脉冲点（Hermes 参考；`prefers-reduced-motion` 下降级为静态点，见 §6.7）。
-- **运行时选择器**（UI-02）：仅列出官方注册运行时（含 Mock，仅测试构建）；展示 `status` 徽标 + `status_reason` + 能力徽标（`hello` 上报的 capabilities）；`disabled` 运行时不可选（不可创建会话，M3-03 DoD3）。
+- **运行时选择器**（UI-02）：仅列出官方注册运行时（含 Mock，仅测试构建）；展示 `status` 徽标 + `status_reason` + 能力徽标（`runtimes_list.capabilities` = `hello` 上报能力 ∪ **核心静态表**；三官方运行时 `multi_provider` 始终显示）；`disabled` 运行时不可选（不可创建会话，M3-03 DoD3）。
 - 依据：UI-01/02、M3-02、M3-03。
 
 ### 2.3 中间消息流区
@@ -236,6 +236,7 @@
   - **禁用态与升权**：无激活会话时选择器禁用 + 空态提示；`deny` 类决议**不呈现 allow 按钮**、不提供 UI 升权后门；降级（如顶档 → `read_only`）后既有 `session`/`always` 授权按新档位重新求值、`pending` 票据不被追溯改写（ADR-014 附录 B 不变量 5/9）；
   - **文案纪律**（C6 延伸）：不得出现「完全权限仍无终端/网络通道」式表述（ADR-014 附录 B 不变量 12；信任级边界见设计 §2.1 第 4 条）。
 - **暂停/恢复（P1，ADR-017 / M7-03）**：会话操作区提供暂停/恢复入口（锚点 `session-pause-toggle`；运行时未声明 `pause_resume` 或连接未就绪时置灰 + `pause_unsupported`）；常驻语义声明：「暂停 = 中断当前回复并冻结会话；恢复 = 重放被中断的输入（原生会话上下文保留，Mode R）；暂停不承诺保留未完成的生成内容」；`paused` 态发送与 `run_retry` 被拒绝（`session_paused`，恢复后解除）。
+- **供应商/模型只读（P1，M7-10 / ADR-028 v0.9）**：当前会话 provider 停用/删除时，历史消息可查看；输入框保留草稿但发送禁用；提示「该供应商已停用或删除，当前会话只读：历史消息可查看，不能发送新消息。」（锚点 `session-provider-readonly`）；**不自动切换 provider、不自动清空记忆**；**不中止当前在途 run，`session_interrupt` 可用**；旧会话（无 `provider_id`）显示重选入口（复用 `session-provider-select`，`data-context="reselect"`）；**model 空/失效/不属于 provider 时显示“补选模型”入口（一次性）；但 `provider_state=invalid` 时只读，禁用所有补选（含 model）**；补选需适配器准备成功，失败不持久化、保持只读；仍拒绝 `session_send`（补选前）、`run_retry`、`session_resume`。**补选命中在途 run → `session_busy`，UI 使用补选专用文案「当前任务仍在运行，暂不能补选供应商/模型，请等当前任务结束后重试。」，不复用队列满文案、不排队。**
 - **禁用态矩阵**：
 
 | 场景 | 输入框 | 发送 | 中断 | 提示位置 |
@@ -247,6 +248,7 @@
 | `storage_backpressure`（L2） | 可用 | 禁用（服务端拒绝新 run） | 依 run 状态 | composer 内联提示 |
 | 运行时 `disabled/degraded` | 可用 | 禁用 | 禁用 | 运行时徽标 + 空态说明 |
 | 会话 `paused`（P1，ADR-017） | 可用（草稿保留） | 禁用（`session_paused`；恢复后解除） | 禁用 | 状态条 `paused` 提示 + `session-pause-toggle` |
+| 供应商/模型失效（P1，M7-10） | 可用（草稿保留） | 禁用（只读/待补选） | 可用（仅当前在途 run） | 状态条 + `session-provider-readonly`；model 失效显示补选入口；补选遇在途 run 显示补选专用 `session_busy` 文案 |
 | 无激活会话 | 禁用 | 禁用 | 禁用 | `请选择或新建会话` |
 
 - 依据：D8、D4、M3-02、M3-06、M3-03。
@@ -254,7 +256,7 @@
 ### 2.5 顶部/侧边状态区
 
 - **顶栏（合并现有状态条 + HealthMonitor + EventBridgeIndicator）**：
-  - 左：应用名 + 当前会话标题 + 会话状态 chip；
+  - 左：应用名 + 当前会话标题 + 会话状态 chip + **当前供应商/模型状态**（`session-provider-current`；`data-provider-id`；`data-state` = active/invalid/readonly；`data-model-state` = active/invalid（停用/删除/不属于）/missing；provider 空时 model 在任一启用 provider 中**存在且启用** → active，否则 invalid）；
   - 中：run 状态（无进行中 run / run 运行中 / 等待审批 / 最近终态）；
   - 右：运行时紧凑徽标组（每运行时一个点 + 名称缩写，hover 显示 `status_reason` 中文释义与最近变更时间，点击打开右栏运行时面板）、存储状态（`normal` 时弱化显示，异常时强调并可点击定位横幅）、待审批计数徽标（点击切到对应会话并聚焦审批卡）、`设置`/`关于` 入口；
   - `event-bridge-status`（M3-01 调试指示）移入设置/诊断页，不再出现在主界面（避免用户困惑）。
@@ -342,6 +344,8 @@ UI 呈现规则：
 
 > **配色分色注（ADR-015，复审 N5）**：§4.4「`disabled` = 危险红」为故障类统一口径；ADR-015 引入 `user_disabled`（非故障）后按 reason 分色——`user_disabled` = 灰点（非危险色）/ 故障类（`start_failed` / `handshake_timeout` / `crash_loop` / `version_mismatch` / `untrusted`）= `--ae-danger` 红；§4.4 表与 §6.4 色 token 说明按此同步。
 
+> **供应商/模型回显（ADR-028 v0.9）**：会话头当前供应商/模型见 §2.5（`session-provider-current` + `data-model-state`）；供应商停用/删除后的只读态与 `send/retry/resume` 拒绝、`session_interrupt` 可用见 §2.4/§3.3；model 空/失效/不属于补选见 §2.4/§5.1；provider 空时 model 在任一启用 provider 中**存在且启用** → active，否则 invalid。
+
 ### 3.3 run 生命周期与会话状态（D8 + D9 + M2-01）
 
 ```mermaid
@@ -371,6 +375,8 @@ flowchart TD
 ```
 
 要点：同一会话同时仅 1 个 run（D8）；权限等待只改变**会话**状态，不改变 run 状态；`paused` 在 P0 不可达（§4#22）；`timeout` 终态（DDL 枚举）按「失败」呈现，文案见 §5。
+
+- **供应商/模型失效只读（P1，M7-10 / ADR-028 v0.9）**：provider 停用/删除后 `provider_state=invalid`，会话进入只读；`session_send`/`run_retry`/`session_resume` 拒绝；历史消息可查看；当前在途 run 不中止且 **`session_interrupt` 可用**；**不自动切换 provider**。**UI 优先级：provider 失效 → 只读，禁用所有补选（含 model）**；仅 provider 有效且 model 空/失效/不属于时，才显示一次性 `session_send.model` 补选；`model_state=active` 的判定在 provider 空时按“model 在任一启用 provider 中**存在且启用** → active，否则 invalid”，选中 provider 后按归属复核；旧会话无 `provider_id` 为 `provider_state=readonly`，通过 `session-provider-select`（`data-context="reselect"`）补选 provider（必要时 model）并持久化后恢复；适配器准备失败不持久化、保持只读；补选仅在空闲/无在途 run 时允许，有在途 run → `session_busy`。
 
 ### 3.4 存储降级（D4 + D8 + ADR-004）
 
@@ -477,7 +483,7 @@ stateDiagram-v2
 | `storage_backpressure` | D8 L2、ADR-003/004 | 「存储写入繁忙，暂时无法接受新任务（已有任务不受影响）」 | 稍后重试；适配器隔离时等待自动恢复（≤30s） | 阻断新 run；已有 run 继续 |
 | `persist_degraded` | D4、ADR-004 | 「存储已降级为只读：写入与新任务已停止，运行中的任务已中断」 | 修复磁盘/目录/权限 → 重启应用（无热恢复） | 阻断写入/新 run；读/备份/诊断可用 |
 | `readback_gap_too_large` | D4、ADR-009 | 「历史消息过多，请关闭并重新打开会话。」（现有文案；补充说明可重新加载最近 N 条） | 确认后清缓存重载最近 500 条（不重启核心/应用） | 阻断补读；不阻断输入/发送 |
-| `session_busy` | D8 run 串行 | 「当前任务仍在运行，等待队列已满（最多 1 条），请稍后发送」 | 等待当前 run 终态后重发（草稿保留） | 阻断该条发送 |
+| `session_busy` | D8 run 串行 | 「当前任务仍在运行，等待队列已满（最多 1 条），请稍后发送」（**补选上下文使用 §5.1 专用文案，不显示本行**） | 等待当前 run 终态后重发（草稿保留） | 阻断该条发送 |
 | `version_mismatch` | D5/ADR-002/ADR-008 | 「运行时版本不匹配：需要 {required}，当前 {found}」 | 升级适配器/应用后重启；不可直接启用 | 阻断该 runtime（`disabled`） |
 | `untrusted` | §2.1、§4#28、D5 | 「适配器未通过官方白名单校验，已拒绝加载（P3 沙箱前仅支持官方适配器）」 | 无（不提供启用入口） | 阻断该 runtime |
 | `crash_loop` | D5 熔断 | 「运行时 60 秒内崩溃 5 次，已熔断停止（防止崩溃循环）」 | `重新启用` 或修复后重启应用 | 阻断该 runtime 直至人工启用 |
@@ -506,6 +512,21 @@ stateDiagram-v2
 | `invalid_json` / `unknown_field` / `missing_field` / `invalid_type` / `invalid_value` / `invalid_enum` / `too_large` / `out_of_range` / `invalid_format` | D7/M1-08 | 「输入不合法（{field}）：{message}」 | 修正输入 | 阻断该命令 |
 | `not_implemented` | D7 框架 | 「该功能尚未实现（{command}）」 | 无 | 阻断该命令（仅开发期出现） |
 | `internal` | ADR-006 | 「内部错误：{message}」 | 重试；持续出现导出诊断 | 阻断该命令 |
+
+### 5.1 供应商选择 / 只读 / 模型补选文案（ADR-028 v0.9，M7-10）
+
+| 场景 | 用户可见文案（中文） | 锚点 / 状态 |
+|---|---|---|
+| 未选择供应商 | 「请选择供应商后才能创建会话。」 | `provider-required-notice`（`data-state="missing"`、`data-field="provider"`）；创建按钮禁用 |
+| 未选择模型 | 「请选择模型后才能创建会话。」 | `provider-required-notice`（`data-state="missing"`、`data-field="model"`）；创建按钮禁用 |
+| 模型已停用/删除/不属于所选供应商 | 「该模型已停用、删除或不属于所选供应商，请补选模型后重试。」 | `session-provider-current`（`data-model-state="invalid"`）；补选入口可用 |
+| 补选时当前任务仍在运行 | 「当前任务仍在运行，暂不能补选供应商/模型，请等当前任务结束后重试。」 | `session-provider-select`（`data-context="reselect"`、`data-busy="run_in_flight"`）；不排队、不显示队列满文案；草稿保留 |
+| 供应商已停用/删除 | 「该供应商已停用或删除，当前会话只读：历史消息可查看，不能发送新消息；当前任务仍可中断。」 | `session-provider-readonly`（`data-reason="provider_disabled\|provider_deleted\|provider_missing"`）；发送禁用、中断可用 |
+| 供应商失效 + 模型失效/缺失 | 「该供应商已停用或删除，当前会话只读；不能补选模型或其他供应商。」 | `session-provider-readonly`；**禁用所有补选（含 model）**，优先级高于模型补选入口 |
+| 端点用户输入风险 | 「端点由用户填写；API Key 将发送至该地址，请自行确认其可信性。」 | `provider-endpoint-preview`（`data-source="explicit\|base_url\|default"`） |
+| 记忆预填 | 「已按上次选择预填供应商，可直接创建或修改。」 | `session-provider-select`（预填视为已选） |
+
+> 文案可微调，语义与操作口径不得改变；不得把“预填”写成“自动选择”，不得承诺端点可信或 HTTPS。
 
 ---
 
@@ -705,6 +726,11 @@ stateDiagram-v2
 | M7-08 | 工作区实现登记（2026-10-20） | 左栏树：`workspace-item-toggle`（折叠，`aria-expanded`）/ `workspace-item-name` / `workspace-item-count`（在途/总数）/ `workspace-session`（会话叶子，点击打开标签）/ `workspace-session-empty` / `workspace-assign`（改派当前会话）/ `workspace-rename` / `workspace-rename-input` / `workspace-rename-save` / `workspace-rename-cancel` / `workspace-delete` / `workspace-delete-confirm-box` / `workspace-delete-confirm` / `workspace-delete-cancel` / `workspace-create-form` / `workspace-name-input` / `workspace-root-input` / `workspace-root-pick` / `workspace-create-submit` / `workspace-create-cancel` / `workspace-error`（`data-code`）/ `workspace-assign-notice`（常驻「权限基准不变，如需变更请新建会话」，R5/R15）/ `workspace-assign-result`（`data-result`）/ `workspace-tree-empty` / `workspace-tree-loading`；设置页入口去重：`settings-workspace-entry`（仅缺省绑定，仅新会话生效；不提供第二个全局绑定入口） | `workspace-item`：`data-workspace-id`（未分配合成组为空串）、`data-manageable`；`workspace-item-count`：`data-active` / `data-total`；`workspace-session`：`data-session-id` / `data-active` / `data-status` |
 | M7-09 | 预设 | `presets-page` / `preset-item` / `preset-edit` | `data-preset-id` / `data-builtin` |
 | M7-09 | 预设实现登记（2026-10-19） | `settings-tab-presets`（设置子导航）/ `preset-name` / `preset-builtin` / `preset-in-use`（「使用中」标记）/ `preset-preview` / `preset-use`（选中/取消）/ `preset-delete`（内置置灰）/ `preset-delete-confirm` / `preset-delete-confirm-button` / `preset-delete-cancel` / `preset-edit-form` / `preset-edit-name` / `preset-edit-prompt` / `preset-edit-save` / `preset-edit-cancel` / `preset-add` / `preset-add-name` / `preset-add-prompt` / `preset-add-submit` / `presets-notice` / `presets-error`（`data-code`）/ `preset-list` / `preset-empty`；新建会话入口 `session-preset-select`（预设可选，缺省「不使用预设」） | `preset-item`：`data-active`（使用中）；`presets-error`：`data-code` |
+| M7-10 | 新建会话供应商选择 / 旧会话重选（三运行时；2026-10-23 v0.14） | `session-provider-select` | `data-context="create\|reselect"`、`data-provider-id`、`data-invalid`、`data-disabled`、`data-busy="run_in_flight"` |
+| M7-10 | 未选择/失效提示 | `provider-required-notice` | `data-state="missing\|invalid"`、`data-field="provider\|model"` |
+| M7-10 | 供应商端点预览 | `provider-endpoint-preview` | `data-protocol`、`data-source="explicit\|base_url\|default"` |
+| M7-10 | 会话当前供应商/模型 | `session-provider-current` | `data-provider-id`、`data-state="active\|invalid\|readonly"`、`data-model-state="active\|invalid（停用/删除/不属于）\|missing"` |
+| M7-10 | 只读提示 | `session-provider-readonly` | `data-reason="provider_disabled\|provider_deleted\|provider_missing"` |
 | M6-03 | 审计 | `audit-page` / `audit-filter` / `audit-export` | — |
 | M6-01 | 规则 | `rules-page` / `rule-item` | `data-rule-id` / `data-enabled` |
 | M5-02 / M5-04 | 备份与保留设置 | `settings-backup-auto` / `settings-retention` | — |
@@ -725,7 +751,7 @@ stateDiagram-v2
 | M7-04 | 主窗格标记（任务登记，2026-10-18） | `pane-primary` | `data-session-id`（聚焦标签会话；无激活会话时为空串） |
 | M7-06 | 引用注入入口 | `file-reference` | — |
 
-> **P1 锚点登记（2026-09-30 按 ADR-014 附录 F-1 登记，共 10 组；2026-10-08 按 ADR-015 附录 E-4 增 2 组，共 12 组；2026-10-09 按 M5-01 批次增 3 组——`session-pause-toggle`（ADR-017，M7-03）、`archive`（ADR-021，M5-05）、`file-reference`（ADR-024，M7-06），共 **15 组**）**：上表 M5–M8 十五组为 P1 登记项，实施时不得重命名（§7.1 规则 5；重命名视为破坏性变更）；正式锚点契约由 M5-01 批次登记，实现与断言由对应任务承担；`permission-mode-boundary` 为**常驻文案**锚点（R14，文案定稿见 ADR-014 附录 F-3，交互与档位语义见 §2.4），`permission-mode-selector` 的 `data-mode` 三档取值为 `read_only` / `workspace_write`（缺省）/ `danger_full_access`；`runtime-toggle` / `runtime-disable-confirm` 为 ADR-015（M7-01）登记项；`provider-test-notice`（M3-11 实现登记）已按 ADR-014 附录 F-2 废止，由 `provider-test-result` 承接（P1 = 真实调用）。
+> **P1 锚点登记（2026-09-30 按 ADR-014 附录 F-1 登记，共 10 组；2026-10-08 按 ADR-015 附录 E-4 增 2 组，共 12 组；2026-10-09 按 M5-01 批次增 3 组——`session-pause-toggle`（ADR-017，M7-03）、`archive`（ADR-021，M5-05）、`file-reference`（ADR-024，M7-06），共 **15 组**；2026-10-22 按 ADR-028 v0.4 增 5 组——`session-provider-select`/`provider-required-notice`/`provider-endpoint-preview`/`session-provider-current`/`session-provider-readonly`（M7-10），共 **20 组**）**：上表 M5–M8 二十组为 P1 登记项，实施时不得重命名（§7.1 规则 5；重命名视为破坏性变更）；正式锚点契约由 M5-01 批次登记（v0.9 由 ADR-028 v0.4 增补），实现与断言由对应任务承担；`permission-mode-boundary` 为**常驻文案**锚点（R14，文案定稿见 ADR-014 附录 F-3，交互与档位语义见 §2.4），`permission-mode-selector` 的 `data-mode` 三档取值为 `read_only` / `workspace_write`（缺省）/ `danger_full_access`；`runtime-toggle` / `runtime-disable-confirm` 为 ADR-015（M7-01）登记项；`provider-test-notice`（M3-11 实现登记）已按 ADR-014 附录 F-2 废止，由 `provider-test-result` 承接（P1 = 真实调用）；`session-provider-*` 五组为 ADR-028 v0.4（M7-10）登记项，**2026-10-23 v0.10-v0.14 扩展 `session-provider-select`（`data-context="create|reselect"`、`data-busy="run_in_flight"`）、`provider-required-notice`（`data-field="provider|model"`）与 `session-provider-current`（`data-model-state`，invalid 含不属于/provider 空语义），不新增锚点组，计数仍 20**；**预填视为已选**、旧会话重选、model 空/失效补选、失效只读（中断可用）、端点风险文案与状态见 §2.2/§2.4/§5.1。
 
 > **M3-12 锚点契约（2026-09-29 按 ADR-011 决策 5 登记并冻结）**：`session-group` / `data-group` / `session-group-title` 及 `session-list` 结构变更自本版冻结，实施时不得重命名（§7.1 规则 5；重命名视为破坏性变更）；断言接口（`data-group` 序列 = 非空组固定组序子集、空组不渲染、等待组增删、`session-item` 不得跨组错位）见 `docs/M3-03-遗留项处置草案.md` §5.2 与 `docs/adr/ADR-011-m3-12-waiting-state-grouping.md` 决策 5。
 
@@ -770,6 +796,7 @@ stateDiagram-v2
 | 22 | 遥测 / 崩溃上报 UI | §4#26 | 不计划 |
 | 23 | 账号 / 云同步 / 多设备 UI | §4#27 | P6（需 ADR） |
 | 24 | 导入 / 导出（JSON/JSONL）界面 | §4#17 | P2 |
+| 25 | 多供应商选择 / 全局记忆 / 失效只读 / 旧会话重选 / model 状态补选 | ADR-028 v0.9、M7-10（直接实施项，不构成 P1 门禁）；provider 失效禁用所有补选；只读态中断可用 | **P1** |
 
 > **ADR-010（2026-09-24）登记例外**：S-11 文件引用面板（只读）、思考深度、模型与供应商配置三项 P0 能力为范围冻结的登记例外（豁免对价见 ADR-010 §7）；文件树浏览/改动视图/模型删除仍在 P1+/P4，不因本例外提前。
 >
@@ -796,6 +823,20 @@ stateDiagram-v2
 | Q13 | 流式期间用户上滚后是否暂停自动滚动 | 暂停 + 「有新消息 ↓」（§2.3） | 与 Proma 行为对齐，需 E2E 覆盖 |
 | Q14 | 会话草稿是否需要会话级隔离（当前实现为单一草稿） | 会话级草稿（客户端内存，不落库） | 切换会话时的数据丢失风险 |
 | Q15 | 右栏「诊断入口」是否直接跳 S-07 还是内联显示容量 | 内联容量摘要 + 「导出诊断」按钮；分区顺序随 ADR-010 登记（运行时→权限→文件→诊断） | 减少一次跳转 |
+
+---
+
+## 10. 版本记录
+
+| 版本 | 日期 | 变更 |
+|---|---|---|
+| v0.8 | 2026-10-18 | M7-04 标签页/分屏锚点与 C1 修订登记 |
+| v0.9 | 2026-10-22 | ADR-028 v0.4：三官方运行时多供应商选择（§2.2）、全局记忆预填视为已选、供应商失效/删除只读（§2.4）、当前供应商回显（§2.5）、4 条文案（§5.1）、5 个锚点（§7.3，15→20）、§8 M7-10 P1 行 |
+| v0.10 | 2026-10-23 | ADR-028 v0.5：provider+model 必选、旧会话重选（`session-provider-select[data-context=reselect]`）、只读态中断可用（§2.4 矩阵/§3.3）、自动路由过滤（§2.2）、5 条文案（§5.1）、锚点属性扩展（计数仍 20）、§8 M7-10 行 |
+| v0.11 | 2026-10-23 | ADR-028 v0.6：旧会话适配器准备/失败回滚、model 空/失效一次性补选、`data-model-state`（§2.5/§7.3）、model 失效文案（§5.1）、§2.4 矩阵、§8 M7-10 行 |
+| v0.12 | 2026-10-23 | ADR-028 v0.7：model 不属于 provider 计入 `invalid`（§2.5/§5.1/§7.3）、21 行真相表文案、§8 M7-10 行 |
+| v0.13 | 2026-10-23 | ADR-028 v0.8：provider 空 model_state（任一启用 provider 存在→active）、UI 优先级（provider 失效禁用所有补选）、版本标签 |
+| v0.14 | 2026-10-23 | ADR-028 v0.9：provider 空 model_state 明确“存在且启用”、`session-provider-select` 锚点日期 v0.14、补选 `session_busy` 上下文文案（不复用队列满文案）、版本记录 |
 
 ---
 
