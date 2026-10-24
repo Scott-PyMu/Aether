@@ -5234,7 +5234,7 @@ select.form-input {
 
 /* ===== 响应式 ========================================================== */
 
-@media (max-width: 1180px) {
+@media (max-width: 1279px) {
   .right {
     position: absolute;
     top: 0;

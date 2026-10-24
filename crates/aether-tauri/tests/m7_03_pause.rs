@@ -103,8 +103,10 @@ struct Harness {
     log_path: PathBuf,
 }
 
-/// 两个运行时：`mock`（声明 `pause_resume`）与 `codex`（官方 id 占位，指向
-/// `--no-pause-resume` 负向夹具——未声明能力路径）。
+/// 两个运行时：`mock`（声明 `pause_resume`）与 `pi`（官方白名单内的
+/// 非 `multi_provider` 占位 id，指向 `--no-pause-resume` 负向夹具——未声明能力
+/// 路径；ADR-028 后三官方运行时创建会话必须显式 provider/model，故负向能力门
+/// 使用非 multi_provider 的白名单 id）。
 fn harness(fixture: &Path) -> Harness {
     let dir = TempDir::new().expect("临时目录");
     let runtime = new_runtime();
@@ -126,7 +128,7 @@ fn harness(fixture: &Path) -> Harness {
         boot_supervisor(
             vec![
                 spec_for("mock", fixture, &log_path, false),
-                spec_for("codex", fixture, &log_path, true),
+                spec_for("pi", fixture, &log_path, true),
             ],
             Some(&dir.path().join("adapters.json")),
         )
@@ -279,7 +281,7 @@ fn pause_unsupported_runtime_is_rejected_without_transition() {
         return;
     };
     let h = harness(&fixture);
-    let session_id = create_session(&h, "codex");
+    let session_id = create_session(&h, "pi");
     assert_eq!(session_status(&h, &session_id), SessionStatus::Idle);
     let changes_before = count_status_changes(&h, &session_id);
     let dispatches_before = pause_dispatch_count(&h);

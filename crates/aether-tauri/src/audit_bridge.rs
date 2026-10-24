@@ -86,17 +86,33 @@ impl SupervisorObserver for DeferredObserver {
 /// 回调为同步接口，写入/事件提交经核心运行时 spawn（fire-and-forget，不阻塞监督器
 /// 任务）；失败仅记 tracing 告警（审计为追加日志，不反向阻断适配器监督）。
 pub struct StoreAuditObserver {
-    write: WriteQueue,
     handle: tokio::runtime::Handle,
     pipeline: Option<EventPipeline>,
+    /// 审计写入串行队列：监督器回调为同步接口，逐条 `send` 保序；由单一
+    /// 消费任务按提交顺序写入（状态转移先于其后的准入/熔断审计）。
+    audit_tx: tokio::sync::mpsc::UnboundedSender<AuditLogRecord>,
 }
 
 impl StoreAuditObserver {
     pub fn new(write: WriteQueue, handle: tokio::runtime::Handle) -> Self {
+        // M3-07：审计顺序是 DoD1「逐条 1:1」的一部分——不能用独立 `spawn`
+        // 逐条写入（调度顺序不确定），改为单消费者按提交顺序落库。
+        let (audit_tx, mut audit_rx) = tokio::sync::mpsc::unbounded_channel::<AuditLogRecord>();
+        let write_for_audits = write.clone();
+        handle.spawn(async move {
+            while let Some(record) = audit_rx.recv().await {
+                if let Err(error) = write_for_audits
+                    .execute(StoreCommand::InsertAudit { record })
+                    .await
+                {
+                    tracing::warn!(error = %error, "适配器审计写入失败（M3-07）");
+                }
+            }
+        });
         Self {
-            write,
             handle,
             pipeline: None,
+            audit_tx,
         }
     }
 
@@ -108,12 +124,10 @@ impl StoreAuditObserver {
     }
 
     fn enqueue(&self, record: AuditLogRecord) {
-        let write = self.write.clone();
-        self.handle.spawn(async move {
-            if let Err(error) = write.execute(StoreCommand::InsertAudit { record }).await {
-                tracing::warn!(error = %error, "适配器审计写入失败（M3-07）");
-            }
-        });
+        // `send` 同步入队（无 await），保持调用方提交顺序；队列满/关闭仅告警。
+        if self.audit_tx.send(record).is_err() {
+            tracing::warn!("适配器审计队列已关闭，审计记录丢弃（M3-07）");
+        }
     }
 
     /// 发射 `runtime.status_changed`（附录 B 信封 9 字段；合成会话归段）。

@@ -807,6 +807,17 @@ impl PermissionService {
                 .pending_for_session(session_id.as_str())
                 .is_empty()
         });
+        // 审计先于票据入队：`pending_list` 一旦可见，`permission.requested` 审计必须已提交
+        // （T6/DoD5 断言读取时序；避免“先可见、后审计”的竞态）。
+        self.audit(
+            &request,
+            "agent",
+            "permission.requested",
+            "pending",
+            Some(verdict.reason.clone()),
+            None,
+        )
+        .await?;
         {
             let mut inner = lock_inner(&self.inner);
             if !inner.queue.insert(ticket.clone()) {
@@ -841,15 +852,6 @@ impl PermissionService {
             )
             .await?;
         }
-        self.audit(
-            &request,
-            "agent",
-            "permission.requested",
-            "pending",
-            Some(verdict.reason.clone()),
-            None,
-        )
-        .await?;
         if first_pending_for_session {
             self.notify_pending(request.session_id.as_ref()).await;
         }

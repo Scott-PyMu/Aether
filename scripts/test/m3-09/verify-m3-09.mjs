@@ -181,9 +181,12 @@ record(
     [artifactsTs, '"artifact_add"', "前端 artifact_add 命令名"],
     [artifactsTs, '"artifact_remove"', "前端 artifact_remove 命令名"],
     [workbench, "<FilePanel", "工作台集成文件面板"],
-    // 断点/折叠（≥1280 展开、<1280 抽屉）。
+    // 断点/折叠（≥1280 展开、<1280 抽屉；UI-UX §2.1 冻结口径）。
+    // M7-10 工作台原型对齐将类名 `.workbench-right` 收敛为 `.right`，折叠态仍由
+    // `data-open` 同源驱动（JSX 断言 + 桌面用例覆盖）。
     [styles, "@media (max-width: 1279px)", "右栏 <1280 抽屉断点"],
-    [styles, '.workbench-right[data-open="true"]', "右栏抽屉开关契约"],
+    [styles, ".right.collapsed", "右栏抽屉折叠样式"],
+    [workbench, "data-open={String(rightOpen)}", "右栏抽屉开关契约（data-open）"],
     [styles, ".file-panel", "文件面板样式"],
   ];
   for (const [source, needle, label] of required) {

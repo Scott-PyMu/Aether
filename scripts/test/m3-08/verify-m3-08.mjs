@@ -167,7 +167,7 @@ record(
     [lib, "permission_loop::PermissionServiceGate::new", "执行器权限网关接线（去 None）"],
     [lib, "restore_workspace_binding", "组合根启动恢复接线"],
     [executor, "SessionMappingGate", "适配器会话 id → 核心会话 id 映射"],
-    [executor, "create_session_with_options", "system_prompt 注入下发（M7-06/ADR-024：options 扩展形）"],
+    [executor, "create_session_with_all_options", "system_prompt 注入下发（M7-06/ADR-024；M7-10/ADR-028 扩展为 all_options）"],
     [executor, "permission_loop_stats", "零直通探针聚合（DoD7 证据）"],
     [sdkMemory, "MEMORY_CONFLICT_CODE", "冲突错误码（memory_conflict）"],
     [sdkMemory, "atomicWriteMemory", "原子写（临时文件 + rename）"],

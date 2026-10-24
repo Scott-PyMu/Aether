@@ -2147,7 +2147,13 @@ impl IpcBackend for SessionBackend {
                     .run(&run_id)
                     .await
                     .map_err(|error| IpcError::internal(format!("run 读取失败：{error}")))?
-                    .ok_or_else(|| IpcError::invalid_value("run 不存在；无法重试"))?;
+                    // M3-06 契约：未知 run 必须保留稳定业务码 `run_not_found`
+                    // （`LifecycleError::RunNotFound` 的唯一映射，供 UI/测试判定）。
+                    .ok_or_else(|| {
+                        map_lifecycle_error(LifecycleError::RunNotFound {
+                            run_id: run_id.clone(),
+                        })
+                    })?;
                 let session = reads
                     .session(&run.session_id)
                     .await
