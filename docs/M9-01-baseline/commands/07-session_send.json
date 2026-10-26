@@ -1,0 +1,82 @@
+{
+  "schema": "aether.m9-01.command-baseline.v1",
+  "command": "session_send",
+  "index": 7,
+  "route": "daemon",
+  "exposure": "ui",
+  "reachable": true,
+  "params": {
+    "style": "strict",
+    "dto": "SessionSendRequest",
+    "required": [
+      "session_id",
+      "text",
+      "client_msg_id"
+    ],
+    "optional": [
+      "thinking_depth",
+      "references",
+      "provider_id",
+      "model"
+    ],
+    "field_types": {
+      "session_id": "String",
+      "text": "String",
+      "client_msg_id": "String",
+      "thinking_depth": "Option<i64>",
+      "references": "Vec<ReferenceEntry>",
+      "provider_id": "Option<String>",
+      "model": "Option<String>"
+    }
+  },
+  "accepted_shape": {
+    "session_id": "01J00000000000000000000000",
+    "text": "sample",
+    "client_msg_id": "sample"
+  },
+  "rejects": [
+    {
+      "id": "unknown_field",
+      "stage": "strict_parse",
+      "params": {
+        "__unexpected_field": true
+      },
+      "expect": {
+        "result": "rejected",
+        "code": "unknown_field",
+        "field": "__unexpected_field"
+      }
+    },
+    {
+      "id": "invalid_json",
+      "stage": "strict_parse",
+      "params": [],
+      "expect": {
+        "result": "rejected",
+        "code": "invalid_json"
+      }
+    },
+    {
+      "id": "missing_field",
+      "stage": "strict_parse",
+      "params": {},
+      "expect": {
+        "result": "rejected",
+        "code": "missing_field",
+        "field": "session_id"
+      }
+    },
+    {
+      "id": "invalid_type",
+      "stage": "strict_parse",
+      "params": {
+        "session_id": 12345
+      },
+      "expect": {
+        "result": "rejected",
+        "code": "invalid_type"
+      }
+    }
+  ],
+  "note": "rejects 的期望码由 strict 解析（deny_unknown_fields）确定性给出；accepted_shape 只声明请求形态，不声明后端成功。响应体 golden 由 M9-04 追加，不改本文件。"
+}

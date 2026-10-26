@@ -79,6 +79,11 @@
     "verify:m8-01": "node scripts/test/m8-01/verify-m8-01.mjs",
     "verify:m8-03": "node scripts/test/m8-03/verify-m8-03.mjs",
     "verify:m8-04": "node scripts/test/m8-04/verify-m8-04.mjs",
+    "verify:error-codes": "node scripts/test/verify-error-codes.mjs",
+    "verify:m9-01-baseline": "node scripts/test/verify-m9-01-baseline.mjs",
+    "generate:error-codes": "node scripts/ci/error-codes.mjs generate",
+    "baseline:m9-01:record": "node scripts/ci/m9-01-baseline.mjs record",
+    "stats:m9-01": "node scripts/ci/m9-01-stats.mjs",
     "dev:desktop": "node scripts/ci/dev-desktop.mjs",
     "smoke": "node scripts/test/smoke-desktop.mjs",
     "ci:local": "node scripts/test/ci-local.mjs"

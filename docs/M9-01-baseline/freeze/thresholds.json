@@ -1,0 +1,45 @@
+{
+  "schema": "aether.m9-01.thresholds.v1",
+  "status": "frozen",
+  "frozen_at": "2026-10-26",
+  "unit_note": "RSS 与体积按 MiB（1 MiB = 1048576 字节）；安装包上限按字节给出；时间按毫秒。",
+  "head_baseline": {
+    "installer_path": "dist-out/Aether_0.1.0_x64_en-US.msi",
+    "installer_bytes": 127811584,
+    "installer_sha256": "49bbef4fc77dab52946bba95a9055450b4df35101028800838be2049365446a9",
+    "installer_built_at": "2026-10-09T09:55:55+08:00",
+    "provenance": "仓库内可复现的最新安装包（M8-04 批次）；M9-01 不重新打 Tauri 包（Tauri 仅开发期对照，ADR-029）。",
+    "head_commit_at_freeze": "4558d06f4222fd469ac4246d9068382e30dcc2f1"
+  },
+  "installer": {
+    "max_bytes": 191717376,
+    "rule": "≤1.5 × HEAD 基线（127811584 × 1.5 = 191717376）",
+    "absolute_cap_bytes": 471859200,
+    "absolute_cap_note": "且 ≤450 MiB（471859200 字节）；取两者更严者，故实际硬上限 = 191717376 字节",
+    "gate": "G6/G7 任一超限即不通过，无自由裁量豁免（P2 计划 §2.15/§3.9）"
+  },
+  "runtime": {
+    "idle_rss_max_bytes": 524288000,
+    "idle_rss_rule": "idle RSS ≤500 MiB",
+    "ten_sessions_max_bytes": 1258291200,
+    "ten_sessions_rule": "10 会话 ≤1.2 GiB"
+  },
+  "startup": {
+    "window_shown_max_ms": 1500,
+    "handshake_target_ms": 2000,
+    "handshake_timeout_ms": 10000,
+    "handshake_retry": 1,
+    "ui_ready_max_ms": 5000,
+    "session_create_max_ms": 2000
+  },
+  "events": {
+    "load": "10 会话 × 50 delta/s",
+    "control_event_loss_allowed": 0,
+    "p95_latency_max_ms": 150
+  },
+  "gates": {
+    "thresholds_apply_to": ["G6 打包", "G7 全量回归"],
+    "failure_rule": "硬失败=停止发布并修复；不得以「部分完成」发布（P2 计划 §1.4）"
+  },
+  "owner": "M9-12（性能基线）/ M9-11（打包）"
+}

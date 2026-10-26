@@ -1,0 +1,42 @@
+{
+  "schema": "aether.m9-01.lifecycle-baseline.v1",
+  "source": "docs/P2-架构迁移-实施计划与验收标准.md §2.15 M9-09 + ADR-029 §5/§4.7",
+  "phases": [
+    {
+      "phase": "window_shown",
+      "budget_ms": 1500,
+      "kind": "hard_threshold",
+      "note": "窗口 ≤1.5s"
+    },
+    {
+      "phase": "daemon_ready",
+      "budget_ms": 2000,
+      "kind": "target",
+      "note": "initialize 握手目标 ≤2s"
+    },
+    {
+      "phase": "daemon_ready_timeout",
+      "budget_ms": 10000,
+      "kind": "hard_timeout",
+      "note": "握手硬超时 ≥10s，超时重试 1 次"
+    },
+    {
+      "phase": "ui_ready",
+      "budget_ms": 5000,
+      "kind": "hard_threshold",
+      "note": "UI ready ≤5s"
+    },
+    {
+      "phase": "session_created",
+      "budget_ms": 2000,
+      "kind": "hard_threshold",
+      "note": "会话创建 <2s（M9-09）"
+    },
+    {
+      "phase": "shutdown_exit",
+      "budget_ms": 10000,
+      "kind": "hard_timeout",
+      "note": "关闭序列总预算（M9-09：先 daemon 收口再退出进程）"
+    }
+  ]
+}

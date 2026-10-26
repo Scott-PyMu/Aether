@@ -1,0 +1,70 @@
+{
+  "schema": "aether.m9-01.command-baseline.v1",
+  "command": "backup_restore",
+  "index": 25,
+  "route": "daemon",
+  "exposure": "ui",
+  "reachable": true,
+  "params": {
+    "style": "strict",
+    "dto": "BackupRestoreRequest",
+    "required": [
+      "source"
+    ],
+    "optional": [
+      "passphrase"
+    ],
+    "field_types": {
+      "source": "BackupSource",
+      "passphrase": "Option<String>"
+    }
+  },
+  "accepted_shape": {
+    "source": "sample"
+  },
+  "rejects": [
+    {
+      "id": "unknown_field",
+      "stage": "strict_parse",
+      "params": {
+        "__unexpected_field": true
+      },
+      "expect": {
+        "result": "rejected",
+        "code": "unknown_field",
+        "field": "__unexpected_field"
+      }
+    },
+    {
+      "id": "invalid_json",
+      "stage": "strict_parse",
+      "params": [],
+      "expect": {
+        "result": "rejected",
+        "code": "invalid_json"
+      }
+    },
+    {
+      "id": "missing_field",
+      "stage": "strict_parse",
+      "params": {},
+      "expect": {
+        "result": "rejected",
+        "code": "missing_field",
+        "field": "source"
+      }
+    },
+    {
+      "id": "invalid_type",
+      "stage": "strict_parse",
+      "params": {
+        "source": 12345
+      },
+      "expect": {
+        "result": "rejected",
+        "code": "invalid_type"
+      }
+    }
+  ],
+  "note": "rejects 的期望码由 strict 解析（deny_unknown_fields）确定性给出；accepted_shape 只声明请求形态，不声明后端成功。响应体 golden 由 M9-04 追加，不改本文件。"
+}

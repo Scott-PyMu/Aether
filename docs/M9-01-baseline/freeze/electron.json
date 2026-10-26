@@ -1,0 +1,21 @@
+{
+  "schema": "aether.m9-01.electron-freeze.v1",
+  "status": "frozen",
+  "line": "45",
+  "version": "45.0.0",
+  "pin": "exact",
+  "resolved_at": "2026-10-26",
+  "resolution": {
+    "source": "https://registry.npmjs.org/-/package/electron/dist-tags",
+    "evidence": "dist-tags.latest = 45.0.0；dist-tags[\"45-x-y\"] = 45.0.0（录制时点的当前稳定线及其精确 patch）",
+    "rule": "M9-01 锁定当前稳定线的精确 patch；不写 ^ / ~ / x / * / latest"
+  },
+  "policy": {
+    "declaration": "所有 package.json 的 electron 依赖必须写精确版本（等于 version 字段），禁止范围表达式",
+    "security_update_window_days": 30,
+    "major_upgrade": "需在 M9-07/M9-11 冒烟通过后方可升级，并同步本文件与 manifest",
+    "owner": "M9-07（Electron 壳落地时消费本文件）",
+    "no_tauri_fallback": "Electron 为唯一发布壳；Tauri 仅开发期对照，无回退包（ADR-029 v0.4）"
+  },
+  "guard": "verify:m9-01-baseline 校验：仓库内任何 package.json 声明的 electron 版本必须精确等于 version（精确 semver，无范围前缀）"
+}

@@ -1,0 +1,41 @@
+{
+  "schema": "aether.m9-01.decisions.v1",
+  "frozen_at": "2026-10-26",
+  "source": "P2 计划 M9-01 DoD-6/DoD-7；ADR-029 v0.4；设计 §5 阶段门禁",
+  "decisions": [
+    {
+      "id": "linux_scope",
+      "dod": "DoD-6",
+      "title": "Linux 范围裁定",
+      "decision": "M9 的 G6 只要求 Linux 构建 + CI 冒烟（deb / AppImage），不纳入签名/公证发布门禁；Windows（MSI）与 macOS（per-arch DMG）才是 M9 发布门禁。",
+      "scope_in": [
+        "Linux：构建成功 + CI 冒烟（启动、首窗、health、干净退出）",
+        "README/打包说明标注 Linux 非签名发布目标"
+      ],
+      "scope_out": [
+        "Linux 代码签名 / 公证 / 分架构发布产物",
+        "把 Linux 冒烟失败作为 G6 硬失败（除构建失败外）"
+      ],
+      "rationale": "签名与公证成本高且与本地优先桌面目标不冲突；把 Linux 纳入发布门禁会阻塞 M9 关键路径，而降级为构建冒烟可保留可回归性。",
+      "owner": "M9-11",
+      "status": "frozen"
+    },
+    {
+      "id": "phase_boundary",
+      "dod": "DoD-7",
+      "title": "阶段边界裁定（WebContentsView / UtilityProcess）",
+      "decision": "WebContentsView PoC 属 P2 迁移使能，不构成 UI-06（P4）前移；UtilityProcess 仅为进程承载手段，不构成 MCP（P3）交付。",
+      "scope_in": [
+        "WebContentsView：多视图承载/隔离/路由的迁移使能验证（M9-07）",
+        "UtilityProcess：作为可选子进程承载方式的评估，不改变 daemon 唯一监督口径"
+      ],
+      "scope_out": [
+        "UI-06 完整交互（P4）提前进入 M9",
+        "MCP 协议、工具市场、外部消费者接入（P3）进入 M9"
+      ],
+      "rationale": "迁移期只做『换壳不换功能』；把 PoC 误当阶段交付会同时破坏 M9 的等价口径与 P3/P4 的排期。",
+      "owner": "架构负责人 / M9-07",
+      "status": "frozen"
+    }
+  ]
+}

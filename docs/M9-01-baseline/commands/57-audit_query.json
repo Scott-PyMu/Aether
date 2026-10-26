@@ -1,0 +1,96 @@
+{
+  "schema": "aether.m9-01.command-baseline.v1",
+  "command": "audit_query",
+  "index": 57,
+  "route": "daemon",
+  "exposure": "ui",
+  "reachable": true,
+  "params": {
+    "style": "no_params",
+    "dto": "AuditQueryRequest",
+    "required": [],
+    "optional": [
+      "session_id",
+      "actor",
+      "action",
+      "resource",
+      "from_ts",
+      "to_ts",
+      "limit",
+      "offset"
+    ],
+    "field_types": {
+      "session_id": "Option<String>",
+      "actor": "Option<String>",
+      "action": "Option<String>",
+      "resource": "Option<String>",
+      "from_ts": "Option<i64>",
+      "to_ts": "Option<i64>",
+      "limit": "Option<u32>",
+      "offset": "Option<u64>"
+    }
+  },
+  "accepted_shape": {},
+  "rejects": [
+    {
+      "id": "unknown_field",
+      "stage": "strict_parse",
+      "params": {
+        "__unexpected_field": true
+      },
+      "expect": {
+        "result": "rejected",
+        "code": "unknown_field",
+        "field": "__unexpected_field"
+      }
+    },
+    {
+      "id": "invalid_json",
+      "stage": "strict_parse",
+      "params": [],
+      "expect": {
+        "result": "rejected",
+        "code": "invalid_json"
+      }
+    }
+  ],
+  "semantic_cases": [
+    {
+      "id": "paging_limit_zero",
+      "stage": "semantic_validation",
+      "params": {
+        "limit": 0
+      },
+      "expect": {
+        "result": "rejected",
+        "code": "out_of_range",
+        "field": "limit"
+      }
+    },
+    {
+      "id": "paging_limit_over_max",
+      "stage": "semantic_validation",
+      "params": {
+        "limit": 501
+      },
+      "expect": {
+        "result": "rejected",
+        "code": "out_of_range",
+        "field": "limit"
+      }
+    },
+    {
+      "id": "ts_window_inverted",
+      "stage": "semantic_validation",
+      "params": {
+        "from_ts": 10,
+        "to_ts": 5
+      },
+      "expect": {
+        "result": "rejected",
+        "code": "invalid_value"
+      }
+    }
+  ],
+  "note": "rejects 的期望码由 strict 解析（deny_unknown_fields）确定性给出；accepted_shape 只声明请求形态，不声明后端成功。响应体 golden 由 M9-04 追加，不改本文件。"
+}

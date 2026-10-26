@@ -1,0 +1,35 @@
+{
+  "schema": "aether.m9-01.stats.v1",
+  "unit_note": "行数按「以 \\n 分隔的行数」计（含空行，末尾换行不额外计一行）；调用点按正则匹配次数计。",
+  "commands": {
+    "total": 63,
+    "daemon": 59,
+    "shell": 4,
+    "reachable": 61,
+    "reserved": 2
+  },
+  "frontend": {
+    "source_files": 55,
+    "test_files": 46,
+    "invoke_call_sites": 70,
+    "invoke_files": 14
+  },
+  "protocol": {
+    "bindings_lines": 1003,
+    "dod_reference_bindings_lines": 1003,
+    "matches_dod_reference": true
+  },
+  "core": {
+    "lines": 1810,
+    "files": 6,
+    "rust_test_files": 122
+  },
+  "method": {
+    "commands": "crates/aether-tauri/src/ipc/commands.rs › tauri_specta::collect_commands![...]",
+    "invoke": "apps/desktop/src/**/*.{ts,tsx}（排除 *.test.ts(x)）› /\\binvoke\\s*(?:<[^>]*>)?\\s*\\(/g",
+    "frontend_tests": "apps/desktop/src/**/*.test.{ts,tsx}",
+    "bindings": "packages/protocol/src/bindings.ts",
+    "core": "crates/aether-core/src/**/*.rs",
+    "rust_tests": "crates/*/tests/**/*.rs"
+  }
+}

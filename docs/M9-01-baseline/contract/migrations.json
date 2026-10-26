@@ -1,0 +1,16 @@
+{
+  "schema": "aether.m9-01.migrations-baseline.v1",
+  "source": "migrations",
+  "files": [
+    "0001_init.sql",
+    "0002_unique_keys.sql",
+    "0003_p0_ui_extensions.sql",
+    "0004_permission_mode_and_rules.sql",
+    "0005_audit_indexes.sql",
+    "0006_runtime_enabled.sql",
+    "0007_presets.sql",
+    "0008_session_search_fts.sql",
+    "0009_provider_endpoints.sql"
+  ],
+  "rule": "0001–0009 已发布不可修改；新约束走 0002+ 增量迁移（ADR-004）"
+}

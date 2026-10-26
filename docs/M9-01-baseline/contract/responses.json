@@ -1,0 +1,1844 @@
+{
+  "schema": "aether.m9-01.responses-baseline.v1",
+  "source": [
+    "crates/aether-tauri/src/ipc/dto.rs",
+    "crates/aether-tauri/src/ipc/error.rs",
+    "crates/aether-tauri/src/session_backend.rs",
+    "crates/aether-tauri/src/core_health.rs",
+    "crates/aether-core/src/domain.rs"
+  ],
+  "command_envelope": {
+    "kind": "json",
+    "typed": false,
+    "note": "63 条命令统一返回 JsonPayload（自由 JSON）；HEAD 没有按命令的响应 DTO，故 commands[].response.type 恒为 null，响应契约按『序列化类型清单』冻结。"
+  },
+  "dto_note": "ipc/dto.rs 只有 59 个 *Request 请求 DTO、1 个非请求结构体（ReferenceEntry）与若干序列化枚举；响应结构体分布在 error/session_backend/core_health/core::domain。",
+  "commands": [
+    {
+      "command": "runtimes_list",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "session_list",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "session_create",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "session_search",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "session_rename",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "session_delete",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "session_send",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "session_interrupt",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "session_pause",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "session_resume",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "session_dispose",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "messages_page",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "permissions_pending",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "permission_resolve",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "session_permission_mode_set",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "rules_list",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "rule_add",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "rule_update",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "rule_delete",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "rule_toggle",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "settings_get",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "settings_set",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "backup_create",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "backup_list",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "backup_restore",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "app_restart",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "run_retry",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "runtime_retry",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "runtime_enable",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "runtime_disable",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "workspace_set",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "workspaces_list",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "workspace_create",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "workspace_update",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "workspace_delete",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "session_workspace_assign",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "ref_pick",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "artifacts_list",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "artifact_add",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "artifact_remove",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "providers_list",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "provider_create",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "provider_update",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "provider_delete",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "provider_toggle",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "provider_model_add",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "provider_model_toggle",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "provider_test",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "provider_models_fetch",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "presets_list",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "preset_add",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "preset_update",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "preset_delete",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "export_diagnostics",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "session_export",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "archive_export",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "audit_query",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "audit_export",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "health",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "startup_get",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "startup_pick_target",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "startup_migrate",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "app_exit",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    }
+  ],
+  "types": [
+    {
+      "id": "crates/aether-tauri/src/ipc/dto.rs::PermissionDecision",
+      "name": "PermissionDecision",
+      "kind": "enum",
+      "source": "crates/aether-tauri/src/ipc/dto.rs",
+      "variants": [
+        {
+          "variant": "Once",
+          "wire": "once"
+        },
+        {
+          "variant": "Session",
+          "wire": "session"
+        },
+        {
+          "variant": "Always",
+          "wire": "always"
+        },
+        {
+          "variant": "Deny",
+          "wire": "deny"
+        }
+      ]
+    },
+    {
+      "id": "crates/aether-tauri/src/ipc/dto.rs::SessionStatus",
+      "name": "SessionStatus",
+      "kind": "enum",
+      "source": "crates/aether-tauri/src/ipc/dto.rs",
+      "variants": [
+        {
+          "variant": "Creating",
+          "wire": "creating"
+        },
+        {
+          "variant": "Idle",
+          "wire": "idle"
+        },
+        {
+          "variant": "Running",
+          "wire": "running"
+        },
+        {
+          "variant": "Paused",
+          "wire": "paused"
+        },
+        {
+          "variant": "WaitingPermission",
+          "wire": "waiting_permission"
+        },
+        {
+          "variant": "Completed",
+          "wire": "completed"
+        },
+        {
+          "variant": "Failed",
+          "wire": "failed"
+        },
+        {
+          "variant": "Cancelled",
+          "wire": "cancelled"
+        }
+      ]
+    },
+    {
+      "id": "crates/aether-tauri/src/ipc/dto.rs::RefPickKind",
+      "name": "RefPickKind",
+      "kind": "enum",
+      "source": "crates/aether-tauri/src/ipc/dto.rs",
+      "variants": [
+        {
+          "variant": "File",
+          "wire": "file"
+        },
+        {
+          "variant": "Directory",
+          "wire": "directory"
+        }
+      ]
+    },
+    {
+      "id": "crates/aether-tauri/src/ipc/dto.rs::ProviderType",
+      "name": "ProviderType",
+      "kind": "enum",
+      "source": "crates/aether-tauri/src/ipc/dto.rs",
+      "variants": [
+        {
+          "variant": "Anthropic",
+          "wire": "anthropic"
+        },
+        {
+          "variant": "Openai",
+          "wire": "openai"
+        },
+        {
+          "variant": "Deepseek",
+          "wire": "deepseek"
+        },
+        {
+          "variant": "Google",
+          "wire": "google"
+        },
+        {
+          "variant": "Custom",
+          "wire": "custom"
+        }
+      ]
+    },
+    {
+      "id": "crates/aether-tauri/src/ipc/error.rs::IpcErrorCode",
+      "name": "IpcErrorCode",
+      "kind": "enum",
+      "source": "crates/aether-tauri/src/ipc/error.rs",
+      "variants": [
+        {
+          "variant": "InvalidJson",
+          "wire": "invalid_json"
+        },
+        {
+          "variant": "UnknownField",
+          "wire": "unknown_field"
+        },
+        {
+          "variant": "MissingField",
+          "wire": "missing_field"
+        },
+        {
+          "variant": "InvalidType",
+          "wire": "invalid_type"
+        },
+        {
+          "variant": "InvalidValue",
+          "wire": "invalid_value"
+        },
+        {
+          "variant": "InvalidEnum",
+          "wire": "invalid_enum"
+        },
+        {
+          "variant": "TooLarge",
+          "wire": "too_large"
+        },
+        {
+          "variant": "OutOfRange",
+          "wire": "out_of_range"
+        },
+        {
+          "variant": "InvalidFormat",
+          "wire": "invalid_format"
+        },
+        {
+          "variant": "PathRejected",
+          "wire": "path_rejected"
+        },
+        {
+          "variant": "StartupBlocked",
+          "wire": "startup_blocked"
+        },
+        {
+          "variant": "MigrationFailed",
+          "wire": "migration_failed"
+        },
+        {
+          "variant": "Internal",
+          "wire": "internal"
+        },
+        {
+          "variant": "CoreNotReady",
+          "wire": "core_not_ready"
+        },
+        {
+          "variant": "NotImplemented",
+          "wire": "not_implemented"
+        },
+        {
+          "variant": "ReadbackGapTooLarge",
+          "wire": "readback_gap_too_large"
+        },
+        {
+          "variant": "ArtifactPathRejected",
+          "wire": "artifact_path_rejected"
+        },
+        {
+          "variant": "BuiltinProviderUndeletable",
+          "wire": "builtin_provider_undeletable"
+        },
+        {
+          "variant": "ProviderNotFound",
+          "wire": "provider_not_found"
+        },
+        {
+          "variant": "ProviderModelNotFound",
+          "wire": "provider_model_not_found"
+        },
+        {
+          "variant": "RuleNotFound",
+          "wire": "rule_not_found"
+        },
+        {
+          "variant": "RuntimeBusy",
+          "wire": "runtime_busy"
+        },
+        {
+          "variant": "NoCandidateRuntime",
+          "wire": "no_candidate_runtime"
+        },
+        {
+          "variant": "PauseUnsupported",
+          "wire": "pause_unsupported"
+        },
+        {
+          "variant": "ProviderUnreachable",
+          "wire": "provider_unreachable"
+        },
+        {
+          "variant": "ProviderAuthFailed",
+          "wire": "provider_auth_failed"
+        },
+        {
+          "variant": "ProviderError",
+          "wire": "provider_error"
+        },
+        {
+          "variant": "PresetNotFound",
+          "wire": "preset_not_found"
+        },
+        {
+          "variant": "BuiltinPresetUndeletable",
+          "wire": "builtin_preset_undeletable"
+        },
+        {
+          "variant": "WorkspaceNotFound",
+          "wire": "workspace_not_found"
+        },
+        {
+          "variant": "WorkspaceInUse",
+          "wire": "workspace_in_use"
+        },
+        {
+          "variant": "SessionNotFound",
+          "wire": "session_not_found"
+        }
+      ]
+    },
+    {
+      "id": "crates/aether-tauri/src/ipc/error.rs::IpcError",
+      "name": "IpcError",
+      "kind": "struct",
+      "source": "crates/aether-tauri/src/ipc/error.rs",
+      "fields": [
+        {
+          "name": "code",
+          "type": "IpcErrorCode",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "message",
+          "type": "String",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "field",
+          "type": "Option<String>",
+          "required": false,
+          "optional_when": [
+            "type_option",
+            "skip_serializing_if"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "crates/aether-tauri/src/session_backend.rs::MessagesPageResponse",
+      "name": "MessagesPageResponse",
+      "kind": "struct",
+      "source": "crates/aether-tauri/src/session_backend.rs",
+      "fields": [
+        {
+          "name": "session_id",
+          "type": "String",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "last_seq",
+          "type": "Option<u64>",
+          "required": false,
+          "optional_when": [
+            "type_option",
+            "skip_serializing_if"
+          ]
+        },
+        {
+          "name": "max_seq",
+          "type": "Option<u64>",
+          "required": false,
+          "optional_when": [
+            "type_option"
+          ]
+        },
+        {
+          "name": "events",
+          "type": "Vec<EventEnvelope>",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "messages",
+          "type": "Option<Vec<Message>>",
+          "required": false,
+          "optional_when": [
+            "type_option",
+            "skip_serializing_if"
+          ]
+        },
+        {
+          "name": "complete",
+          "type": "bool",
+          "required": true,
+          "optional_when": []
+        }
+      ]
+    },
+    {
+      "id": "crates/aether-tauri/src/session_backend.rs::SessionWarning",
+      "name": "SessionWarning",
+      "kind": "struct",
+      "source": "crates/aether-tauri/src/session_backend.rs",
+      "fields": [
+        {
+          "name": "code",
+          "type": "String",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "field",
+          "type": "String",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "runtime_id",
+          "type": "String",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "message",
+          "type": "String",
+          "required": true,
+          "optional_when": []
+        }
+      ]
+    },
+    {
+      "id": "crates/aether-tauri/src/session_backend.rs::SessionSummary",
+      "name": "SessionSummary",
+      "kind": "struct",
+      "source": "crates/aether-tauri/src/session_backend.rs",
+      "fields": [
+        {
+          "name": "id",
+          "type": "String",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "runtime_id",
+          "type": "String",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "workspace_id",
+          "type": "Option<String>",
+          "required": false,
+          "optional_when": [
+            "type_option"
+          ]
+        },
+        {
+          "name": "parent_session_id",
+          "type": "Option<String>",
+          "required": false,
+          "optional_when": [
+            "type_option"
+          ]
+        },
+        {
+          "name": "title",
+          "type": "String",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "status",
+          "type": "crate::ipc::dto::SessionStatus",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "model",
+          "type": "Option<String>",
+          "required": false,
+          "optional_when": [
+            "type_option"
+          ]
+        },
+        {
+          "name": "provider_id",
+          "type": "Option<String>",
+          "required": false,
+          "optional_when": [
+            "type_option",
+            "skip_serializing_if"
+          ]
+        },
+        {
+          "name": "provider_name",
+          "type": "Option<String>",
+          "required": false,
+          "optional_when": [
+            "type_option",
+            "skip_serializing_if"
+          ]
+        },
+        {
+          "name": "provider_state",
+          "type": "String",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "model_state",
+          "type": "String",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "thinking_depth",
+          "type": "Option<u8>",
+          "required": false,
+          "optional_when": [
+            "type_option",
+            "skip_serializing_if"
+          ]
+        },
+        {
+          "name": "permission_mode",
+          "type": "Option<String>",
+          "required": false,
+          "optional_when": [
+            "type_option",
+            "skip_serializing_if"
+          ]
+        },
+        {
+          "name": "preset_id",
+          "type": "Option<String>",
+          "required": false,
+          "optional_when": [
+            "type_option",
+            "skip_serializing_if"
+          ]
+        },
+        {
+          "name": "preset_name",
+          "type": "Option<String>",
+          "required": false,
+          "optional_when": [
+            "type_option",
+            "skip_serializing_if"
+          ]
+        },
+        {
+          "name": "system_prompt",
+          "type": "Option<String>",
+          "required": false,
+          "optional_when": [
+            "type_option"
+          ]
+        },
+        {
+          "name": "config",
+          "type": "JsonPayload",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "token_usage",
+          "type": "JsonPayload",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "created_at",
+          "type": "i64",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "updated_at",
+          "type": "i64",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "closed_at",
+          "type": "Option<i64>",
+          "required": false,
+          "optional_when": [
+            "type_option"
+          ]
+        },
+        {
+          "name": "workspace_root",
+          "type": "Option<String>",
+          "required": false,
+          "optional_when": [
+            "type_option",
+            "skip_serializing_if"
+          ]
+        },
+        {
+          "name": "warnings",
+          "type": "Option<Vec<SessionWarning>>",
+          "required": false,
+          "optional_when": [
+            "type_option",
+            "skip_serializing_if"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "crates/aether-tauri/src/core_health.rs::RuntimeSummary",
+      "name": "RuntimeSummary",
+      "kind": "struct",
+      "source": "crates/aether-tauri/src/core_health.rs",
+      "fields": [
+        {
+          "name": "id",
+          "type": "String",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "status",
+          "type": "String",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "status_reason",
+          "type": "Option<String>",
+          "required": false,
+          "optional_when": [
+            "type_option",
+            "skip_serializing_if"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "crates/aether-tauri/src/core_health.rs::HealthReport",
+      "name": "HealthReport",
+      "kind": "struct",
+      "source": "crates/aether-tauri/src/core_health.rs",
+      "fields": [
+        {
+          "name": "storage_state",
+          "type": "String",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "write_queue_depth",
+          "type": "usize",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "runtimes",
+          "type": "Option<Vec<RuntimeSummary>>",
+          "required": false,
+          "optional_when": [
+            "type_option"
+          ]
+        },
+        {
+          "name": "concurrency_gate",
+          "type": "Option<aether_control::ConcurrencyGateSnapshot>",
+          "required": false,
+          "optional_when": [
+            "type_option",
+            "skip_serializing_if"
+          ]
+        },
+        {
+          "name": "ts",
+          "type": "i64",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "degrade_trigger",
+          "type": "Option<String>",
+          "required": false,
+          "optional_when": [
+            "type_option",
+            "skip_serializing_if"
+          ]
+        },
+        {
+          "name": "degraded_since_ms",
+          "type": "Option<i64>",
+          "required": false,
+          "optional_when": [
+            "type_option",
+            "skip_serializing_if"
+          ]
+        },
+        {
+          "name": "detail",
+          "type": "Option<String>",
+          "required": false,
+          "optional_when": [
+            "type_option",
+            "skip_serializing_if"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "crates/aether-core/src/domain.rs::TokenUsage",
+      "name": "TokenUsage",
+      "kind": "struct",
+      "source": "crates/aether-core/src/domain.rs",
+      "fields": [
+        {
+          "name": "input_tokens",
+          "type": "u64",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "output_tokens",
+          "type": "u64",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "total_tokens",
+          "type": "u64",
+          "required": true,
+          "optional_when": []
+        }
+      ]
+    },
+    {
+      "id": "crates/aether-core/src/domain.rs::SessionStatus",
+      "name": "SessionStatus",
+      "kind": "enum",
+      "source": "crates/aether-core/src/domain.rs",
+      "variants": [
+        {
+          "variant": "Creating",
+          "wire": "creating"
+        },
+        {
+          "variant": "Idle",
+          "wire": "idle"
+        },
+        {
+          "variant": "Running",
+          "wire": "running"
+        },
+        {
+          "variant": "Paused",
+          "wire": "paused"
+        },
+        {
+          "variant": "WaitingPermission",
+          "wire": "waiting_permission"
+        },
+        {
+          "variant": "Completed",
+          "wire": "completed"
+        },
+        {
+          "variant": "Failed",
+          "wire": "failed"
+        },
+        {
+          "variant": "Cancelled",
+          "wire": "cancelled"
+        }
+      ]
+    },
+    {
+      "id": "crates/aether-core/src/domain.rs::RunStatus",
+      "name": "RunStatus",
+      "kind": "enum",
+      "source": "crates/aether-core/src/domain.rs",
+      "variants": [
+        {
+          "variant": "Queued",
+          "wire": "queued"
+        },
+        {
+          "variant": "Running",
+          "wire": "running"
+        },
+        {
+          "variant": "Succeeded",
+          "wire": "succeeded"
+        },
+        {
+          "variant": "Failed",
+          "wire": "failed"
+        },
+        {
+          "variant": "Cancelled",
+          "wire": "cancelled"
+        },
+        {
+          "variant": "Timeout",
+          "wire": "timeout"
+        }
+      ]
+    },
+    {
+      "id": "crates/aether-core/src/domain.rs::RuntimeStatus",
+      "name": "RuntimeStatus",
+      "kind": "enum",
+      "source": "crates/aether-core/src/domain.rs",
+      "variants": [
+        {
+          "variant": "Cold",
+          "wire": "cold"
+        },
+        {
+          "variant": "Starting",
+          "wire": "starting"
+        },
+        {
+          "variant": "Ready",
+          "wire": "ready"
+        },
+        {
+          "variant": "Degraded",
+          "wire": "degraded"
+        },
+        {
+          "variant": "Disabled",
+          "wire": "disabled"
+        }
+      ]
+    },
+    {
+      "id": "crates/aether-core/src/domain.rs::MessageRole",
+      "name": "MessageRole",
+      "kind": "enum",
+      "source": "crates/aether-core/src/domain.rs",
+      "variants": [
+        {
+          "variant": "User",
+          "wire": "user"
+        },
+        {
+          "variant": "Assistant",
+          "wire": "assistant"
+        },
+        {
+          "variant": "System",
+          "wire": "system"
+        },
+        {
+          "variant": "Tool",
+          "wire": "tool"
+        }
+      ]
+    },
+    {
+      "id": "crates/aether-core/src/domain.rs::PermissionDecision",
+      "name": "PermissionDecision",
+      "kind": "enum",
+      "source": "crates/aether-core/src/domain.rs",
+      "variants": [
+        {
+          "variant": "Allow",
+          "wire": "allow"
+        },
+        {
+          "variant": "Deny",
+          "wire": "deny"
+        },
+        {
+          "variant": "Ask",
+          "wire": "ask"
+        }
+      ]
+    },
+    {
+      "id": "crates/aether-core/src/domain.rs::PermissionScope",
+      "name": "PermissionScope",
+      "kind": "enum",
+      "source": "crates/aether-core/src/domain.rs",
+      "variants": [
+        {
+          "variant": "Once",
+          "wire": "once"
+        },
+        {
+          "variant": "Session",
+          "wire": "session"
+        },
+        {
+          "variant": "Always",
+          "wire": "always"
+        }
+      ]
+    },
+    {
+      "id": "crates/aether-core/src/domain.rs::PermissionStatus",
+      "name": "PermissionStatus",
+      "kind": "enum",
+      "source": "crates/aether-core/src/domain.rs",
+      "variants": [
+        {
+          "variant": "Pending",
+          "wire": "pending"
+        },
+        {
+          "variant": "Resolved",
+          "wire": "resolved"
+        },
+        {
+          "variant": "Timeout",
+          "wire": "timeout"
+        }
+      ]
+    },
+    {
+      "id": "crates/aether-core/src/domain.rs::PermissionMode",
+      "name": "PermissionMode",
+      "kind": "enum",
+      "source": "crates/aether-core/src/domain.rs",
+      "variants": [
+        {
+          "variant": "ReadOnly",
+          "wire": "read_only"
+        },
+        {
+          "variant": "WorkspaceWrite",
+          "wire": "workspace_write"
+        },
+        {
+          "variant": "DangerFullAccess",
+          "wire": "danger_full_access"
+        }
+      ]
+    },
+    {
+      "id": "crates/aether-core/src/domain.rs::ReferenceKind",
+      "name": "ReferenceKind",
+      "kind": "enum",
+      "source": "crates/aether-core/src/domain.rs",
+      "variants": [
+        {
+          "variant": "File",
+          "wire": "file"
+        },
+        {
+          "variant": "Directory",
+          "wire": "directory"
+        }
+      ]
+    },
+    {
+      "id": "crates/aether-core/src/domain.rs::MessageReference",
+      "name": "MessageReference",
+      "kind": "struct",
+      "source": "crates/aether-core/src/domain.rs",
+      "fields": [
+        {
+          "name": "path",
+          "type": "String",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "kind",
+          "type": "ReferenceKind",
+          "required": true,
+          "optional_when": []
+        }
+      ]
+    },
+    {
+      "id": "crates/aether-core/src/domain.rs::LogLevel",
+      "name": "LogLevel",
+      "kind": "enum",
+      "source": "crates/aether-core/src/domain.rs",
+      "variants": [
+        {
+          "variant": "Trace",
+          "wire": "trace"
+        },
+        {
+          "variant": "Debug",
+          "wire": "debug"
+        },
+        {
+          "variant": "Info",
+          "wire": "info"
+        },
+        {
+          "variant": "Warn",
+          "wire": "warn"
+        },
+        {
+          "variant": "Error",
+          "wire": "error"
+        }
+      ]
+    },
+    {
+      "id": "crates/aether-core/src/domain.rs::Runtime",
+      "name": "Runtime",
+      "kind": "struct",
+      "source": "crates/aether-core/src/domain.rs",
+      "fields": [
+        {
+          "name": "id",
+          "type": "RuntimeId",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "name",
+          "type": "String",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "kind",
+          "type": "String",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "version",
+          "type": "String",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "protocol",
+          "type": "String",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "capabilities",
+          "type": "Vec<String>",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "endpoint",
+          "type": "Option<String>",
+          "required": false,
+          "optional_when": [
+            "type_option"
+          ]
+        },
+        {
+          "name": "config",
+          "type": "serde_json::Value",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "status",
+          "type": "RuntimeStatus",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "status_reason",
+          "type": "Option<String>",
+          "required": false,
+          "optional_when": [
+            "type_option"
+          ]
+        },
+        {
+          "name": "last_seen_at",
+          "type": "Option<i64>",
+          "required": false,
+          "optional_when": [
+            "type_option"
+          ]
+        },
+        {
+          "name": "created_at",
+          "type": "i64",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "updated_at",
+          "type": "i64",
+          "required": true,
+          "optional_when": []
+        }
+      ]
+    },
+    {
+      "id": "crates/aether-core/src/domain.rs::Workspace",
+      "name": "Workspace",
+      "kind": "struct",
+      "source": "crates/aether-core/src/domain.rs",
+      "fields": [
+        {
+          "name": "id",
+          "type": "WorkspaceId",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "name",
+          "type": "String",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "root_path",
+          "type": "String",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "memory_files",
+          "type": "Vec<String>",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "created_at",
+          "type": "i64",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "updated_at",
+          "type": "i64",
+          "required": true,
+          "optional_when": []
+        }
+      ]
+    },
+    {
+      "id": "crates/aether-core/src/domain.rs::Preset",
+      "name": "Preset",
+      "kind": "struct",
+      "source": "crates/aether-core/src/domain.rs",
+      "fields": [
+        {
+          "name": "id",
+          "type": "PresetId",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "name",
+          "type": "String",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "system_prompt",
+          "type": "String",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "is_builtin",
+          "type": "bool",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "created_at",
+          "type": "i64",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "updated_at",
+          "type": "i64",
+          "required": true,
+          "optional_when": []
+        }
+      ]
+    },
+    {
+      "id": "crates/aether-core/src/domain.rs::Session",
+      "name": "Session",
+      "kind": "struct",
+      "source": "crates/aether-core/src/domain.rs",
+      "fields": [
+        {
+          "name": "id",
+          "type": "SessionId",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "runtime_id",
+          "type": "RuntimeId",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "workspace_id",
+          "type": "Option<WorkspaceId>",
+          "required": false,
+          "optional_when": [
+            "type_option"
+          ]
+        },
+        {
+          "name": "parent_session_id",
+          "type": "Option<SessionId>",
+          "required": false,
+          "optional_when": [
+            "type_option"
+          ]
+        },
+        {
+          "name": "title",
+          "type": "String",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "status",
+          "type": "SessionStatus",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "model",
+          "type": "Option<String>",
+          "required": false,
+          "optional_when": [
+            "type_option"
+          ]
+        },
+        {
+          "name": "thinking_depth",
+          "type": "u8",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "permission_mode",
+          "type": "PermissionMode",
+          "required": false,
+          "optional_when": [
+            "serde_default"
+          ]
+        },
+        {
+          "name": "preset_id",
+          "type": "Option<PresetId>",
+          "required": false,
+          "optional_when": [
+            "type_option",
+            "serde_default"
+          ]
+        },
+        {
+          "name": "system_prompt",
+          "type": "Option<String>",
+          "required": false,
+          "optional_when": [
+            "type_option"
+          ]
+        },
+        {
+          "name": "config",
+          "type": "serde_json::Value",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "token_usage",
+          "type": "TokenUsage",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "created_at",
+          "type": "i64",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "updated_at",
+          "type": "i64",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "closed_at",
+          "type": "Option<i64>",
+          "required": false,
+          "optional_when": [
+            "type_option"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "crates/aether-core/src/domain.rs::Message",
+      "name": "Message",
+      "kind": "struct",
+      "source": "crates/aether-core/src/domain.rs",
+      "fields": [
+        {
+          "name": "id",
+          "type": "MessageId",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "session_id",
+          "type": "SessionId",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "run_id",
+          "type": "Option<RunId>",
+          "required": false,
+          "optional_when": [
+            "type_option"
+          ]
+        },
+        {
+          "name": "client_msg_id",
+          "type": "Option<String>",
+          "required": false,
+          "optional_when": [
+            "type_option",
+            "serde_default"
+          ]
+        },
+        {
+          "name": "role",
+          "type": "MessageRole",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "content",
+          "type": "String",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "content_parts",
+          "type": "Option<serde_json::Value>",
+          "required": false,
+          "optional_when": [
+            "type_option"
+          ]
+        },
+        {
+          "name": "tool_calls",
+          "type": "Option<serde_json::Value>",
+          "required": false,
+          "optional_when": [
+            "type_option"
+          ]
+        },
+        {
+          "name": "parent_message_id",
+          "type": "Option<MessageId>",
+          "required": false,
+          "optional_when": [
+            "type_option"
+          ]
+        },
+        {
+          "name": "seq",
+          "type": "u64",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "created_at",
+          "type": "i64",
+          "required": true,
+          "optional_when": []
+        }
+      ]
+    },
+    {
+      "id": "crates/aether-core/src/domain.rs::Run",
+      "name": "Run",
+      "kind": "struct",
+      "source": "crates/aether-core/src/domain.rs",
+      "fields": [
+        {
+          "name": "id",
+          "type": "RunId",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "session_id",
+          "type": "SessionId",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "status",
+          "type": "RunStatus",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "input_message_id",
+          "type": "Option<MessageId>",
+          "required": false,
+          "optional_when": [
+            "type_option"
+          ]
+        },
+        {
+          "name": "thinking_depth",
+          "type": "Option<u8>",
+          "required": false,
+          "optional_when": [
+            "type_option",
+            "serde_default"
+          ]
+        },
+        {
+          "name": "error",
+          "type": "Option<String>",
+          "required": false,
+          "optional_when": [
+            "type_option"
+          ]
+        },
+        {
+          "name": "started_at",
+          "type": "i64",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "finished_at",
+          "type": "Option<i64>",
+          "required": false,
+          "optional_when": [
+            "type_option"
+          ]
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "commands": 63,
+    "types": 29
+  }
+}

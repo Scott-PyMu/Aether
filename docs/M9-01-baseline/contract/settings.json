@@ -1,0 +1,16 @@
+{
+  "schema": "aether.m9-01.settings-baseline.v1",
+  "source": "crates/aether-tauri/src/ipc/dto.rs",
+  "keys": [
+    "backup.reminder",
+    "backup.auto.enabled",
+    "backup.auto.frequency",
+    "backup.auto.retention",
+    "backup.encryption.enabled",
+    "events.retention.enabled",
+    "events.retention.days",
+    "ui.layout",
+    "ui.provider_selection"
+  ],
+  "rule": "未登记键一律 invalid_enum（默认拒绝，ADR-018 A-6）"
+}

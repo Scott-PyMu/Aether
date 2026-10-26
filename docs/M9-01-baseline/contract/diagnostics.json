@@ -1,0 +1,31 @@
+{
+  "schema": "aether.m9-01.diagnostics-baseline.v1",
+  "source": "crates/aether-tauri/src/diagnostics_control.rs",
+  "command": "export_diagnostics",
+  "response_keys": [
+    "path",
+    "file_name",
+    "bytes",
+    "generated_at",
+    "sections",
+    "scanned_clean",
+    "log_lines",
+    "task_dumps"
+  ],
+  "sections": [
+    "app",
+    "host",
+    "health",
+    "security",
+    "capacity",
+    "store",
+    "backup_auto",
+    "retention",
+    "export",
+    "config",
+    "logs",
+    "task_dumps",
+    "session_pause"
+  ],
+  "redaction": "密钥零泄漏（D10）：脱敏后仍命中密钥模式即拒绝写出（diagnostics_write_failed）"
+}

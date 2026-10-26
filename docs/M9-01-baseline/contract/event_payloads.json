@@ -1,0 +1,580 @@
+{
+  "schema": "aether.m9-01.event-payloads-baseline.v1",
+  "source": "crates/aether-core/src/event.rs",
+  "envelope_version": 1,
+  "envelope_fields": [
+    "v",
+    "id",
+    "session_id",
+    "run_id",
+    "runtime_id",
+    "seq",
+    "ts",
+    "type",
+    "payload"
+  ],
+  "types": [
+    {
+      "type": "session.created",
+      "variant": "SessionCreated",
+      "mvp": true,
+      "payload": "SessionCreatedPayload",
+      "fields": [
+        {
+          "name": "summary",
+          "type": "SessionSummary",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "routed",
+          "type": "Option<bool>",
+          "optional": true,
+          "optional_when": [
+            "type_option",
+            "skip_serializing_if",
+            "serde_default"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "session.updated",
+      "variant": "SessionUpdated",
+      "mvp": true,
+      "payload": "SessionUpdatedPayload",
+      "fields": [
+        {
+          "name": "session_id",
+          "type": "SessionId",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "changed_fields",
+          "type": "Vec<String>",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "title",
+          "type": "Option<String>",
+          "optional": true,
+          "optional_when": [
+            "type_option",
+            "skip_serializing_if",
+            "serde_default"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "session.status_changed",
+      "variant": "SessionStatusChanged",
+      "mvp": true,
+      "payload": "SessionStatusChangedPayload",
+      "fields": [
+        {
+          "name": "session_id",
+          "type": "SessionId",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "from",
+          "type": "SessionStatus",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "to",
+          "type": "SessionStatus",
+          "optional": false,
+          "optional_when": []
+        }
+      ]
+    },
+    {
+      "type": "session.closed",
+      "variant": "SessionClosed",
+      "mvp": true,
+      "payload": "SessionClosedPayload",
+      "fields": [
+        {
+          "name": "session_id",
+          "type": "SessionId",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "closed_at",
+          "type": "i64",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "reason",
+          "type": "Option<String>",
+          "optional": true,
+          "optional_when": [
+            "type_option",
+            "skip_serializing_if",
+            "serde_default"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "run.started",
+      "variant": "RunStarted",
+      "mvp": true,
+      "payload": "RunStartedPayload",
+      "fields": [
+        {
+          "name": "run_id",
+          "type": "RunId",
+          "optional": false,
+          "optional_when": []
+        }
+      ]
+    },
+    {
+      "type": "run.completed",
+      "variant": "RunCompleted",
+      "mvp": true,
+      "payload": "RunCompletedPayload",
+      "fields": [
+        {
+          "name": "run_id",
+          "type": "RunId",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "usage",
+          "type": "Option<crate::domain::TokenUsage>",
+          "optional": true,
+          "optional_when": [
+            "type_option"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "run.failed",
+      "variant": "RunFailed",
+      "mvp": true,
+      "payload": "RunFailedPayload",
+      "fields": [
+        {
+          "name": "run_id",
+          "type": "RunId",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "error",
+          "type": "ErrorInfo",
+          "optional": false,
+          "optional_when": []
+        }
+      ]
+    },
+    {
+      "type": "run.cancelled",
+      "variant": "RunCancelled",
+      "mvp": true,
+      "payload": "RunCancelledPayload",
+      "fields": [
+        {
+          "name": "run_id",
+          "type": "RunId",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "reason",
+          "type": "Option<String>",
+          "optional": true,
+          "optional_when": [
+            "type_option"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "message.delta",
+      "variant": "MessageDelta",
+      "mvp": true,
+      "payload": "MessageDeltaPayload",
+      "fields": [
+        {
+          "name": "message_id",
+          "type": "MessageId",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "text",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        }
+      ]
+    },
+    {
+      "type": "message.completed",
+      "variant": "MessageCompleted",
+      "mvp": true,
+      "payload": "MessageCompletedPayload",
+      "fields": [
+        {
+          "name": "message",
+          "type": "MessageSummary",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "usage",
+          "type": "Option<crate::domain::TokenUsage>",
+          "optional": true,
+          "optional_when": [
+            "type_option"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "tool.call_started",
+      "variant": "ToolCallStarted",
+      "mvp": true,
+      "payload": "ToolCallStartedPayload",
+      "fields": [
+        {
+          "name": "tool_call_id",
+          "type": "ToolCallId",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "tool_name",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "args",
+          "type": "Value",
+          "optional": false,
+          "optional_when": []
+        }
+      ]
+    },
+    {
+      "type": "tool.call_completed",
+      "variant": "ToolCallCompleted",
+      "mvp": true,
+      "payload": "ToolCallCompletedPayload",
+      "fields": [
+        {
+          "name": "tool_call_id",
+          "type": "ToolCallId",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "tool_name",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "duration_ms",
+          "type": "u64",
+          "optional": false,
+          "optional_when": []
+        }
+      ]
+    },
+    {
+      "type": "tool.call_failed",
+      "variant": "ToolCallFailed",
+      "mvp": true,
+      "payload": "ToolCallFailedPayload",
+      "fields": [
+        {
+          "name": "tool_call_id",
+          "type": "ToolCallId",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "tool_name",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "duration_ms",
+          "type": "u64",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "error",
+          "type": "ErrorInfo",
+          "optional": false,
+          "optional_when": []
+        }
+      ]
+    },
+    {
+      "type": "permission.requested",
+      "variant": "PermissionRequested",
+      "mvp": true,
+      "payload": "PermissionRequestedPayload",
+      "fields": [
+        {
+          "name": "request_id",
+          "type": "PermissionRequestId",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "resource",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "action",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "target",
+          "type": "Option<String>",
+          "optional": true,
+          "optional_when": [
+            "type_option"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "permission.resolved",
+      "variant": "PermissionResolved",
+      "mvp": true,
+      "payload": "PermissionResolvedPayload",
+      "fields": [
+        {
+          "name": "request_id",
+          "type": "PermissionRequestId",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "decision",
+          "type": "PermissionDecision",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "scope",
+          "type": "Option<PermissionScope>",
+          "optional": true,
+          "optional_when": [
+            "type_option"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "runtime.status_changed",
+      "variant": "RuntimeStatusChanged",
+      "mvp": true,
+      "payload": "RuntimeStatusChangedPayload",
+      "fields": [
+        {
+          "name": "runtime_id",
+          "type": "RuntimeId",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "from",
+          "type": "RuntimeStatus",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "to",
+          "type": "RuntimeStatus",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "reason",
+          "type": "Option<String>",
+          "optional": true,
+          "optional_when": [
+            "type_option"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "usage",
+      "variant": "Usage",
+      "mvp": true,
+      "payload": "UsagePayload",
+      "fields": [
+        {
+          "name": "tokens",
+          "type": "crate::domain::TokenUsage",
+          "optional": false,
+          "optional_when": []
+        }
+      ]
+    },
+    {
+      "type": "log",
+      "variant": "Log",
+      "mvp": true,
+      "payload": "LogPayload",
+      "fields": [
+        {
+          "name": "level",
+          "type": "LogLevel",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "message",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "variant": "Error",
+      "mvp": true,
+      "payload": "ErrorInfo",
+      "fields": [
+        {
+          "name": "code",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "message",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "recoverable",
+          "type": "bool",
+          "optional": false,
+          "optional_when": []
+        }
+      ]
+    },
+    {
+      "type": "message.reasoning_delta",
+      "variant": "MessageReasoningDelta",
+      "mvp": false,
+      "payload": "MessageReasoningDeltaPayload",
+      "fields": [
+        {
+          "name": "message_id",
+          "type": "MessageId",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "text",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        }
+      ]
+    },
+    {
+      "type": "subagent.spawned",
+      "variant": "SubagentSpawned",
+      "mvp": false,
+      "payload": "SubagentSpawnedPayload",
+      "fields": [
+        {
+          "name": "child_session_id",
+          "type": "SessionId",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "mode",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        }
+      ]
+    },
+    {
+      "type": "subagent.completed",
+      "variant": "SubagentCompleted",
+      "mvp": false,
+      "payload": "SubagentCompletedPayload",
+      "fields": [
+        {
+          "name": "child_session_id",
+          "type": "SessionId",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "verdict",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        }
+      ]
+    },
+    {
+      "type": "workflow.*",
+      "variant": "Workflow",
+      "mvp": false,
+      "payload": "WorkflowEventPayload",
+      "fields": [
+        {
+          "name": "workflow_run_id",
+          "type": "crate::ids::WorkflowRunId",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "node_id",
+          "type": "Option<String>",
+          "optional": true,
+          "optional_when": [
+            "type_option"
+          ]
+        },
+        {
+          "name": "status",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "types": 23,
+    "mvp": 19
+  }
+}

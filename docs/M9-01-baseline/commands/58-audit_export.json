@@ -1,0 +1,56 @@
+{
+  "schema": "aether.m9-01.command-baseline.v1",
+  "command": "audit_export",
+  "index": 58,
+  "route": "daemon",
+  "exposure": "ui",
+  "reachable": true,
+  "params": {
+    "style": "no_params",
+    "dto": "AuditExportRequest",
+    "required": [],
+    "optional": [
+      "target_dir",
+      "session_id",
+      "actor",
+      "action",
+      "resource",
+      "from_ts",
+      "to_ts"
+    ],
+    "field_types": {
+      "target_dir": "Option<String>",
+      "session_id": "Option<String>",
+      "actor": "Option<String>",
+      "action": "Option<String>",
+      "resource": "Option<String>",
+      "from_ts": "Option<i64>",
+      "to_ts": "Option<i64>"
+    }
+  },
+  "accepted_shape": {},
+  "rejects": [
+    {
+      "id": "unknown_field",
+      "stage": "strict_parse",
+      "params": {
+        "__unexpected_field": true
+      },
+      "expect": {
+        "result": "rejected",
+        "code": "unknown_field",
+        "field": "__unexpected_field"
+      }
+    },
+    {
+      "id": "invalid_json",
+      "stage": "strict_parse",
+      "params": [],
+      "expect": {
+        "result": "rejected",
+        "code": "invalid_json"
+      }
+    }
+  ],
+  "note": "rejects 的期望码由 strict 解析（deny_unknown_fields）确定性给出；accepted_shape 只声明请求形态，不声明后端成功。响应体 golden 由 M9-04 追加，不改本文件。"
+}

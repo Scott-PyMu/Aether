@@ -1,0 +1,88 @@
+{
+  "schema": "aether.m9-01.risks.v1",
+  "frozen_at": "2026-10-26",
+  "source": "P2 计划 M9-01 DoD-5；ADR-029 §5/§9；设计 D4/D5/D10",
+  "rule": "每项必须有 owner / 缓解 / 触发；触发即进入对应门禁失败流程（不设自由裁量豁免）。",
+  "risks": [
+    {
+      "id": "electron_security_surface",
+      "title": "Electron 安全面（CSP / 导航 / preload / contextIsolation / sandbox）",
+      "category": "security",
+      "owner": "M9-07 / M9-10",
+      "severity": "high",
+      "mitigation": "按 ADR-029 §5.1 主基线：renderer 无 Node 集成、contextIsolation=true、sandbox=true、CSP 白名单、禁止任意导航/新窗口、preload 仅暴露白名单 API（含 pathForFile）。",
+      "trigger": "预加载暴露面超出清单、导航守卫被绕过、CSP 缺失、生产构建 devtools 可达，任一命中即 G4 不通过。",
+      "status": "open"
+    },
+    {
+      "id": "orphan_processes",
+      "title": "孤儿进程（aetherd / 适配器子进程树残留）",
+      "category": "process",
+      "owner": "M9-03 / M9-05",
+      "severity": "high",
+      "mitigation": "aetherd 由 Electron 子进程启动；stdin EOF + Job Object + 进程组整树回收；适配器仍由 daemon 唯一监督；退出走 3.6 关闭序列（先 daemon 收口再退进程）。",
+      "trigger": "应用退出后仍有 aetherd/适配器存活，或终止只回收单 PID（AGENTS §2.5 禁止），即 G1/G3 不通过。",
+      "status": "open"
+    },
+    {
+      "id": "event_order",
+      "title": "事件顺序与丢事件（seq / 先日志后广播 / 补读）",
+      "category": "data",
+      "owner": "M9-05",
+      "severity": "high",
+      "mitigation": "先写日志后广播；会话内 seq 由单一 sequencer 单调分配，DB UNIQUE(session_id,seq) 兜底；控制队列满走 journal 补读丢 delta、不重启 daemon；UI 以 last_seq 续读。",
+      "trigger": "出现重复/空洞 seq、控制事件丢失、补读死循环、或为『修复』而重启 daemon，即 G3 不通过。",
+      "status": "open"
+    },
+    {
+      "id": "keychain",
+      "title": "Keychain 可用性与密钥泄漏",
+      "category": "security",
+      "owner": "M9-09 / M9-10",
+      "severity": "high",
+      "mitigation": "密钥仅存 OS Keychain，配置只存 keychain:// 引用；诊断包/导出脱敏后仍命中密钥模式即拒绝写出；测试夹具禁用真实密钥。",
+      "trigger": "Keychain preflight 失败未走 S-13 降级、日志/诊断包/导出文件出现密钥，即 G5 不通过。",
+      "status": "open"
+    },
+    {
+      "id": "size_startup",
+      "title": "安装包体积与启动/RSS 膨胀",
+      "category": "performance",
+      "owner": "M9-11 / M9-12",
+      "severity": "medium",
+      "mitigation": "硬阈值冻结：安装包 ≤1.5×HEAD 基线且 ≤450MiB（实际 191,717,376 字节）、idle RSS ≤500MiB、10 会话 ≤1.2GiB、窗口 ≤1.5s、UI ready ≤5s；超限即 G6/G7 不通过。",
+      "trigger": "任一硬阈值超限，且无 ADR 批准的阈值变更。",
+      "status": "open"
+    },
+    {
+      "id": "webcontentsview",
+      "title": "WebContentsView 隔离（多视图/共享会话状态）",
+      "category": "security",
+      "owner": "M9-07",
+      "severity": "medium",
+      "mitigation": "视图独立 renderer + 独立 session partition + sandbox；视图间不共享 Node/预加载能力；跨视图只经 main 的路由清单转发。",
+      "trigger": "任一视图可直达 daemon/本地端口、或可读取另一视图的上下文，即 G4/G5 不通过。",
+      "status": "open"
+    },
+    {
+      "id": "contract_drift",
+      "title": "契约漂移（命令 / 错误码 / 事件 / 设置键 / 迁移）",
+      "category": "contract",
+      "owner": "M9-02 / M9-04",
+      "severity": "high",
+      "mitigation": "M9-01 基线哈希 + contract_digest 硬闸门；error_codes.json 生成物 diff=0；63/59/4 与 32 枚举计数校验；迁移 0001–0009 只读。",
+      "trigger": "verify:error-codes / verify:m9-01-baseline 任一失败，或出现未走 ADR 的命令/错误码/事件/设置/迁移变更。",
+      "status": "open"
+    },
+    {
+      "id": "dual_maintenance",
+      "title": "双维护（Tauri 与 Electron 并行期）",
+      "category": "delivery",
+      "owner": "架构负责人",
+      "severity": "medium",
+      "mitigation": "Tauri 仅开发期对照、新功能不得进入；G8 直接退役、无回退包；aether-app 为唯一命令实现，Tauri 只做薄适配。",
+      "trigger": "Tauri 侧新增业务逻辑、或出现第二份命令实现/双写，即 G8 前阻断。",
+      "status": "open"
+    }
+  ]
+}

@@ -1,0 +1,67 @@
+{
+  "schema": "aether.m9-01.command-baseline.v1",
+  "command": "app_exit",
+  "index": 63,
+  "route": "shell",
+  "exposure": "ui",
+  "reachable": true,
+  "params": {
+    "style": "strict",
+    "dto": "AppExitRequest",
+    "required": [
+      "confirm"
+    ],
+    "optional": [],
+    "field_types": {
+      "confirm": "bool"
+    }
+  },
+  "accepted_shape": {
+    "confirm": true
+  },
+  "rejects": [
+    {
+      "id": "unknown_field",
+      "stage": "strict_parse",
+      "params": {
+        "__unexpected_field": true
+      },
+      "expect": {
+        "result": "rejected",
+        "code": "unknown_field",
+        "field": "__unexpected_field"
+      }
+    },
+    {
+      "id": "invalid_json",
+      "stage": "strict_parse",
+      "params": [],
+      "expect": {
+        "result": "rejected",
+        "code": "invalid_json"
+      }
+    },
+    {
+      "id": "missing_field",
+      "stage": "strict_parse",
+      "params": {},
+      "expect": {
+        "result": "rejected",
+        "code": "missing_field",
+        "field": "confirm"
+      }
+    },
+    {
+      "id": "invalid_type",
+      "stage": "strict_parse",
+      "params": {
+        "confirm": "not-a-boolean"
+      },
+      "expect": {
+        "result": "rejected",
+        "code": "invalid_type"
+      }
+    }
+  ],
+  "note": "rejects 的期望码由 strict 解析（deny_unknown_fields）确定性给出；accepted_shape 只声明请求形态，不声明后端成功。响应体 golden 由 M9-04 追加，不改本文件。"
+}

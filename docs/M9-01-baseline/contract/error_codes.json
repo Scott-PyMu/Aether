@@ -1,0 +1,254 @@
+{
+  "schema": "aether.m9-01.error-codes-baseline.v1",
+  "source": "packages/protocol/src/error_codes.json",
+  "ipc": [
+    {
+      "code": "invalid_json",
+      "kind": "ipc",
+      "owner": "M1-08",
+      "first_adr": null
+    },
+    {
+      "code": "unknown_field",
+      "kind": "ipc",
+      "owner": "M1-08",
+      "first_adr": null
+    },
+    {
+      "code": "missing_field",
+      "kind": "ipc",
+      "owner": "M1-08",
+      "first_adr": null
+    },
+    {
+      "code": "invalid_type",
+      "kind": "ipc",
+      "owner": "M1-08",
+      "first_adr": null
+    },
+    {
+      "code": "invalid_value",
+      "kind": "ipc",
+      "owner": "M1-08",
+      "first_adr": null
+    },
+    {
+      "code": "invalid_enum",
+      "kind": "ipc",
+      "owner": "M1-08",
+      "first_adr": null
+    },
+    {
+      "code": "too_large",
+      "kind": "ipc",
+      "owner": "M1-08",
+      "first_adr": null
+    },
+    {
+      "code": "out_of_range",
+      "kind": "ipc",
+      "owner": "M1-08",
+      "first_adr": null
+    },
+    {
+      "code": "invalid_format",
+      "kind": "ipc",
+      "owner": "M1-08",
+      "first_adr": null
+    },
+    {
+      "code": "path_rejected",
+      "kind": "ipc",
+      "owner": "M1-08",
+      "first_adr": null
+    },
+    {
+      "code": "startup_blocked",
+      "kind": "ipc",
+      "owner": "M1-06",
+      "first_adr": null
+    },
+    {
+      "code": "migration_failed",
+      "kind": "ipc",
+      "owner": "M1-06",
+      "first_adr": null
+    },
+    {
+      "code": "internal",
+      "kind": "ipc",
+      "owner": "M1-06",
+      "first_adr": null
+    },
+    {
+      "code": "core_not_ready",
+      "kind": "ipc",
+      "owner": "M1-08",
+      "first_adr": "ADR-007"
+    },
+    {
+      "code": "not_implemented",
+      "kind": "ipc",
+      "owner": "M1-08",
+      "first_adr": null
+    },
+    {
+      "code": "readback_gap_too_large",
+      "kind": "ipc",
+      "owner": "M3-02",
+      "first_adr": "ADR-009"
+    },
+    {
+      "code": "artifact_path_rejected",
+      "kind": "ipc",
+      "owner": "M1-08",
+      "first_adr": "ADR-010"
+    },
+    {
+      "code": "builtin_provider_undeletable",
+      "kind": "ipc",
+      "owner": "M1-08",
+      "first_adr": "ADR-010"
+    },
+    {
+      "code": "provider_not_found",
+      "kind": "ipc",
+      "owner": "M1-08",
+      "first_adr": "ADR-010"
+    },
+    {
+      "code": "provider_model_not_found",
+      "kind": "ipc",
+      "owner": "M1-08",
+      "first_adr": "ADR-010"
+    },
+    {
+      "code": "rule_not_found",
+      "kind": "ipc",
+      "owner": "M6-01",
+      "first_adr": "ADR-018"
+    },
+    {
+      "code": "runtime_busy",
+      "kind": "ipc",
+      "owner": "M7-01",
+      "first_adr": "ADR-015"
+    },
+    {
+      "code": "no_candidate_runtime",
+      "kind": "ipc",
+      "owner": "M7-02",
+      "first_adr": "ADR-022"
+    },
+    {
+      "code": "pause_unsupported",
+      "kind": "ipc",
+      "owner": "M7-03",
+      "first_adr": "ADR-017"
+    },
+    {
+      "code": "provider_unreachable",
+      "kind": "ipc",
+      "owner": "M7-06",
+      "first_adr": "ADR-024"
+    },
+    {
+      "code": "provider_auth_failed",
+      "kind": "ipc",
+      "owner": "M7-06",
+      "first_adr": "ADR-024"
+    },
+    {
+      "code": "provider_error",
+      "kind": "ipc",
+      "owner": "M7-06",
+      "first_adr": "ADR-024"
+    },
+    {
+      "code": "preset_not_found",
+      "kind": "ipc",
+      "owner": "M7-09",
+      "first_adr": "ADR-026"
+    },
+    {
+      "code": "builtin_preset_undeletable",
+      "kind": "ipc",
+      "owner": "M7-09",
+      "first_adr": "ADR-026"
+    },
+    {
+      "code": "workspace_not_found",
+      "kind": "ipc",
+      "owner": "M7-08",
+      "first_adr": "ADR-026"
+    },
+    {
+      "code": "workspace_in_use",
+      "kind": "ipc",
+      "owner": "M7-08",
+      "first_adr": "ADR-026"
+    },
+    {
+      "code": "session_not_found",
+      "kind": "ipc",
+      "owner": "M7-07",
+      "first_adr": "ADR-025"
+    }
+  ],
+  "business": [
+    {
+      "code": "session_busy",
+      "owner": "M5-01",
+      "first_adr": "ADR-018",
+      "kind": "business"
+    },
+    {
+      "code": "session_paused",
+      "owner": "M5-01",
+      "first_adr": "ADR-018",
+      "kind": "business"
+    },
+    {
+      "code": "storage_backpressure",
+      "owner": "M5-01",
+      "first_adr": "ADR-018",
+      "kind": "business"
+    },
+    {
+      "code": "memory_conflict",
+      "owner": "M5-01",
+      "first_adr": "ADR-018",
+      "kind": "business"
+    },
+    {
+      "code": "permission_not_pending",
+      "owner": "M5-01",
+      "first_adr": "ADR-018",
+      "kind": "business"
+    },
+    {
+      "code": "data_dir_locked",
+      "owner": "M9-03",
+      "first_adr": "ADR-029",
+      "kind": "business"
+    },
+    {
+      "code": "sync_dir_blocked",
+      "owner": "M5-01",
+      "first_adr": "ADR-018",
+      "kind": "business"
+    },
+    {
+      "code": "db_open_failed",
+      "owner": "M9-03",
+      "first_adr": "ADR-029",
+      "kind": "business"
+    },
+    {
+      "code": "schema_checksum_mismatch",
+      "owner": "M9-03",
+      "first_adr": "ADR-029",
+      "kind": "business"
+    }
+  ]
+}

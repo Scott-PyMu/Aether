@@ -1,0 +1,136 @@
+{
+  "schema": "aether.m9-01.events-baseline.v1",
+  "source": "crates/aether-core/src/event.rs",
+  "envelope_version": 1,
+  "envelope_fields": [
+    "v",
+    "id",
+    "session_id",
+    "run_id",
+    "runtime_id",
+    "seq",
+    "ts",
+    "type",
+    "payload"
+  ],
+  "event_types": [
+    {
+      "variant": "SessionCreated",
+      "wire": "session.created"
+    },
+    {
+      "variant": "SessionUpdated",
+      "wire": "session.updated"
+    },
+    {
+      "variant": "SessionStatusChanged",
+      "wire": "session.status_changed"
+    },
+    {
+      "variant": "SessionClosed",
+      "wire": "session.closed"
+    },
+    {
+      "variant": "RunStarted",
+      "wire": "run.started"
+    },
+    {
+      "variant": "RunCompleted",
+      "wire": "run.completed"
+    },
+    {
+      "variant": "RunFailed",
+      "wire": "run.failed"
+    },
+    {
+      "variant": "RunCancelled",
+      "wire": "run.cancelled"
+    },
+    {
+      "variant": "MessageDelta",
+      "wire": "message.delta"
+    },
+    {
+      "variant": "MessageCompleted",
+      "wire": "message.completed"
+    },
+    {
+      "variant": "ToolCallStarted",
+      "wire": "tool.call_started"
+    },
+    {
+      "variant": "ToolCallCompleted",
+      "wire": "tool.call_completed"
+    },
+    {
+      "variant": "ToolCallFailed",
+      "wire": "tool.call_failed"
+    },
+    {
+      "variant": "PermissionRequested",
+      "wire": "permission.requested"
+    },
+    {
+      "variant": "PermissionResolved",
+      "wire": "permission.resolved"
+    },
+    {
+      "variant": "RuntimeStatusChanged",
+      "wire": "runtime.status_changed"
+    },
+    {
+      "variant": "Usage",
+      "wire": "usage"
+    },
+    {
+      "variant": "Log",
+      "wire": "log"
+    },
+    {
+      "variant": "Error",
+      "wire": "error"
+    },
+    {
+      "variant": "MessageReasoningDelta",
+      "wire": "message.reasoning_delta"
+    },
+    {
+      "variant": "SubagentSpawned",
+      "wire": "subagent.spawned"
+    },
+    {
+      "variant": "SubagentCompleted",
+      "wire": "subagent.completed"
+    },
+    {
+      "variant": "Workflow",
+      "wire": "workflow.*"
+    }
+  ],
+  "mvp_types": [
+    "SessionCreated",
+    "SessionUpdated",
+    "SessionStatusChanged",
+    "SessionClosed",
+    "RunStarted",
+    "RunCompleted",
+    "RunFailed",
+    "RunCancelled",
+    "MessageDelta",
+    "MessageCompleted",
+    "ToolCallStarted",
+    "ToolCallCompleted",
+    "ToolCallFailed",
+    "PermissionRequested",
+    "PermissionResolved",
+    "RuntimeStatusChanged",
+    "Usage",
+    "Log",
+    "Error"
+  ],
+  "rules": [
+    "seq 会话内单调唯一（DB UNIQUE(session_id,seq) 兜底，ADR-003/ADR-004）",
+    "先写日志后广播（D4）；控制事件不丢，delta 可丢并按 last_seq 补读",
+    "事件类型只取附录 B 清单，禁止自造（AGENTS §2.3）"
+  ]
+}
