@@ -1,15 +1,17 @@
 # Aether
 
-本地优先、可扩展的统一多 Agent 编排桌面平台（Tauri 2 + Rust 核心 + TypeScript 适配器 + React UI）。
+本地优先、可扩展的统一多 Agent 编排桌面平台（Electron 壳 + Rust `aetherd` 核心 + TypeScript 适配器 + React UI；ADR-029）。
 
-- 基线：《设计文档》当前冻结版（含 ADR-001–016）、《需求文档》v0.12、《实施计划与验收标准》v1.24。
-- 状态：P0（MVP）技术验收进行中；失败场景演练与验收清单见 `docs/`。
+- 基线：《设计文档》**v1.28**（含 ADR-001–015、017–029；ADR-029 **v0.4** = Electron + aetherd 第三轮整改）、《需求文档》v0.18、《实施计划与验收标准》v1.24、`docs/P2-架构迁移-实施计划与验收标准.md` v0.5（含 M10 详细 DoD/G9–G13）、`docs/UI-UX-设计规格.md` v0.17（S-01 不可达/S-12/S-13）。
+- 状态：**P2-M9 架构迁移**（先迁移、后 P2 功能）；Tauri 仅开发对照，**无回退包**。
+- 迁移期说明：下方 `tauri dev` / Tauri 打包仅用于开发对照；Electron 开发/打包命令在 M9-07/M9-08 落地后以 `pnpm dev:desktop` / `pnpm package:desktop` 为准。
 
 ## 架构总览
 
 ```
 apps/desktop            React UI（Vite + Zustand；事件驱动）
-packages/protocol       Tauri IPC 类型契约（tauri-specta 生成物，禁止手改）
+apps/desktop/electron   Electron main / preload / builder（ADR-029）
+packages/protocol       生成式 TS 类型/客户端 + 命令路由清单（禁止手改）
 packages/adapter-sdk    TypeScript 适配器 SDK（线协议、信封、限流）
 packages/adapter-*      官方适配器（claude-code / codex / deepseek-harness；mock 仅测试）
 crates/aether-core      纯模型与事件信封（无 I/O）
@@ -17,14 +19,17 @@ crates/aether-store     SQLite 存储（单写队列 + WAL + 迁移）
 crates/aether-adapters  适配器进程宿主与监督器（D5/D6）
 crates/aether-control   生命周期、事件管线、权限服务、背压
 crates/aether-security  权限策略引擎、路径守卫、密钥与脱敏
-crates/aether-tauri     桌面壳与 IPC 命令层（薄）
+crates/aether-rpc       JSON-RPC 2.0 / JSONL 叶子基础设施（ADR-029）
+crates/aether-app       transport-agnostic 命令层/DTO/校验/AppHost（ADR-029）
+crates/aether-daemon    aetherd 二进制 / stdio 传输 / 生命周期（ADR-029）
+crates/aether-tauri     Tauri 适配层（仅开发对照；G8 后退役；无回退包）
 ```
 
-依赖方向单向：`core → store / adapters / control / security → tauri`（AGENTS §2.1）。
+依赖方向单向：`core → store / adapters / control / security → app → daemon / tauri（迁移期）`（AGENTS §2.1）。
 
 ## 本地开发
 
-要求：Rust 1.98+、Node 20+、pnpm 10.34.5、Bun 1.4.2（适配器单文件编译）、WebView2（Windows）。
+要求：Rust 1.98+、Node 20+、pnpm 10.34.5、Bun 1.4.2（适配器单文件编译）、Electron（M9 落地后）；WebView2 仅 Tauri 开发对照需要（Windows）。
 
 ```powershell
 pnpm install --frozen-lockfile
@@ -41,8 +46,7 @@ cargo build --workspace  # Rust 构建
 pnpm dev:desktop
 ```
 
-- 等价于在 `crates/aether-tauri` 下执行 `tauri dev`（`tauri.conf.json` 位于该目录；Tauri CLI
-  只按当前目录识别应用，`--config` 不改变识别结果）。经 `scripts/ci/dev-desktop.mjs` 启动，
+- **M9-07 前**：等价于在 `crates/aether-tauri` 下执行 `tauri dev`（仅开发对照；`tauri.conf.json` 位于该目录；Tauri CLI 只按当前目录识别应用，`--config` 不改变识别结果）。**M9-07 后**：`pnpm dev:desktop` 启动 Electron（Vite + main/preload）。经 `scripts/ci/dev-desktop.mjs` 启动，
   自动补齐 `cargo` / `pnpm` 的 PATH，无需手工改 `$env:Path`；额外参数经 `--` 透传
   （如 `pnpm dev:desktop -- --no-watch`）。
 - 首次编译需数分钟；前端 `http://localhost:5173` 热更新。

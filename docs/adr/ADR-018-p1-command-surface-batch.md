@@ -3,10 +3,10 @@
 | 项 | 内容 |
 |---|---|
 | 编号 | ADR-018（P1-A03） |
-| 版本 | **v0.3（ADR-028 v0.4/v0.5 横切增量）**：v0.1 创建（批次稿）；v0.2 按 `docs/M5-01-ADR批次评审意见.md` 修订闭环；v0.3 增 settings 键 `ui.provider_selection`（设置键 8 → 9，不改命令/错误码） |
-| 状态 | **已批准（2026-10-09；人工授权 AI 审批——独立评审通过即批准，见 `docs/M5-01-ADR批次评审意见.md` §7）**；已合入《设计文档》v1.16；**v0.3 为 ADR-028 v0.4/v0.5 的横切登记，随 ADR-028 复审/合入，不单独批准**（2026-10-22/2026-10-23） |
-| 决策日期 | 2026-10-09；v0.3 增量 2026-10-22 |
-| 决策载体 | 《设计文档》v1.15 → v1.16（D7 命令面 52 → 63、命令参数校验矩阵增量）；ADR-006 附录 B v0.7 → **v0.8**（错误码全集 23 → 32、登记行 11 → 20）；`docs/P1-实施计划与验收标准.md` v0.7（§9 行标注）；**ADR-028 v0.4/v0.5（设置键 `ui.provider_selection`，8 → 9）** |
+| 版本 | **v0.5（ADR-029 v0.4 交叉引用，2026-10-26）**：v0.1 创建；v0.2 修订闭环；v0.3 增 `ui.provider_selection`；v0.4 登记预算/`business_code`；v0.5 增 `schema_checksum_mismatch`（R11） |
+| 状态 | **已批准 v0.5（2026-10-09；人工授权 AI 审批；v0.5 为 R11 横切登记，2026-10-26）**；已合入《设计文档》v1.28 |
+| 决策日期 | 2026-10-09；v0.3 2026-10-22；v0.5 2026-10-26 |
+| 决策载体 | 《设计文档》v1.16 → **v1.28**（D7 命令面 63、校验矩阵）；ADR-006 附录 B **v0.10**；P1 计划 v0.7；**ADR-028 v0.4/v0.5** |
 | 关联 | 设计 D7、附录 A/B/C；ADR-004/006/007/009/010（命令面先例）、ADR-014 附录 C-1（15 命令基线）、ADR-015 附录 C（52 命令 / 全集 23 基线）；本批次 ADR-017/019/020/021/022/023/024/025/026 |
 | 取代 / 被取代 | 无（新增；**登记边界**见 §1.2） |
 | 回退条件 | 见 §6 |
@@ -176,10 +176,16 @@ P1 计划 §9 P1-A03：「D7 P1 命令面增量登记（备份/保留/规则/导
 
 **A-7 稳定业务码口径（P2-4 澄清）**
 
-- P0 先例：部分业务拒绝以 `invalid_value` + message 内的**稳定业务码前缀**表达（如 `session_busy`、`backup_not_found`；`crates/aether-tauri/src/session_backend.rs` / `backup_control.rs` 现状）。
+- P0 先例：部分业务拒绝以 `invalid_value` + message 内的**稳定业务码前缀**表达（如 `session_busy`、`backup_not_found`；`crates/aether-tauri/src/session_backend.rs` / `backup_control.rs` 现状）。**ADR-029 v0.3 起改由 `error.data.business_code` 承载，见 A-9；`aether_code` 仍为 32 枚举。**
 - 本批次沿用：`session_busy`（ADR-025 删除前置 / ADR-026 改派前置）、`session_paused`（ADR-017 交互矩阵）等**不进入 `IpcErrorCode` 枚举、不计入错误码计数**；仅 ADR-006 附录 B 显式登记的错误码计入「全集/登记行」。
 - 实现任务不得把上述业务码登记为新错误码；如未来需要前端按类型分支，须走 ADR-006 增行流程。
 
 **A-8 UI-UX §5 文案行登记（P2-1）**
 
 - 本批次 9 个新错误码在 UI-UX v0.7 统一登记文案行（含 `pause_unsupported`、`rule_not_found`、`no_candidate_runtime`、`provider_error`、`session_not_found`、`workspace_not_found`、`workspace_in_use`、`preset_not_found`、`builtin_preset_undeletable`）；`provider_unreachable`/`provider_auth_failed` 文案行已由 ADR-014 应用（本次仅核验存在，不重复登记）。
+
+## A-9 ADR-029 v0.4 交叉引用（v0.5，2026-10-26）
+
+- **A-1 `audit_query`**：增可选 `max_bytes`（64KiB–1.5MiB，默认 1MiB）与 `next_cursor`；`next_cursor` 与 `offset` 互斥；`has_more` 含预算截断；`limit` 仍 ≤500。旧客户端省略按默认。
+- **A-7 业务码命名空间**：`aether_code` 只取 32 枚举；业务拒绝以 `error.data.business_code` 增量承载（`session_busy`/`session_paused`/`storage_backpressure`/`memory_conflict`/`permission_not_pending`/`data_dir_locked`/`sync_dir_blocked`/`db_open_failed`/`schema_checksum_mismatch`），不进入 32、不改变既有 `invalid_value` 语义。
+- **A-8 UI 文案**：S-12 壳级致命页、S-13 Keychain 重授权、`data_dir_locked`、预算续页（UI-UX v0.16，锚点 22）。

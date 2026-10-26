@@ -1,12 +1,12 @@
-# Aether UI/UX 设计规格 v0.14（v0.2 已评审通过；v0.3 为 M3-12 锚点登记；v0.4 为 M3-11 前置登记；v0.5 为 ADR-014 P1 锚点与权限模式登记；v0.6 为 ADR-015 热插拔锚点/文案/配色分色/计数登记；v0.7 为 M5-01 批次 ADR-017–ADR-026 锚点/文案/暂停状态/计数登记；v0.8 为 M7-04 标签页/分屏锚点与 C1 修订登记；v0.9 为 ADR-028 v0.4 多供应商选择/记忆/只读锚点与文案登记；v0.10 为 ADR-028 v0.5 复审整改；v0.11 为 ADR-028 v0.6 旧会话重选/model 状态；v0.12 为 ADR-028 v0.7 model 不属于 provider/21 行真相表文案；v0.13 为 ADR-028 v0.8 provider 空 model_state/UI 优先级；v0.14 为 ADR-028 v0.9 编辑性 P2 + 补选上下文文案（存在且启用/锚点日期/session_busy 文案））
+# Aether UI/UX 设计规格 v0.17（v0.2 已评审通过；v0.3 为 M3-12 锚点登记；v0.4 为 M3-11 前置登记；v0.5 为 ADR-014 P1 锚点与权限模式登记；v0.6 为 ADR-015 热插拔锚点/文案/配色分色/计数登记；v0.7 为 M5-01 批次 ADR-017–ADR-026 锚点/文案/暂停状态/计数登记；v0.8 为 M7-04 标签页/分屏锚点与 C1 修订登记；v0.9 为 ADR-028 v0.4 多供应商选择/记忆/只读锚点与文案登记；v0.10 为 ADR-028 v0.5 复审整改；v0.11 为 ADR-028 v0.6 旧会话重选/model 状态；v0.12 为 ADR-028 v0.7 model 不属于 provider/21 行真相表文案；v0.13 为 ADR-028 v0.8 provider 空 model_state/UI 优先级；v0.14 为 ADR-028 v0.9 编辑性 P2 + 补选上下文文案（存在且启用/锚点日期/session_busy 文案））
 
 | 项 | 内容 |
 |---|---|
-| 文档 | Aether UI/UX 设计规格 v0.14（v0.2 已评审通过；v0.3 为 M3-12 锚点登记；v0.4 为 M3-11 前置登记；v0.5 为 ADR-014 P1 锚点与权限模式登记；v0.6 为 ADR-015 热插拔锚点/文案/配色分色/计数登记；v0.7 为 M5-01 批次 ADR-017–ADR-026 登记；v0.8 为 M7-04 标签页/分屏锚点与 C1 修订登记（2026-10-18）；v0.9 为 ADR-028 v0.4 多供应商选择/全局记忆/失效只读/端点预览锚点与文案登记（2026-10-22）；v0.10 为 ADR-028 v0.5 复审整改（2026-10-23）；v0.11 为 ADR-028 v0.6 旧会话重选/model 状态（2026-10-23）；v0.12 为 ADR-028 v0.7 model 不属于/21 行真相表（2026-10-23）；v0.13 为 ADR-028 v0.8 provider 空 model_state/UI 优先级（2026-10-23）；**v0.14 为 ADR-028 v0.9 编辑性 P2 + 补选上下文文案：model_state“存在且启用”、锚点日期、`session_busy` 文案（2026-10-23）**） |
-| 依据基线 | 《需求文档》v0.18（ADR-028 v0.9 三官方运行时多供应商）、《设计文档》**v1.24**（设计基线冻结，含 ADR-001–015、017–028）、《实施计划与验收标准》v1.24、`docs/P1-实施计划与验收标准.md` **v0.13**、`AGENTS.md`、ADR-010/ADR-011/ADR-014/ADR-015/ADR-017–ADR-028 |
+| 文档 | Aether UI/UX 设计规格 v0.17（**v0.17 = 2026-10-26 ADR-029 v0.4 R6/R10/R11/R13：M9 无启动门、状态图/§5 拆行、`db_open_failed`/`schema_checksum_mismatch`、S-08 恢复备份、启动门锚点标不可达；锚点 22**；v0.16 = ADR-029 v0.3：A4 致命/S-01/S-01a 不可达、S-12 路径/手动移动/独立 renderer、`data_dir_locked`、预算续页；v0.15 = 2026-10-26 ADR-029 v0.2：S-12/S-13、锚点 20→22；其余不变；v0.2 已评审通过；v0.3 为 M3-12 锚点登记；v0.4 为 M3-11 前置登记；v0.5 为 ADR-014 P1 锚点与权限模式登记；v0.6 为 ADR-015 热插拔锚点/文案/配色分色/计数登记；v0.7 为 M5-01 批次 ADR-017–ADR-026 登记；v0.8 为 M7-04 标签页/分屏锚点与 C1 修订登记（2026-10-18）；v0.9 为 ADR-028 v0.4 多供应商选择/全局记忆/失效只读/端点预览锚点与文案登记（2026-10-22）；v0.10 为 ADR-028 v0.5 复审整改（2026-10-23）；v0.11 为 ADR-028 v0.6 旧会话重选/model 状态（2026-10-23）；v0.12 为 ADR-028 v0.7 model 不属于/21 行真相表（2026-10-23）；v0.13 为 ADR-028 v0.8 provider 空 model_state/UI 优先级（2026-10-23）；**v0.14 为 ADR-028 v0.9 编辑性 P2 + 补选上下文文案：model_state“存在且启用”、锚点日期、`session_busy` 文案（2026-10-23）**） |
+| 依据基线 | 《需求文档》v0.18、《设计文档》**v1.28**（ADR-029 v0.4；含 ADR-001–015、017–029）、《实施计划与验收标准》v1.24、`docs/P1-实施计划与验收标准.md` **v0.14**、`docs/P2-架构迁移-实施计划与验收标准.md` **v0.5**、`AGENTS.md`、ADR-010/011/014/015/017–029 |
 | 参考对象 | Proma（proma-ai/Proma）信息组织范式；Hermes Studio / Ekko Studio（EKKOLearnAI/hermes-studio）界面范式（仅借鉴公开界面思路，不拷贝代码，A11/SE-05） |
 | 效力 | **本文件不构成冻结基线**。与设计文档冲突时以设计文档为准；本文件中的实现偏差须先提 ADR（AGENTS §3） |
-| 适用范围 | P0 前端（M3-01…M3-12）与 E2E；**P1 新增界面锚点按 ADR-014 / ADR-015 / ADR-017–ADR-028 登记（P1 任务 M5–M8，§7.3）**；**M7-04 任务登记锚点（标签页/分屏）自 v0.8 冻结；M7-10 供应商选择/记忆/只读锚点自 v0.9 冻结（v0.10/v0.11/v0.12/v0.13/v0.14 扩展属性、不新增组）**；P1+ 其余仍仅作预留说明，不进入排期 |
+| 适用范围 | P0 前端（M3-01…M3-12）与 E2E；**P1 新增界面锚点按 ADR-014 / ADR-015 / ADR-017–ADR-028 登记（P1 任务 M5–M8，§7.3）**；**M7-04 任务登记锚点（标签页/分屏）自 v0.8 冻结；M7-10 供应商选择/记忆/只读锚点自 v0.9 冻结（v0.10/v0.11/v0.12/v0.13/v0.14 扩展属性、不新增组）**；**M9 v0.15 新增 S-12/S-13；v0.16 标 S-01/S-01a M9 不可达、S-12 路径/手动移动、`data_dir_locked`；v0.17 去启动门/补 `db_open_failed`（ADR-029 v0.4，锚点 22）**；P1+ 其余仍仅作预留说明，不进入排期 |
 | 状态 | **已评审通过（2026-09-24，随 ADR-010 批次）**；v0.2 已回流 ADR-010（文件引用面板 / 思考深度 / 模型与供应商配置，M3-09/M3-10/M3-11）；**v0.3（2026-09-29）：按 ADR-011 决策 5 登记 M3-12 分组锚点契约并冻结（§7.3），依据基线同步计划 v1.18**；**v0.4（2026-09-30）：按 M3-11 DoD6 前置要求登记「模型选择器空态与手动输入共存口径」（ADR-010 §5-9；UI-05 回归防护；实施记录见 `docs/M3-11-证据.md`）**；**v0.5（2026-09-30，ADR-014 合入 / 拟合入）：① §7.3 P1 锚点增量 10 组（含 `permission-mode-boundary` 常驻文案，R14）；② §5 文案表 +2 错误码（`provider_unreachable` / `provider_auth_failed`，ADR-014 附录 C-5）；③ 废止 §5「连通性测试将在 P1 开放」行与 `provider-test-notice` 提示（语义相反，ADR-014 附录 F-2）；④ §2.4 增权限模式选择器（三档）与常驻边界声明（ADR-014 决策 3 / 附录 F-3）**；**v0.6（2026-10-08，ADR-015 合入 / 拟合入）：E-0 头部同步；E-1 §3.2 用户启停边与 `user_disabled` 呈现行；E-2 配色分色注（`user_disabled` 灰 / 故障类红，§4.4/§6.4 同步）；E-3/E-5 §5 文案表 +2（`user_disabled` / `runtime_busy`）；E-4 §7.3 锚点 +2（`runtime-toggle` / `runtime-disable-confirm`，注与计数十组 → 十二组）；E-6 §8#10 补注；E-7 §0.1 C10 计数 36 → 52**；**v0.7（2026-10-09，M5-01 批次 ADR-017–ADR-026 合入 / 拟合入）：① §0.1 C2 更新（P1 起 pause/resume 开放，能力未声明置灰；ADR-017）与 C10 计数 52 → 63（ADR-018）；② §5 文案表 +10（`paused` 状态行 + 9 个新错误码：`pause_unsupported`/`rule_not_found`/`no_candidate_runtime`/`provider_error`/`session_not_found`/`workspace_not_found`/`workspace_in_use`/`preset_not_found`/`builtin_preset_undeletable`）；③ §7.3 锚点 +3（`session-pause-toggle`（M7-03）/ `archive`（M5-05）/ `file-reference`（M7-06）；十二组 → **十五组**）；④ §2.4 增暂停语义常驻声明（ADR-017 A-8）；本文件仍不构成冻结基线（与设计文档冲突以设计文档为准）；「开放问题」未关闭前不得据此定稿**；**v0.8（2026-10-18，M7-04）：① §0.1 C1 修订——P1 起标签页/分屏在单窗口内开放（M7-04；多窗口仍不做）；② §2.1/§2.2 增标签栏与分屏窗格线框说明（布局持久化 = settings ui.layout，ADR-018 附录 A-6）；③ §7.3 登记并冻结 M7-04 锚点组（workbench-tabs / session-tab / session-tab-badge / split-toggle / split-pane 等）；④ §8#1 更新（标签/分屏 P1 已实现，多窗口仍不做）；⑤ §0.2「Chrome 风格 Tab 栏」处置同步为 P1 落地形态（工作台会话视图标签，非多标签窗口）**；**v0.9（2026-10-22，ADR-028 v0.4）：① §2.2 增三运行时供应商选择（全局记忆预填视为已选）；② §2.4 供应商失效/删除只读禁用发送；③ §2.5 当前供应商回显；④ §5 +4 条文案；⑤ §7.3 +5 锚点（15→20）；⑥ §8 增 M7-10 P1 行**；**v0.10（2026-10-23，ADR-028 v0.5）：① §2.2 provider+model 必选、自动路由过滤；② §2.4 旧会话重选/只读中断可用/矩阵；③ §3.3 只读中断；④ §5.1 文案补“可中断”；⑤ §7.3 `session-provider-select` 增 `data-context`、`provider-required-notice` 增 `data-field`（计数仍 20）；⑥ 版本记录 v0.10**；**v0.11（2026-10-23，ADR-028 v0.6）：① §2.4 旧会话适配器准备/失败回滚、model 空/失效补选；② §2.5 `data-model-state`；③ §5.1 +1 条 model 失效文案；④ §7.3 `session-provider-current` 增 `data-model-state`；⑤ 版本记录 v0.11**；**v0.12（2026-10-23，ADR-028 v0.7）：① §2.4/§5.1 model 不属于 provider 文案；② §2.5/§7.3 `data-model-state` 语义补“不属于”；③ §8 M7-10 行；④ 版本记录 v0.12**；**v0.13（2026-10-23，ADR-028 v0.8）：① §2.4 UI 优先级 provider 失效禁用所有补选；② §2.5 provider 空 model_state 语义；③ §5.1 文案优先级；④ 版本记录 v0.13**；**v0.14（2026-10-23，ADR-028 v0.9）：① §2.5/§3.3 provider 空 `model_state` 明确“存在且启用”；② §7.3 `session-provider-select` 锚点日期改 v0.14；③ §2.4/§5.1 补选 `session_busy` 上下文文案（不复用队列满文案）；④ 版本记录 v0.14** |
 
 **阅读顺序**：§0 硬约束与参考采纳 → §1 界面清单 → §2 线框 → §3 状态图 → §4 组件矩阵 → §5 文案表 → §6 Token/可访问性 → §7 E2E 选择器 → §8 范围冻结 → §9 开放问题。
@@ -62,8 +62,8 @@
 单窗口内三种承载形态（互斥或叠加）：
 
 ```
-阻断页（整窗替换，仅启动门命中时）
-  S-01 数据目录阻断/迁移页
+阻断页（整窗替换，仅启动门命中时；**M9 不可达，A4 走 S-12**）
+  S-01 数据目录阻断/迁移页（**M9 不可达**）
 
 主工作台（常驻基座，M3-02 已实现基础版）
   S-02 主工作台（空态 / 加载态 / 正常态）
@@ -87,21 +87,43 @@
 
 | 编号 | 界面 | 触发条件 | 可达路径 | 核心操作 | 退出/返回 | 依据 | 落地任务 |
 |---|---|---|---|---|---|---|---|
-| S-00 | 启动加载态 | 应用挂载后 `startup_get` 未返回 | 进程启动 | 无（显示「正在执行启动自检…」） | 自动进入 ready 或 S-01 | D2 启动序列、ADR-006 | M1-06（已实现） |
-| S-01 | 数据目录阻断/迁移页 | `startup_get.phase = blocked_sync_dir` | 启动检测命中 A4 同步盘 | 选择目录 → 迁移；退出；未完成迁移续跑 | 迁移成功后自动进入 S-02；退出 = `app_exit` | A4、D1、评审 #9、T13 | M1-06（已实现） |
-| S-01a | 阻断硬错误态 | `phase = blocked_error`（迁移失败/库打开失败/迁移 checksum 不符） | S-01 或启动自检失败 | 查看原因；退出 | 仅退出（修复后重启应用） | D3（checksum 拒绝启动）、ADR-006 | M1-06（已实现） |
+| S-00 | 启动加载态 | 窗口创建后 daemon 握手/健康未完成 | 进程启动 | 无（显示「正在执行启动自检…」） | 自动进入 S-02 或 **S-12** | D2 启动序列、ADR-029 v0.4 | M1-06（M9 复用） |
+| S-01 | 数据目录阻断/迁移页 | `startup_get.phase = blocked_sync_dir` | 启动检测命中 A4 同步盘 | 选择目录 → 迁移；退出；未完成迁移续跑 | 迁移成功后自动进入 S-02；退出 = `app_exit` | A4、D1、评审 #9、T13 | **M9 不可达**（ADR-029 v0.4：A4 致命、不提供迁移；保留定义供后续版本） |
+| S-01a | 阻断硬错误态 | `phase = blocked_error`（迁移失败/库无法打开/迁移 checksum 不符） | S-01 或启动自检失败 | 查看原因；退出 | 仅退出（修复后重启应用） | D3、ADR-006 | **M9 不可达**（A4/DB 无法打开走 S-12；`quick_check` 失败走 S-08；保留定义） |
 | S-02 | 主工作台 | `phase = ready` | 启动完成；任一覆盖层返回 | 会话列表/切换、新建会话、发送、中断、重试、查看工具调用 | 常驻 | D7/D8、UI-01/02/05 | M3-02（已实现基础版；顶栏合并见 §9） |
 | S-02a | 主工作台空态 | 无会话 / 无运行时 | 同上 | 新建会话（有运行时）；查看「无可用运行时」说明 | — | M3-02 DoD2 | M3-02（已实现） |
 | S-02b | 主工作台加载态 | 列表/历史加载中 | 同上 | 无（骨架/文案） | 自动进入正常态 | D8（帧预算） | M3-02 |
 | S-03 | 权限待办 | `permission.requested`（`decision=ask`）或 `permissions_pending` 非空 | 事件驱动；右栏常驻分区；顶栏计数徽标 | 允许（once/session）、拒绝、查看原文/规范化对照 | 决议后卡片转结果态；队列清空后分区隐藏 | D9、SE-02、T6/T7 | M3-03 |
 | S-04 | 运行时状态面板 | 常驻 | 右栏分区；顶栏徽标点击 | 查看状态/reason/能力；`runtime_retry`（仅 `disabled+start_failed`）；`runtime_enable`（仅 `disabled`） | 常驻；无模态 | D5、M1-10、M2-01 DoD6 | M3-03（M3-02 已有选择器） |
 | S-05 | 设置页 | 顶栏「设置」 | S-02 → 覆盖层 | 查看数据目录/安全级别；工作区绑定（`workspace_set`）；备份提醒开关（M3-05 登记键）；跳转备份/诊断/关于 | 「返回工作台」 | D7、D10、D14、D13、M3-05/M3-08 | M3-05 / M3-08 |
-| S-06 | 备份与恢复页 | 设置页入口；容量告警横幅入口 | S-02 → 覆盖层 | 手动备份（`backup_create`）、备份列表（`backup_list`）、恢复（`backup_restore`，内部/外部 `.db`）、外部路径空间检查提示 | 「返回工作台」；恢复成功 → 应用重启 | D13、评审 #6、T9/T8 | M3-04 |
+| S-06 | 备份与恢复页 | 设置页入口；容量告警横幅/S-08 入口 | S-02 → 覆盖层 | 手动备份（`backup_create`）、备份列表（`backup_list`）、恢复（`backup_restore`，内部/外部 `.db`）、外部路径空间检查提示；S-08 入口带 `data-mode="restore"` | 「返回工作台」；恢复成功 → 应用重启 | D13、评审 #6、T9/T8、R10-A | M3-04 |
 | S-07 | 诊断导出页 | 设置页/关于页/降级横幅入口 | S-02 → 覆盖层 | 选择目录 → `export_diagnostics`；查看容量状态（2GB/5GB） | 「返回工作台」 | D11、D13、ADR-007 | M3-05 |
-| S-08 | 降级横幅/只读模式 | `health.storage_state=persist_degraded`；或 L2 `storage_backpressure`；或过渡窗口 `core_not_ready` | 覆盖条常驻（主工作台上方） | 查看触发源；`app_restart`（confirm:true）；打开诊断导出；L2 场景为重试提示 | 修复 + 重启后消失；L2 自动消失 | D4、D8、ADR-004/007 | M3-06（横幅骨架 M2-07 已实现） |
+| S-08 | 降级横幅/只读模式 | `health.storage_state=persist_degraded`（含 DB 可打开但 `quick_check` 失败）；或 L2 `storage_backpressure`；或过渡窗口 `core_not_ready` | 覆盖条常驻（主工作台上方） | 查看触发源；`app_restart`（confirm:true）；打开诊断导出；**恢复备份（S-06，`data-mode="restore"`；维护例外）**；L2 场景为重试提示 | 修复 + 重启后消失；L2 自动消失 | D4、D8、ADR-004/007、ADR-029 §3.5-6 | M3-06（横幅骨架 M2-07 已实现） |
 | S-09 | 核心未响应 | UI 15s 无 `health` 响应 | 主区覆盖层 | 重启核心（`app_restart`） | 重启后回 S-00/S-02 | D2、M2-07 DoD4/5 | M2-07（已实现） |
 | S-10 | 关于页 | 顶栏/设置页入口 | S-02 → 覆盖层 | 查看版本/线协议版本/数据目录/安全边界声明；Mock-only beta 标记（条件显示）；诊断导出入口 | 「返回工作台」 | D7、§2.1、M2-02M DoD3 | M3-05 |
 | S-11 | 文件引用面板（只读） | 常驻（Agent 模式右栏） | S-02 → 右栏 | 查看会话文件/项目文件引用与工作区根路径；添加文件/附加文件夹（`ref_pick`+`artifact_add`）；行内删除（`artifact_remove`） | 常驻；可折叠 | D7/D9、ADR-010 | M3-09 |
+| S-12 | 壳级致命页（daemon 启动/握手/初始化/A4/DB 无法打开/checksum 不符） | daemon spawn/`initialize`/预初始化致命 | 进程启动 / S-00 | 查看原因/日志路径/数据目录路径；重试；退出；**离线导出诊断**（不依赖 daemon）；**手动移动数据目录说明**（不提供迁移按钮） | 重试成功 → S-00/S-02；退出 = 进程结束 | ADR-029 v0.4 §3.5/§4.3；T13 | M9-07（独立最小 renderer） |
+| S-13 | Keychain 重授权/降级提示 | 启动 preflight 失败/旧条目不可读 | S-00 / S-08 / S-09 | 重试授权；备份口令输入；跳过（只读/降级）；查看说明 | 成功回原界面；跳过 → 降级标记 | ADR-029 §5.4；D10/A3；P1-11 | M9-09 |
+
+### 1.2a v0.15/v0.16/v0.17 增补锚点（S-12 / S-13）
+
+| 界面 | data-testid | 关键状态属性 | 文案/行为 |
+|---|---|---|---|
+| S-12 | `shell-fatal` / `shell-fatal-reason` / `shell-fatal-log-path` / `shell-fatal-data-dir` / `shell-fatal-retry` / `shell-fatal-exit` / `shell-fatal-export-diagnostics` | `data-reason="daemon_start_failed\|handshake_failed\|a4_blocked\|db_open_failed\|schema_checksum_mismatch\|data_dir_locked"`、`data-result`（导出） | 「核心未能启动」；显示原因/日志路径/数据目录路径；重试/退出；离线导出诊断不依赖 daemon；手动移动说明 |
+| S-13 | `keychain-reauth` / `keychain-reauth-reason` / `keychain-reauth-retry` / `keychain-reauth-passphrase` / `keychain-reauth-skip` / `keychain-reauth-notice` | `data-scope="provider\|backup"`、`data-mode="reauth\|passphrase\|degraded"` | 「需要重新授权密钥访问」；重试/口令/跳过（只读/降级）；不删除旧条目 |
+
+> **v0.15（2026-10-26，ADR-029 v0.2 / P1-11）**：新增 S-12/S-13；锚点 20 → **22**；其余文案/布局/锚点不变。S-12 是主 UI 不加载时的壳级页面；S-13 不替代 S-09。
+>
+> **v0.16（2026-10-26，ADR-029 v0.3）**：S-01/S-01a 标 M9 不可达；S-12 增数据目录路径/手动移动/独立最小 renderer；§5 增 `data_dir_locked` 与 `business_code` 判定顺序；预算续页复用 `history-overflow`/`history-reload`，**不新增锚点组（仍 22）**。
+>
+> **v0.17（2026-10-26，ADR-029 v0.4 / R6/R10/R11/R13）**：M9 无启动门（A4 致命走 S-12）；状态图去掉 S-01 迁移/S-01a 分支；§5 拆 `startup_blocked`/`sync_dir_blocked`，补 `db_open_failed`（仅 DB 无法打开；`quick_check` 失败走 S-08）与 `schema_checksum_mismatch`；S-08 增恢复备份入口；S-01 信息架构/启动门锚点标 M9 不可达。
+
+### 1.2b 预算续页 UX（v0.16）
+
+- `messages_page` 首页 `messages` 被预算截断 → `messages_has_more=true`，复用既有 `history-reload` 按钮显示「加载更早消息」；events 补读按不透明 `next_cursor` 续读，自动续读最多 3 帧/交互，之后需用户继续；可取消（`history-reload` 二次点击/`Escape`）。
+- `audit_query` 使用 `next_cursor`（与 `offset` 互斥）；`has_more` 含预算截断 → 复用 `history-overflow` 行 + `history-reload`「加载更多」；加载中/结束用 `data-state="loading|end"`。
+- 已到最新：`complete=true` 或 `has_more=false` → `history-overflow` 显示「已到最新」；`readback_gap_too_large` 走既有 `history-reload-error` 提示，不做无限重试。
+- 任何续页失败必须可见（`data-code`），不得静默丢历史。**不新增锚点组（保持 22）**；仅扩展 `history-overflow`/`history-reload` 的 `data-stream`/`data-has-more`/`data-code`。
 
 **不可达界面（P0 明确无入口）**：审计查询、终端、工作流画布、适配器安装、会话搜索、主题切换、账号/云同步。见 §8。
 
@@ -110,7 +132,7 @@
 - 覆盖层视图**不卸载**主工作台状态（会话、草稿、事件订阅保持），返回时恢复原滚动位置与焦点。
 - 覆盖层内 `Esc` = 返回工作台（恢复进入前焦点）；`Tab` 焦点圈定在覆盖层内（`role="dialog"` + `aria-modal="true"`，仅覆盖层视图使用模态语义）。
 - 权限审批卡与降级横幅**不使用模态语义**（不夺焦点），以保证 D9/Proma 参考的「审批期间输入可用」。
-- 启动门（S-01/S-01a）期间除 `startup_*`/`app_exit` 外业务命令不可达（命令层返回 `startup_blocked`，UI 不渲染入口，双重兜底）。
+- **M9：无启动门**（A4 致命走 S-12；`startup_*` 不暴露）。历史 P0 启动门（S-01/S-01a）期间除 `startup_*`/`app_exit` 外业务命令不可达仅保留为后续迁移定义，M9 不可达。
 
 ---
 
@@ -283,22 +305,22 @@ flowchart TD
   A[进程启动] --> B{单实例锁}
   B -- 已有实例 --> B1[聚焦已有窗口<br>第二进程退出]
   B -- 获得锁 --> C[数据目录检测 A4]
-  C -- 命中同步盘 --> D[S-01 阻断页<br>仅「迁移/退出」]
-  D -- 迁移成功 --> E[锁定新目录]
-  D -- 迁移失败 --> D1[错误提示<br>未完成迁移续跑入口]
-  D1 --> D
-  E --> F[打开库 + PRAGMA quick_check]
-  C -- 通过 --> F
-  F -- quick_check 失败 / 迁移 checksum 不符 --> G[S-01a 硬错误态<br>blocked_error]
-  F -- 通过 --> H[孤儿清理 D5 三条件]
-  H --> I[应用 schema_migrations 迁移]
-  I -- 失败 --> G
-  I -- 成功 --> J[适配器预热 cold→starting]
-  J --> K[UI ready 握手]
+  C -- 命中同步盘 --> X[S-12 致命页<br>退出/重试/离线诊断]
+  C -- 通过 --> F[DB 打开]
+  F -- 无法打开 --> X
+  F -- 打开成功 --> I[initialize 握手]
+  I --> Q{PRAGMA quick_check}
+  Q -- 失败 --> SM[S-08 只读安全模式<br>persist_degraded + 导出/备份]
+  Q -- 通过 --> H[孤儿清理 D5 三条件]
+  H --> J[适配器预热 cold→starting]
+  SM --> K[UI ready 握手]
+  J --> K
   K --> L[S-02 主工作台]
-  J -. 过渡窗口 .-> M[业务命令 core_not_ready<br>startup_* 仍可达]
+  J -. 过渡窗口 .-> M[业务命令 core_not_ready<br>M9 无 startup_* 入口]
   M --> K
 ```
+
+> **M9 不可达**：S-01（迁移）/S-01a（`blocked_error`）仅保留为后续迁移定义；M9 的 A4 走 S-12，`quick_check` 失败走 S-08。
 
 ### 3.2 运行时状态（D5 + D8 + ADR-002/004/008）
 
@@ -467,23 +489,27 @@ stateDiagram-v2
 |---|---|---|---|---|---|
 | `persist_degraded` | `health.storage_state`（唯一事实源，D4） | 全宽 danger，`role="alert"`，常驻 | 「存储已降级为只读」+「写入与新任务已停止，运行中的任务已中断。触发源：{degrade_trigger}」 | `重启应用`（`app_restart` confirm:true）、`导出诊断`；说明「P0 无热恢复：修复外部条件后重启」 | 写/新 run；读/备份/导出可用 |
 | `storage_backpressure` | L2（写队列 >4096）拒绝新 run；或适配器隔离 `degraded+storage_backpressure` | 内联 warning（composer 内）+ 运行时徽标黄点 | 「存储写入繁忙，暂时无法接受新任务（已有任务不受影响），请稍后重试」；隔离变体：「适配器因存储背压被隔离，队列回落后将自动恢复（≤30s）」 | `重试`（重新发送）；无重启入口 | 仅新 run；自动恢复 |
-| `core_not_ready` | 启动过渡窗口 `health` 返回该错误 | 顶部 info 条 | 「核心正在初始化，功能暂不可用…」 | 无（自动消失）；>15s → S-09 | 业务命令；`startup_*` 可用 |
+| `core_not_ready` | 启动过渡窗口 `health` 返回该错误 | 顶部 info 条 | 「核心正在初始化，功能暂不可用…」 | 无（自动消失）；>15s → S-09 | 业务命令；**M9 无 `startup_*` 入口** |
 
 ---
 
 ## 5. 错误码 / 状态码文案表
 
-> 文案为 UI 展示基准（可在实现中微调措辞，不得改变语义与操作口径）；`message` 只用于展示，逻辑判断一律按 `code`（error.rs 注释契约）。
+> 文案为 UI 展示基准（不得改变语义与操作口径）；`message` 只用于展示；逻辑判断顺序：**`business_code`（若存在）→ `aether_code`（32 枚举）**（ADR-029 v0.4 / ADR-018 A-7）。`business_code` 为增量字段，旧逻辑不命中时回退 `aether_code`。
 
 | 码 / 状态 | 来源与依据 | 用户可见文案（中文） | 建议操作 | 是否阻断交互 |
 |---|---|---|---|---|
-| `startup_blocked` | D7/ADR-006、A4、M1-06 | 「数据目录检测未通过，应用已停止进入主界面」 | 迁移到本地目录 或 退出（仅两选项，无覆盖开关） | 阻断：仅 S-01 两操作可达 |
-| `migration_failed` | D7/ADR-006、M1-06 | 「数据迁移失败：{message}。原目录与副本均已保留」 | 重试迁移 / 更换目标目录 / 退出 | 阻断：启动门内 |
-| `core_not_ready` | ADR-007 增量 2 | 「核心正在初始化，请稍候…」 | 等待自动重试；持续 >15s → 「核心未响应」+ 重启入口 | 过渡期阻断业务命令（`startup_*` 除外） |
-| `storage_backpressure` | D8 L2、ADR-003/004 | 「存储写入繁忙，暂时无法接受新任务（已有任务不受影响）」 | 稍后重试；适配器隔离时等待自动恢复（≤30s） | 阻断新 run；已有 run 继续 |
-| `persist_degraded` | D4、ADR-004 | 「存储已降级为只读：写入与新任务已停止，运行中的任务已中断」 | 修复磁盘/目录/权限 → 重启应用（无热恢复） | 阻断写入/新 run；读/备份/诊断可用 |
+| `aether_code: startup_blocked` | D7/ADR-006、M1-06 | 「启动门阻断」 | **历史 P0 启动门；M9 不产生/无入口** | 不适用 |
+| `business_code: sync_dir_blocked` | A4；ADR-029 v0.4 | 「数据目录检测未通过，应用已停止进入主界面」 | **重试 / 退出 / 离线导出诊断**；**无迁移按钮**（M9；手动移动数据目录后重启） | 阻断：仅 S-12 |
+| `business_code: data_dir_locked` | ADR-029 v0.4 | 「另一个 Aether 实例正在使用数据目录」 | 关闭另一实例后重试 / 退出 | 阻断：S-12 |
+| `business_code: db_open_failed` | ADR-029 v0.4 / R1 | 「数据库无法打开（缺失/权限/加密头损坏）」 | 重试 / 退出 / 离线诊断；**不把 `quick_check` 失败归入本行** | 阻断：S-12 |
+| `business_code: schema_checksum_mismatch` | ADR-029 v0.4 / R11 | 「已应用迁移校验失败，数据库结构可能被改动」 | 退出；按维护流程从备份恢复/修复后重启；不提供忽略入口 | 阻断：S-12 |
+| `migration_failed` | D7/ADR-006、M1-06 | 「数据迁移失败：{message}。原目录与副本均已保留」 | **M9 不暴露迁移入口**（命令保留；后续版本启用） | 不适用 |
+| `core_not_ready` | ADR-007 增量 2 | 「核心正在初始化，请稍候…」 | 等待自动重试；持续 >15s → 「核心未响应」+ 重启入口 | 过渡期阻断业务命令（**M9 无 `startup_*` 入口**） |
+| `business_code: storage_backpressure` | D8 L2、ADR-003/004；ADR-029 v0.4 | 「存储写入繁忙，暂时无法接受新任务（已有任务不受影响）」 | 稍后重试；适配器隔离时等待自动恢复（≤30s） | 阻断新 run；已有 run 继续 |
+| `persist_degraded` | D4、ADR-004；**ADR-029 v0.4 R1（DB 可打开但 `quick_check` 失败）** | 「存储已降级为只读：写入与新任务已停止，运行中的任务已中断」 | 修复磁盘/目录/权限 → 重启应用（无热恢复）；可先导出/备份 | 阻断写入/新 run；读/备份/诊断可用 |
 | `readback_gap_too_large` | D4、ADR-009 | 「历史消息过多，请关闭并重新打开会话。」（现有文案；补充说明可重新加载最近 N 条） | 确认后清缓存重载最近 500 条（不重启核心/应用） | 阻断补读；不阻断输入/发送 |
-| `session_busy` | D8 run 串行 | 「当前任务仍在运行，等待队列已满（最多 1 条），请稍后发送」（**补选上下文使用 §5.1 专用文案，不显示本行**） | 等待当前 run 终态后重发（草稿保留） | 阻断该条发送 |
+| `business_code: session_busy` | D8 run 串行；ADR-029 v0.4 | 「当前任务仍在运行，等待队列已满（最多 1 条），请稍后发送」（**补选上下文使用 §5.1 专用文案，不显示本行**） | 等待当前 run 终态后重发（草稿保留） | 阻断该条发送 |
 | `version_mismatch` | D5/ADR-002/ADR-008 | 「运行时版本不匹配：需要 {required}，当前 {found}」 | 升级适配器/应用后重启；不可直接启用 | 阻断该 runtime（`disabled`） |
 | `untrusted` | §2.1、§4#28、D5 | 「适配器未通过官方白名单校验，已拒绝加载（P3 沙箱前仅支持官方适配器）」 | 无（不提供启用入口） | 阻断该 runtime |
 | `crash_loop` | D5 熔断 | 「运行时 60 秒内崩溃 5 次，已熔断停止（防止崩溃循环）」 | `重新启用` 或修复后重启应用 | 阻断该 runtime 直至人工启用 |
@@ -649,11 +675,11 @@ stateDiagram-v2
 | 界面 | data-testid | 关键状态属性 |
 |---|---|---|
 | 启动加载 | `startup-loading` / `startup-load-error` | — |
-| 启动门 | `startup-gate` | `phase`（经快照断言） |
-| 启动门-硬错误 | `startup-message` | — |
-| 启动门-目录/原因 | `startup-data-dir` / `startup-reasons` / `startup-precision-note` | — |
-| 启动门-续跑 | `startup-pending` / `startup-pending-target` / `startup-finish-migration` | — |
-| 启动门-操作 | `startup-target` / `startup-pick` / `startup-migrate` / `startup-error` / `startup-exit` | — |
+| 启动门（**M9 不可达**） | `startup-gate` | `phase`（经快照断言） |
+| 启动门-硬错误（**M9 不可达**） | `startup-message` | — |
+| 启动门-目录/原因（**M9 不可达**） | `startup-data-dir` / `startup-reasons` / `startup-precision-note` | — |
+| 启动门-续跑（**M9 不可达**） | `startup-pending` / `startup-pending-target` / `startup-finish-migration` | — |
+| 启动门-操作（**M9 不可达**） | `startup-target` / `startup-pick` / `startup-migrate` / `startup-error` / `startup-exit` | — |
 | 健康 | `health-normal` / `health-loading` / `storage-degraded` / `core-unresponsive` / `core-restart` / `core-restart-error` | — |
 | 工作台 | `workbench` / `create-latency-ms`（`data-ms`） | — |
 | 会话列表 | `session-list` / `session-item` / `session-item-status` / `session-item-model` / `session-list-empty` | `data-session-id`、`data-active` |
@@ -750,8 +776,10 @@ stateDiagram-v2
 | M7-04 | 分屏（任务登记，2026-10-18） | `split-toggle` / `split-pane` / `split-pane-title` / `split-pane-status` / `split-message-stream` / `split-message-list` / `split-message-bubble` / `split-streaming-indicator` / `split-message-stream-empty` / `split-composer-input` / `split-composer-send` | `split-toggle`：`data-enabled`、`data-split`；`split-pane`：`data-session-id`、`data-status`；气泡：`data-role`、`data-streaming`、`data-run-id`、`data-session-id` |
 | M7-04 | 主窗格标记（任务登记，2026-10-18） | `pane-primary` | `data-session-id`（聚焦标签会话；无激活会话时为空串） |
 | M7-06 | 引用注入入口 | `file-reference` | — |
+| M9-07 | S-12 壳级致命页（v0.17） | `shell-fatal` / `shell-fatal-reason` / `shell-fatal-log-path` / `shell-fatal-data-dir` / `shell-fatal-retry` / `shell-fatal-exit` / `shell-fatal-export-diagnostics` | `data-reason="daemon_start_failed\|handshake_failed\|a4_blocked\|db_open_failed\|schema_checksum_mismatch\|data_dir_locked"`、`data-result`（离线导出） |
+| M9-09 | S-13 Keychain 重授权/降级（v0.15） | `keychain-reauth` / `keychain-reauth-reason` / `keychain-reauth-retry` / `keychain-reauth-passphrase` / `keychain-reauth-skip` / `keychain-reauth-notice` | `data-scope="provider\|backup"`、`data-mode="reauth\|passphrase\|degraded"` |
 
-> **P1 锚点登记（2026-09-30 按 ADR-014 附录 F-1 登记，共 10 组；2026-10-08 按 ADR-015 附录 E-4 增 2 组，共 12 组；2026-10-09 按 M5-01 批次增 3 组——`session-pause-toggle`（ADR-017，M7-03）、`archive`（ADR-021，M5-05）、`file-reference`（ADR-024，M7-06），共 **15 组**；2026-10-22 按 ADR-028 v0.4 增 5 组——`session-provider-select`/`provider-required-notice`/`provider-endpoint-preview`/`session-provider-current`/`session-provider-readonly`（M7-10），共 **20 组**）**：上表 M5–M8 二十组为 P1 登记项，实施时不得重命名（§7.1 规则 5；重命名视为破坏性变更）；正式锚点契约由 M5-01 批次登记（v0.9 由 ADR-028 v0.4 增补），实现与断言由对应任务承担；`permission-mode-boundary` 为**常驻文案**锚点（R14，文案定稿见 ADR-014 附录 F-3，交互与档位语义见 §2.4），`permission-mode-selector` 的 `data-mode` 三档取值为 `read_only` / `workspace_write`（缺省）/ `danger_full_access`；`runtime-toggle` / `runtime-disable-confirm` 为 ADR-015（M7-01）登记项；`provider-test-notice`（M3-11 实现登记）已按 ADR-014 附录 F-2 废止，由 `provider-test-result` 承接（P1 = 真实调用）；`session-provider-*` 五组为 ADR-028 v0.4（M7-10）登记项，**2026-10-23 v0.10-v0.14 扩展 `session-provider-select`（`data-context="create|reselect"`、`data-busy="run_in_flight"`）、`provider-required-notice`（`data-field="provider|model"`）与 `session-provider-current`（`data-model-state`，invalid 含不属于/provider 空语义），不新增锚点组，计数仍 20**；**预填视为已选**、旧会话重选、model 空/失效补选、失效只读（中断可用）、端点风险文案与状态见 §2.2/§2.4/§5.1。
+> **P1 锚点登记（2026-09-30 按 ADR-014 附录 F-1 登记，共 10 组；2026-10-08 按 ADR-015 附录 E-4 增 2 组，共 12 组；2026-10-09 按 M5-01 批次增 3 组——`session-pause-toggle`（ADR-017，M7-03）、`archive`（ADR-021，M5-05）、`file-reference`（ADR-024，M7-06），共 **15 组**；2026-10-22 按 ADR-028 v0.4 增 5 组——`session-provider-select`/`provider-required-notice`/`provider-endpoint-preview`/`session-provider-current`/`session-provider-readonly`（M7-10），共 **20 组**）**：上表 M5–M8 二十组为 P1 登记项，实施时不得重命名（§7.1 规则 5；重命名视为破坏性变更）；正式锚点契约由 M5-01 批次登记（v0.9 由 ADR-028 v0.4 增补），实现与断言由对应任务承担；`permission-mode-boundary` 为**常驻文案**锚点（R14，文案定稿见 ADR-014 附录 F-3，交互与档位语义见 §2.4），`permission-mode-selector` 的 `data-mode` 三档取值为 `read_only` / `workspace_write`（缺省）/ `danger_full_access`；`runtime-toggle` / `runtime-disable-confirm` 为 ADR-015（M7-01）登记项；`provider-test-notice`（M3-11 实现登记）已按 ADR-014 附录 F-2 废止，由 `provider-test-result` 承接（P1 = 真实调用）；`session-provider-*` 五组为 ADR-028 v0.4（M7-10）登记项，**2026-10-23 v0.10-v0.14 扩展 `session-provider-select`（`data-context="create|reselect"`、`data-busy="run_in_flight"`）、`provider-required-notice`（`data-field="provider|model"`）与 `session-provider-current`（`data-model-state`，invalid 含不属于/provider 空语义），不新增锚点组，计数仍 20；**v0.15 增 S-12/S-13 两组 → 22**；**预填视为已选**、旧会话重选、model 空/失效补选、失效只读（中断可用）、端点风险文案与状态见 §2.2/§2.4/§5.1。
 
 > **M3-12 锚点契约（2026-09-29 按 ADR-011 决策 5 登记并冻结）**：`session-group` / `data-group` / `session-group-title` 及 `session-list` 结构变更自本版冻结，实施时不得重命名（§7.1 规则 5；重命名视为破坏性变更）；断言接口（`data-group` 序列 = 非空组固定组序子集、空组不渲染、等待组增删、`session-item` 不得跨组错位）见 `docs/M3-03-遗留项处置草案.md` §5.2 与 `docs/adr/ADR-011-m3-12-waiting-state-grouping.md` 决策 5。
 
