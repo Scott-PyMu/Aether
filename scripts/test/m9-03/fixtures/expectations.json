@@ -1,0 +1,168 @@
+{
+  "schema": "aether.m9-03.golden.v1",
+  "note": "M9-03 golden JSONL fixtures（ADR-029 §4.1/§4.2/§4.3/§4.8）：行号从 0 开始；同一 fixture 内按序重放。`reset=true` 表示在该用例前新建连接。期望值只断言稳定字段（不含版本/时间/路径）。",
+  "cases": [
+    {
+      "id": "initialize-handshake",
+      "file": "initialize.jsonl",
+      "line": 0,
+      "reset": true,
+      "expect": {
+        "kind": "result",
+        "result_keys": [
+          "protocolVersion",
+          "daemonVersion",
+          "coreVersion",
+          "dataDir",
+          "phase",
+          "daemonCapabilities"
+        ],
+        "protocol_version": "1.0",
+        "phase_in": ["warming", "ready", "degraded"],
+        "daemon_capabilities": ["events", "permissions", "dialogs"]
+      }
+    },
+    {
+      "id": "params-omitted",
+      "file": "params.jsonl",
+      "line": 0,
+      "reset": false,
+      "expect": { "kind": "result", "phase_in": ["ready", "warming", "degraded"] }
+    },
+    {
+      "id": "params-null",
+      "file": "params.jsonl",
+      "line": 1,
+      "reset": false,
+      "expect": { "kind": "result" }
+    },
+    {
+      "id": "params-empty-object",
+      "file": "params.jsonl",
+      "line": 2,
+      "reset": false,
+      "expect": { "kind": "result" }
+    },
+    {
+      "id": "params-payload-wrapper-rejected",
+      "file": "params.jsonl",
+      "line": 3,
+      "reset": false,
+      "expect": {
+        "kind": "error",
+        "transport": -32602,
+        "aether_code": "unknown_field",
+        "details_field": "payload"
+      }
+    },
+    {
+      "id": "params-inner-dto-accepted",
+      "file": "params.jsonl",
+      "line": 4,
+      "reset": false,
+      "expect": {
+        "kind": "anything-but",
+        "forbidden_aether_codes": ["unknown_field", "invalid_json", "missing_field"]
+      }
+    },
+    {
+      "id": "transport-parse-error",
+      "file": "transport.jsonl",
+      "line": 0,
+      "reset": false,
+      "expect": { "kind": "error", "transport": -32700, "aether_code": "invalid_json" }
+    },
+    {
+      "id": "transport-not-an-object",
+      "file": "transport.jsonl",
+      "line": 1,
+      "reset": false,
+      "expect": { "kind": "error", "transport": -32600, "aether_code": "invalid_json" }
+    },
+    {
+      "id": "transport-wrong-jsonrpc",
+      "file": "transport.jsonl",
+      "line": 2,
+      "reset": false,
+      "expect": { "kind": "error", "transport": -32600, "aether_code": "invalid_value" }
+    },
+    {
+      "id": "transport-missing-method",
+      "file": "transport.jsonl",
+      "line": 3,
+      "reset": false,
+      "expect": { "kind": "error", "transport": -32600, "aether_code": "invalid_value" }
+    },
+    {
+      "id": "transport-first-use-of-id",
+      "file": "transport.jsonl",
+      "line": 4,
+      "reset": false,
+      "expect": { "kind": "result" }
+    },
+    {
+      "id": "transport-duplicate-id",
+      "file": "transport.jsonl",
+      "line": 5,
+      "reset": false,
+      "expect": {
+        "kind": "error",
+        "transport": -32600,
+        "aether_code": "invalid_value",
+        "reason": "duplicate_request_id"
+      }
+    },
+    {
+      "id": "transport-unknown-method",
+      "file": "transport.jsonl",
+      "line": 6,
+      "reset": false,
+      "expect": {
+        "kind": "error",
+        "transport": -32601,
+        "aether_code": "not_implemented"
+      }
+    },
+    {
+      "id": "shutdown-accepted",
+      "file": "shutdown.jsonl",
+      "line": 0,
+      "reset": false,
+      "expect": { "kind": "result", "accepted": true, "close": true }
+    },
+    {
+      "id": "shutdown-rejects-new-requests",
+      "file": "shutdown.jsonl",
+      "line": 1,
+      "reset": false,
+      "expect": {
+        "kind": "error",
+        "transport": -32004,
+        "reason": "shutting_down"
+      }
+    }
+  ],
+  "pre_initialize_cases": [
+    {
+      "id": "pre-initialize-business",
+      "file": "params.jsonl",
+      "line": 0,
+      "expect": {
+        "kind": "error",
+        "transport": -32002,
+        "aether_code": "core_not_ready",
+        "reason": "not_initialized"
+      }
+    }
+  ],
+  "oversized": {
+    "id": "oversized-frame",
+    "limit_bytes": 2097152,
+    "expect": {
+      "kind": "error",
+      "transport": -32003,
+      "aether_code": "too_large",
+      "details_limit": 2097152
+    }
+  }
+}

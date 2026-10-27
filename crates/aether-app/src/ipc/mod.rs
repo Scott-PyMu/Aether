@@ -10,6 +10,7 @@
 //! 桌面壳（Tauri/Electron）只做注册与 `State` 适配后调用 [`IpcState::dispatch`]。
 
 pub mod backend;
+pub mod business;
 pub mod dispatch;
 pub mod dto;
 pub mod error;
@@ -21,7 +22,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
 pub use backend::IpcBackend;
-pub use dispatch::{dispatch, COMMANDS};
+pub use business::BusinessCode;
+pub use dispatch::{daemon_commands, dispatch, is_shell_local, COMMANDS, SHELL_COMMANDS};
 pub use error::{IpcError, IpcErrorCode};
 
 use crate::picker::DirectoryPicker;

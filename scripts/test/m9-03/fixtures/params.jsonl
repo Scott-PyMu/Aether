@@ -1,0 +1,5 @@
+{"jsonrpc":"2.0","id":11,"method":"startup_get"}
+{"jsonrpc":"2.0","id":12,"method":"startup_get","params":null}
+{"jsonrpc":"2.0","id":13,"method":"startup_get","params":{}}
+{"jsonrpc":"2.0","id":14,"method":"session_create","params":{"payload":{"runtime_id":"claude-code","title":"fixture"}}}
+{"jsonrpc":"2.0","id":15,"method":"session_create","params":{"runtime_id":"claude-code","title":"fixture"}}

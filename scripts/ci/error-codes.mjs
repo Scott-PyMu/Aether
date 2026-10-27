@@ -46,7 +46,7 @@ const BUSINESS_CODES = [
   { code: "schema_checksum_mismatch", owner: "M9-03", first_adr: "ADR-029" },
 ];
 
-const MODE = process.argv[2] ?? "check";
+const MODE = process.argv.slice(2).find((arg) => !arg.startsWith("--")) ?? "check";
 if (MODE !== "generate" && MODE !== "check") {
   console.error(`[error-codes] 未知模式：${MODE}（可选 generate / check）`);
   process.exit(2);

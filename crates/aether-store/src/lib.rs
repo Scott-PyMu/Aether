@@ -23,6 +23,7 @@ pub mod error;
 pub mod migration;
 pub mod ops;
 pub mod pragma;
+pub mod preflight;
 pub mod store;
 pub mod write_queue;
 
@@ -69,6 +70,7 @@ pub use ops::{
     WorkspaceSessionCounts, AUDIT_QUERY_DEFAULT_LIMIT, AUDIT_QUERY_MAX_LIMIT, SUMMARY_TABLES,
 };
 pub use pragma::PragmaSnapshot;
+pub use preflight::{preflight, PreflightReport};
 pub use store::{quick_check, ExportReport, IntegrityReport, Store, StoreMode, TableExport};
 pub use write_queue::{
     BatchTrigger, CommitReceipt, QueueMetrics, QueuePressureLevel, QueuePressurePhase, ReadPool,

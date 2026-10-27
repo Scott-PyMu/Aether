@@ -111,6 +111,17 @@ pub fn global_sink() -> Option<Arc<LogSink>> {
     GLOBAL_SINK.get().cloned()
 }
 
+/// 登记全局汇聚端句柄（**不安装订阅器**）。
+///
+/// M9-03 `aetherd` 需要自建订阅器（同时输出 stderr 与文件/环形缓冲），因此不能走
+/// [`init`]（它会独占全局订阅器）。调用方负责用自己的 `fmt` 层写入同一
+/// [`LogSink`]；本函数只让 `export_diagnostics` 等诊断入口能取到快照。
+///
+/// 仅首次生效（重复登记返回 `false`，保留首个句柄）。
+pub fn register_sink(sink: Arc<LogSink>) -> bool {
+    GLOBAL_SINK.set(sink).is_ok()
+}
+
 /// 全局接线错误（订阅器已安装/写入端不可用）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogInitError {
@@ -160,9 +171,19 @@ pub fn init(sink: Arc<LogSink>) -> Result<(), LogInitError> {
 }
 
 /// `tracing` → [`LogSink`] 写入适配（按行切分；`fmt` 层可能分多次写同一行）。
+///
+/// M9-03：`aetherd` 自建订阅器（`LogSink` 层 + stderr 层），复用本适配器把运行期
+/// 日志同时写入 `<data_dir>/logs/aetherd.log` 与诊断包可见的环形缓冲。
 #[derive(Clone)]
-struct LogWriter {
+pub struct LogWriter {
     sink: Arc<LogSink>,
+}
+
+impl LogWriter {
+    /// 以汇聚端构造写入适配器。
+    pub fn new(sink: Arc<LogSink>) -> Self {
+        Self { sink }
+    }
 }
 
 impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for LogWriter {
@@ -176,7 +197,7 @@ impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for LogWriter {
     }
 }
 
-struct LogWriterGuard {
+pub struct LogWriterGuard {
     sink: Arc<LogSink>,
     buffer: Vec<u8>,
 }

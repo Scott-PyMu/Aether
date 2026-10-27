@@ -30,7 +30,10 @@ const TARGET = "packages/protocol/src/error_codes.json";
 const SOURCE = "crates/aether-app/src/ipc/error.rs";
 const IPC_EXPECTED = 32;
 const ENTRY_KEYS = ["code", "kind", "owner", "first_adr"];
-const BUSINESS_SET_ENABLED = process.argv.includes("--business-set");
+// M9-03 起默认启用 business 集合一致性校验（P2 计划 M9-01 DoD-4 / M9-03 DoD-4）。
+// 保留 `--business-set` 参数向后兼容（显式启用同义）。
+const BUSINESS_SET_ENABLED = true;
+const BUSINESS_SOURCE = "crates/aether-app/src/ipc/business.rs";
 
 const failures = [];
 const notes = [];
@@ -62,6 +65,32 @@ function expectedIpcCodes() {
   return variants.map((name) => {
     const code = map.get(name);
     if (!code) throw new Error(`变体 ${name} 缺少 as_str() 映射`);
+    return code;
+  });
+}
+
+/** 独立解析业务码常量（`crates/aether-app/src/ipc/business.rs`）：顺序 = ALL 声明顺序。 */
+function expectedBusinessCodes() {
+  const source = readFileSync(path.join(root, BUSINESS_SOURCE), "utf8");
+  const all = source.match(/pub const ALL: \[Self; (\d+)\] = \[([\s\S]*?)\n {4}\];/);
+  if (!all) throw new Error(`无法从 ${BUSINESS_SOURCE} 解析 BusinessCode::ALL`);
+  const declared = Number(all[1]);
+  const order = [...all[2].matchAll(/Self::(\w+)/g)].map((match) => match[1]);
+  const mapping = new Map();
+  const implBlock = source.match(/pub const fn as_str\(self\) -> &'static str \{([\s\S]*?)\n {4}\}/);
+  if (!implBlock) throw new Error(`无法从 ${BUSINESS_SOURCE} 解析 BusinessCode::as_str`);
+  for (const arm of implBlock[1].matchAll(/Self::(\w+)\s*=>\s*"([a-z0-9_]+)"/g)) {
+    mapping.set(arm[1], arm[2]);
+  }
+  if (declared !== 9) {
+    fail(`${BUSINESS_SOURCE} 的 BusinessCode::ALL 长度 ${declared} ≠ 9（ADR-018 A-7）`);
+  }
+  if (order.length !== declared) {
+    fail(`${BUSINESS_SOURCE} 的 ALL 声明项数 ${order.length} ≠ ${declared}`);
+  }
+  return order.map((name) => {
+    const code = mapping.get(name);
+    if (!code) throw new Error(`业务码变体 ${name} 缺少 as_str() 映射`);
     return code;
   });
 }
@@ -161,8 +190,20 @@ if (BUSINESS_SET_ENABLED) {
         `实际 ${actualBusiness.join(",")}`,
     );
   }
+  // M9-03 DoD-4：Rust 业务常量（`BusinessCode::ALL` + `as_str()`）与 JSON 必须一致。
+  try {
+    const rustBusiness = expectedBusinessCodes();
+    if (JSON.stringify(rustBusiness) !== JSON.stringify(actualBusiness)) {
+      fail(
+        `${BUSINESS_SOURCE} 与 ${TARGET} 的 business 集合不一致：` +
+          `Rust ${rustBusiness.join(",")}；JSON ${actualBusiness.join(",")}`,
+      );
+    }
+  } catch (error) {
+    fail(`业务码常量解析失败：${error.message}`);
+  }
 } else {
-  note("business 集合一致性校验自 M9-03 启用（本次只校验结构/去重/kind）。");
+  note("business 集合一致性校验已禁用（--business-set 缺失；M9-03 起默认启用）。");
 }
 
 for (const message of notes) console.log(`[error-codes] 说明：${message}`);
@@ -175,9 +216,6 @@ if (failures.length > 0) {
 
 console.log(
   `[error-codes] 通过：ipc=${IPC_EXPECTED}、business=${business.length}、` +
-    `schema/去重/kind 合规、生成物 diff=0`,
+    `schema/去重/kind 合规、生成物 diff=0、Rust 业务常量一致`,
 );
-if (!BUSINESS_SET_ENABLED) {
-  console.log("[error-codes] 业务码集合校验：M9-03 启用（--business-set）");
-}
 console.log("AETHER_ERROR_CODES PASS");

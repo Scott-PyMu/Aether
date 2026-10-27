@@ -8,200 +8,65 @@ export const commands = {
 	runtimesList: () => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("runtimes_list")),
 	sessionList: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("session_list", { payload })),
 	sessionCreate: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("session_create", { payload })),
-	/**  M7-07/ADR-025 §2.1-2：会话全文检索（标题 + 消息正文；分页上限 100）。 */
 	sessionSearch: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("session_search", { payload })),
-	/**  M7-07/ADR-025 §2.1-3：会话改名（单写队列；`session.updated` + 审计）。 */
 	sessionRename: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("session_rename", { payload })),
-	/**  M7-07/ADR-025 §2.1-4：硬删除会话（在途/待审批 → `session_busy`；`events` 不级联）。 */
 	sessionDelete: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("session_delete", { payload })),
 	sessionSend: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("session_send", { payload })),
 	sessionInterrupt: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("session_interrupt", { payload })),
-	/**
-	 *  M7-03/ADR-017：暂停会话（`pause_resume` 能力门在命令层实时复核——未声明 →
-	 *  `pause_unsupported`，不产生假暂停；回执 `{ session_id, status: "paused" }`）。
-	 */
 	sessionPause: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("session_pause", { payload })),
-	/**
-	 *  M7-03/ADR-017：恢复会话（有暂停标记 → 重放并 `paused → running`；
-	 *  无标记 → `paused → idle`）。
-	 */
 	sessionResume: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("session_resume", { payload })),
 	sessionDispose: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("session_dispose", { payload })),
 	messagesPage: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("messages_page", { payload })),
 	permissionsPending: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("permissions_pending", { payload })),
 	permissionResolve: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("permission_resolve", { payload })),
-	/**
-	 *  M6-01/ADR-014 决策 3：设置会话级权限模式（档位为判定权威入参；
-	 *  仅影响后续工具调用决策，在途会话沙箱参数不变）。
-	 */
 	sessionPermissionModeSet: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("session_permission_mode_set", { payload })),
-	/**  M6-01/ADR-019：用户自定义权限规则清单（无参数；严格解析拒绝未知成员）。 */
 	rulesList: (payload: unknown | null) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("rules_list", { payload })),
-	/**  M6-01/ADR-019：新增权限规则（非法规则拒绝且不落库）。 */
 	ruleAdd: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("rule_add", { payload })),
-	/**  M6-01/ADR-019：更新权限规则（`rule_id` 不存在 → `rule_not_found`）。 */
 	ruleUpdate: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("rule_update", { payload })),
-	/**  M6-01/ADR-019：删除权限规则（`rule_id` 不存在 → `rule_not_found`）。 */
 	ruleDelete: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("rule_delete", { payload })),
-	/**  M6-01/ADR-019：启用/停用权限规则（`enabled` 非布尔由 serde 严格解析拒绝）。 */
 	ruleToggle: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("rule_toggle", { payload })),
 	settingsGet: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("settings_get", { payload })),
 	settingsSet: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("settings_set", { payload })),
-	/**
-	 *  M3-04/D13：手动备份（缺省 = 应用 `backups` 目录；`target_dir` = 系统选择器选中的
-	 *  外部目录，canonicalize 后进入后端执行空间护栏）。
-	 */
 	backupCreate: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("backup_create", { payload })),
-	/**  ADR-004：无参数命令；缺省载荷等价空对象，任何成员都会被严格模式拒绝。 */
 	backupList: (payload: unknown | null) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("backup_list", { payload })),
-	/**
-	 *  ADR-004/D13：外部候选先 canonicalize（存在性 + `.db` 后缀）再进入恢复七步。
-	 * 
-	 *  M3-04：命令层在候选校验通过后请求应用重启（`restart_required`），第 3–6 步由下次
-	 *  启动序列在无写者窗口执行（现场日志恢复；D13「恢复流程含核心重启」）。
-	 */
 	backupRestore: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("backup_restore", { payload })),
-	/**
-	 *  ADR-004/M3-06：显式 `confirm:true` 后触发应用重启（与 `app_exit` 同口径的
-	 *  命令层实现——重启属应用生命周期动作，不经 `IpcBackend` 下游）。
-	 * 
-	 *  机制：`AppHandle::request_restart()` → `RunEvent::ExitRequested` → 既有退出编排
-	 *  （D2 关闭序列：广播 shutdown → 适配器终止段 → 存储五步）→ 进程重启并重跑启动
-	 *  序列（A4 检测 + `quick_check` + 孤儿清理 + 重启状态重建）。P0 无热恢复（D4）：
-	 *  存储降级恢复仅经「修复外部条件 + 本入口重启 + 启动自检」。
-	 */
 	appRestart: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("app_restart", { payload })),
-	/**  ADR-004/M3-06：仅终态 run 可重试（`run_id` ULID；状态由后端判定）。 */
 	runRetry: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("run_retry", { payload })),
-	/**  ADR-004/M1-10：仅 `disabled + start_failed` 可用（白名单与状态由后端判定）。 */
 	runtimeRetry: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("runtime_retry", { payload })),
-	/**  ADR-004/M1-10：仅 `disabled` 可用；`untrusted`/`version_mismatch` 需先修复。 */
 	runtimeEnable: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("runtime_enable", { payload })),
-	/**
-	 *  M7-01/ADR-015：运行期禁用官方适配器（存在在途会话且未确认 → `runtime_busy`；
-	 *  确认后偏好先写 → `disabled + user_disabled` → 受控终止）。
-	 */
 	runtimeDisable: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("runtime_disable", { payload })),
-	/**  ADR-004/D14：`workspace_id` 或 `root_path`（canonicalize + 同步盘拒绝）。 */
 	workspaceSet: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("workspace_set", { payload })),
-	/**
-	 *  M7-08/ADR-026 §2.1-1：工作区树清单（无参数；工作区 + 会话计数 + 合成组
-	 *  「默认（数据目录）」）。
-	 */
 	workspacesList: (payload: unknown | null) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("workspaces_list", { payload })),
-	/**
-	 *  M7-08/ADR-026 §2.1-1：新建工作区（名称 ≤64；root canonicalize + 存在目录 +
-	 *  同步盘拒绝；同根路径已存在 → `invalid_value`）。
-	 */
 	workspaceCreate: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("workspace_create", { payload })),
-	/**  M7-08/ADR-026 §2.1-1：工作区改名（仅名称；`root_path` 不可变）。 */
 	workspaceUpdate: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("workspace_update", { payload })),
-	/**
-	 *  M7-08/ADR-026 §2.1-1：删除工作区（存在会话引用 → `workspace_in_use`；只删行，
-	 *  不删磁盘文件）。
-	 */
 	workspaceDelete: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("workspace_delete", { payload })),
-	/**
-	 *  M7-08/ADR-026 §2.1-1：会话改派工作区（在途 → `session_busy`；记忆注入源切换；
-	 *  权限基准不重算——R15/不变量 11）。
-	 */
 	sessionWorkspaceAssign: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("session_workspace_assign", { payload })),
-	/**
-	 *  ADR-010/M3-09：引用选择器（`{ kind: "file" | "directory" }`）。
-	 * 
-	 *  Rust 侧系统选择器（复用 `DirectoryPicker` 抽象并扩展文件选择；E2E 注入替身），
-	 *  **不新增 WebView capability 权限面**（与 `startup_pick_target` 先例一致）；
-	 *  路径原样返回、不做 canonicalize（校验在 `artifact_add`）；用户取消 → `{ path: null }`。
-	 */
 	refPick: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("ref_pick", { payload })),
-	/**  ADR-010/M3-09：会话引用清单（只读；不触发 `workspace_set`、不产生事件）。 */
 	artifactsList: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("artifacts_list", { payload })),
-	/**
-	 *  ADR-010/M3-09：登记会话引用（canonicalize + 可访问性检查在命令层；失败
-	 *  `artifact_path_rejected`；同会话同路径幂等）。
-	 */
 	artifactAdd: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("artifact_add", { payload })),
-	/**  ADR-010/M3-09：删除会话引用（不存在 → 幂等 `{ removed: false }`）。 */
 	artifactRemove: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("artifact_remove", { payload })),
-	/**  ADR-010/M3-11：供应商与模型清单（无参数；非空成员一律拒绝）。 */
 	providersList: (payload: unknown | null) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("providers_list", { payload })),
-	/**  ADR-010/M3-11：新建供应商（`api_key` 明文仅传输 → 核心写 keyring → `api_key_ref`）。 */
 	providerCreate: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("provider_create", { payload })),
-	/**  ADR-010/M3-11：整体更新供应商（`type` 不可改；`api_key` 三态）。 */
 	providerUpdate: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("provider_update", { payload })),
-	/**  ADR-010/M3-11：删除供应商（内置硬拒绝 `builtin_provider_undeletable`）。 */
 	providerDelete: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("provider_delete", { payload })),
-	/**  ADR-010/M3-11：快速启用/停用供应商（内置可停用）。 */
 	providerToggle: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("provider_toggle", { payload })),
-	/**
-	 *  ADR-010/M3-11：新增供应商模型（默认启用；重复 `(provider_id, model_id)` →
-	 *  `invalid_value`）。
-	 */
 	providerModelAdd: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("provider_model_add", { payload })),
-	/**  ADR-010/M3-11：模型启用/停用（不存在 → `provider_model_not_found`）。 */
 	providerModelToggle: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("provider_model_toggle", { payload })),
-	/**  M7-06/ADR-024：供应商连通性测试（真实网络请求；五路径错误映射；无密钥不发请求）。 */
 	providerTest: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("provider_test", { payload })),
-	/**  M7-06/ADR-024：从供应商获取模型列表（归一化 + 幂等 upsert）。 */
 	providerModelsFetch: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("provider_models_fetch", { payload })),
-	/**  M7-09/ADR-026：Agent 预设清单（无参数；严格解析拒绝未知成员）。 */
 	presetsList: (payload: unknown | null) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("presets_list", { payload })),
-	/**  M7-09/ADR-026：新增自定义预设（名称 ≤64 字符、提示词 ≤32KiB）。 */
 	presetAdd: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("preset_add", { payload })),
-	/**  M7-09/ADR-026：更新预设（内置可编辑；`preset_id` 不存在 → `preset_not_found`）。 */
 	presetUpdate: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("preset_update", { payload })),
-	/**  M7-09/ADR-026：删除预设（内置 → `builtin_preset_undeletable`；硬约束）。 */
 	presetDelete: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("preset_delete", { payload })),
 	exportDiagnostics: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("export_diagnostics", { payload })),
-	/**
-	 *  M5-05/ADR-018：单会话 JSONL 导出（缺省 = 应用 `archives/` 目录；
-	 *  `target_dir` = 系统选择器选中的外部目录，canonicalize 后进入后端空间护栏）。
-	 */
 	sessionExport: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("session_export", { payload })),
-	/**
-	 *  M5-05/ADR-018：全库归档导出（容量「一键归档」；锚点 `archive`）。
-	 * 
-	 *  无参数调用（缺省载荷 / `{}`）合法；`target_dir` 可选（系统选择器选中的外部目录）。
-	 */
 	archiveExport: (payload: unknown | null) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("archive_export", { payload })),
-	/**
-	 *  M6-03/ADR-023：审计查询（过滤：会话/时间/actor/action/resource；分页；
-	 *  `ts DESC, id DESC` 稳定排序）。缺省载荷（`null` / `{}`）= 空过滤（最近 100 条）。
-	 */
 	auditQuery: (payload: unknown | null) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("audit_query", { payload })),
-	/**
-	 *  M6-03/ADR-023：审计导出（过滤同 `audit_query`；缺省写入数据目录 `archives/`，
-	 *  外部目录经系统选择器 canonicalize 后进入空间护栏；原子写不留半成品）。
-	 */
 	auditExport: (payload: unknown | null) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("audit_export", { payload })),
-	/**
-	 *  ADR-007 决策 1：核心健康查询（无参数；严格解析拒绝未知成员）。
-	 * 
-	 *  返回 `HealthReport`（`storage_state` / `write_queue_depth` / `runtimes` 摘要 / `ts`）；
-	 *  仅本地 IPC，不落库、不产生事件。UI 每 5s 轮询，15s 无响应显示「核心未响应」+ 重启入口。
-	 *  数据源：`EventPipeline::health()` + 监督器摘要（M2-07 接线）。
-	 * 
-	 *  说明（M2-07）：命令为 async——E2E 探针经 `AETHER_E2E_HEALTH_STALL_MS` 在运行时上
-	 *  挂起本命令（模拟无响应；不阻塞主线程），生产路径无等待。
-	 */
 	health: (payload: unknown | null) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("health", { payload })),
-	/**
-	 *  M1-06：启动门快照（拒绝启动时仍可达；UI 据此渲染门界面）。
-	 *  ADR-006：无参数命令；缺省载荷等价空对象，任何成员都会被严格模式拒绝。
-	 */
 	startupGet: (payload: unknown | null) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("startup_get", { payload })),
-	/**
-	 *  M1-06：迁移目标目录选择（`DirectoryPicker` 抽象：生产为系统对话框，测试/E2E 注入替身；
-	 *  不新增 WebView capability 权限面）。用户取消返回 `{ "target_dir": null }`。
-	 *  ADR-006：无参数命令；缺省载荷等价空对象，任何成员都会被严格模式拒绝。
-	 */
 	startupPickTarget: (payload: unknown | null) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("startup_pick_target", { payload })),
-	/**  M1-06/A4：执行迁移（复制 → sha256 校验 → 原子替换 → 指针锁定新目录）。 */
 	startupMigrate: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("startup_migrate", { payload })),
-	/**
-	 *  M1-06：退出应用（拒绝启动界面「退出」按钮；不暴露窗口控制能力）。
-	 *  ADR-006（v0.3 对齐）：`{ confirm: true }` 显式确认；严格解析拒绝未知成员。
-	 */
 	appExit: (payload: unknown) => typedError<unknown, IpcError_Serialize>(__TAURI_INVOKE("app_exit", { payload })),
 };
 

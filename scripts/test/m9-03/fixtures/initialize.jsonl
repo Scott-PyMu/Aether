@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"1.0","appVersion":"0.1.0","client":"electron","clientCapabilities":["events","permissions","dialogs","browser-view"],"requiredCapabilities":["events","permissions"]}}

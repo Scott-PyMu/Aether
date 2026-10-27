@@ -1,0 +1,7 @@
+{"jsonrpc":"2.0","id":21,"method":"startup_get"
+[1,2,3]
+{"jsonrpc":"1.0","id":22,"method":"startup_get"}
+{"jsonrpc":"2.0","id":23}
+{"jsonrpc":"2.0","id":23,"method":"startup_get"}
+{"jsonrpc":"2.0","id":23,"method":"startup_get"}
+{"jsonrpc":"2.0","id":24,"method":"unknown_method"}

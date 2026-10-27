@@ -167,3 +167,51 @@ pub fn dispatch(state: &IpcState, method: &str, params: Value) -> Result<Value, 
 pub fn unknown_method(method: &str) -> IpcError {
     IpcError::not_implemented(method)
 }
+
+/// 壳本地命令（4 条；ADR-029 §4.6）：由 Electron main 直接处理，**不进入** daemon。
+///
+/// 计数口径冻结为 **63 = 59 daemon + 4 shell**；`dialog.pick` 不用于产品路径
+/// （M9 仅协议预留，见 ADR-029 §3.4）。
+pub const SHELL_COMMANDS: &[&str] = &["app_exit", "app_restart", "ref_pick", "startup_pick_target"];
+
+/// 命令是否由壳本地处理（Electron main：生命周期/原生对话框）。
+pub fn is_shell_local(method: &str) -> bool {
+    SHELL_COMMANDS.contains(&method)
+}
+
+/// daemon 侧 59 条命令（`COMMANDS` 去掉 4 条壳本地命令，顺序不变）。
+///
+/// M9-03 的 `aetherd` 只接受这 59 条；壳本地命令到达 daemon 时按
+/// `method_not_found` 拒绝（路由错误，不得静默成功）。
+pub fn daemon_commands() -> Vec<&'static str> {
+    COMMANDS
+        .iter()
+        .copied()
+        .filter(|method| !is_shell_local(method))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_and_daemon_routes_partition_the_frozen_command_surface() {
+        assert_eq!(SHELL_COMMANDS.len(), 4, "壳本地命令 4 条");
+        assert_eq!(COMMANDS.len(), 63, "命令面 63 条");
+        let daemon = daemon_commands();
+        assert_eq!(daemon.len(), 59, "daemon 路由 59 条");
+        for method in SHELL_COMMANDS {
+            assert!(COMMANDS.contains(method), "壳命令 {method} 必须在 63 内");
+            assert!(is_shell_local(method));
+            assert!(!daemon.contains(method));
+        }
+        for method in &daemon {
+            assert!(!is_shell_local(method));
+        }
+        // 保留命令仍属 daemon 路由（M9 不暴露但可经 RPC 层验收）。
+        for reserved in ["startup_get", "startup_migrate"] {
+            assert!(daemon.contains(&reserved), "{reserved} 属 daemon 路由");
+        }
+    }
+}

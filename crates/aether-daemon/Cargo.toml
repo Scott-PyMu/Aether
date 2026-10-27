@@ -1,0 +1,41 @@
+[package]
+name = "aether-daemon"
+description = "Aether daemon（aetherd）：JSON-RPC 2.0 over JSONL stdio 传输与启动/关闭生命周期（ADR-029 D-029-2/D-029-3）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "aetherd"
+path = "src/main.rs"
+
+# 依赖方向（AGENTS §2.1 / ADR-029 §3.3）：daemon → app → core/store/adapters/control/security；
+# `aether-rpc` 为叶子基础设施。**不得**依赖 `aether-tauri`（ADR-029 §3.3 硬约束）。
+[dependencies]
+aether-app.workspace = true
+aether-core.workspace = true
+aether-rpc.workspace = true
+aether-store.workspace = true
+# 数据目录 OS 独占锁（P2-8：handle-based，崩溃由 OS 自动释放；纯 Rust，无 unsafe）。
+# 许可 MIT OR Apache-2.0（deny.toml 允许清单内），见 docs/M9-03-证据.md §供应链。
+fs4 = { version = "1.1", default-features = false, features = ["sync"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "sync"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = [
+    "fmt",
+    "std",
+    "registry",
+    "ansi",
+] }
+
+[dev-dependencies]
+aether-store = { workspace = true }
+rusqlite = { version = "0.40", features = ["bundled"] }
+tempfile = "3"
+
+[lints]
+workspace = true

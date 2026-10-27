@@ -50,7 +50,7 @@ pub mod shell_host;
 pub mod shutdown;
 pub mod startup;
 
-pub use ipc::{IpcBackend, IpcError, IpcErrorCode, IpcState, COMMANDS};
+pub use ipc::{BusinessCode, IpcBackend, IpcError, IpcErrorCode, IpcState, COMMANDS, SHELL_COMMANDS};
 pub use shell_host::ShellHost;
 
 /// 产品名（诊断包/证据行使用；与安装产物 productName 一致）。
