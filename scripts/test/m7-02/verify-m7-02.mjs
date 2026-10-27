@@ -97,12 +97,12 @@ try {
   }
 
   // 4) 命令层契约：错误码 / DTO / 路由调用 / queue 响应 / health 增量。
-  const error = read("crates/aether-tauri/src/ipc/error.rs");
+  const error = read("crates/aether-app/src/ipc/error.rs");
   assert(error.includes("NoCandidateRuntime"), "error.rs 缺少 NoCandidateRuntime");
   assert(error.includes('Self::NoCandidateRuntime => "no_candidate_runtime"'), "错误码字符串缺失");
-  const dto = read("crates/aether-tauri/src/ipc/dto.rs");
+  const dto = read("crates/aether-app/src/ipc/dto.rs");
   assert(dto.includes("pub runtime_id: Option<String>"), "DTO runtime_id 未改为可选");
-  const backend = read("crates/aether-tauri/src/session_backend.rs");
+  const backend = read("crates/aether-app/src/session_backend.rs");
   for (const token of [
     "route_runtime(",
     "no_candidate_runtime(",
@@ -112,7 +112,7 @@ try {
   ]) {
     assert(backend.includes(token), `session_backend.rs 缺少「${token}」`);
   }
-  const health = read("crates/aether-tauri/src/core_health.rs");
+  const health = read("crates/aether-app/src/core_health.rs");
   for (const token of ["concurrency_gate", "with_concurrency_gate", "ConcurrencyGateSnapshot"]) {
     assert(health.includes(token), `core_health.rs 缺少「${token}」`);
   }

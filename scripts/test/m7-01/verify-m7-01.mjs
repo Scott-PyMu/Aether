@@ -83,7 +83,7 @@ try {
   // 3) `runtimes.enabled` 仅经启停命令维护（无 settings 等旁路）。
   const allowedSetRuntimeEnabled = new Set([
     "crates/aether-store/src/ops.rs",
-    "crates/aether-tauri/src/runtime_control.rs",
+    "crates/aether-app/src/runtime_control.rs",
     "crates/aether-store/tests/m7_01_runtime_enabled.rs",
     "crates/aether-tauri/tests/m7_01_runtime_control.rs",
   ]);
@@ -105,7 +105,7 @@ try {
   };
   walk(path.join(repoRoot, "crates"));
   assert(offender.length === 0, `enabled 写路径出现未登记调用方：${offender.join(",")}`);
-  const dto = read("crates/aether-tauri/src/ipc/dto.rs");
+  const dto = read("crates/aether-app/src/ipc/dto.rs");
   assert(!/SETTINGS_KEY_ALLOWLIST[\s\S]*?"runtimes\./.test(dto), "settings 不得登记 runtimes.* 键");
 
   // 4) UI 锚点与文案（ADR-015 附录 E）。
@@ -122,9 +122,9 @@ try {
   const buildRs = read("crates/aether-tauri/build.rs");
   assert(buildRs.includes("AETHER_RUNTIME_BUNDLE_DIR"), "build.rs 必须支持期望摘要数据源覆盖");
   assert(buildRs.includes("registry_expectation.rs"), "build.rs 必须生成期望摘要模块");
-  const identity = read("crates/aether-tauri/src/registry_identity.rs");
+  const identity = read("crates/aether-app/src/registry_identity.rs");
   assert(identity.includes("include!"), "registry_identity 必须可被 build.rs include");
-  const registry = read("crates/aether-tauri/src/runtime_registry.rs");
+  const registry = read("crates/aether-app/src/runtime_registry.rs");
   assert(registry.includes("ExpectedRegistry::compiled"), "运行期必须使用编译进二进制的期望摘要");
 
   record("静态：迁移/命令面/bindings/旁路/UI 锚点/信任锚逐项", 0);

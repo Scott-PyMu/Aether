@@ -149,7 +149,7 @@ try {
   assertContains(commands, "PresetsListRequest", "commands.rs");
 
   // 错误码（ipc/error.rs）。
-  const errors = read("crates/aether-tauri/src/ipc/error.rs");
+  const errors = read("crates/aether-app/src/ipc/error.rs");
   for (const token of [
     "PresetNotFound",
     '"preset_not_found"',
@@ -160,7 +160,7 @@ try {
   }
 
   // DTO 校验上限（名称 ≤64 / 提示词 ≤32KiB；与核心常量同源）。
-  const dto = read("crates/aether-tauri/src/ipc/dto.rs");
+  const dto = read("crates/aether-app/src/ipc/dto.rs");
   for (const token of [
     "MAX_PRESET_NAME_CHARS",
     "MAX_PRESET_PROMPT_BYTES",
@@ -172,7 +172,7 @@ try {
   }
 
   // 预设命令执行体：审计动作 + 内置保护 + 单写队列。
-  const presetControl = read("crates/aether-tauri/src/preset_control.rs");
+  const presetControl = read("crates/aether-app/src/preset_control.rs");
   for (const token of [
     "preset.created",
     "preset.updated",
@@ -191,7 +191,7 @@ try {
   for (const token of ["compose_system_prompt", "PRESET_PROMPT_MARKER_PREFIX", "preset.prompt_block()"]) {
     assertContains(memory, token, "aether-control/src/memory.rs");
   }
-  const backend = read("crates/aether-tauri/src/session_backend.rs");
+  const backend = read("crates/aether-app/src/session_backend.rs");
   for (const token of [
     "compose_system_prompt",
     "with_preset(",

@@ -84,9 +84,9 @@ record(
 {
   const problems = [];
   const read = (relative) => readFileSync(path.join(repoRoot, relative), "utf8");
-  const sessionBackend = read("crates/aether-tauri/src/session_backend.rs");
+  const sessionBackend = read("crates/aether-app/src/session_backend.rs");
   const lib = read("crates/aether-tauri/src/lib.rs");
-  const shutdown = read("crates/aether-tauri/src/shutdown.rs");
+  const shutdown = read("crates/aether-app/src/shutdown.rs");
   const workbench = read("apps/desktop/src/SessionWorkbench.tsx");
   const panel = read("apps/desktop/src/PermissionPanel.tsx");
   const runtimePanel = read("apps/desktop/src/RuntimePanel.tsx");

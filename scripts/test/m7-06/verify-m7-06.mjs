@@ -71,7 +71,7 @@ try {
   }
 
   // 连通性实现（超时常量 + 五路径映射 + 端点推导）。
-  const connectivity = read("crates/aether-tauri/src/provider_connectivity.rs");
+  const connectivity = read("crates/aether-app/src/provider_connectivity.rs");
   for (const token of [
     "PROVIDER_HTTP_TOTAL_TIMEOUT",
     "PROVIDER_HTTP_CONNECT_TIMEOUT",
@@ -107,7 +107,7 @@ try {
   );
 
   // 命令实现（幂等 upsert / 无密钥不发请求 / AETHER 辅助 env 常量）。
-  const providerControl = read("crates/aether-tauri/src/provider_control.rs");
+  const providerControl = read("crates/aether-app/src/provider_control.rs");
   for (const token of [
     "pub fn provider_test",
     "pub fn provider_models_fetch",
@@ -119,7 +119,7 @@ try {
   }
 
   // 消费映射 hook（运行时映射 + env 常量 + 选择规则）。
-  const providerEnv = read("crates/aether-tauri/src/provider_env.rs");
+  const providerEnv = read("crates/aether-app/src/provider_env.rs");
   for (const token of [
     "expected_provider_type",
     "ENV_ANTHROPIC_API_KEY",
@@ -139,7 +139,7 @@ try {
   assert(runtimeRs.includes("env_source"), "runtime.rs 未接线 env_source");
 
   // 命令面与错误码登记（含 bindings 生成物 token）。
-  const errorRs = read("crates/aether-tauri/src/ipc/error.rs");
+  const errorRs = read("crates/aether-app/src/ipc/error.rs");
   for (const token of ["ProviderUnreachable", "ProviderAuthFailed", "ProviderError"]) {
     assert(errorRs.includes(token), `error.rs 缺少：${token}`);
   }

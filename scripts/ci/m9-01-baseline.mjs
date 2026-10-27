@@ -34,8 +34,11 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".
 
 export const BASELINE_DIR = "docs/M9-01-baseline";
 const COMMANDS_SRC = "crates/aether-tauri/src/ipc/commands.rs";
-const DTO_SRC = "crates/aether-tauri/src/ipc/dto.rs";
-const ERROR_SRC = "crates/aether-tauri/src/ipc/error.rs";
+// M9-02（ADR-029 D-029-4）：命令实现（DTO/严格解析/rejects 的来源）已迁至 aether-app；
+// 本文件仍从 tauri 的 `collect_commands!` 取**声明顺序**，实现细节从 handlers 解析。
+const HANDLERS_SRC = "crates/aether-app/src/ipc/handlers.rs";
+const DTO_SRC = "crates/aether-app/src/ipc/dto.rs";
+const ERROR_SRC = "crates/aether-app/src/ipc/error.rs";
 const EVENT_SRC = "crates/aether-core/src/event.rs";
 const MIGRATIONS_DIR = "migrations";
 
@@ -55,11 +58,28 @@ const SAMPLE_PATH = String.raw`E:\aether-baseline\sample`;
  * （messages_page/会话摘要）、core_health（health）、core/domain（会话/运行时/工作区等域对象）。
  * 本清单按「定义位置」取，响应字段/可选性一律从这些文件的 `#[derive(...Serialize...)]` 类型解析。
  */
+/**
+ * 基线冻结标签（M9-02 迁移）：`docs/M9-01-baseline/` 是 **HEAD 快照**，
+ * `contract_digest` 的 `responses[].source` / `id` 保留录制时点的仓库路径。
+ * M9-02 把实现迁到 `aether-app` 后，这里把当前路径映射回录制期标签，
+ * 确保契约摘要不因「纯文件移动」而漂移（M9-04 重录时改为真实路径）。
+ */
+const BASELINE_SOURCE_LABEL = new Map([
+  ["crates/aether-app/src/ipc/dto.rs", "crates/aether-tauri/src/ipc/dto.rs"],
+  ["crates/aether-app/src/ipc/error.rs", "crates/aether-tauri/src/ipc/error.rs"],
+  ["crates/aether-app/src/session_backend.rs", "crates/aether-tauri/src/session_backend.rs"],
+  ["crates/aether-app/src/core_health.rs", "crates/aether-tauri/src/core_health.rs"],
+]);
+
+/** 当前源码路径 → 基线冻结标签（无映射则原样）。 */
+function baselineLabel(rel) {
+  return BASELINE_SOURCE_LABEL.get(rel) ?? rel;
+}
 const RESPONSE_SOURCES = [
-  "crates/aether-tauri/src/ipc/dto.rs",
-  "crates/aether-tauri/src/ipc/error.rs",
-  "crates/aether-tauri/src/session_backend.rs",
-  "crates/aether-tauri/src/core_health.rs",
+  "crates/aether-app/src/ipc/dto.rs",
+  "crates/aether-app/src/ipc/error.rs",
+  "crates/aether-app/src/session_backend.rs",
+  "crates/aether-app/src/core_health.rs",
   "crates/aether-core/src/domain.rs",
 ];
 
@@ -91,7 +111,7 @@ const LIFECYCLE = {
 };
 
 const DIAGNOSTICS = {
-  source: "crates/aether-tauri/src/diagnostics_control.rs",
+  source: "crates/aether-app/src/diagnostics_control.rs",
   command: "export_diagnostics",
   response_keys: [
     "path",
@@ -280,7 +300,7 @@ function parseSerializableTypes(rel) {
         id: `${rel}::${match[2]}`,
         name: match[2],
         kind: "struct",
-        source: rel,
+        source: baselineLabel(rel),
         fields: parseFields(scanned.body),
       });
       continue;
@@ -304,7 +324,7 @@ function parseSerializableTypes(rel) {
       });
       pendingRename = null;
     }
-    types.push({ id: `${rel}::${match[2]}`, name: match[2], kind: "enum", source: rel, variants });
+    types.push({ id: `${baselineLabel(rel)}::${match[2]}`, name: match[2], kind: "enum", source: baselineLabel(rel), variants });
   }
   return types;
 }
@@ -508,6 +528,7 @@ function buildRejects(fields, enums, style) {
 /** 汇总基线契约（录制与校验共用；`contract_digest` 的输入）。 */
 export function collectContract() {
   const commandsSource = read(COMMANDS_SRC);
+  const handlersSource = read(HANDLERS_SRC);
   const dtoSource = read(DTO_SRC);
   const errorSource = read(ERROR_SRC);
   const eventSource = read(EVENT_SRC);
@@ -517,7 +538,7 @@ export function collectContract() {
   const enums = parseEnums(dtoSource);
 
   const commands = names.map((name, index) => {
-    const { signature, body } = parseCommandBody(commandsSource, name);
+    const { signature, body } = parseCommandBody(handlersSource, name);
     const hasPayload = /payload:\s*JsonPayload/.test(signature);
     const parsed = body.match(
       /let _?request:\s*([A-Z]\w*)\s*=\s*(parse_strict|parse_no_params)\(/,

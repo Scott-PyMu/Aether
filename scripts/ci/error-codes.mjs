@@ -3,7 +3,7 @@
  * `error_codes.json` 生成器（M9-01 DoD-4；ADR-029 §4.3/§7、AGENTS §2.8）。
  *
  * 单一事实来源（M9-01 骨架期；M9-03 起改由 `aether-app` 清单提供，输出格式不变）：
- * - `ipc`：`crates/aether-tauri/src/ipc/error.rs` 的 `IpcErrorCode` 枚举顺序 + `as_str()`
+ * - `ipc`：`crates/aether-app/src/ipc/error.rs` 的 `IpcErrorCode` 枚举顺序 + `as_str()`
  *   映射（32 项）。代码名不得手写：解析不到、解析出多于/少于 32 项都直接失败。
  * - `business`：本文件 `BUSINESS_CODES` 登记表，逐项与 ADR-018 附录 A-7 的 9 个业务码
  *   一致（`aether_code` 只取 32 枚举；业务码走 `error.data.business_code`，ADR-029 R-P0-2）。
@@ -23,7 +23,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-const SOURCE = "crates/aether-tauri/src/ipc/error.rs";
+const SOURCE = "crates/aether-app/src/ipc/error.rs";
 const TARGET = "packages/protocol/src/error_codes.json";
 const IPC_EXPECTED_COUNT = 32;
 const FALLBACK_OWNER = "M1-08";

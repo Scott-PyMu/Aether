@@ -50,11 +50,11 @@ try {
     }
   }
 
-  const backend = read("crates/aether-tauri/src/ipc/backend.rs");
+  const backend = read("crates/aether-app/src/ipc/backend.rs");
   for (const name of ["session_search", "session_rename", "session_delete"]) {
     assert(backend.includes(`fn ${name}`), `IpcBackend 缺 ${name}`);
   }
-  const dto = read("crates/aether-tauri/src/ipc/dto.rs");
+  const dto = read("crates/aether-app/src/ipc/dto.rs");
   for (const name of [
     "SessionSearchRequest",
     "SessionRenameRequest",
@@ -62,7 +62,7 @@ try {
   ]) {
     assert(dto.includes(`pub struct ${name}`), `DTO 缺 ${name}`);
   }
-  const error = read("crates/aether-tauri/src/ipc/error.rs");
+  const error = read("crates/aether-app/src/ipc/error.rs");
   assert(error.includes("SessionNotFound") && error.includes('"session_not_found"'), "错误码缺 session_not_found");
 
   const bindings = read("packages/protocol/src/bindings.ts");
@@ -118,7 +118,7 @@ try {
   ]) {
     assert(lifecycle.includes(token), `control 缺「${token}」`);
   }
-  const sessionBackend = read("crates/aether-tauri/src/session_backend.rs");
+  const sessionBackend = read("crates/aether-app/src/session_backend.rs");
   assert(sessionBackend.includes("session_not_found"), "messages_page 缺删除后 session_not_found 检查");
 
   const workbench = read("apps/desktop/src/SessionWorkbench.tsx");

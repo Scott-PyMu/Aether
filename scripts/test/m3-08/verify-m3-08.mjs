@@ -144,9 +144,9 @@ record(
   const problems = [];
   const read = (relative) => readFileSync(path.join(repoRoot, relative), "utf8");
   const memory = read("crates/aether-control/src/memory.rs");
-  const sessionBackend = read("crates/aether-tauri/src/session_backend.rs");
+  const sessionBackend = read("crates/aether-app/src/session_backend.rs");
   const lib = read("crates/aether-tauri/src/lib.rs");
-  const executor = read("crates/aether-tauri/src/adapter_executor.rs");
+  const executor = read("crates/aether-app/src/adapter_executor.rs");
   const sdkMemory = read("packages/adapter-sdk/src/memory.ts");
   const mockScenarios = read("packages/adapter-mock/src/scenarios.ts");
   const settingsPage = read("apps/desktop/src/SettingsPage.tsx");

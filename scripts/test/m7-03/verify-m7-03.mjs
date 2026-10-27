@@ -146,7 +146,7 @@ try {
   }
 
   // 6) 命令层：错误码 / 命令注册三处 / bindings / 能力门与业务码。
-  const errorSource = read("crates/aether-tauri/src/ipc/error.rs");
+  const errorSource = read("crates/aether-app/src/ipc/error.rs");
   assert(errorSource.includes("PauseUnsupported"), "error.rs 缺少 PauseUnsupported");
   assert(
     errorSource.includes('Self::PauseUnsupported => "pause_unsupported"'),
@@ -157,7 +157,7 @@ try {
     const mentions = (commandsSource.match(new RegExp(command, "g")) ?? []).length;
     assert(mentions >= 4, `命令 ${command} 注册点不足：${mentions}`);
   }
-  const backendSource = read("crates/aether-tauri/src/session_backend.rs");
+  const backendSource = read("crates/aether-app/src/session_backend.rs");
   for (const token of [
     "fn session_pause(",
     "fn session_resume(",
@@ -168,14 +168,14 @@ try {
   ]) {
     assert(backendSource.includes(token), `session_backend.rs 缺少「${token}」`);
   }
-  const executorSource = read("crates/aether-tauri/src/adapter_executor.rs");
+  const executorSource = read("crates/aether-app/src/adapter_executor.rs");
   for (const token of ["pause_session", "impl aether_control::PauseNotifier for AdapterRunExecutor"]) {
     assert(executorSource.includes(token), `adapter_executor.rs 缺少「${token}」`);
   }
   const libSource = read("crates/aether-tauri/src/lib.rs");
   assert(libSource.includes("with_pause_notifier"), "lib.rs 缺少 pause notifier 接线");
   assert(libSource.includes("session_manager: session_manager.clone()"), "lib.rs 缺少诊断接线");
-  const diagnostics = read("crates/aether-tauri/src/diagnostics_control.rs");
+  const diagnostics = read("crates/aether-app/src/diagnostics_control.rs");
   assert(diagnostics.includes('"session_pause"'), "诊断包缺少 session_pause 段");
   const bindings = read("packages/protocol/src/bindings.ts");
   for (const token of ["sessionPause", "sessionResume", '"pause_unsupported"']) {

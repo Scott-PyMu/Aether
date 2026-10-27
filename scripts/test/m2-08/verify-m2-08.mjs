@@ -171,7 +171,7 @@ record("回归 m2-08 触及面：aether-adapters supervisor 单测", regression.
     problems.push("lib.rs 缺少核心启动接线（boot_core_full / boot_core_health_with_slot）");
   }
 
-  const control = read("crates/aether-tauri/src/runtime_control.rs");
+  const control = read("crates/aether-app/src/runtime_control.rs");
   for (const [needle, label] of [
     ["pub fn run_supervisor_startup", "启动序列收口入口"],
     ["cleanup_orphans", "孤儿清理（D5 三条件）"],
@@ -181,7 +181,7 @@ record("回归 m2-08 触及面：aether-adapters supervisor 单测", regression.
     if (!control.includes(needle)) problems.push(`runtime_control.rs 缺少${label}: ${needle}`);
   }
 
-  const shutdown = read("crates/aether-tauri/src/shutdown.rs");
+  const shutdown = read("crates/aether-app/src/shutdown.rs");
   for (const [needle, label] of [
     ["APP_EXIT_BUDGET: Duration = Duration::from_secs(10)", "T11 退出预算 10s"],
     ["pipeline.shutdown()", "广播 shutdown（D2 第一步）"],

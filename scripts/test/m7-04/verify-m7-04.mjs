@@ -85,9 +85,9 @@ try {
   );
 
   // 2) 后端设置键登记（M5-01 DoD5②/ADR-018 附录 A-6）：白名单 + 类型校验 + 缺省。
-  const dto = read("crates/aether-tauri/src/ipc/dto.rs");
+  const dto = read("crates/aether-app/src/ipc/dto.rs");
   assert(dto.includes('"ui.layout"'), "SETTINGS_KEY_ALLOWLIST 缺 ui.layout");
-  const diagnostics = read("crates/aether-tauri/src/diagnostics_control.rs");
+  const diagnostics = read("crates/aether-app/src/diagnostics_control.rs");
   for (const token of [
     'pub const UI_LAYOUT_KEY: &str = "ui.layout";',
     "UI_LAYOUT_MAX_BYTES",

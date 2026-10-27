@@ -101,11 +101,11 @@ record(
 {
   const problems = [];
   const read = (relative) => readFileSync(path.join(repoRoot, relative), "utf8");
-  const sessionBackend = read("crates/aether-tauri/src/session_backend.rs");
+  const sessionBackend = read("crates/aether-app/src/session_backend.rs");
   const writeQueue = read("crates/aether-store/src/write_queue.rs");
-  const executor = read("crates/aether-tauri/src/adapter_executor.rs");
+  const executor = read("crates/aether-app/src/adapter_executor.rs");
   const lib = read("crates/aether-tauri/src/lib.rs");
-  const error = read("crates/aether-tauri/src/ipc/error.rs");
+  const error = read("crates/aether-app/src/ipc/error.rs");
   const aetherStore = read("apps/desktop/src/aetherStore.ts");
   const backfillSource = read("apps/desktop/src/backfillSource.ts");
   const workbench = read("apps/desktop/src/SessionWorkbench.tsx");

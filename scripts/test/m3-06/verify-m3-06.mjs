@@ -160,10 +160,10 @@ if (skipE2e) {
   const problems = [];
   const read = (relative) => readFileSync(path.join(repoRoot, relative), "utf8");
   const lifecycle = read("crates/aether-control/src/lifecycle.rs");
-  const sessionBackend = read("crates/aether-tauri/src/session_backend.rs");
+  const sessionBackend = read("crates/aether-app/src/session_backend.rs");
   const commands = read("crates/aether-tauri/src/ipc/commands.rs");
   const lib = read("crates/aether-tauri/src/lib.rs");
-  const executor = read("crates/aether-tauri/src/adapter_executor.rs");
+  const executor = read("crates/aether-app/src/adapter_executor.rs");
   const probe = read("crates/aether-tauri/src/m3_06_probe.rs");
   const workbench = read("apps/desktop/src/SessionWorkbench.tsx");
   const healthMonitor = read("apps/desktop/src/HealthMonitor.tsx");

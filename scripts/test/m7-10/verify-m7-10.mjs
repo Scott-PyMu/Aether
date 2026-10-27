@@ -63,7 +63,7 @@ function staticChecks() {
   ]) {
     assertContains(uiux, token, "UI-UX");
   }
-  const dto = read("crates/aether-tauri/src/ipc/dto.rs");
+  const dto = read("crates/aether-app/src/ipc/dto.rs");
   for (const token of [
     "\"ui.provider_selection\"",
     "\"ui.layout\"",

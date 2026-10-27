@@ -6,7 +6,7 @@
  *  1. diff=0：`packages/protocol/src/error_codes.json` 与生成器重新生成的结果逐字节一致
  *     （生成物禁手改）；生成物缺失/多键/少键都算失败。
  *  2. ipc=32：`ipc` 恰好 32 项，且代码集合与**顺序**都与
- *     `crates/aether-tauri/src/ipc/error.rs` 的 `IpcErrorCode` 声明一致
+ *     `crates/aether-app/src/ipc/error.rs` 的 `IpcErrorCode` 声明一致
  *     （本脚本独立解析枚举，不复用生成器的解析结果，防「生成器自己和自己一致」）。
  *  3. schema/去重/kind：每项仅含 `code/kind/owner/first_adr`；`code` 为 snake_case；
  *     `kind` 与所属集合一致（`ipc` / `business`）；`owner` 形如 `M9-01`；
@@ -27,7 +27,7 @@ import { buildErrorCodes, renderErrorCodes } from "../ci/error-codes.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const TARGET = "packages/protocol/src/error_codes.json";
-const SOURCE = "crates/aether-tauri/src/ipc/error.rs";
+const SOURCE = "crates/aether-app/src/ipc/error.rs";
 const IPC_EXPECTED = 32;
 const ENTRY_KEYS = ["code", "kind", "owner", "first_adr"];
 const BUSINESS_SET_ENABLED = process.argv.includes("--business-set");

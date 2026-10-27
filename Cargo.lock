@@ -53,6 +53,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "aether-app"
+version = "0.1.0"
+dependencies = [
+ "aether-adapters",
+ "aether-control",
+ "aether-core",
+ "aether-security",
+ "aether-store",
+ "dirs",
+ "hex",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2",
+ "specta",
+ "specta-typescript",
+ "sysinfo",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "ulid",
+ "ureq",
+ "winreg",
+]
+
+[[package]]
 name = "aether-control"
 version = "0.1.0"
 dependencies = [
@@ -117,6 +144,7 @@ name = "aether-tauri"
 version = "0.1.0"
 dependencies = [
  "aether-adapters",
+ "aether-app",
  "aether-control",
  "aether-core",
  "aether-security",

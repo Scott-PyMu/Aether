@@ -198,7 +198,7 @@ function checkUiUx() {
 // ===== DoD5②：设置键代码落点 =====
 
 function checkSettingsKeys() {
-  const dto = read("crates/aether-tauri/src/ipc/dto.rs");
+  const dto = read("crates/aether-app/src/ipc/dto.rs");
   const keys = [
     "backup.reminder",
     "backup.auto.enabled",
@@ -212,7 +212,7 @@ function checkSettingsKeys() {
   for (const key of keys) {
     expect(dto.includes(`"${key}"`), `SETTINGS_KEY_ALLOWLIST 缺键 ${key}`);
   }
-  const diagnostics = read("crates/aether-tauri/src/diagnostics_control.rs");
+  const diagnostics = read("crates/aether-app/src/diagnostics_control.rs");
   for (const token of [
     "UI_LAYOUT_MAX_BYTES",
     "validate_setting_int_range",

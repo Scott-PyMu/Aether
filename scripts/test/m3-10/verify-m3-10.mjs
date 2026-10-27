@@ -205,10 +205,10 @@ if (existsSync(designDoc)) {
   const coreDomain = read("crates/aether-core/src/domain.rs");
   const storeOps = read("crates/aether-store/src/ops.rs");
   const lifecycle = read("crates/aether-control/src/lifecycle.rs");
-  const executor = read("crates/aether-tauri/src/adapter_executor.rs");
-  const dto = read("crates/aether-tauri/src/ipc/dto.rs");
-  const validate = read("crates/aether-tauri/src/ipc/validate.rs");
-  const backend = read("crates/aether-tauri/src/session_backend.rs");
+  const executor = read("crates/aether-app/src/adapter_executor.rs");
+  const dto = read("crates/aether-app/src/ipc/dto.rs");
+  const validate = read("crates/aether-app/src/ipc/validate.rs");
+  const backend = read("crates/aether-app/src/session_backend.rs");
   const sessionClient = read("crates/aether-adapters/src/session_client.rs");
   const mockAdapterTs = read("packages/adapter-mock/src/mock-adapter.ts");
   const mockCli = read("packages/adapter-mock/src/cli.ts");

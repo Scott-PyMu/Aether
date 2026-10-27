@@ -96,7 +96,7 @@ try {
     }
   }
   assert(commands.includes('WorkspaceCreateRequest'), "workspace_create DTO 未接线");
-  const backend = read("crates/aether-tauri/src/ipc/backend.rs");
+  const backend = read("crates/aether-app/src/ipc/backend.rs");
   for (const name of [
     "workspaces_list",
     "workspace_create",
@@ -108,7 +108,7 @@ try {
   }
 
   // 2) 错误码登记（ADR-006 附录 B：workspace_not_found / workspace_in_use）。
-  const errorRs = read("crates/aether-tauri/src/ipc/error.rs");
+  const errorRs = read("crates/aether-app/src/ipc/error.rs");
   for (const code of ["workspace_not_found", "workspace_in_use"]) {
     assert(errorRs.includes(`"${code}"`), `错误码缺 ${code}`);
   }
@@ -168,7 +168,7 @@ try {
   ]) {
     assert(permission.includes(token), `permission.rs 缺「${token}」`);
   }
-  const sessionBackend = read("crates/aether-tauri/src/session_backend.rs");
+  const sessionBackend = read("crates/aether-app/src/session_backend.rs");
   for (const token of [
     "persist_session_baseline",
     "session.workspace_assigned",

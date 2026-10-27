@@ -199,7 +199,7 @@ record(
     if (!patrol.includes(needle)) problems.push(`resource_patrol.rs 缺少${label}: ${needle}`);
   }
 
-  const coreHealth = read("crates/aether-tauri/src/core_health.rs");
+  const coreHealth = read("crates/aether-app/src/core_health.rs");
   for (const [needle, label] of [
     ["SupervisorRuntimeSummaries", "监督器摘要源（ADR-007 §5-2）"],
     ["boot_core_health_with", "摘要源注入启动"],
@@ -208,7 +208,7 @@ record(
     if (!coreHealth.includes(needle)) problems.push(`core_health.rs 缺少${label}: ${needle}`);
   }
 
-  const logging = read("crates/aether-tauri/src/logging.rs");
+  const logging = read("crates/aether-app/src/logging.rs");
   for (const [needle, label] of [
     ['LOG_FILE_NAME: &str = "aether.log"', "日志文件名"],
     ["pub fn init_for_data_dir", "生产接线入口"],

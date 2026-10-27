@@ -86,12 +86,12 @@ record(
 {
   const problems = [];
   const read = (relative) => readFileSync(path.join(repoRoot, relative), "utf8");
-  const retention = read("crates/aether-tauri/src/retention.rs");
-  const archiveControl = read("crates/aether-tauri/src/archive_control.rs");
+  const retention = read("crates/aether-app/src/retention.rs");
+  const archiveControl = read("crates/aether-app/src/archive_control.rs");
   const storeArchive = read("crates/aether-store/src/archive.rs");
   const ops = read("crates/aether-store/src/ops.rs");
-  const diagnostics = read("crates/aether-tauri/src/diagnostics_control.rs");
-  const dto = read("crates/aether-tauri/src/ipc/dto.rs");
+  const diagnostics = read("crates/aether-app/src/diagnostics_control.rs");
+  const dto = read("crates/aether-app/src/ipc/dto.rs");
   const lib = read("crates/aether-tauri/src/lib.rs");
   const settingsPage = read("apps/desktop/src/SettingsPage.tsx");
   const settingsTs = read("apps/desktop/src/settings.ts");

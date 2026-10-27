@@ -24,11 +24,12 @@ test = false
 # 测试目标注入 Common-Controls v6 清单资源（见 build.rs；MIT 许可，随 tauri-winres 已在依赖图内）
 embed-resource = "3.0.11"
 tauri-build = { version = "2.6.3", features = [] }
-# M7-01/ADR-015：构建期生成注册清单期望摘要表（与运行期同版本、同 Cargo.lock，无新增依赖）
-serde_json = "1"
-sha2 = "0.10"
+# M9-02：注册清单期望摘要表已迁至 `aether-app/build.rs`（本 crate 不再生成，避免双份信任锚）。
 
 [dependencies]
+# ADR-029 D-029-2/D-029-4：应用层（transport-agnostic 命令层/业务编排）。
+# 本 crate 只做 Tauri 注册/State 适配与壳能力实现，不得复制业务/校验逻辑。
+aether-app.workspace = true
 aether-core.workspace = true
 # ADR-007：`health` 命令真实数据源（EventPipeline 与存储运行时）。
 aether-control.workspace = true

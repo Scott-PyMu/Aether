@@ -1,0 +1,2320 @@
+//! IPC 参数校验矩阵（M1-08 DoD3；M9-02 迁至 `aether-app` 直连 `IpcState::dispatch`）。
+//!
+//! 覆盖三类畸形参数（超长 / 未知字段 / 非法枚举）与路径类样本；全部断言：
+//! 1. 返回结构化错误码（可选字段名）；
+//! 2. 不调用后端（即不落库、不透传下游）。
+//!
+//! 迁移口径（ADR-029 D-029-4）：本文件走**应用层命令入口**（`dispatch`），
+//! 不依赖 Tauri；壳层等价性由 `aether-tauri/tests/ipc_validation.rs`（MockRuntime
+//! 真实注册路径）双跑覆盖（M9-02 DoD-4「迁移或双跑」）。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
+
+use aether_app::ipc::backend::IpcBackend;
+use aether_app::ipc::dto::{
+    AppRestartRequest, ArchiveExportRequest, ArtifactAddRequest, ArtifactRemoveRequest,
+    ArtifactsListRequest, AuditExportRequest, AuditQueryRequest, BackupCreateRequest,
+    BackupRestoreRequest, ExportDiagnosticsRequest, MessagesPageRequest, PermissionResolveRequest,
+    PermissionsPendingRequest, PresetAddRequest, PresetDeleteRequest, PresetUpdateRequest,
+    PresetsListRequest, ProviderCreateRequest, ProviderDeleteRequest, ProviderModelAddRequest,
+    ProviderModelToggleRequest, ProviderModelsFetchRequest, ProviderTestRequest, ProviderToggleRequest,
+    ProviderUpdateRequest, ProvidersListRequest,
+    RunRetryRequest, RuntimeDisableRequest, RuntimeEnableRequest, RuntimeRetryRequest,
+    SessionCreateRequest, SessionExportRequest, SessionIdRequest, SessionListRequest,
+    SessionSendRequest, SessionWorkspaceAssignRequest, SessionDeleteRequest, SessionRenameRequest,
+    SessionSearchRequest, SettingsGetRequest, SettingsSetRequest,
+    WorkspaceCreateRequest, WorkspaceDeleteRequest, WorkspaceSetRequest, WorkspaceUpdateRequest,
+    WorkspacesListRequest,
+};
+use aether_app::ipc::error::IpcError;
+use aether_app::ipc::path::{
+    is_within, validate_external_file, validate_user_path, validate_workspace_root, ArtifactPath,
+};
+use aether_app::ipc::validate::{
+    parse_strict, CommandRequest, MAX_MESSAGE_BYTES, MAX_TITLE_CHARS,
+};
+use aether_app::ipc::{IpcState, COMMANDS};
+use serde_json::{json, Value};
+
+const ULID: &str = "01J8ZQ5R0N7W9Y8X6V4T2S0K1M";
+const CLIENT_MSG_ID: &str = "01J8ZQ5R0N7W9Y8X6V4T2S0K1N";
+
+/// 记录后端：只为断言「下游是否被调用」。
+#[derive(Default)]
+struct RecordingBackend {
+    calls: Mutex<Vec<String>>,
+}
+
+impl RecordingBackend {
+    fn calls(&self) -> Vec<String> {
+        match self.calls.lock() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+
+    fn record(&self, command: &str) -> Result<Value, IpcError> {
+        match self.calls.lock() {
+            Ok(mut guard) => guard.push(command.to_string()),
+            Err(poisoned) => poisoned.into_inner().push(command.to_string()),
+        }
+        Ok(json!({ "recorded": command }))
+    }
+}
+
+impl IpcBackend for RecordingBackend {
+    fn runtimes_list(&self) -> Result<Value, IpcError> {
+        self.record("runtimes_list")
+    }
+
+    fn session_list(&self, _request: &SessionListRequest) -> Result<Value, IpcError> {
+        self.record("session_list")
+    }
+
+    fn session_search(&self, _request: &SessionSearchRequest) -> Result<Value, IpcError> {
+        self.record("session_search")
+    }
+
+    fn session_rename(&self, _request: &SessionRenameRequest) -> Result<Value, IpcError> {
+        self.record("session_rename")
+    }
+
+    fn session_delete(&self, _request: &SessionDeleteRequest) -> Result<Value, IpcError> {
+        self.record("session_delete")
+    }
+
+    fn session_create(&self, _request: &SessionCreateRequest) -> Result<Value, IpcError> {
+        self.record("session_create")
+    }
+
+    fn session_send(&self, _request: &SessionSendRequest) -> Result<Value, IpcError> {
+        self.record("session_send")
+    }
+
+    fn session_interrupt(&self, _request: &SessionIdRequest) -> Result<Value, IpcError> {
+        self.record("session_interrupt")
+    }
+
+    fn session_pause(&self, _request: &SessionIdRequest) -> Result<Value, IpcError> {
+        self.record("session_pause")
+    }
+
+    fn session_resume(&self, _request: &SessionIdRequest) -> Result<Value, IpcError> {
+        self.record("session_resume")
+    }
+
+    fn session_dispose(&self, _request: &SessionIdRequest) -> Result<Value, IpcError> {
+        self.record("session_dispose")
+    }
+
+    fn messages_page(&self, _request: &MessagesPageRequest) -> Result<Value, IpcError> {
+        self.record("messages_page")
+    }
+
+    fn permissions_pending(&self, _request: &PermissionsPendingRequest) -> Result<Value, IpcError> {
+        self.record("permissions_pending")
+    }
+
+    fn permission_resolve(&self, _request: &PermissionResolveRequest) -> Result<Value, IpcError> {
+        self.record("permission_resolve")
+    }
+
+    fn settings_get(&self, _request: &SettingsGetRequest) -> Result<Value, IpcError> {
+        self.record("settings_get")
+    }
+
+    fn settings_set(&self, _request: &SettingsSetRequest) -> Result<Value, IpcError> {
+        self.record("settings_set")
+    }
+
+    fn backup_create(
+        &self,
+        _request: &BackupCreateRequest,
+        _canonical_target_dir: Option<&Path>,
+    ) -> Result<Value, IpcError> {
+        self.record("backup_create")
+    }
+
+    fn backup_list(&self) -> Result<Value, IpcError> {
+        self.record("backup_list")
+    }
+
+    /// ADR-007 决策 1：health（无参数；记录下游调用以便断言）。
+    fn health(&self) -> Result<Value, IpcError> {
+        self.record("health")
+    }
+
+    fn backup_restore(
+        &self,
+        _request: &BackupRestoreRequest,
+        _canonical_external_path: Option<&Path>,
+    ) -> Result<Value, IpcError> {
+        self.record("backup_restore")
+    }
+
+    fn app_restart(&self, _request: &AppRestartRequest) -> Result<Value, IpcError> {
+        self.record("app_restart")
+    }
+
+    fn run_retry(&self, _request: &RunRetryRequest) -> Result<Value, IpcError> {
+        self.record("run_retry")
+    }
+
+    fn runtime_retry(&self, _request: &RuntimeRetryRequest) -> Result<Value, IpcError> {
+        self.record("runtime_retry")
+    }
+
+    fn runtime_enable(&self, _request: &RuntimeEnableRequest) -> Result<Value, IpcError> {
+        self.record("runtime_enable")
+    }
+
+    fn runtime_disable(&self, _request: &RuntimeDisableRequest) -> Result<Value, IpcError> {
+        self.record("runtime_disable")
+    }
+
+    fn workspace_set(
+        &self,
+        _request: &WorkspaceSetRequest,
+        _canonical_root_path: Option<&Path>,
+    ) -> Result<Value, IpcError> {
+        self.record("workspace_set")
+    }
+
+    fn workspaces_list(&self, _request: &WorkspacesListRequest) -> Result<Value, IpcError> {
+        self.record("workspaces_list")
+    }
+
+    fn workspace_create(
+        &self,
+        _request: &WorkspaceCreateRequest,
+        _canonical_root_path: &Path,
+    ) -> Result<Value, IpcError> {
+        self.record("workspace_create")
+    }
+
+    fn workspace_update(&self, _request: &WorkspaceUpdateRequest) -> Result<Value, IpcError> {
+        self.record("workspace_update")
+    }
+
+    fn workspace_delete(&self, _request: &WorkspaceDeleteRequest) -> Result<Value, IpcError> {
+        self.record("workspace_delete")
+    }
+
+    fn session_workspace_assign(
+        &self,
+        _request: &SessionWorkspaceAssignRequest,
+    ) -> Result<Value, IpcError> {
+        self.record("session_workspace_assign")
+    }
+
+    fn artifacts_list(&self, _request: &ArtifactsListRequest) -> Result<Value, IpcError> {
+        self.record("artifacts_list")
+    }
+
+    fn artifact_add(
+        &self,
+        _request: &ArtifactAddRequest,
+        _resolved: &ArtifactPath,
+    ) -> Result<Value, IpcError> {
+        self.record("artifact_add")
+    }
+
+    fn artifact_remove(&self, _request: &ArtifactRemoveRequest) -> Result<Value, IpcError> {
+        self.record("artifact_remove")
+    }
+
+    fn providers_list(&self, _request: &ProvidersListRequest) -> Result<Value, IpcError> {
+        self.record("providers_list")
+    }
+
+    fn provider_create(&self, _request: &ProviderCreateRequest) -> Result<Value, IpcError> {
+        self.record("provider_create")
+    }
+
+    fn provider_update(&self, _request: &ProviderUpdateRequest) -> Result<Value, IpcError> {
+        self.record("provider_update")
+    }
+
+    fn provider_delete(&self, _request: &ProviderDeleteRequest) -> Result<Value, IpcError> {
+        self.record("provider_delete")
+    }
+
+    fn provider_toggle(&self, _request: &ProviderToggleRequest) -> Result<Value, IpcError> {
+        self.record("provider_toggle")
+    }
+
+    fn provider_model_add(&self, _request: &ProviderModelAddRequest) -> Result<Value, IpcError> {
+        self.record("provider_model_add")
+    }
+
+    fn provider_model_toggle(
+        &self,
+        _request: &ProviderModelToggleRequest,
+    ) -> Result<Value, IpcError> {
+        self.record("provider_model_toggle")
+    }
+
+    fn provider_test(&self, _request: &ProviderTestRequest) -> Result<Value, IpcError> {
+        self.record("provider_test")
+    }
+
+    fn provider_models_fetch(
+        &self,
+        _request: &ProviderModelsFetchRequest,
+    ) -> Result<Value, IpcError> {
+        self.record("provider_models_fetch")
+    }
+
+    fn presets_list(&self, _request: &PresetsListRequest) -> Result<Value, IpcError> {
+        self.record("presets_list")
+    }
+
+    fn preset_add(&self, _request: &PresetAddRequest) -> Result<Value, IpcError> {
+        self.record("preset_add")
+    }
+
+    fn preset_update(&self, _request: &PresetUpdateRequest) -> Result<Value, IpcError> {
+        self.record("preset_update")
+    }
+
+    fn preset_delete(&self, _request: &PresetDeleteRequest) -> Result<Value, IpcError> {
+        self.record("preset_delete")
+    }
+
+    fn export_diagnostics(
+        &self,
+        _request: &ExportDiagnosticsRequest,
+        _canonical_target_dir: &Path,
+    ) -> Result<Value, IpcError> {
+        self.record("export_diagnostics")
+    }
+
+    fn session_export(
+        &self,
+        _request: &SessionExportRequest,
+        _canonical_target_dir: Option<&Path>,
+    ) -> Result<Value, IpcError> {
+        self.record("session_export")
+    }
+
+    fn archive_export(
+        &self,
+        _request: &ArchiveExportRequest,
+        _canonical_target_dir: Option<&Path>,
+    ) -> Result<Value, IpcError> {
+        self.record("archive_export")
+    }
+
+    fn audit_query(&self, _request: &AuditQueryRequest) -> Result<Value, IpcError> {
+        self.record("audit_query")
+    }
+
+    fn audit_export(
+        &self,
+        _request: &AuditExportRequest,
+        _canonical_target_dir: Option<&Path>,
+    ) -> Result<Value, IpcError> {
+        self.record("audit_export")
+    }
+}
+
+static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+fn temp_dir(label: &str) -> PathBuf {
+    let unique = format!(
+        "aether-m1-08-{label}-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
+    );
+    let dir = std::env::temp_dir().join(unique);
+    std::fs::create_dir_all(&dir).expect("创建临时目录");
+    dir
+}
+
+/// 长路径形式（测试夹具用）。
+///
+/// CI 的 `%TEMP%` 形如 `C:\Users\RUNNER~1\...`，含 8.3 短名——短名是 D9/T7 的
+/// **拒绝样本**，不能直接当作合法输入；夹具先 canonicalize 并去掉 `\\?\` 前缀。
+fn long_path(path: &Path) -> String {
+    let canonical = std::fs::canonicalize(path).expect("canonicalize 夹具路径");
+    let text = canonical.to_string_lossy().to_string();
+    #[cfg(windows)]
+    if let Some(stripped) = text.strip_prefix(r"\\?\") {
+        return stripped.to_string();
+    }
+    text
+}
+
+struct Fixture {
+    state: IpcState,
+    backend: Arc<RecordingBackend>,
+    root: PathBuf,
+    outside: PathBuf,
+}
+
+fn fixture(label: &str) -> Fixture {
+    let base = temp_dir(label);
+    let root = base.join("root");
+    let outside = base.join("outside");
+    std::fs::create_dir_all(&root).expect("创建 root");
+    std::fs::create_dir_all(&outside).expect("创建 outside");
+
+    let backend = Arc::new(RecordingBackend::default());
+    let state = IpcState::new(backend.clone(), vec![root.clone()]);
+
+    Fixture {
+        state,
+        backend,
+        root,
+        outside,
+    }
+}
+
+/// 命令入口：应用层 `dispatch`（不依赖 Tauri）；错误按同一 `IpcError` 序列化形状断言。
+fn invoke(state: &IpcState, command: &str, payload: Value) -> Result<Value, Value> {
+    match state.dispatch(command, payload) {
+        Ok(value) => Ok(value),
+        Err(error) => Err(serde_json::to_value(error).unwrap_or(Value::Null)),
+    }
+}
+fn assert_error(result: Result<Value, Value>, code: &str, field: Option<&str>, label: &str) {
+    match result {
+        Ok(value) => panic!("样本 {label} 期望结构化错误，实际成功：{value}"),
+        Err(error) => {
+            assert_eq!(
+                error.get("code").and_then(Value::as_str),
+                Some(code),
+                "样本 {label} 期望错误码 {code}，实际：{error}"
+            );
+            if let Some(expected_field) = field {
+                assert_eq!(
+                    error.get("field").and_then(Value::as_str),
+                    Some(expected_field),
+                    "样本 {label} 期望字段 {expected_field}，实际：{error}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn malformed_samples_return_structured_errors_and_do_not_reach_backend() {
+    let fixture = fixture("malformed");
+    let overlong_text = "x".repeat(MAX_MESSAGE_BYTES + 1);
+    let long_title = "标".repeat(MAX_TITLE_CHARS + 1);
+    let external_db = fixture.outside.join("candidate.db");
+    std::fs::write(&external_db, b"not a database").expect("写入外部候选 .db");
+    let external_txt = fixture.outside.join("candidate.txt");
+    std::fs::write(&external_txt, b"x").expect("写入外部候选 .txt");
+    let missing_db = fixture.outside.join("missing.db");
+    let sync_root = fixture.outside.join("OneDrive").join("workspace");
+    std::fs::create_dir_all(&sync_root).expect("创建同步盘样本目录");
+    let inside = fixture.root.to_string_lossy().to_string();
+
+    let samples: Vec<(&str, Value, &str, Option<&str>)> = vec![
+        (
+            "session_send",
+            json!({ "session_id": ULID, "text": "hi", "client_msg_id": CLIENT_MSG_ID, "unexpected": true }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
+        (
+            "session_send",
+            json!({ "session_id": ULID, "client_msg_id": CLIENT_MSG_ID }),
+            "missing_field",
+            Some("text"),
+        ),
+        (
+            "session_send",
+            json!({ "session_id": ULID, "text": "hi" }),
+            "missing_field",
+            Some("client_msg_id"),
+        ),
+        (
+            "session_send",
+            json!({ "session_id": ULID, "text": "hi", "client_msg_id": "msg-1" }),
+            "invalid_format",
+            Some("client_msg_id"),
+        ),
+        (
+            "session_send",
+            json!({ "session_id": ULID, "text": overlong_text, "client_msg_id": CLIENT_MSG_ID }),
+            "too_large",
+            Some("text"),
+        ),
+        (
+            "session_send",
+            json!({ "session_id": ULID, "text": 42, "client_msg_id": CLIENT_MSG_ID }),
+            "invalid_type",
+            None,
+        ),
+        (
+            "session_send",
+            json!({ "session_id": "not-a-ulid", "text": "hi", "client_msg_id": CLIENT_MSG_ID }),
+            "invalid_format",
+            Some("session_id"),
+        ),
+        (
+            "session_send",
+            json!({ "session_id": ULID, "text": "bad\u{0}text", "client_msg_id": CLIENT_MSG_ID }),
+            "invalid_format",
+            Some("text"),
+        ),
+        // M7-06/ADR-024：`session_send.references` 矩阵（条数/类型/路径校验；
+        // 路径失败统一 `artifact_path_rejected`）。
+        (
+            "session_send",
+            json!({
+                "session_id": ULID,
+                "text": "hi",
+                "client_msg_id": CLIENT_MSG_ID,
+                "references": (0..33).map(|index| json!({ "path": format!("C:/tmp/m7-06-{index}.txt"), "kind": "file" })).collect::<Vec<_>>(),
+            }),
+            "too_large",
+            Some("references"),
+        ),
+        (
+            "session_send",
+            json!({
+                "session_id": ULID,
+                "text": "hi",
+                "client_msg_id": CLIENT_MSG_ID,
+                "references": [{ "path": "C:/tmp/a.txt", "kind": "socket" }],
+            }),
+            "invalid_enum",
+            Some("references[].kind"),
+        ),
+        (
+            "session_send",
+            json!({
+                "session_id": ULID,
+                "text": "hi",
+                "client_msg_id": CLIENT_MSG_ID,
+                "references": [{ "path": "C:/tmp/a.txt", "kind": "file", "extra": 1 }],
+            }),
+            "unknown_field",
+            Some("extra"),
+        ),
+        (
+            "session_send",
+            json!({
+                "session_id": ULID,
+                "text": "hi",
+                "client_msg_id": CLIENT_MSG_ID,
+                "references": [{ "path": "relative/path.txt", "kind": "file" }],
+            }),
+            "artifact_path_rejected",
+            None,
+        ),
+        // M7-06/ADR-024：连通性测试与模型获取命令矩阵（`{ provider_id }` 严格解析）。
+        ("provider_test", json!({}), "missing_field", Some("provider_id")),
+        (
+            "provider_test",
+            json!({ "provider_id": "not-a-ulid" }),
+            "invalid_format",
+            Some("provider_id"),
+        ),
+        (
+            "provider_test",
+            json!({ "provider_id": ULID, "extra": true }),
+            "unknown_field",
+            Some("extra"),
+        ),
+        (
+            "provider_models_fetch",
+            json!({ "provider_id": 42 }),
+            "invalid_type",
+            None,
+        ),
+        (
+            "provider_models_fetch",
+            json!({}),
+            "missing_field",
+            Some("provider_id"),
+        ),
+        (
+            "session_create",
+            json!({ "runtime_id": "mock", "title": long_title }),
+            "too_large",
+            Some("title"),
+        ),
+        (
+            "session_create",
+            json!({ "runtime_id": "Claude Code", "title": "ok" }),
+            "invalid_format",
+            Some("runtime_id"),
+        ),
+        (
+            "session_create",
+            json!({ "runtime_id": "mock", "title": "ok", "extra": 1 }),
+            "unknown_field",
+            Some("extra"),
+        ),
+        (
+            "session_list",
+            json!({ "status": "zombie" }),
+            "invalid_enum",
+            None,
+        ),
+        (
+            "session_search",
+            json!({ "query": "   " }),
+            "invalid_value",
+            None,
+        ),
+        (
+            "session_search",
+            json!({ "query": long_title }),
+            "too_large",
+            Some("query"),
+        ),
+        (
+            "session_search",
+            json!({ "query": "ok", "limit": 0 }),
+            "out_of_range",
+            Some("limit"),
+        ),
+        (
+            "session_search",
+            json!({ "query": "ok", "limit": 101 }),
+            "out_of_range",
+            Some("limit"),
+        ),
+        (
+            "session_search",
+            json!({ "query": "ok", "extra": 1 }),
+            "unknown_field",
+            Some("extra"),
+        ),
+        (
+            "session_rename",
+            json!({ "session_id": "short", "title": "ok" }),
+            "invalid_format",
+            Some("session_id"),
+        ),
+        (
+            "session_rename",
+            json!({ "session_id": ULID, "title": "   " }),
+            "invalid_value",
+            None,
+        ),
+        (
+            "session_rename",
+            json!({ "session_id": ULID, "title": long_title }),
+            "too_large",
+            Some("title"),
+        ),
+        (
+            "session_delete",
+            json!({ "session_id": "short" }),
+            "invalid_format",
+            Some("session_id"),
+        ),
+        (
+            "session_delete",
+            json!({ "session_id": ULID, "extra": 1 }),
+            "unknown_field",
+            Some("extra"),
+        ),
+        (
+            "messages_page",
+            json!({ "session_id": ULID, "limit": 501 }),
+            "out_of_range",
+            Some("limit"),
+        ),
+        (
+            "messages_page",
+            json!({ "session_id": ULID, "limit": 0 }),
+            "out_of_range",
+            Some("limit"),
+        ),
+        (
+            "messages_page",
+            json!({ "session_id": ULID, "last_seq": -1 }),
+            "invalid_value",
+            None,
+        ),
+        (
+            // M6-01/ADR-019 启用 `always` 持久授权后，非法枚举样本改用仍不存在的值。
+            "permission_resolve",
+            json!({ "request_id": ULID, "decision": "sometimes" }),
+            "invalid_enum",
+            None,
+        ),
+        (
+            "permission_resolve",
+            json!({ "request_id": "short", "decision": "once" }),
+            "invalid_format",
+            Some("request_id"),
+        ),
+        (
+            "settings_get",
+            json!({ "key": "theme" }),
+            "invalid_enum",
+            Some("key"),
+        ),
+        (
+            "settings_set",
+            json!({ "key": "unknown.key", "value": { "a": 1 } }),
+            "invalid_enum",
+            Some("key"),
+        ),
+        (
+            "export_diagnostics",
+            json!({ "target_dir": "relative/path" }),
+            "path_rejected",
+            None,
+        ),
+        // M3-05/ADR-003 决策 19：诊断导出目标为外部路径（选择器选择，不做默认目录信任）；
+        // 不存在目录 / 非目录（文件）仍必须拒绝。
+        (
+            "export_diagnostics",
+            json!({ "target_dir": missing_db.to_string_lossy() }),
+            "path_rejected",
+            None,
+        ),
+        (
+            "export_diagnostics",
+            json!({ "target_dir": external_txt.to_string_lossy() }),
+            "path_rejected",
+            None,
+        ),
+        (
+            "session_interrupt",
+            json!({ "session_id": ["not", "a", "string"] }),
+            "invalid_type",
+            None,
+        ),
+        // ===== M7-03/ADR-017：session_pause / session_resume 校验矩阵（ULID + 严格解析）=====
+        (
+            "session_pause",
+            json!({ "unexpected": 1 }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
+        ("session_pause", json!({}), "missing_field", Some("session_id")),
+        (
+            "session_pause",
+            json!({ "session_id": 42 }),
+            "invalid_type",
+            None,
+        ),
+        (
+            "session_pause",
+            json!({ "session_id": "short" }),
+            "invalid_format",
+            Some("session_id"),
+        ),
+        (
+            "session_resume",
+            json!({ "unexpected": true }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
+        ("session_resume", json!({}), "missing_field", Some("session_id")),
+        (
+            "session_resume",
+            json!({ "session_id": ["not", "a", "string"] }),
+            "invalid_type",
+            None,
+        ),
+        (
+            "session_resume",
+            json!({ "session_id": "short" }),
+            "invalid_format",
+            Some("session_id"),
+        ),
+        // ===== ADR-004 七命令校验矩阵 =====
+        (
+            "backup_list",
+            json!({ "unexpected": 1 }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
+        ("backup_restore", json!({}), "missing_field", Some("source")),
+        (
+            "backup_restore",
+            json!({ "source": { "internal": { "id": "short" } } }),
+            "invalid_format",
+            Some("source.internal.id"),
+        ),
+        (
+            "backup_restore",
+            json!({ "source": { "external": { "path": "relative.db" } } }),
+            "path_rejected",
+            None,
+        ),
+        (
+            "backup_restore",
+            json!({ "source": { "external": { "path": external_txt.to_string_lossy() } } }),
+            "path_rejected",
+            None,
+        ),
+        (
+            "backup_restore",
+            json!({ "source": { "external": { "path": missing_db.to_string_lossy() } } }),
+            "path_rejected",
+            None,
+        ),
+        ("app_restart", json!({}), "missing_field", Some("confirm")),
+        (
+            "app_restart",
+            json!({ "confirm": false }),
+            "invalid_value",
+            Some("confirm"),
+        ),
+        (
+            "app_restart",
+            json!({ "confirm": "yes" }),
+            "invalid_type",
+            None,
+        ),
+        // ADR-006 v0.3：`app_exit` 的 confirm 对齐（缺失/false/未知成员）。
+        ("app_exit", json!({}), "missing_field", Some("confirm")),
+        (
+            "app_exit",
+            json!({ "confirm": false }),
+            "invalid_value",
+            Some("confirm"),
+        ),
+        (
+            "app_exit",
+            json!({ "confirm": true, "extra": 1 }),
+            "unknown_field",
+            Some("extra"),
+        ),
+        (
+            "run_retry",
+            json!({ "run_id": "short" }),
+            "invalid_format",
+            Some("run_id"),
+        ),
+        (
+            "run_retry",
+            json!({ "run": ULID }),
+            "unknown_field",
+            Some("run"),
+        ),
+        (
+            "runtime_retry",
+            json!({ "runtime_id": "Claude Code" }),
+            "invalid_format",
+            Some("runtime_id"),
+        ),
+        (
+            "runtime_enable",
+            json!({}),
+            "missing_field",
+            Some("runtime_id"),
+        ),
+        // ===== M7-01/ADR-015：runtime_disable 畸形参数矩阵（校验失败不落库/不透传） =====
+        (
+            "runtime_disable",
+            json!({ "runtime_id": "mock", "extra": true }),
+            "unknown_field",
+            Some("extra"),
+        ),
+        (
+            "runtime_disable",
+            json!({}),
+            "missing_field",
+            Some("runtime_id"),
+        ),
+        (
+            "runtime_disable",
+            json!({ "runtime_id": "mock", "confirm_terminate": "yes" }),
+            "invalid_type",
+            None,
+        ),
+        (
+            "runtime_disable",
+            json!({ "runtime_id": "bad id!" }),
+            "invalid_format",
+            Some("runtime_id"),
+        ),
+        (
+            "runtime_disable",
+            json!({ "runtime_id": 42 }),
+            "invalid_type",
+            None,
+        ),
+        ("workspace_set", json!({}), "invalid_value", None),
+        (
+            "workspace_set",
+            json!({ "workspace_id": ULID, "root_path": inside }),
+            "invalid_value",
+            None,
+        ),
+        (
+            "workspace_set",
+            json!({ "root_path": "relative" }),
+            "path_rejected",
+            None,
+        ),
+        (
+            "workspace_set",
+            json!({ "root_path": sync_root.to_string_lossy() }),
+            "path_rejected",
+            None,
+        ),
+        // ===== M7-08/ADR-026 §2.1：工作区五命令畸形参数矩阵（校验失败不落库/不透传） =====
+        (
+            "workspaces_list",
+            json!({ "unexpected": 1 }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
+        (
+            "workspace_create",
+            json!({ "root_path": inside }),
+            "missing_field",
+            Some("name"),
+        ),
+        (
+            "workspace_create",
+            json!({ "name": "ws", "root_path": inside, "unexpected": 1 }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
+        (
+            "workspace_create",
+            json!({ "name": "", "root_path": inside }),
+            "invalid_format",
+            Some("name"),
+        ),
+        (
+            "workspace_create",
+            json!({ "name": "x".repeat(65), "root_path": inside }),
+            "too_large",
+            Some("name"),
+        ),
+        (
+            "workspace_create",
+            json!({ "name": " ws ", "root_path": inside }),
+            "invalid_format",
+            Some("name"),
+        ),
+        (
+            "workspace_create",
+            json!({ "name": "ws", "root_path": "relative" }),
+            "path_rejected",
+            None,
+        ),
+        (
+            "workspace_update",
+            json!({ "workspace_id": "not-a-ulid", "name": "x" }),
+            "invalid_format",
+            Some("workspace_id"),
+        ),
+        (
+            "workspace_update",
+            json!({ "workspace_id": ULID, "name": "x", "root_path": inside }),
+            "unknown_field",
+            Some("root_path"),
+        ),
+        (
+            "workspace_delete",
+            json!({ "workspace_id": "x" }),
+            "invalid_format",
+            Some("workspace_id"),
+        ),
+        (
+            "workspace_delete",
+            json!({ "workspace_id": ULID, "unexpected": 1 }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
+        (
+            "session_workspace_assign",
+            json!({ "session_id": "not-a-ulid", "workspace_id": ULID }),
+            "invalid_format",
+            Some("session_id"),
+        ),
+        (
+            "session_workspace_assign",
+            json!({ "session_id": ULID, "workspace_id": "not-a-ulid" }),
+            "invalid_format",
+            Some("workspace_id"),
+        ),
+        (
+            "session_workspace_assign",
+            json!({ "session_id": ULID }),
+            "missing_field",
+            Some("workspace_id"),
+        ),
+        (
+            "session_send",
+            json!(["not-an-object"]),
+            "invalid_json",
+            None,
+        ),
+        // ===== ADR-007 决策 1：health 无参数严格解析（任何成员拒绝） =====
+        (
+            "health",
+            json!({ "unexpected": 1 }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
+        // ===== ADR-010/M3-09：文件引用四命令校验矩阵 =====
+        (
+            "ref_pick",
+            json!({ "kind": "binary" }),
+            "invalid_enum",
+            None,
+        ),
+        (
+            "ref_pick",
+            json!({ "kind": "file", "unexpected": 1 }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
+        ("ref_pick", json!({}), "missing_field", Some("kind")),
+        (
+            "artifacts_list",
+            json!({ "session_id": "not-a-ulid" }),
+            "invalid_format",
+            Some("session_id"),
+        ),
+        (
+            "artifacts_list",
+            json!({ "session_id": ULID, "unexpected": 1 }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
+        (
+            "artifact_add",
+            json!({ "session_id": ULID }),
+            "missing_field",
+            Some("path"),
+        ),
+        (
+            "artifact_add",
+            json!({ "session_id": ULID, "path": "" }),
+            "invalid_format",
+            Some("path"),
+        ),
+        (
+            "artifact_add",
+            json!({ "session_id": ULID, "path": "x".repeat(4097) }),
+            "too_large",
+            Some("path"),
+        ),
+        (
+            "artifact_add",
+            json!({ "session_id": ULID, "path": "relative/notes.md" }),
+            "artifact_path_rejected",
+            None,
+        ),
+        (
+            "artifact_remove",
+            json!({ "session_id": ULID, "artifact_id": "short" }),
+            "invalid_format",
+            Some("artifact_id"),
+        ),
+        (
+            "artifact_remove",
+            json!({ "session_id": ULID, "artifact_id": ULID, "unexpected": true }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
+        // ===== ADR-010/M3-11：供应商七命令校验矩阵 =====
+        (
+            "providers_list",
+            json!({ "unexpected": 1 }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
+        (
+            "provider_create",
+            json!({ "name": "x", "type": "custom", "base_url": "https://a.example.com", "enabled": true, "unexpected": 1 }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
+        (
+            "provider_create",
+            json!({ "name": "x", "type": "mistral", "base_url": "https://a.example.com", "enabled": true }),
+            "invalid_enum",
+            None,
+        ),
+        (
+            "provider_create",
+            json!({ "name": "x", "type": "custom", "base_url": "ftp://a.example.com", "enabled": true }),
+            "invalid_format",
+            Some("base_url"),
+        ),
+        (
+            "provider_create",
+            json!({ "name": "x", "type": "custom", "enabled": true }),
+            "missing_field",
+            Some("base_url"),
+        ),
+        (
+            "provider_create",
+            json!({ "name": "x", "type": "openai", "api_key": "k".repeat(8193), "enabled": true }),
+            "too_large",
+            Some("api_key"),
+        ),
+        (
+            "provider_create",
+            json!({ "name": "", "type": "openai", "enabled": true }),
+            "invalid_format",
+            Some("name"),
+        ),
+        (
+            "provider_update",
+            json!({ "id": "short", "name": "x", "enabled": true }),
+            "invalid_format",
+            Some("id"),
+        ),
+        (
+            "provider_update",
+            json!({ "id": ULID, "name": "x", "type": "custom", "enabled": true }),
+            "unknown_field",
+            Some("type"),
+        ),
+        (
+            "provider_delete",
+            json!({ "id": "short" }),
+            "invalid_format",
+            Some("id"),
+        ),
+        (
+            "provider_toggle",
+            json!({ "id": ULID }),
+            "missing_field",
+            Some("enabled"),
+        ),
+        (
+            "provider_model_add",
+            json!({ "provider_id": ULID, "model_id": "bad model", "display_name": "X" }),
+            "invalid_format",
+            Some("model_id"),
+        ),
+        (
+            "provider_model_add",
+            json!({ "provider_id": ULID, "model_id": "m", "display_name": "" }),
+            "invalid_format",
+            Some("display_name"),
+        ),
+        (
+            "provider_model_toggle",
+            json!({ "provider_id": "short", "model_id": "m", "enabled": true }),
+            "invalid_format",
+            Some("provider_id"),
+        ),
+        // ===== ADR-018/M5-05：归档导出两命令校验矩阵 =====
+        (
+            "session_export",
+            json!({ "session_id": "short" }),
+            "invalid_format",
+            Some("session_id"),
+        ),
+        (
+            "session_export",
+            json!({ "session_id": ULID, "unexpected": 1 }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
+        (
+            "session_export",
+            json!({ "session_id": ULID, "target_dir": "relative/path" }),
+            "path_rejected",
+            None,
+        ),
+        (
+            "session_export",
+            json!({ "session_id": ULID, "target_dir": "" }),
+            "invalid_format",
+            Some("target_dir"),
+        ),
+        (
+            "archive_export",
+            json!({ "unexpected": 1 }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
+        (
+            "archive_export",
+            json!({ "target_dir": "relative/path" }),
+            "path_rejected",
+            None,
+        ),
+        (
+            "archive_export",
+            json!({ "target_dir": 42 }),
+            "invalid_type",
+            None,
+        ),
+        // ===== ADR-018/M6-03：审计查询/导出校验矩阵 =====
+        (
+            "audit_query",
+            json!({ "unexpected": 1 }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
+        (
+            "audit_query",
+            json!({ "session_id": "short" }),
+            "invalid_format",
+            Some("session_id"),
+        ),
+        (
+            "audit_query",
+            json!({ "actor": "robot" }),
+            "invalid_enum",
+            Some("actor"),
+        ),
+        (
+            "audit_query",
+            json!({ "action": "Tool.Call!" }),
+            "invalid_format",
+            Some("action"),
+        ),
+        (
+            "audit_query",
+            json!({ "action": "x".repeat(65) }),
+            "too_large",
+            Some("action"),
+        ),
+        (
+            "audit_query",
+            json!({ "resource": "" }),
+            "invalid_format",
+            Some("resource"),
+        ),
+        (
+            "audit_query",
+            json!({ "from_ts": -1 }),
+            "out_of_range",
+            Some("from_ts"),
+        ),
+        (
+            "audit_query",
+            json!({ "to_ts": -1 }),
+            "out_of_range",
+            Some("to_ts"),
+        ),
+        (
+            "audit_query",
+            json!({ "from_ts": 200, "to_ts": 100 }),
+            "invalid_value",
+            None,
+        ),
+        (
+            "audit_query",
+            json!({ "limit": 0 }),
+            "out_of_range",
+            Some("limit"),
+        ),
+        (
+            "audit_query",
+            json!({ "limit": 501 }),
+            "out_of_range",
+            Some("limit"),
+        ),
+        (
+            "audit_query",
+            json!({ "limit": "100" }),
+            "invalid_type",
+            None,
+        ),
+        (
+            "audit_export",
+            json!({ "unexpected": true }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
+        (
+            "audit_export",
+            json!({ "actor": "nobody" }),
+            "invalid_enum",
+            Some("actor"),
+        ),
+        (
+            "audit_export",
+            json!({ "target_dir": "relative/path" }),
+            "path_rejected",
+            None,
+        ),
+        (
+            "audit_export",
+            json!({ "from_ts": 10, "to_ts": 5 }),
+            "invalid_value",
+            None,
+        ),
+    ];
+
+    for (command, payload, code, field) in samples {
+        let result = invoke(&fixture.state, command, payload.clone());
+        assert_error(result, code, field, &format!("{command} {payload}"));
+        assert!(
+            fixture.backend.calls().is_empty(),
+            "校验失败后不得调用下游（不落库/不透传）：{:?}",
+            fixture.backend.calls()
+        );
+    }
+}
+
+#[test]
+fn valid_requests_reach_backend_exactly_once() {
+    let fixture = fixture("valid");
+    let inside = long_path(&fixture.root);
+    let external_db = fixture.outside.join("restore-candidate.db");
+    std::fs::write(&external_db, b"candidate").expect("写入外部候选 .db");
+    let external_db = long_path(&external_db);
+    let reference_file = fixture.root.join("reference.md");
+    std::fs::write(&reference_file, b"# ref").expect("写入引用文件");
+    let reference_file = long_path(&reference_file);
+
+    let samples: Vec<(&str, Value, &str)> = vec![
+        ("runtimes_list", Value::Null, "runtimes_list"),
+        ("session_list", json!({ "limit": 50 }), "session_list"),
+        (
+            "session_search",
+            json!({ "query": "会话", "limit": 20, "offset": 0 }),
+            "session_search",
+        ),
+        (
+            "session_rename",
+            json!({ "session_id": ULID, "title": "新标题" }),
+            "session_rename",
+        ),
+        ("session_delete", json!({ "session_id": ULID }), "session_delete"),
+        (
+            "session_create",
+            json!({ "runtime_id": "mock", "title": "会话", "model": "deepseek/deepseek-chat" }),
+            "session_create",
+        ),
+        (
+            "session_send",
+            json!({ "session_id": ULID, "text": "你好", "client_msg_id": CLIENT_MSG_ID }),
+            "session_send",
+        ),
+        // M7-06/ADR-024：合法引用形态（canonicalize + 可访问性通过）到达后端。
+        (
+            "session_send",
+            json!({
+                "session_id": ULID,
+                "text": "带引用",
+                "client_msg_id": CLIENT_MSG_ID,
+                "references": [{ "path": reference_file, "kind": "file" }],
+            }),
+            "session_send",
+        ),
+        (
+            "session_interrupt",
+            json!({ "session_id": ULID }),
+            "session_interrupt",
+        ),
+        // M7-03/ADR-017：暂停/恢复合法形态到达后端。
+        ("session_pause", json!({ "session_id": ULID }), "session_pause"),
+        ("session_resume", json!({ "session_id": ULID }), "session_resume"),
+        (
+            "session_dispose",
+            json!({ "session_id": ULID }),
+            "session_dispose",
+        ),
+        (
+            "messages_page",
+            json!({ "session_id": ULID, "last_seq": 0, "limit": 500 }),
+            "messages_page",
+        ),
+        ("permissions_pending", json!({}), "permissions_pending"),
+        (
+            "permission_resolve",
+            json!({ "request_id": ULID, "decision": "session" }),
+            "permission_resolve",
+        ),
+        (
+            "backup_create",
+            json!({ "label": "手动备份" }),
+            "backup_create",
+        ),
+        // ADR-004 七命令：合法形态必须到达后端（含无参数 backup_list 的两种调用方式）。
+        ("backup_list", Value::Null, "backup_list"),
+        ("backup_list", json!({}), "backup_list"),
+        (
+            "backup_restore",
+            json!({ "source": { "internal": { "id": ULID } } }),
+            "backup_restore",
+        ),
+        (
+            "backup_restore",
+            json!({ "source": { "external": { "path": external_db } } }),
+            "backup_restore",
+        ),
+        ("run_retry", json!({ "run_id": ULID }), "run_retry"),
+        (
+            "runtime_retry",
+            json!({ "runtime_id": "mock" }),
+            "runtime_retry",
+        ),
+        (
+            "runtime_enable",
+            json!({ "runtime_id": "mock" }),
+            "runtime_enable",
+        ),
+        // M7-01/ADR-015：runtime_disable 合法形态（缺省确认/显式确认）到达后端。
+        (
+            "runtime_disable",
+            json!({ "runtime_id": "mock" }),
+            "runtime_disable",
+        ),
+        (
+            "runtime_disable",
+            json!({ "runtime_id": "mock", "confirm_terminate": true }),
+            "runtime_disable",
+        ),
+        (
+            "workspace_set",
+            json!({ "workspace_id": ULID }),
+            "workspace_set",
+        ),
+        (
+            "workspace_set",
+            json!({ "root_path": inside }),
+            "workspace_set",
+        ),
+        // M7-08/ADR-026 §2.1：工作区五命令合法形态到达后端。
+        ("workspaces_list", Value::Null, "workspaces_list"),
+        ("workspaces_list", json!({}), "workspaces_list"),
+        (
+            "workspace_create",
+            json!({ "name": "工作区", "root_path": inside }),
+            "workspace_create",
+        ),
+        (
+            "workspace_update",
+            json!({ "workspace_id": ULID, "name": "改名" }),
+            "workspace_update",
+        ),
+        (
+            "workspace_delete",
+            json!({ "workspace_id": ULID }),
+            "workspace_delete",
+        ),
+        (
+            "session_workspace_assign",
+            json!({ "session_id": ULID, "workspace_id": ULID }),
+            "session_workspace_assign",
+        ),
+        // ADR-010/M3-09：文件引用四命令（ref_pick 由选择器夹具单测覆盖，不触后端）。
+        (
+            "artifacts_list",
+            json!({ "session_id": ULID }),
+            "artifacts_list",
+        ),
+        (
+            "artifact_add",
+            json!({ "session_id": ULID, "path": reference_file }),
+            "artifact_add",
+        ),
+        (
+            "artifact_remove",
+            json!({ "session_id": ULID, "artifact_id": ULID }),
+            "artifact_remove",
+        ),
+        // ADR-010/M3-11：供应商七命令（合法形态到达后端；providers_list 两种调用方式）。
+        ("providers_list", Value::Null, "providers_list"),
+        ("providers_list", json!({}), "providers_list"),
+        (
+            "provider_create",
+            json!({
+                "name": "自定义", "type": "custom", "base_url": "https://api.example.com",
+                "api_key": "unit-placeholder", "enabled": true
+            }),
+            "provider_create",
+        ),
+        (
+            "provider_create",
+            json!({ "name": "OpenAI 兼容", "type": "openai", "enabled": false }),
+            "provider_create",
+        ),
+        (
+            "provider_update",
+            json!({ "id": ULID, "name": "改名", "enabled": true }),
+            "provider_update",
+        ),
+        (
+            "provider_update",
+            json!({ "id": ULID, "name": "清除密钥", "api_key": "", "base_url": "", "enabled": false }),
+            "provider_update",
+        ),
+        ("provider_delete", json!({ "id": ULID }), "provider_delete"),
+        (
+            "provider_toggle",
+            json!({ "id": ULID, "enabled": true }),
+            "provider_toggle",
+        ),
+        (
+            "provider_model_add",
+            json!({ "provider_id": ULID, "model_id": "deepseek-v4-pro", "display_name": "DeepSeek V4 Pro" }),
+            "provider_model_add",
+        ),
+        (
+            "provider_model_toggle",
+            json!({ "provider_id": ULID, "model_id": "deepseek-v4-pro", "enabled": false }),
+            "provider_model_toggle",
+        ),
+        // M7-06/ADR-024：连通性测试与模型获取（合法形态到达后端；网络在后端，不触达）。
+        (
+            "provider_test",
+            json!({ "provider_id": ULID }),
+            "provider_test",
+        ),
+        (
+            "provider_models_fetch",
+            json!({ "provider_id": ULID }),
+            "provider_models_fetch",
+        ),
+        (
+            "export_diagnostics",
+            json!({ "target_dir": inside }),
+            "export_diagnostics",
+        ),
+        // M3-05/ADR-003 决策 19：诊断导出目标支持外部目录（选择器路径不在允许根内也合法）。
+        (
+            "export_diagnostics",
+            json!({ "target_dir": long_path(&fixture.outside) }),
+            "export_diagnostics",
+        ),
+        // M3-05：设置键白名单已登记 `backup.reminder`（合法形态到达后端）。
+        (
+            "settings_get",
+            json!({ "key": "backup.reminder" }),
+            "settings_get",
+        ),
+        (
+            "settings_set",
+            json!({ "key": "backup.reminder", "value": true }),
+            "settings_set",
+        ),
+        // ADR-007 决策 1：health 无参数（缺省载荷与空对象两种合法调用方式）。
+        ("health", Value::Null, "health"),
+        ("health", json!({}), "health"),
+        // ADR-018/M5-05：归档导出两命令（无参/缺省 target_dir 两种合法调用方式）。
+        ("archive_export", Value::Null, "archive_export"),
+        ("archive_export", json!({}), "archive_export"),
+        (
+            "archive_export",
+            json!({ "target_dir": inside }),
+            "archive_export",
+        ),
+        (
+            "session_export",
+            json!({ "session_id": ULID }),
+            "session_export",
+        ),
+        (
+            "session_export",
+            json!({ "session_id": ULID, "target_dir": inside }),
+            "session_export",
+        ),
+        // ADR-018/M6-03：审计查询/导出（缺省载荷 = 空过滤；合法过滤形态到达后端）。
+        ("audit_query", Value::Null, "audit_query"),
+        ("audit_query", json!({}), "audit_query"),
+        (
+            "audit_query",
+            json!({
+                "session_id": ULID,
+                "actor": "agent",
+                "action": "tool.call",
+                "resource": "mock.echo",
+                "from_ts": 100,
+                "to_ts": 200,
+                "limit": 50,
+                "offset": 10,
+            }),
+            "audit_query",
+        ),
+        ("audit_export", Value::Null, "audit_export"),
+        (
+            "audit_export",
+            json!({ "actor": "system", "target_dir": inside }),
+            "audit_export",
+        ),
+    ];
+
+    for (command, payload, expected) in samples {
+        let result = invoke(&fixture.state, command, payload.clone());
+        let value = result.unwrap_or_else(|error| {
+            panic!("样本 {command} {payload} 应通过校验，实际错误：{error}")
+        });
+        assert_eq!(
+            value.get("recorded").and_then(Value::as_str),
+            Some(expected),
+            "命令 {command} 必须到达后端"
+        );
+    }
+
+    // settings_*：未登记键（默认拒绝）返回 invalid_enum；已登记键在合法样本中到达后端。
+    for (command, payload) in [
+        ("settings_get", json!({ "key": "theme" })),
+        ("settings_set", json!({ "key": "theme", "value": true })),
+    ] {
+        assert_error(
+            invoke(&fixture.state, command, payload),
+            "invalid_enum",
+            Some("key"),
+            command,
+        );
+    }
+
+    let expected_calls: Vec<String> = [
+        "runtimes_list",
+        "session_list",
+        "session_search",
+        "session_rename",
+        "session_delete",
+        "session_create",
+        "session_send",
+        "session_send",
+        "session_interrupt",
+        "session_pause",
+        "session_resume",
+        "session_dispose",
+        "messages_page",
+        "permissions_pending",
+        "permission_resolve",
+        "backup_create",
+        "backup_list",
+        "backup_list",
+        "backup_restore",
+        "backup_restore",
+        "run_retry",
+        "runtime_retry",
+        "runtime_enable",
+        "runtime_disable",
+        "runtime_disable",
+        "workspace_set",
+        "workspace_set",
+        "workspaces_list",
+        "workspaces_list",
+        "workspace_create",
+        "workspace_update",
+        "workspace_delete",
+        "session_workspace_assign",
+        "artifacts_list",
+        "artifact_add",
+        "artifact_remove",
+        "providers_list",
+        "providers_list",
+        "provider_create",
+        "provider_create",
+        "provider_update",
+        "provider_update",
+        "provider_delete",
+        "provider_toggle",
+        "provider_model_add",
+        "provider_model_toggle",
+        "provider_test",
+        "provider_models_fetch",
+        "export_diagnostics",
+        "export_diagnostics",
+        "settings_get",
+        "settings_set",
+        "health",
+        "health",
+        "archive_export",
+        "archive_export",
+        "archive_export",
+        "session_export",
+        "session_export",
+        "audit_query",
+        "audit_query",
+        "audit_query",
+        "audit_export",
+        "audit_export",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect();
+    assert_eq!(
+        fixture.backend.calls(),
+        expected_calls,
+        "合法请求必须恰好一次到达后端"
+    );
+}
+
+/// ADR-006 v0.3：`app_exit` 在 `{confirm:true}` 通过严格解析后才进入命令体；
+/// 框架夹具无应用句柄 → 命令体返回 `not_implemented`（证明校验已通过、未透传后端）。
+#[test]
+fn app_exit_requires_confirm_true_before_reaching_command_body() {
+    let fixture = fixture("app-exit");
+    let result = invoke(&fixture.state, "app_exit", json!({ "confirm": true }));
+    match result {
+        Err(error) => {
+            assert_eq!(
+                error.get("code").and_then(Value::as_str),
+                Some("not_implemented"),
+                "合法 confirm:true 必须通过严格解析并到达命令体：{error}"
+            );
+        }
+        Ok(value) => panic!("夹具无应用句柄，不应成功退出：{value}"),
+    }
+    assert!(
+        fixture.backend.calls().is_empty(),
+        "app_exit 不经 IpcBackend 下游"
+    );
+}
+
+/// ADR-004/M3-06：`app_restart` 在 `{confirm:true}` 通过严格解析后才进入命令体；
+/// 框架夹具无应用句柄 → 命令体返回 `not_implemented`（证明校验已通过、未透传后端）。
+/// 命令层实现与 `app_exit` 同口径（重启属应用生命周期动作）。
+#[test]
+fn app_restart_requires_confirm_true_before_reaching_command_body() {
+    let fixture = fixture("app-restart");
+    let result = invoke(&fixture.state, "app_restart", json!({ "confirm": true }));
+    match result {
+        Err(error) => {
+            assert_eq!(
+                error.get("code").and_then(Value::as_str),
+                Some("not_implemented"),
+                "合法 confirm:true 必须通过严格解析并到达命令体：{error}"
+            );
+        }
+        Ok(value) => panic!("夹具无应用句柄，不应成功重启：{value}"),
+    }
+    assert!(
+        fixture.backend.calls().is_empty(),
+        "app_restart 不经 IpcBackend 下游"
+    );
+}
+
+/// ADR-010/M3-09：`ref_pick` 合法 `kind` 通过严格解析后进入命令体；
+/// 框架夹具无选择器 → `not_implemented`（证明校验已通过、未透传后端）。
+#[test]
+fn ref_pick_valid_kind_reaches_command_body_before_picker_check() {
+    let fixture = fixture("ref-pick-body");
+    for kind in ["file", "directory"] {
+        let result = invoke(&fixture.state, "ref_pick", json!({ "kind": kind }));
+        match result {
+            Err(error) => {
+                assert_eq!(
+                    error.get("code").and_then(Value::as_str),
+                    Some("not_implemented"),
+                    "合法 kind={kind} 必须通过严格解析并到达命令体：{error}"
+                );
+            }
+            Ok(value) => panic!("夹具无选择器，不应成功：{value}"),
+        }
+    }
+    assert!(
+        fixture.backend.calls().is_empty(),
+        "ref_pick 不经 IpcBackend 下游"
+    );
+}
+
+/// M3-09：引用路径校验（canonicalize + 可访问性 + kind 探测）——合法不误拒、
+/// 失败统一 `artifact_path_rejected`（ADR-010；不含 A4 同步盘语义）。
+#[test]
+fn artifact_path_validator_accepts_usable_paths_and_rejects_others() {
+    let base = temp_dir("artifact-path");
+    let file = base.join("notes.md");
+    std::fs::write(&file, b"# notes").expect("写入文件");
+    let folder = base.join("docs");
+    std::fs::create_dir_all(&folder).expect("创建目录");
+
+    let resolved = aether_app::ipc::path::validate_artifact_path(&long_path(&file))
+        .expect("合法文件必须接受（不误拒）");
+    assert_eq!(resolved.kind, "file");
+    assert_eq!(resolved.size_bytes, Some(7));
+    let resolved = aether_app::ipc::path::validate_artifact_path(&long_path(&folder))
+        .expect("合法目录必须接受");
+    assert_eq!(resolved.kind, "directory");
+    assert_eq!(resolved.size_bytes, None);
+
+    let missing = base.join("missing.txt");
+    for (label, candidate) in [
+        ("不存在", missing.to_string_lossy().to_string()),
+        ("相对路径", "relative/notes.md".to_owned()),
+    ] {
+        let error = aether_app::ipc::path::validate_artifact_path(&candidate).expect_err(label);
+        assert_eq!(
+            error.code.as_str(),
+            "artifact_path_rejected",
+            "{label}：{error}"
+        );
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_special_path_samples_are_rejected_without_downstream_call() {
+    let fixture = fixture("windows-paths");
+    let samples = [
+        r"\\server\share\dir",
+        r"\\?\C:\data",
+        r"\\.\C:\data",
+        r"C:\data\PROGRA~1\dir",
+        r"C:\data\file.txt:stream",
+        r"C:\data\trailing.",
+        r"C:\data\trailing ",
+        r"C:\data\CON",
+        r"C:\data\nul.txt",
+        r"C:\data\LPT1.log",
+    ];
+    for sample in samples {
+        let result = invoke(
+            &fixture.state,
+            "export_diagnostics",
+            json!({ "target_dir": sample }),
+        );
+        match result {
+            Ok(value) => panic!("样本 {sample} 应被拒绝，实际成功：{value}"),
+            Err(error) => {
+                assert_eq!(error["code"], "path_rejected", "样本 {sample}：{error}");
+            }
+        }
+        assert!(
+            fixture.backend.calls().is_empty(),
+            "路径校验失败后不得调用下游：{:?}",
+            fixture.backend.calls()
+        );
+    }
+}
+
+#[test]
+fn path_validator_accepts_inside_and_rejects_escape() {
+    let root = temp_dir("path-root");
+    let inside = root.join("nested");
+    std::fs::create_dir_all(&inside).expect("创建子目录");
+
+    assert!(validate_user_path(&long_path(&inside), std::slice::from_ref(&root)).is_ok());
+    assert!(validate_user_path(&long_path(&root), std::slice::from_ref(&root)).is_ok());
+
+    let outside = temp_dir("path-outside");
+    let escape = root
+        .join("..")
+        .join(outside.file_name().expect("outside 目录名"));
+    assert_eq!(
+        validate_user_path(&escape.to_string_lossy(), std::slice::from_ref(&root))
+            .expect_err("逃逸必须拒绝")
+            .code
+            .as_str(),
+        "path_rejected"
+    );
+    assert_eq!(
+        validate_user_path(&outside.to_string_lossy(), &[root])
+            .expect_err("根目录外必须拒绝")
+            .code
+            .as_str(),
+        "path_rejected"
+    );
+}
+
+#[test]
+fn path_prefix_check_is_component_wise() {
+    let root = PathBuf::from(if cfg!(windows) { r"C:\data" } else { "/data" });
+    let sibling = PathBuf::from(if cfg!(windows) {
+        r"C:\database"
+    } else {
+        "/database"
+    });
+    let inside = PathBuf::from(if cfg!(windows) {
+        r"C:\data\file.txt"
+    } else {
+        "/data/file.txt"
+    });
+    assert!(is_within(&inside, &root));
+    assert!(!is_within(&sibling, &root));
+}
+
+#[test]
+fn external_and_workspace_path_validators_follow_d13_d7() {
+    let base = temp_dir("path-external");
+    let base_long = long_path(&base);
+
+    // backup_restore 外部候选：必须存在、是文件、后缀 .db（大小写不敏感）。
+    let db = base.join("backup.DB");
+    std::fs::write(&db, b"x").expect("写入候选");
+    assert!(validate_external_file(&long_path(&db), "db").is_ok());
+    let txt = base.join("backup.txt");
+    std::fs::write(&txt, b"x").expect("写入候选");
+    assert_eq!(
+        validate_external_file(&long_path(&txt), "db")
+            .expect_err("非 .db 必须拒绝")
+            .code
+            .as_str(),
+        "path_rejected"
+    );
+    let missing = PathBuf::from(&base_long).join("missing.db");
+    assert_eq!(
+        validate_external_file(&missing.to_string_lossy(), "db")
+            .expect_err("不存在必须拒绝")
+            .code
+            .as_str(),
+        "path_rejected"
+    );
+    assert_eq!(
+        validate_external_file(&base_long, "db")
+            .expect_err("目录必须拒绝")
+            .code
+            .as_str(),
+        "path_rejected"
+    );
+
+    // workspace_set root_path：必须存在且为目录；同步盘路径段拒绝（A4 预检）。
+    let workspace = base.join("workspace");
+    std::fs::create_dir_all(&workspace).expect("创建 workspace");
+    assert!(validate_workspace_root(&long_path(&workspace)).is_ok());
+    let missing_ws = PathBuf::from(&base_long).join("missing");
+    assert_eq!(
+        validate_workspace_root(&missing_ws.to_string_lossy())
+            .expect_err("不存在必须拒绝")
+            .code
+            .as_str(),
+        "path_rejected"
+    );
+    assert_eq!(
+        validate_workspace_root(&long_path(&db))
+            .expect_err("文件必须拒绝")
+            .code
+            .as_str(),
+        "path_rejected"
+    );
+    let sync = base.join("OneDrive").join("ws");
+    std::fs::create_dir_all(&sync).expect("创建同步盘样本");
+    let rejection = validate_workspace_root(&long_path(&sync)).expect_err("同步盘必须拒绝");
+    assert_eq!(rejection.code.as_str(), "path_rejected");
+    assert!(
+        rejection.message.contains("同步盘") || rejection.message.contains("OneDrive"),
+        "拒绝原因必须可读：{rejection}"
+    );
+}
+
+#[test]
+fn parse_strict_classifies_serde_errors() {
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    #[allow(dead_code)]
+    struct Sample {
+        name: String,
+        #[serde(default)]
+        optional: Option<u32>,
+    }
+
+    impl CommandRequest for Sample {}
+
+    let unknown = parse_strict::<Sample>(json!({ "name": "a", "extra": 1 })).expect_err("未知字段");
+    assert_eq!(unknown.code.as_str(), "unknown_field");
+    assert_eq!(unknown.field.as_deref(), Some("extra"));
+
+    let missing = parse_strict::<Sample>(json!({})).expect_err("缺字段");
+    assert_eq!(missing.code.as_str(), "missing_field");
+    assert_eq!(missing.field.as_deref(), Some("name"));
+
+    let wrong_type = parse_strict::<Sample>(json!({ "name": 42 })).expect_err("类型错误");
+    assert_eq!(wrong_type.code.as_str(), "invalid_type");
+
+    let not_object = parse_strict::<Sample>(json!([1, 2])).expect_err("非对象");
+    assert_eq!(not_object.code.as_str(), "invalid_json");
+
+    assert!(parse_strict::<Sample>(json!({ "name": "ok", "optional": 3 })).is_ok());
+}
+
+/// M3-10 DoD5：思考深度校验矩阵（ADR-010 决策 2）——
+/// 0–4 合法（到达后端恰好一次）；5 / -1 → `out_of_range`；1.5 / "高" / true →
+/// `invalid_type`；非法样本不落库、不透传。
+#[test]
+fn thinking_depth_matrix_valid_and_invalid_samples() {
+    let fixture = fixture("m3-10-thinking");
+    let invalid: Vec<(&str, Value, &str, Option<&str>)> = vec![
+        (
+            "session_create",
+            json!({ "runtime_id": "mock", "title": "t", "thinking_depth": 5 }),
+            "out_of_range",
+            Some("thinking_depth"),
+        ),
+        (
+            "session_create",
+            json!({ "runtime_id": "mock", "title": "t", "thinking_depth": -1 }),
+            "out_of_range",
+            Some("thinking_depth"),
+        ),
+        (
+            "session_create",
+            json!({ "runtime_id": "mock", "title": "t", "thinking_depth": 1.5 }),
+            "invalid_type",
+            None,
+        ),
+        (
+            "session_create",
+            json!({ "runtime_id": "mock", "title": "t", "thinking_depth": "高" }),
+            "invalid_type",
+            None,
+        ),
+        (
+            "session_create",
+            json!({ "runtime_id": "mock", "title": "t", "thinking_depth": true }),
+            "invalid_type",
+            None,
+        ),
+        (
+            "session_send",
+            json!({ "session_id": ULID, "text": "hi", "client_msg_id": CLIENT_MSG_ID, "thinking_depth": 9 }),
+            "out_of_range",
+            Some("thinking_depth"),
+        ),
+        (
+            "session_send",
+            json!({ "session_id": ULID, "text": "hi", "client_msg_id": CLIENT_MSG_ID, "thinking_depth": -3 }),
+            "out_of_range",
+            Some("thinking_depth"),
+        ),
+        (
+            "session_send",
+            json!({ "session_id": ULID, "text": "hi", "client_msg_id": CLIENT_MSG_ID, "thinking_depth": 2.5 }),
+            "invalid_type",
+            None,
+        ),
+        (
+            "session_send",
+            json!({ "session_id": ULID, "text": "hi", "client_msg_id": CLIENT_MSG_ID, "thinking_depth": "high" }),
+            "invalid_type",
+            None,
+        ),
+    ];
+    for (command, payload, code, field) in invalid {
+        let result = invoke(&fixture.state, command, payload.clone());
+        assert_error(result, code, field, &format!("{command} {payload}"));
+        assert!(
+            fixture.backend.calls().is_empty(),
+            "校验失败后不得调用下游（不落库/不透传）：{:?}",
+            fixture.backend.calls()
+        );
+    }
+
+    // 0–4 全部合法；缺省（无字段/null）同样合法。
+    for value in [0i64, 1, 2, 3, 4] {
+        let created = invoke(
+            &fixture.state,
+            "session_create",
+            json!({ "runtime_id": "mock", "title": "t", "thinking_depth": value }),
+        );
+        assert!(created.is_ok(), "档位 {value} 必须合法：{created:?}");
+        let sent = invoke(
+            &fixture.state,
+            "session_send",
+            json!({
+                "session_id": ULID,
+                "text": "hi",
+                "client_msg_id": CLIENT_MSG_ID,
+                "thinking_depth": value,
+            }),
+        );
+        assert!(sent.is_ok(), "档位 {value} 必须合法：{sent:?}");
+    }
+    assert!(
+        invoke(
+            &fixture.state,
+            "session_create",
+            json!({ "runtime_id": "mock", "title": "t", "thinking_depth": Value::Null }),
+        )
+        .is_ok(),
+        "显式 null（缺省）必须合法"
+    );
+    assert_eq!(
+        fixture.backend.calls().len(),
+        11,
+        "合法样本（5 档 × 2 + null）各到达后端恰好一次：{:?}",
+        fixture.backend.calls()
+    );
+}
+
+/// M7-09/ADR-026 DoD2：预设四命令 + `session_create.preset_id` 的参数校验矩阵
+/// （非法样本一律结构化错误且不调用下游）。
+#[test]
+fn preset_commands_validation_matrix() {
+    let fixture = fixture("m7-09-presets");
+    let long_name = "名".repeat(65);
+    // 上限按 UTF-8 字节数（32KiB = 32768 字节）；ASCII 便于精确构造边界。
+    let long_prompt = "x".repeat(32 * 1024 + 1);
+    let invalid: Vec<(&str, Value, &str, Option<&str>)> = vec![
+        // presets_list 无参数：任何成员都被严格模式拒绝。
+        (
+            "presets_list",
+            json!({ "limit": 1 }),
+            "unknown_field",
+            Some("limit"),
+        ),
+        // preset_add：缺字段 / 未知字段 / 类型 / 空名 / 超长 / 提示词超限。
+        ("preset_add", json!({ "name": "n" }), "missing_field", Some("system_prompt")),
+        (
+            "preset_add",
+            json!({ "system_prompt": "p" }),
+            "missing_field",
+            Some("name"),
+        ),
+        (
+            "preset_add",
+            json!({ "name": "n", "system_prompt": "p", "is_builtin": true }),
+            "unknown_field",
+            Some("is_builtin"),
+        ),
+        (
+            "preset_add",
+            json!({ "name": 42, "system_prompt": "p" }),
+            "invalid_type",
+            None,
+        ),
+        (
+            "preset_add",
+            json!({ "name": "", "system_prompt": "p" }),
+            "invalid_format",
+            Some("name"),
+        ),
+        (
+            "preset_add",
+            json!({ "name": long_name, "system_prompt": "p" }),
+            "too_large",
+            Some("name"),
+        ),
+        (
+            "preset_add",
+            json!({ "name": "n", "system_prompt": long_prompt }),
+            "too_large",
+            Some("system_prompt"),
+        ),
+        // preset_update：id 形态 / 空请求 / 超长。
+        (
+            "preset_update",
+            json!({ "preset_id": "not-a-ulid", "name": "n" }),
+            "invalid_format",
+            Some("preset_id"),
+        ),
+        (
+            "preset_update",
+            json!({ "preset_id": ULID }),
+            "invalid_value",
+            None,
+        ),
+        (
+            "preset_update",
+            json!({ "preset_id": ULID, "name": long_name }),
+            "too_large",
+            Some("name"),
+        ),
+        (
+            "preset_update",
+            json!({ "preset_id": ULID, "system_prompt": long_prompt }),
+            "too_large",
+            Some("system_prompt"),
+        ),
+        // preset_delete：id 形态 / 未知字段。
+        (
+            "preset_delete",
+            json!({ "preset_id": "01J0000000000000000000" }),
+            "invalid_format",
+            Some("preset_id"),
+        ),
+        (
+            "preset_delete",
+            json!({ "preset_id": ULID, "confirm": true }),
+            "unknown_field",
+            Some("confirm"),
+        ),
+        // session_create.preset_id：形态非法在命令层拦截。
+        (
+            "session_create",
+            json!({ "runtime_id": "mock", "title": "t", "preset_id": "abc" }),
+            "invalid_format",
+            Some("preset_id"),
+        ),
+    ];
+    for (command, payload, code, field) in invalid {
+        let result = invoke(&fixture.state, command, payload.clone());
+        assert_error(result, code, field, &format!("{command} {payload}"));
+        assert!(
+            fixture.backend.calls().is_empty(),
+            "校验失败后不得调用下游（不落库/不透传）：{:?}",
+            fixture.backend.calls()
+        );
+    }
+
+    // 合法样本（边界值）：名称 64 字符、提示词恰 32KiB、空提示词、仅改名、
+    // `preset_id` 为 ULID —— 均到达后端恰好一次。
+    let boundary_name = "名".repeat(64);
+    let boundary_prompt = "x".repeat(32 * 1024);
+    let valid: Vec<(&str, Value)> = vec![
+        ("presets_list", Value::Null),
+        (
+            "preset_add",
+            json!({ "name": boundary_name, "system_prompt": boundary_prompt }),
+        ),
+        (
+            "preset_add",
+            json!({ "name": "empty-prompt", "system_prompt": "" }),
+        ),
+        (
+            "preset_update",
+            json!({ "preset_id": ULID, "name": "renamed" }),
+        ),
+        (
+            "preset_update",
+            json!({ "preset_id": ULID, "system_prompt": "" }),
+        ),
+        ("preset_delete", json!({ "preset_id": ULID })),
+        (
+            "session_create",
+            json!({ "runtime_id": "mock", "title": "t", "preset_id": ULID }),
+        ),
+    ];
+    for (command, payload) in &valid {
+        let result = invoke(&fixture.state, command, payload.clone());
+        assert!(result.is_ok(), "合法样本必须到达后端：{command} {payload} → {result:?}");
+    }
+    assert_eq!(
+        fixture.backend.calls().len(),
+        valid.len(),
+        "合法样本各到达后端恰好一次：{:?}",
+        fixture.backend.calls()
+    );
+}
+
+/// M9-02 DoD-2：命令面冻结清单 = M9-01 HEAD 基线的 63 条（顺序与路由分组一致）。
+///
+/// 该清单是 `dispatch` 的唯一入口合同；任何增删改都必须走 ADR 并同步
+/// `docs/M9-01-baseline/manifest.json`（M9-04 生成 `command-manifest.json`）。
+#[test]
+fn commands_manifest_matches_frozen_baseline() {
+    const BASELINE: &[&str] = &[
+        "runtimes_list",
+        "session_list",
+        "session_create",
+        "session_search",
+        "session_rename",
+        "session_delete",
+        "session_send",
+        "session_interrupt",
+        "session_pause",
+        "session_resume",
+        "session_dispose",
+        "messages_page",
+        "permissions_pending",
+        "permission_resolve",
+        "session_permission_mode_set",
+        "rules_list",
+        "rule_add",
+        "rule_update",
+        "rule_delete",
+        "rule_toggle",
+        "settings_get",
+        "settings_set",
+        "backup_create",
+        "backup_list",
+        "backup_restore",
+        "app_restart",
+        "run_retry",
+        "runtime_retry",
+        "runtime_enable",
+        "runtime_disable",
+        "workspace_set",
+        "workspaces_list",
+        "workspace_create",
+        "workspace_update",
+        "workspace_delete",
+        "session_workspace_assign",
+        "ref_pick",
+        "artifacts_list",
+        "artifact_add",
+        "artifact_remove",
+        "providers_list",
+        "provider_create",
+        "provider_update",
+        "provider_delete",
+        "provider_toggle",
+        "provider_model_add",
+        "provider_model_toggle",
+        "provider_test",
+        "provider_models_fetch",
+        "presets_list",
+        "preset_add",
+        "preset_update",
+        "preset_delete",
+        "export_diagnostics",
+        "session_export",
+        "archive_export",
+        "audit_query",
+        "audit_export",
+        "health",
+        "startup_get",
+        "startup_pick_target",
+        "startup_migrate",
+        "app_exit",
+    ];
+    assert_eq!(COMMANDS.len(), 63, "命令面冻结为 63 条（59 daemon + 4 shell）");
+    assert_eq!(
+        COMMANDS,
+        BASELINE,
+        "命令清单与 M9-01 HEAD 基线不一致（增删改须走 ADR 并更新基线）"
+    );
+    let mut sorted = COMMANDS.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(sorted.len(), COMMANDS.len(), "命令名必须唯一");
+    // 路由分组（ADR-029 §4.6）：4 条壳本地路径必须存在；2 条保留命令仍在 63 内。
+    for shell in ["app_exit", "app_restart", "ref_pick", "startup_pick_target"] {
+        assert!(COMMANDS.contains(&shell), "缺少壳命令 {shell}");
+    }
+    for reserved in ["startup_get", "startup_migrate"] {
+        assert!(COMMANDS.contains(&reserved), "保留命令 {reserved} 不得移出 63");
+    }
+}
+
+/// M9-02 DoD-2/DoD-4：63 条命令逐条可达，且未知字段在命令体之前被严格拒绝。
+///
+/// 覆盖口径：对每条命令注入未声明成员 →
+/// - 有参/无参命令（`runtimes_list` 外）必须返回 `unknown_field`（`deny_unknown_fields`），
+///   证明路由 arm 存在且校验先于后端；
+/// - `runtimes_list` 迁移前即不接收参数（保持现状，不改变语义）；
+/// - 未知方法返回 `not_implemented`（M9-03 JSON-RPC 层映射 `method_not_found`）。
+#[test]
+fn every_command_is_routed_and_rejects_unknown_members() {
+    let fixture = fixture("m9-02-command-face");
+    for command in COMMANDS {
+        for payload in [
+            json!({ "__m9_02_unknown_member": true }),
+            json!("__m9_02_non_object"),
+        ] {
+            let result = invoke(&fixture.state, command, payload.clone());
+            if *command == "runtimes_list" {
+                assert!(
+                    result.is_ok(),
+                    "runtimes_list 不接收参数（迁移前语义），应忽略参数并执行：{result:?}"
+                );
+                continue;
+            }
+            if payload.is_string() {
+                assert_error(
+                    result,
+                    "invalid_json",
+                    None,
+                    &format!("{command} 非对象参数"),
+                );
+            } else {
+                assert_error(
+                    result,
+                    "unknown_field",
+                    Some("__m9_02_unknown_member"),
+                    &format!("{command} 未声明成员"),
+                );
+            }
+        }
+    }
+    // 两条 payload 各触发一次 runtimes_list（其余命令在校验阶段被拒绝）。
+    assert_eq!(
+        fixture.backend.calls(),
+        vec!["runtimes_list".to_owned(), "runtimes_list".to_owned()],
+        "非法参数不得越过校验到达后端"
+    );
+    assert_error(
+        invoke(&fixture.state, "__m9_02_unknown_command", Value::Null),
+        "not_implemented",
+        None,
+        "未知方法",
+    );
+}

@@ -104,15 +104,15 @@ record(
   const problems = [];
   const read = (relative) => readFileSync(path.join(repoRoot, relative), "utf8");
   const storeBackup = read("crates/aether-store/src/backup.rs");
-  const backupControl = read("crates/aether-tauri/src/backup_control.rs");
+  const backupControl = read("crates/aether-app/src/backup_control.rs");
   // M5-02：手动/自动共用执行路径迁移至 `backup_auto.rs`（空间护栏/原子写出）；
   // 行为断言（空间不足拒绝且不写出）仍由 `m3_04_backup_ipc` 集成用例承载。
-  const backupAuto = read("crates/aether-tauri/src/backup_auto.rs");
+  const backupAuto = read("crates/aether-app/src/backup_auto.rs");
   const lib = read("crates/aether-tauri/src/lib.rs");
-  const sessionBackend = read("crates/aether-tauri/src/session_backend.rs");
+  const sessionBackend = read("crates/aether-app/src/session_backend.rs");
   const commands = read("crates/aether-tauri/src/ipc/commands.rs");
-  const dto = read("crates/aether-tauri/src/ipc/dto.rs");
-  const migrate = read("crates/aether-tauri/src/startup/migrate.rs");
+  const dto = read("crates/aether-app/src/ipc/dto.rs");
+  const migrate = read("crates/aether-app/src/startup/migrate.rs");
   const app = read("apps/desktop/src/App.tsx");
   const page = read("apps/desktop/src/BackupPage.tsx");
   const required = [

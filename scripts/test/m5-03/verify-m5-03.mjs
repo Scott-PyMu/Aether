@@ -95,11 +95,11 @@ record(
   const problems = [];
   const read = (relative) => readFileSync(path.join(repoRoot, relative), "utf8");
   const crypto = read("crates/aether-security/src/backup_crypto.rs");
-  const control = read("crates/aether-tauri/src/backup_control.rs");
-  const auto = read("crates/aether-tauri/src/backup_auto.rs");
-  const dto = read("crates/aether-tauri/src/ipc/dto.rs");
-  const pathRs = read("crates/aether-tauri/src/ipc/path.rs");
-  const diagnostics = read("crates/aether-tauri/src/diagnostics_control.rs");
+  const control = read("crates/aether-app/src/backup_control.rs");
+  const auto = read("crates/aether-app/src/backup_auto.rs");
+  const dto = read("crates/aether-app/src/ipc/dto.rs");
+  const pathRs = read("crates/aether-app/src/ipc/path.rs");
+  const diagnostics = read("crates/aether-app/src/diagnostics_control.rs");
   const settingsPage = read("apps/desktop/src/SettingsPage.tsx");
   const settingsTs = read("apps/desktop/src/settings.ts");
   const uiUx = read("docs/UI-UX-设计规格.md");

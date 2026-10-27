@@ -126,10 +126,10 @@ record(
   const problems = [];
   const read = (relative) => readFileSync(path.join(repoRoot, relative), "utf8");
   const commands = read("crates/aether-tauri/src/ipc/commands.rs");
-  const errorRs = read("crates/aether-tauri/src/ipc/error.rs");
-  const pathRs = read("crates/aether-tauri/src/ipc/path.rs");
-  const backend = read("crates/aether-tauri/src/session_backend.rs");
-  const backendTrait = read("crates/aether-tauri/src/ipc/backend.rs");
+  const errorRs = read("crates/aether-app/src/ipc/error.rs");
+  const pathRs = read("crates/aether-app/src/ipc/path.rs");
+  const backend = read("crates/aether-app/src/session_backend.rs");
+  const backendTrait = read("crates/aether-app/src/ipc/backend.rs");
   const bindings = read("crates/aether-tauri/src/bindings.rs");
   const migration = read("migrations/0003_p0_ui_extensions.sql");
   const embedded = read("crates/aether-store/src/migration.rs");
