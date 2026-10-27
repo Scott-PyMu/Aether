@@ -124,7 +124,7 @@ record(
   const permissionRs = read("crates/aether-control/src/permission.rs");
   const permissionCode = stripComments(permissionRs);
   const lifecycleRs = read("crates/aether-control/src/lifecycle.rs");
-  const lib = read("crates/aether-tauri/src/lib.rs");
+  const lib = [read("crates/aether-tauri/src/lib.rs"), read("crates/aether-app/src/boot.rs")].join("\n");
   const sessionState = read("crates/aether-core/src/session_state.rs");
   const workbench = read("apps/desktop/src/SessionWorkbench.tsx");
   const sessionGroups = read("apps/desktop/src/sessionGroups.ts");

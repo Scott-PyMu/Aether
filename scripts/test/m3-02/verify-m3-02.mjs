@@ -104,7 +104,7 @@ record(
   const sessionBackend = read("crates/aether-app/src/session_backend.rs");
   const writeQueue = read("crates/aether-store/src/write_queue.rs");
   const executor = read("crates/aether-app/src/adapter_executor.rs");
-  const lib = read("crates/aether-tauri/src/lib.rs");
+  const lib = [read("crates/aether-tauri/src/lib.rs"), read("crates/aether-app/src/boot.rs")].join("\n");
   const error = read("crates/aether-app/src/ipc/error.rs");
   const aetherStore = read("apps/desktop/src/aetherStore.ts");
   const backfillSource = read("apps/desktop/src/backfillSource.ts");

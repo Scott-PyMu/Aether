@@ -474,13 +474,24 @@ mod tests {
         let outside = dir.parent().expect("父目录").join("aether-m7-01-outside");
         std::fs::create_dir_all(&outside).expect("外部目录");
         std::fs::write(outside.join("evil.exe"), b"stub").expect("外部程序");
+        // M9-02 迁入 aether-app 后本用例参与 Linux CI 覆盖率任务：绝对路径字面量必须
+        // 随平台选择（Windows `C:\...` 在 Unix 是相对路径，会被误判为可接受）。
+        let absolute_program = if cfg!(windows) {
+            r"C:\Windows\evil.exe"
+        } else {
+            "/etc/evil.exe"
+        };
+        let manifest = serde_json::json!({
+            "schema_version": 1,
+            "runtimes": [
+                {"id":"third-party","name":"X","kind":"x","version":"1","protocol":"1.0","program":"x.exe"},
+                {"id":"codex","name":"Y","kind":"codex","version":"1","protocol":"1.0","program": absolute_program},
+                {"id":"deepseek-harness","name":"Z","kind":"dsh","version":"1","protocol":"1.0","program":"../aether-m7-01-outside/evil.exe"}
+            ]
+        });
         write_manifest(
             &dir,
-            r#"{"schema_version":1,"runtimes":[
-              {"id":"third-party","name":"X","kind":"x","version":"1","protocol":"1.0","program":"x.exe"},
-              {"id":"codex","name":"Y","kind":"codex","version":"1","protocol":"1.0","program":"C:\\Windows\\evil.exe"},
-              {"id":"deepseek-harness","name":"Z","kind":"dsh","version":"1","protocol":"1.0","program":"../aether-m7-01-outside/evil.exe"}
-            ]}"#,
+            &serde_json::to_string(&manifest).expect("清单序列化"),
         );
         let expected = ExpectedRegistry::from_parts(
             true,

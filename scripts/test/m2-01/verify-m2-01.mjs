@@ -114,7 +114,7 @@ if (process.platform === "win32") {
     problems.push("aether-tauri 未接线 aether-adapters（runtime_* 薄适配）");
   }
   const backend = readFileSync(
-    path.join(repoRoot, "crates", "aether-tauri", "src", "runtime_control.rs"),
+    path.join(repoRoot, "crates", "aether-app", "src", "runtime_control.rs"),
     "utf8",
   );
   for (const needle of [

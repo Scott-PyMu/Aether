@@ -91,7 +91,7 @@ if (!skipTests) {
   // ADR-007 增量 2：T12 顺序过渡窗口错误码 core_not_ready 在案；
   // health 真实返回测试（normal/persist_degraded/core_not_ready/wired-runtimes）已签入。
   const errorSource = readFileSync(
-    path.join(repoRoot, "crates", "aether-tauri", "src", "ipc", "error.rs"),
+    path.join(repoRoot, "crates", "aether-app", "src", "ipc", "error.rs"),
     "utf8",
   );
   const healthTest = readFileSync(
@@ -109,7 +109,7 @@ if (!skipTests) {
     if (!healthTest.includes(`fn ${test}(`)) problems.push(`health_command.rs 缺少用例 ${test}`);
   }
   if (!/install_backend/.test(readFileSync(
-    path.join(repoRoot, "crates", "aether-tauri", "src", "ipc", "mod.rs"),
+    path.join(repoRoot, "crates", "aether-app", "src", "ipc", "mod.rs"),
     "utf8",
   ))) {
     problems.push("ipc/mod.rs 缺少延迟后端注入 install_backend（T12 顺序）");

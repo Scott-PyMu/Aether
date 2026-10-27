@@ -125,7 +125,7 @@ record(
   const providerControl = read("crates/aether-app/src/provider_control.rs");
   const sessionBackend = read("crates/aether-app/src/session_backend.rs");
   const bindingsRs = read("crates/aether-tauri/src/bindings.rs");
-  const libRs = read("crates/aether-tauri/src/lib.rs");
+  const libRs = [read("crates/aether-tauri/src/lib.rs"), read("crates/aether-app/src/boot.rs")].join("\n");
   const migration = read("migrations/0003_p0_ui_extensions.sql");
   const generated = read("packages/protocol/src/bindings.ts");
   const providersTs = read("apps/desktop/src/providers.ts");

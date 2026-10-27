@@ -158,7 +158,7 @@ if (process.platform === "win32") {
   }
 
   const bridge = readFileSync(
-    path.join(repoRoot, "crates", "aether-tauri", "src", "isolation.rs"),
+    path.join(repoRoot, "crates", "aether-app", "src", "isolation.rs"),
     "utf8",
   );
   for (const needle of [

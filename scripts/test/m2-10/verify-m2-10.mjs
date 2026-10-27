@@ -97,7 +97,7 @@ record(
     "utf8",
   );
   const gateSource = readFileSync(
-    path.join(repoRoot, "crates", "aether-tauri", "src", "permission_loop.rs"),
+    path.join(repoRoot, "crates", "aether-app", "src", "permission_loop.rs"),
     "utf8",
   );
   const testSource = readFileSync(

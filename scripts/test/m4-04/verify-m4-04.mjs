@@ -627,7 +627,7 @@ if (selected("DoD4")) {
 
   // 错误码全集：源码枚举 ↔ 测试引用覆盖（逐条分支证据）。
   const errorSource = readFileSync(
-    path.join(repoRoot, "crates", "aether-tauri", "src", "ipc", "error.rs"),
+    path.join(repoRoot, "crates", "aether-app", "src", "ipc", "error.rs"),
     "utf8",
   );
   const codeEnum = errorSource
@@ -675,7 +675,7 @@ if (selected("DoD4")) {
   const warningOk =
     thinkingSource.includes("thinking_depth_unsupported") &&
     readFileSync(
-      path.join(repoRoot, "crates", "aether-tauri", "src", "session_backend.rs"),
+      path.join(repoRoot, "crates", "aether-app", "src", "session_backend.rs"),
       "utf8",
     ).includes("thinking_depth_unsupported");
   writeArtifact("warning-codes.json", {

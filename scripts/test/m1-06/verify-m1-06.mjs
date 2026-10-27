@@ -149,7 +149,7 @@ if (skipE2e) {
 // ---------------------------------------------------------------------------
 {
   const detectSource = readFileSync(
-    path.join(repoRoot, "crates", "aether-tauri", "src", "startup", "detect.rs"),
+    path.join(repoRoot, "crates", "aether-app", "src", "startup", "detect.rs"),
     "utf8",
   );
   const noteOk =
@@ -187,10 +187,11 @@ if (skipE2e) {
 // 6. 静态：目录选择器抽象与迁移分支测试接线
 // ---------------------------------------------------------------------------
 {
-  const pickerSource = readFileSync(
-    path.join(repoRoot, "crates", "aether-tauri", "src", "picker.rs"),
-    "utf8",
-  );
+  // M9-02：trait/替身（FixedDirectoryPicker）在 aether-app；Tauri 实现留在壳层。
+  const pickerSource = [
+    readFileSync(path.join(repoRoot, "crates", "aether-app", "src", "picker.rs"), "utf8"),
+    readFileSync(path.join(repoRoot, "crates", "aether-tauri", "src", "picker.rs"), "utf8"),
+  ].join("\n");
   recordOk(
     "picker.rs：DirectoryPicker trait + 生产/替身实现",
     pickerSource.includes("pub trait DirectoryPicker") &&
@@ -226,7 +227,7 @@ if (skipE2e) {
 
   // 幂等续跑（指针写入失败窗口）：状态机 / 注入写入器 / 续跑测试。
   const stateSource = readFileSync(
-    path.join(repoRoot, "crates", "aether-tauri", "src", "startup", "state.rs"),
+    path.join(repoRoot, "crates", "aether-app", "src", "startup", "state.rs"),
     "utf8",
   );
   recordOk(

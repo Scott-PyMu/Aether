@@ -162,7 +162,7 @@ if (skipE2e) {
   const lifecycle = read("crates/aether-control/src/lifecycle.rs");
   const sessionBackend = read("crates/aether-app/src/session_backend.rs");
   const commands = read("crates/aether-tauri/src/ipc/commands.rs");
-  const lib = read("crates/aether-tauri/src/lib.rs");
+  const lib = [read("crates/aether-tauri/src/lib.rs"), read("crates/aether-app/src/boot.rs"), read("crates/aether-tauri/src/shell_host.rs")].join("\n");
   const executor = read("crates/aether-app/src/adapter_executor.rs");
   const probe = read("crates/aether-tauri/src/m3_06_probe.rs");
   const workbench = read("apps/desktop/src/SessionWorkbench.tsx");
@@ -175,7 +175,7 @@ if (skipE2e) {
     [lifecycle, "RUN_INTERRUPTED_CODE", "run_interrupted 错误码"],
     [sessionBackend, "fn run_retry", "run_retry IPC 接线"],
     [commands, "fn app_restart", "app_restart 命令层实现"],
-    [commands, "request_restart", "AppHandle::request_restart（复用 D2 关闭序列）"],
+    [lib, "request_restart", "AppHandle::request_restart（复用 D2 关闭序列）"],
     [lib, "reconcile_interrupted_runs", "生产启动路径接线重启状态重建"],
     [executor, "request.run_id.as_str()", "适配器幂等键按 run id（重放不被吞）"],
     [probe, "AETHER_E2E_M3_06_PROBE", "M3-06 E2E 探针在案"],
