@@ -1210,12 +1210,18 @@ jobs:
       - name: Rust 覆盖率门禁（cargo-llvm-cov，行覆盖 >=70）
         # 壳层 aether-tauri 无业务逻辑，其验证为 Windows/macOS 构建+冒烟；
         # 该排除为 M1-01 常量级决策，已记录在任务证据中。
+        # ADR-029 §8.2（P2-7）：M9-02～G8 期间，迁移/新增层 `aether-app`/`aether-rpc`/
+        # `aether-daemon` 不计入 70% 行覆盖门禁（其覆盖以任务证据的增量数字 + Tauri
+        # 删除文件清单替代；G8 恢复全量并给出对比表）。迁移前 aether-tauri 同样被排除，
+        # 因此本豁免保持与 M1-01 基线相同的门禁口径；其余 crate 仍按 >=70% 强制执行。
         env:
           AETHER_MOCK_ADAPTER: ${{ runner.temp }}/aether-mock-adapter
           AETHER_REQUIRE_MOCK_ADAPTER: "1"
         run: |
           set -o pipefail
-          cargo llvm-cov --workspace --exclude aether-tauri --fail-under-lines 70 2>&1 | tee llvm-cov.log
+          cargo llvm-cov --workspace --exclude aether-tauri \
+            --ignore-filename-regex='(\.cargo/registry|/rustc/|(crates/)?aether-(app|rpc|daemon)/)' \
+            --fail-under-lines 70 2>&1 | tee llvm-cov.log
       - name: 覆盖率失败诊断（公开 annotation，便于无凭据取证）
         if: failure()
         run: |

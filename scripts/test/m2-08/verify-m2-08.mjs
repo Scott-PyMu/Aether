@@ -154,7 +154,8 @@ record("回归 m2-08 触及面：aether-adapters supervisor 单测", regression.
   const problems = [];
   const read = (relative) => readFileSync(path.join(repoRoot, relative), "utf8");
 
-  const lib = read("crates/aether-tauri/src/lib.rs");
+  // M9-02：组合根尾段（boot_core_full/run_supervisor_startup）在 aether-app::boot。
+  const lib = [read("crates/aether-tauri/src/lib.rs"), read("crates/aether-app/src/boot.rs")].join("\n");
   // M3-02：启动入口重构为 `boot_core_full`（同一启动序列 + 会话后端所需的
   // 读/写/管线句柄；存储槽位仍共享给退出编排）。断言接受两者之一，意图不变。
   const coreBootWired =
@@ -181,7 +182,8 @@ record("回归 m2-08 触及面：aether-adapters supervisor 单测", regression.
     if (!control.includes(needle)) problems.push(`runtime_control.rs 缺少${label}: ${needle}`);
   }
 
-  const shutdown = read("crates/aether-app/src/shutdown.rs");
+  // M9-02：Tauri `prevent_exit` 属壳层；编排对象仍为 aether-app::shutdown。
+  const shutdown = [read("crates/aether-app/src/shutdown.rs"), read("crates/aether-tauri/src/shutdown.rs")].join("\n");
   for (const [needle, label] of [
     ["APP_EXIT_BUDGET: Duration = Duration::from_secs(10)", "T11 退出预算 10s"],
     ["pipeline.shutdown()", "广播 shutdown（D2 第一步）"],
