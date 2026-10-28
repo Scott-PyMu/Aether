@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
+use super::cursor;
 use super::error::{IpcError, IpcErrorCode};
 use super::path;
 use super::validate::{
@@ -440,6 +441,12 @@ pub struct MessagesPageRequest {
     pub last_seq: Option<u64>,
     #[serde(default)]
     pub limit: Option<u32>,
+    /// 响应预算（ADR-009 §9：64KiB–1.5MiB，缺省 1MiB）。
+    #[serde(default)]
+    pub max_bytes: Option<u32>,
+    /// 不透明游标（仅 events 补读流；与 `last_seq` 互斥）。
+    #[serde(default)]
+    pub next_cursor: Option<String>,
 }
 
 impl CommandRequest for MessagesPageRequest {
@@ -447,7 +454,19 @@ impl CommandRequest for MessagesPageRequest {
         if !is_ulid(&self.session_id) {
             return Err(IpcError::invalid_format("session_id", "必须是 26 位 ULID"));
         }
-        validate_page_limit(self.limit)
+        validate_page_limit(self.limit)?;
+        cursor::validate_max_bytes(self.max_bytes, "max_bytes")?;
+        if let Some(token) = &self.next_cursor {
+            if self.last_seq.is_some() {
+                return Err(IpcError::at_field(
+                    IpcErrorCode::InvalidValue,
+                    "next_cursor",
+                    "next_cursor 与 last_seq 互斥（游标已包含续读位置）",
+                ));
+            }
+            cursor::validate_cursor(token, cursor::STREAM_EVENTS)?;
+        }
+        Ok(())
     }
 }
 
@@ -1574,11 +1593,24 @@ pub struct AuditQueryRequest {
     pub limit: Option<u32>,
     #[serde(default)]
     pub offset: Option<u64>,
+    /// 响应预算（ADR-018 A-1：64KiB–1.5MiB，缺省 1MiB）。
+    #[serde(default)]
+    pub max_bytes: Option<u32>,
+    /// 不透明游标（与 `offset` 互斥）。
+    #[serde(default)]
+    pub next_cursor: Option<String>,
 }
 
 impl AuditQueryRequest {
     /// 转换为存储层过滤条件（`limit` 缺省 100；上限由校验与存储层双重钳制）。
     pub fn to_store_query(&self) -> Result<aether_store::AuditQuery, IpcError> {
+        let offset = usize::try_from(self.offset.unwrap_or(0))
+            .map_err(|_| IpcError::out_of_range("offset", "超出本机分页寻址范围"))?;
+        self.to_store_query_at(offset)
+    }
+
+    /// 指定分页偏移（游标续读用；`next_cursor` 的 `pos` 已含偏移）。
+    pub fn to_store_query_at(&self, offset: usize) -> Result<aether_store::AuditQuery, IpcError> {
         Ok(aether_store::AuditQuery {
             session_id: self.session_id.clone(),
             actor: self.actor.clone(),
@@ -1587,9 +1619,26 @@ impl AuditQueryRequest {
             from_ts: self.from_ts,
             to_ts: self.to_ts,
             limit: self.limit.map(|value| value as usize),
-            offset: usize::try_from(self.offset.unwrap_or(0))
-                .map_err(|_| IpcError::out_of_range("offset", "超出本机分页寻址范围"))?,
+            offset,
         })
+    }
+
+    /// 过滤条件指纹（游标复用校验；`limit` 变化也会使游标失效）。
+    pub fn filter_fingerprint(&self) -> String {
+        let limit = self
+            .limit
+            .unwrap_or(aether_store::AUDIT_QUERY_DEFAULT_LIMIT as u32)
+            .to_string();
+        cursor::filter_hash(&[
+            cursor::STREAM_AUDIT,
+            cursor::stable_text(self.session_id.as_deref()),
+            cursor::stable_text(self.actor.as_deref()),
+            cursor::stable_text(self.action.as_deref()),
+            cursor::stable_text(self.resource.as_deref()),
+            &self.from_ts.unwrap_or(-1).to_string(),
+            &self.to_ts.unwrap_or(-1).to_string(),
+            &limit,
+        ])
     }
 }
 
@@ -1615,7 +1664,19 @@ impl CommandRequest for AuditQueryRequest {
                 ))
             }
             _ => Ok(()),
+        }?;
+        cursor::validate_max_bytes(self.max_bytes, "max_bytes")?;
+        if let Some(token) = &self.next_cursor {
+            if self.offset.is_some() {
+                return Err(IpcError::at_field(
+                    IpcErrorCode::InvalidValue,
+                    "next_cursor",
+                    "next_cursor 与 offset 互斥（游标已包含续读位置）",
+                ));
+            }
+            cursor::validate_cursor(token, cursor::STREAM_AUDIT)?;
         }
+        Ok(())
     }
 }
 

@@ -44,7 +44,8 @@ use crate::ipc::dto::{
     SessionExportRequest, SessionIdRequest, SessionListRequest, SessionSendRequest,
     SettingsGetRequest, SettingsSetRequest, WorkspaceSetRequest,
 };
-use crate::ipc::error::IpcError;
+use crate::ipc::cursor;
+use crate::ipc::error::{IpcError, IpcErrorCode};
 use crate::ipc::path::ArtifactPath;
 use crate::retention::{RetentionDeps, RetentionTask, RetentionThresholds};
 
@@ -400,19 +401,58 @@ impl IpcBackend for ArchiveControlBackend {
     /// 以「多取一行」探测 `has_more`；1e6 行下已过滤分页查询 P95 ≤300ms）。
     fn audit_query(&self, request: &AuditQueryRequest) -> Result<Value, IpcError> {
         let reads = self.reads_required()?;
-        let query = request.to_store_query()?;
+        // 预算/游标（ADR-018 A-1；ADR-029 §4.1）：`max_bytes` 只影响响应裁剪，
+        // `next_cursor` 与 `offset` 互斥（DTO 校验已拒绝同时出现）。
+        let max_bytes = cursor::validate_max_bytes(request.max_bytes, "max_bytes")? as usize;
+        let filter_hash = request.filter_fingerprint();
+        let offset = match &request.next_cursor {
+            Some(token) => {
+                let (pos, hash) = cursor::decode_cursor(token, cursor::STREAM_AUDIT)?;
+                if hash != filter_hash {
+                    return Err(IpcError::at_field(
+                        IpcErrorCode::InvalidValue,
+                        "next_cursor",
+                        "游标与当前过滤条件不匹配（过滤字段/limit 已变化），请从首页重新查询",
+                    ));
+                }
+                usize::try_from(pos).map_err(|_| {
+                    IpcError::out_of_range("next_cursor", "游标偏移超出本机分页寻址范围")
+                })?
+            }
+            None => usize::try_from(request.offset.unwrap_or(0))
+                .map_err(|_| IpcError::out_of_range("offset", "超出本机分页寻址范围"))?,
+        };
+        let query = request.to_store_query_at(offset)?;
         let result = self.call(async move {
             reads.audit_query(query).await.map_err(|error| {
                 IpcError::internal(format!("审计查询失败（audit_query）：{error}"))
             })
         })?;
         let rows: Vec<Value> = result.rows.iter().map(audit_row_value).collect();
-        Ok(json!({
+        let (rows, truncated) = cursor::fit_budget(rows, max_bytes)?;
+        let has_more = result.has_more || truncated;
+        let next_cursor = if has_more && !rows.is_empty() {
+            let pos = offset.saturating_add(rows.len()) as u64;
+            Some(cursor::encode_cursor(
+                cursor::STREAM_AUDIT,
+                pos,
+                &filter_hash,
+            ))
+        } else {
+            None
+        };
+        let mut response = json!({
             "rows": rows,
             "limit": result.limit,
-            "offset": result.offset,
-            "has_more": result.has_more,
-        }))
+            "offset": offset,
+            "has_more": has_more,
+        });
+        if let Some(next_cursor) = next_cursor {
+            if let Some(object) = response.as_object_mut() {
+                object.insert("next_cursor".to_owned(), Value::from(next_cursor));
+            }
+        }
+        Ok(response)
     }
 
     /// M6-03/ADR-023：审计导出（JSONL + manifest；kind=`audit`）。

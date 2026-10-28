@@ -1,0 +1,49 @@
+{
+  "id": "crates/aether-tauri/src/session_backend.rs::MessagesPageResponse",
+  "fields": [
+    {
+      "name": "session_id",
+      "type": "String",
+      "required": true,
+      "optional_when": []
+    },
+    {
+      "name": "last_seq",
+      "type": "Option<u64>",
+      "required": false,
+      "optional_when": [
+        "type_option",
+        "skip_serializing_if"
+      ]
+    },
+    {
+      "name": "max_seq",
+      "type": "Option<u64>",
+      "required": false,
+      "optional_when": [
+        "type_option"
+      ]
+    },
+    {
+      "name": "events",
+      "type": "Vec<EventEnvelope>",
+      "required": true,
+      "optional_when": []
+    },
+    {
+      "name": "messages",
+      "type": "Option<Vec<Message>>",
+      "required": false,
+      "optional_when": [
+        "type_option",
+        "skip_serializing_if"
+      ]
+    },
+    {
+      "name": "complete",
+      "type": "bool",
+      "required": true,
+      "optional_when": []
+    }
+  ]
+}

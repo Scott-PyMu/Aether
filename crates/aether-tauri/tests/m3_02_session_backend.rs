@@ -166,6 +166,21 @@ fn event(index: usize, session: &str) -> Value {
     })
 }
 
+/// 大载荷事件（M9-04 响应预算用例；payload 约 `bytes` 字节）。
+fn sized_event(index: usize, session: &str, bytes: usize) -> Value {
+    json!({
+        "v": 1,
+        "id": format!("01J{index:023}"),
+        "session_id": session,
+        "run_id": null,
+        "runtime_id": "mock",
+        "seq": 0,
+        "ts": 1_700_000_000_000i64,
+        "type": "log",
+        "payload": { "level": "info", "message": "x".repeat(bytes) },
+    })
+}
+
 fn wait_until(timeout: Duration, predicate: impl Fn() -> bool) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
@@ -223,6 +238,8 @@ fn latest_page(h: &Harness, session_id: &str, limit: u32) -> Value {
             session_id: session_id.to_owned(),
             last_seq: None,
             limit: Some(limit),
+                    max_bytes: None,
+            next_cursor: None,
         })
         .expect("最近一页")
 }
@@ -256,6 +273,8 @@ fn messages_page_pages_backfill_latest_and_guards_gap() {
             session_id: session.to_owned(),
             last_seq: Some(2),
             limit: Some(10),
+                    max_bytes: None,
+            next_cursor: None,
         })
         .expect("补读");
     assert_eq!(page["max_seq"], 5);
@@ -275,6 +294,8 @@ fn messages_page_pages_backfill_latest_and_guards_gap() {
             session_id: session.to_owned(),
             last_seq: None,
             limit: Some(2),
+                    max_bytes: None,
+            next_cursor: None,
         })
         .expect("最近一页");
     assert_eq!(latest["max_seq"], 5);
@@ -301,6 +322,8 @@ fn messages_page_pages_backfill_latest_and_guards_gap() {
             session_id: session.to_owned(),
             last_seq: Some(0),
             limit: Some(500),
+                    max_bytes: None,
+            next_cursor: None,
         })
         .expect_err("缺口超过上限必须拒绝自动补发");
     assert_eq!(error.code, IpcErrorCode::ReadbackGapTooLarge);
@@ -313,6 +336,8 @@ fn messages_page_pages_backfill_latest_and_guards_gap() {
             session_id: session.to_owned(),
             last_seq: Some(5),
             limit: Some(500),
+                    max_bytes: None,
+            next_cursor: None,
         })
         .expect("边界内补读");
     assert_eq!(page["complete"], true);
@@ -324,6 +349,8 @@ fn messages_page_pages_backfill_latest_and_guards_gap() {
             session_id: session.to_owned(),
             last_seq: Some(GAP_LIMIT + 100),
             limit: Some(500),
+                    max_bytes: None,
+            next_cursor: None,
         })
         .expect("越过最新断点");
     assert_eq!(boundary["max_seq"], GAP_LIMIT + 5);
@@ -396,6 +423,8 @@ fn messages_page_latest_returns_tail_ascending_and_option_shape() {
             session_id: session_id.clone(),
             last_seq: Some(0),
             limit: Some(2),
+                    max_bytes: None,
+            next_cursor: None,
         })
         .expect("补读页");
     assert!(
@@ -481,6 +510,8 @@ fn session_create_persists_model_and_send_interrupt_dispose_are_wired() {
             session_id: session_id.clone(),
             last_seq: None,
             limit: Some(50),
+                    max_bytes: None,
+            next_cursor: None,
         })
         .expect("最近一页");
     let messages = latest["messages"].as_array().expect("messages 数组");
@@ -493,6 +524,8 @@ fn session_create_persists_model_and_send_interrupt_dispose_are_wired() {
             session_id: session_id.clone(),
             last_seq: Some(0),
             limit: Some(50),
+                    max_bytes: None,
+            next_cursor: None,
         })
         .expect("补读页");
     assert!(
@@ -568,7 +601,119 @@ fn messages_page_requires_read_pool() {
             session_id: "01J8ZQ5R0N7W9Y8X6V4T2S0K1M".to_owned(),
             last_seq: None,
             limit: None,
+                    max_bytes: None,
+            next_cursor: None,
         })
         .expect_err("无读连接池必须拒绝");
     assert_eq!(error.code, IpcErrorCode::CoreNotReady);
+}
+
+#[test]
+fn messages_page_budget_truncates_cursor_resumes_and_zero_progress_is_safe() {
+    let h = harness();
+    let session = "01J8ZQ5R0N7W9Y8X6V4T2S0K1M";
+    let _seed = session_create(h.backend.as_ref(), "M9-04 预算种子", None);
+    insert_empty_session(&h, session);
+    for index in 1..=5 {
+        h.runtime
+            .block_on(h.pipeline.submit(sized_event(index, session, 16 * 1024)))
+            .expect("提交大载荷事件");
+    }
+
+    let first = h
+        .backend
+        .messages_page(&MessagesPageRequest {
+            session_id: session.to_owned(),
+            last_seq: Some(0),
+            limit: Some(500),
+            max_bytes: Some(64 * 1024),
+            next_cursor: None,
+        })
+        .expect("补读首页（预算 64KiB）");
+    let first_events = first["events"].as_array().expect("events");
+    assert!(
+        first_events.len() < 5,
+        "64KiB 预算必须截断 5×16KiB 事件：{}",
+        first_events.len()
+    );
+    assert_eq!(first["complete"], json!(false), "截断时不得标记 complete");
+    let cursor = first["next_cursor"].as_str().expect("截断必须给 next_cursor");
+    assert!(!cursor.is_empty(), "next_cursor 必须不透明非空");
+
+    let mut collected: Vec<u64> = first_events
+        .iter()
+        .map(|event| event["seq"].as_u64().expect("seq"))
+        .collect();
+    let mut next = Some(cursor.to_owned());
+    let mut pages = 1;
+    while let Some(token) = next.take() {
+        pages += 1;
+        assert!(pages <= 5, "补读不得死循环（零推进）");
+        let page = h
+            .backend
+            .messages_page(&MessagesPageRequest {
+                session_id: session.to_owned(),
+                last_seq: None,
+                limit: Some(500),
+                max_bytes: Some(64 * 1024),
+                next_cursor: Some(token),
+            })
+            .expect("游标续读");
+        let events = page["events"].as_array().expect("events");
+        collected.extend(events.iter().map(|event| event["seq"].as_u64().expect("seq")));
+        next = page["next_cursor"].as_str().map(str::to_owned);
+    }
+    collected.sort_unstable();
+    collected.dedup();
+    assert_eq!(collected, (1..=5).collect::<Vec<_>>(), "续读必须无重复/无空洞");
+
+    // 游标与过滤条件（limit）绑定：篡改后 invalid_value。
+    let hash = aether_app::ipc::cursor::filter_hash(&[
+        aether_app::ipc::cursor::STREAM_EVENTS,
+        session,
+        "500",
+    ]);
+    let last_seq = collected.last().copied().unwrap_or(5);
+    let zero_progress = aether_app::ipc::cursor::encode_cursor(
+        aether_app::ipc::cursor::STREAM_EVENTS,
+        last_seq,
+        &hash,
+    );
+    let page = h
+        .backend
+        .messages_page(&MessagesPageRequest {
+            session_id: session.to_owned(),
+            last_seq: None,
+            limit: Some(500),
+            max_bytes: Some(64 * 1024),
+            next_cursor: Some(zero_progress),
+        })
+        .expect("零推进页");
+    assert!(
+        page["events"].as_array().is_some_and(Vec::is_empty),
+        "已到末尾必须空页：{page}"
+    );
+    assert!(
+        page.get("next_cursor").is_none(),
+        "空页不得返回同一游标（零推进）"
+    );
+
+    let tampered = h.backend.messages_page(&MessagesPageRequest {
+        session_id: session.to_owned(),
+        last_seq: None,
+        limit: Some(499),
+        max_bytes: Some(64 * 1024),
+        next_cursor: Some(aether_app::ipc::cursor::encode_cursor(
+            aether_app::ipc::cursor::STREAM_EVENTS,
+            last_seq,
+            &hash,
+        )),
+    });
+    match tampered {
+        Ok(value) => panic!("游标 filter_hash 不匹配必须拒绝：{value}"),
+        Err(error) => {
+            assert_eq!(error.code.as_str(), "invalid_value");
+            assert_eq!(error.field.as_deref(), Some("next_cursor"));
+        }
+    }
 }

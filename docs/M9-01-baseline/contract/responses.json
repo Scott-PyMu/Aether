@@ -779,6 +779,21 @@
           "type": "bool",
           "required": true,
           "optional_when": []
+        },
+        {
+          "name": "next_cursor",
+          "type": "Option<String>",
+          "required": false,
+          "optional_when": [
+            "type_option",
+            "skip_serializing_if"
+          ]
+        },
+        {
+          "name": "messages_has_more",
+          "type": "bool",
+          "required": true,
+          "optional_when": []
         }
       ]
     },

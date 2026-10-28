@@ -1,0 +1,381 @@
+{
+  "schema": "aether.m9-04.baseline-before.v1",
+  "recorded_at": "2026-10-26T18:07:50+08:00",
+  "head_commit": "4558d06f4222fd469ac4246d9068382e30dcc2f1",
+  "contract_digest": "383f6da61bd36e644da9994aeac3e84b691ad5b39ff0bd1a759bee51611cd2e1",
+  "entries": [
+    {
+      "path": "docs/M9-01-baseline/commands/01-runtimes_list.json",
+      "command": "runtimes_list",
+      "sha256": "6fdd56a255ef1ad447b5299156270f2c79f1b0df9837cb1b9609e847c0f1d0ef"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/02-session_list.json",
+      "command": "session_list",
+      "sha256": "bc58a3296dcfacc9f652cdcc90651a7ce166a588a26093316544a3ffa4ba3aa8"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/03-session_create.json",
+      "command": "session_create",
+      "sha256": "4eaa18eac17d7bed58d96ad158ea9dbf8f2b1e2704712285f9ad7ca5abe20f08"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/04-session_search.json",
+      "command": "session_search",
+      "sha256": "164248cef9fe966bbed7f5c7aba316f5cd692ff2c7be10b17cba71ffe29bc9e2"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/05-session_rename.json",
+      "command": "session_rename",
+      "sha256": "6ac8bce060599d4a0090d8d4204d1a65e41612b026579dec0b76b39acb87387f"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/06-session_delete.json",
+      "command": "session_delete",
+      "sha256": "5041e765ce2f4661f36a96f4e4e385b7f202e4acb9afeb21225392bbfa11c96e"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/07-session_send.json",
+      "command": "session_send",
+      "sha256": "eec3311301892ba2a7aaee6ebdb9aecc24673500f62b5d001f9b9b466d168ba9"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/08-session_interrupt.json",
+      "command": "session_interrupt",
+      "sha256": "e773669b40a5d278ae0b2fde622da66ebc4bbba695f23f2334b9bee39a0026fd"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/09-session_pause.json",
+      "command": "session_pause",
+      "sha256": "b46739ff09c5d6e3f2fe57b19ea9785d8bff23735265ccc230659374242c30da"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/10-session_resume.json",
+      "command": "session_resume",
+      "sha256": "122455154a54e72a9efac8cffb50fbdf30dd704cbd157fcb6981b16e11dac44e"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/11-session_dispose.json",
+      "command": "session_dispose",
+      "sha256": "6b485f47eed90d46d458127f5f98fee41fc39e07d9ee33b4ccf5146c396379bc"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/12-messages_page.json",
+      "command": "messages_page",
+      "sha256": "d8d941d72dd240f5175b916ec5300a3c50fc423aa01ba5c42f085104d748b4d6"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/13-permissions_pending.json",
+      "command": "permissions_pending",
+      "sha256": "667ef552f8391940c39bd8b4537e6bee4a0e7f90742f23c87369a0daaa21c3ce"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/14-permission_resolve.json",
+      "command": "permission_resolve",
+      "sha256": "78d6ac3c5890687130bd3d720484590e23c2f2012511092221cb02864db2e1da"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/15-session_permission_mode_set.json",
+      "command": "session_permission_mode_set",
+      "sha256": "cd396c6cb19ad57238073105c74f94cf87deaf9ddad97be716f080006955b85e"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/16-rules_list.json",
+      "command": "rules_list",
+      "sha256": "7fcc3a6dd7d7354c481e648e7cc374bef7dcb8e490ca3cc2a49a7e060efdc209"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/17-rule_add.json",
+      "command": "rule_add",
+      "sha256": "e045f57d3b6a169d86d010a222d8dad099bdff4dbd5b59e31a4ef9d79a3e584a"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/18-rule_update.json",
+      "command": "rule_update",
+      "sha256": "4b50c27c65f72a3ed75a65c48d172f47ce191de0f76a7b53beb9d9e937ef5af2"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/19-rule_delete.json",
+      "command": "rule_delete",
+      "sha256": "0124b4b1727d155ebf78f5c8d7c270a5dffe9c576abedc72f4a03fec991bc07a"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/20-rule_toggle.json",
+      "command": "rule_toggle",
+      "sha256": "a8d305c0fff1c46778fa99ae8864f6355a23c03072dffa33c4ad55700c015a04"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/21-settings_get.json",
+      "command": "settings_get",
+      "sha256": "74fdc329b22f89ef138d0f0a8898d2591791201e5783c4ab7cdd9768b1a110ea"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/22-settings_set.json",
+      "command": "settings_set",
+      "sha256": "79ed3cf4b7bc3e89434e38384843084bcab9a5048505caa36971ce43200ba0a9"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/23-backup_create.json",
+      "command": "backup_create",
+      "sha256": "1fd1124bf158b7683036f27bb83b82d1a48d24edfcaab7d0fbf5abe4b8091867"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/24-backup_list.json",
+      "command": "backup_list",
+      "sha256": "4e0b25df2cc688f7dd30ffb2a11237915a048dc84b2d0c7aff198ac238c6cec5"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/25-backup_restore.json",
+      "command": "backup_restore",
+      "sha256": "ff356aa692ca153da6d157b48ce0ef77d020867900b84a2424f43a5b9eabcc2a"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/26-app_restart.json",
+      "command": "app_restart",
+      "sha256": "c0213d2b0d4c0ca60bd575bb5be2d899c7fd56aa80b5022759ab00320fd2b801"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/27-run_retry.json",
+      "command": "run_retry",
+      "sha256": "a0867759d495b792a46aecb0fb0aae4223f9d2386c21975a05d0f3424e62a78d"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/28-runtime_retry.json",
+      "command": "runtime_retry",
+      "sha256": "bdba5e164876603924406e3864285cc52c3f575bf75b59d45734c754e196f1cb"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/29-runtime_enable.json",
+      "command": "runtime_enable",
+      "sha256": "80a4cf4e9147f08cab1ba913048fedccd3c458e02449234d2c4249cdd7118b1f"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/30-runtime_disable.json",
+      "command": "runtime_disable",
+      "sha256": "6ea6a230542eb4f7e6d45cec7c8fa009891eb3c609eb3bbd185869879cad017e"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/31-workspace_set.json",
+      "command": "workspace_set",
+      "sha256": "078acbbcf6b3b99024d4117ef2b59c9b3caf35ae055b21d00730dcda44aae076"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/32-workspaces_list.json",
+      "command": "workspaces_list",
+      "sha256": "37a87ba3f707ca18a3d5061144ade11b644255e299c93290bea5614f73a4485d"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/33-workspace_create.json",
+      "command": "workspace_create",
+      "sha256": "94b0c7ea8e870ad279f2d299dabf9411109ff151b5ca401d73e5d54721a0d20d"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/34-workspace_update.json",
+      "command": "workspace_update",
+      "sha256": "660e44d0a6a7642d5aab5689346ccf81b8c116588c9b6e7352de2cb3e9791654"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/35-workspace_delete.json",
+      "command": "workspace_delete",
+      "sha256": "eca7cf0583fdb9b4a3ecb84833e9f8165c6b8816eaf996b3fa6ee32aadffca43"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/36-session_workspace_assign.json",
+      "command": "session_workspace_assign",
+      "sha256": "cca81218857e397b1381778f8c6155114e42e3e657028d650e05da5d5a04fb34"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/37-ref_pick.json",
+      "command": "ref_pick",
+      "sha256": "accd20530d28a1c90d548d1a072374651b4d54d0255f3c932df306f0d950104a"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/38-artifacts_list.json",
+      "command": "artifacts_list",
+      "sha256": "f0500a2adf41d92d05edf958719f4f1680df8b33011f467748025dd841fd313d"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/39-artifact_add.json",
+      "command": "artifact_add",
+      "sha256": "dab71fd9d5c2254885c27d1faff9d2868ba5141acb2f31074afaee388a3d238a"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/40-artifact_remove.json",
+      "command": "artifact_remove",
+      "sha256": "670cc7442ae36893e33e5c1f6ad69ea8f4917a08264039db742f3e6322d6eac3"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/41-providers_list.json",
+      "command": "providers_list",
+      "sha256": "1b8c2cc009dbd21058c9433008fb9b5f7399efc6a761d2d1324b7b31ba7da343"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/42-provider_create.json",
+      "command": "provider_create",
+      "sha256": "0914227377d72318c3f83896c5a9b8e43ab69d706f9ef162e3923ff978ba9e42"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/43-provider_update.json",
+      "command": "provider_update",
+      "sha256": "0039b3d84846f2dca57b292b66afd02a1d8ba5b4c2ada3ff1b2a02c3c1a3ce06"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/44-provider_delete.json",
+      "command": "provider_delete",
+      "sha256": "dc8a633fe854fe141b524b106d39b6794611039c2a236e9af7239520bb43e8da"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/45-provider_toggle.json",
+      "command": "provider_toggle",
+      "sha256": "5ae3fa16fee7d8a799c8e57d2fe5ea6904343df5fe196ac0a6ff1a1504c7e4c4"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/46-provider_model_add.json",
+      "command": "provider_model_add",
+      "sha256": "18140201a6b7fe44cd63d77d12182fe08fa8071f871049f5ffe976469dcdfe2d"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/47-provider_model_toggle.json",
+      "command": "provider_model_toggle",
+      "sha256": "fb6acca5f97a3d8dbfa0302f8f06ffd916ac5d1edd61ea683dd450f62029e41e"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/48-provider_test.json",
+      "command": "provider_test",
+      "sha256": "d23eeeda8197828e4be908148e9427636287f16b0f45bc95db72d3d0a9ad9879"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/49-provider_models_fetch.json",
+      "command": "provider_models_fetch",
+      "sha256": "6852ddca4b1a97cb29281611f2675a05fea816c48ca77bf5f0915b07028e9bbe"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/50-presets_list.json",
+      "command": "presets_list",
+      "sha256": "3379d228b871660e43f074608d84d3834f89d2351d211756aae254fbab651c40"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/51-preset_add.json",
+      "command": "preset_add",
+      "sha256": "3453b22c978fccec6e5427adff09b5327a8a6e18a36e90dee16f20b2b91db42a"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/52-preset_update.json",
+      "command": "preset_update",
+      "sha256": "45fb35faab4f890a0451b25b7c78d3d1af42bde77da44a38a00c42d7e47c0a63"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/53-preset_delete.json",
+      "command": "preset_delete",
+      "sha256": "77256cf735553b5773dcef4d65903deafabafc4e14a633a344cd7709668bdf69"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/54-export_diagnostics.json",
+      "command": "export_diagnostics",
+      "sha256": "1cb1810e4cab7a1bc9fdc0a9177d511d24c0f54c68861b417d32d3b8f0a357cc"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/55-session_export.json",
+      "command": "session_export",
+      "sha256": "43acfd29960208ad5a147d3e54b2a3954cccf4ab1ed7fb81aa91ea7db8efd4f6"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/56-archive_export.json",
+      "command": "archive_export",
+      "sha256": "3d46f3f7fe0a537c116418346c9aa68e62108eeb3ecc53c00191e2c5b208622c"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/57-audit_query.json",
+      "command": "audit_query",
+      "sha256": "4fdc53065ad5fac1dd0973a1255ea6cd4faf14a6116158dc75daa6f4310301d4"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/58-audit_export.json",
+      "command": "audit_export",
+      "sha256": "7208c5de3540e78c1991d437eb326c1f1824eca12458fd7b6f0418b3595444b8"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/59-health.json",
+      "command": "health",
+      "sha256": "910583b80e0353f41e3959d94f206c617c74e0e77d13bf6c7b8d74b0bd93d0d5"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/60-startup_get.json",
+      "command": "startup_get",
+      "sha256": "ae1aa6dbeaebcb6be5282ade413f7292066c904f2cd9ddeed9fd6bdc2f50a8d7"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/61-startup_pick_target.json",
+      "command": "startup_pick_target",
+      "sha256": "22f8fa75c4caec2299f4e634494f8f1fd4d899f8c42fcf344225396929a1336b"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/62-startup_migrate.json",
+      "command": "startup_migrate",
+      "sha256": "6bc063c0eae355721681b0ee7e547c701328bb01d5a5b2293fc6023ef1950c49"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/63-app_exit.json",
+      "command": "app_exit",
+      "sha256": "9adc81f3a429ca42d792f32ab99c7faf1809a5ccadca9be6b943e35c41116a06"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "docs/M9-01-baseline/contract/error_codes.json",
+      "sha256": "7bfe65d48fd3bae5bc2dc1ffe7b4536dfa7da8976ba54b2f8ee31a82e7afcce7"
+    },
+    {
+      "path": "docs/M9-01-baseline/contract/events.json",
+      "sha256": "4500849eea37136188bafd2aa3d4b5e2c531a641965fc22e6e96ed7fb877ea5c"
+    },
+    {
+      "path": "docs/M9-01-baseline/contract/settings.json",
+      "sha256": "5ae9b9def841f6c74e3a553147175eeae16f7d6c50c94e83c08a46651d9ffd1d"
+    },
+    {
+      "path": "docs/M9-01-baseline/contract/migrations.json",
+      "sha256": "885e09a599262a560e7eb57b3d37a6bdae03a8782b3c835491a9f4213819aa65"
+    },
+    {
+      "path": "docs/M9-01-baseline/contract/diagnostics.json",
+      "sha256": "b3c64630bcbee5ad6bddab9b14c28ccc7fdba19a27149b189b0f2661a19f3deb"
+    },
+    {
+      "path": "docs/M9-01-baseline/contract/lifecycle.json",
+      "sha256": "33693551c06c7618a57b02cba9f89f30e95c714ca0572005d1b9349aec1ab38a"
+    },
+    {
+      "path": "docs/M9-01-baseline/contract/responses.json",
+      "sha256": "af8d38db318b90b7475f3996e6fed649c23a937826240db414267e6ee1198edb"
+    },
+    {
+      "path": "docs/M9-01-baseline/contract/event_payloads.json",
+      "sha256": "26cc1502dce7a788e76cbf5ce720b2307da55e04ecc7bcdc4c3336a7190fda0c"
+    },
+    {
+      "path": "docs/M9-01-baseline/contract/stats.json",
+      "sha256": "0f11462c44068fc43a17833bb7632c857c682f380493a68fade226bd46bf78f2"
+    },
+    {
+      "path": "docs/M9-01-baseline/contract/risks.json",
+      "sha256": "3b9f03fb31bb5a5904d55331272958ef32b6c154d4c5ba1376630b28f252065d",
+      "purpose": "DoD-5 风险登记"
+    },
+    {
+      "path": "docs/M9-01-baseline/contract/decisions.json",
+      "sha256": "2f5f5afd777c26dba62dad49d6cbde648ad5d2ce1695562c192b985c85c731cc",
+      "purpose": "DoD-6/DoD-7 裁定证据"
+    },
+    {
+      "path": "docs/M9-01-baseline/freeze/electron.json",
+      "sha256": "1128023f5308d95e8ea066910c30c359943413a56ffbfc7c3621db43ee34e580",
+      "purpose": "Electron 精确 patch 冻结"
+    },
+    {
+      "path": "docs/M9-01-baseline/freeze/thresholds.json",
+      "sha256": "09d3c14e29da813de68c2dd6fbeb6ad97e69841f9aba48c0aa4a49a3720118d2",
+      "purpose": "硬阈值冻结"
+    }
+  ]
+}

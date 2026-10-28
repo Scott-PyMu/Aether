@@ -281,6 +281,8 @@ fn mock_adapter_end_to_end_create_stream_interrupt_and_backfill() {
             session_id: session_id.clone(),
             last_seq: Some(0),
             limit: Some(500),
+            max_bytes: None,
+            next_cursor: None,
         })
         .expect("messages_page");
     assert_eq!(page["complete"], true);

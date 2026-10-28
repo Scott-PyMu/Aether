@@ -305,6 +305,8 @@ fn delete_session_cascades_and_keeps_events() {
         session_id: session.as_str().to_owned(),
         last_seq: None,
         limit: None,
+        max_bytes: None,
+        next_cursor: None,
     });
     let error = page.expect_err("删除后补读必须失败");
     assert_eq!(error.code, IpcErrorCode::SessionNotFound);

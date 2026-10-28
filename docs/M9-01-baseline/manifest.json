@@ -154,7 +154,7 @@
     {
       "path": "docs/M9-01-baseline/commands/12-messages_page.json",
       "command": "messages_page",
-      "sha256": "d8d941d72dd240f5175b916ec5300a3c50fc423aa01ba5c42f085104d748b4d6"
+      "sha256": "7a2eef987ba16738a2a0ff01092a05260c8b0e7e80c1362776817fcb195897d2"
     },
     {
       "path": "docs/M9-01-baseline/commands/13-permissions_pending.json",
@@ -379,7 +379,7 @@
     {
       "path": "docs/M9-01-baseline/commands/57-audit_query.json",
       "command": "audit_query",
-      "sha256": "4fdc53065ad5fac1dd0973a1255ea6cd4faf14a6116158dc75daa6f4310301d4"
+      "sha256": "8fec43ff0454fa719529354dc88377585af0fcf81219a0eeed4d117797c5fea5"
     },
     {
       "path": "docs/M9-01-baseline/commands/58-audit_export.json",
@@ -439,7 +439,7 @@
     },
     {
       "path": "docs/M9-01-baseline/contract/responses.json",
-      "sha256": "af8d38db318b90b7475f3996e6fed649c23a937826240db414267e6ee1198edb"
+      "sha256": "90968acfa0c88714dabd295a3415ad317005859148043b0e55f0aba04d067a84"
     },
     {
       "path": "docs/M9-01-baseline/contract/event_payloads.json",
@@ -470,7 +470,7 @@
       "purpose": "硬阈值冻结"
     }
   ],
-  "contract_digest": "383f6da61bd36e644da9994aeac3e84b691ad5b39ff0bd1a759bee51611cd2e1",
+  "contract_digest": "813fae0404119c384c9abe3a1b5fc704ab31a892660b4eb989270146d6fcf134",
   "frozen": {
     "rule": "M9-04/M9-13 只新增，不改期望值；命令/错误码/事件/设置/迁移变更必须先走 ADR。",
     "recorded_before": "M9-02（抽取 aether-app 之前）"

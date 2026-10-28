@@ -1,0 +1,291 @@
+{
+  "schema": "aether.m9-04.error-code-matrix.v1",
+  "source": "P2 计划 M9-04 DoD-2 / ADR-029 §4.3/§16.2",
+  "counts": {
+    "ipc": 32,
+    "ipc_natural": 11,
+    "ipc_injected": 21,
+    "business": 9
+  },
+  "ipc": [
+    {
+      "code": "invalid_json",
+      "mode": "natural",
+      "command": "health",
+      "params": []
+    },
+    {
+      "code": "unknown_field",
+      "mode": "natural",
+      "command": "health",
+      "params": {
+        "__unexpected_field": true
+      }
+    },
+    {
+      "code": "missing_field",
+      "mode": "natural",
+      "command": "session_create",
+      "params": {}
+    },
+    {
+      "code": "invalid_type",
+      "mode": "natural",
+      "command": "session_create",
+      "params": {
+        "title": 12345
+      }
+    },
+    {
+      "code": "invalid_value",
+      "mode": "natural",
+      "command": "audit_query",
+      "params": {
+        "from_ts": 10,
+        "to_ts": 5
+      }
+    },
+    {
+      "code": "invalid_enum",
+      "mode": "natural",
+      "command": "audit_query",
+      "params": {
+        "actor": "bogus"
+      }
+    },
+    {
+      "code": "too_large",
+      "mode": "natural",
+      "command": "session_create",
+      "params": {
+        "title": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      }
+    },
+    {
+      "code": "out_of_range",
+      "mode": "natural",
+      "command": "messages_page",
+      "params": {
+        "session_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+        "limit": 0
+      }
+    },
+    {
+      "code": "invalid_format",
+      "mode": "natural",
+      "command": "messages_page",
+      "params": {
+        "session_id": "not-a-ulid"
+      }
+    },
+    {
+      "code": "path_rejected",
+      "mode": "natural",
+      "command": "export_diagnostics",
+      "params": {
+        "target_dir": "relative\\dir"
+      }
+    },
+    {
+      "code": "artifact_path_rejected",
+      "mode": "natural",
+      "command": "artifact_add",
+      "params": {
+        "session_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+        "path": "no-such-file-m9-04"
+      }
+    },
+    {
+      "code": "startup_blocked",
+      "mode": "injected",
+      "command": "health",
+      "params": null
+    },
+    {
+      "code": "migration_failed",
+      "mode": "injected",
+      "command": "health",
+      "params": null
+    },
+    {
+      "code": "internal",
+      "mode": "injected",
+      "command": "health",
+      "params": null
+    },
+    {
+      "code": "core_not_ready",
+      "mode": "injected",
+      "command": "health",
+      "params": null
+    },
+    {
+      "code": "not_implemented",
+      "mode": "injected",
+      "command": "health",
+      "params": null
+    },
+    {
+      "code": "readback_gap_too_large",
+      "mode": "injected",
+      "command": "health",
+      "params": null
+    },
+    {
+      "code": "builtin_provider_undeletable",
+      "mode": "injected",
+      "command": "health",
+      "params": null
+    },
+    {
+      "code": "provider_not_found",
+      "mode": "injected",
+      "command": "health",
+      "params": null
+    },
+    {
+      "code": "provider_model_not_found",
+      "mode": "injected",
+      "command": "health",
+      "params": null
+    },
+    {
+      "code": "rule_not_found",
+      "mode": "injected",
+      "command": "health",
+      "params": null
+    },
+    {
+      "code": "runtime_busy",
+      "mode": "injected",
+      "command": "health",
+      "params": null
+    },
+    {
+      "code": "no_candidate_runtime",
+      "mode": "injected",
+      "command": "health",
+      "params": null
+    },
+    {
+      "code": "pause_unsupported",
+      "mode": "injected",
+      "command": "health",
+      "params": null
+    },
+    {
+      "code": "provider_unreachable",
+      "mode": "injected",
+      "command": "health",
+      "params": null
+    },
+    {
+      "code": "provider_auth_failed",
+      "mode": "injected",
+      "command": "health",
+      "params": null
+    },
+    {
+      "code": "provider_error",
+      "mode": "injected",
+      "command": "health",
+      "params": null
+    },
+    {
+      "code": "preset_not_found",
+      "mode": "injected",
+      "command": "health",
+      "params": null
+    },
+    {
+      "code": "builtin_preset_undeletable",
+      "mode": "injected",
+      "command": "health",
+      "params": null
+    },
+    {
+      "code": "workspace_not_found",
+      "mode": "injected",
+      "command": "health",
+      "params": null
+    },
+    {
+      "code": "workspace_in_use",
+      "mode": "injected",
+      "command": "health",
+      "params": null
+    },
+    {
+      "code": "session_not_found",
+      "mode": "injected",
+      "command": "health",
+      "params": null
+    }
+  ],
+  "business": [
+    {
+      "code": "session_busy",
+      "mode": "injected",
+      "command": "health",
+      "real_path": "lifecycle SessionBusy（session_delete/session_workspace_assign）",
+      "real_command": "session_delete",
+      "params": null
+    },
+    {
+      "code": "session_paused",
+      "mode": "injected",
+      "command": "health",
+      "real_path": "lifecycle SessionPaused（paused 发送/重试）",
+      "real_command": "session_send",
+      "params": null
+    },
+    {
+      "code": "storage_backpressure",
+      "mode": "injected",
+      "command": "health",
+      "real_path": "lifecycle StorageBackpressure（写队列高水位）",
+      "real_command": "session_create",
+      "params": null
+    },
+    {
+      "code": "memory_conflict",
+      "mode": "injected",
+      "command": "health",
+      "real_path": "适配器 tool.call_failed.error.code（M3-08；M9 无命令入口）",
+      "real_command": "artifact_add",
+      "params": null
+    },
+    {
+      "code": "permission_not_pending",
+      "mode": "injected",
+      "command": "health",
+      "real_path": "PermissionError::NotPending（重复决议）",
+      "real_command": "permission_resolve",
+      "params": null
+    },
+    {
+      "code": "data_dir_locked",
+      "mode": "bootstrap",
+      "command": "initialize",
+      "real_path": "M9-03 致命启动检查（首帧 id:null；退出码 20）"
+    },
+    {
+      "code": "sync_dir_blocked",
+      "mode": "bootstrap",
+      "command": "initialize",
+      "real_path": "M9-03 A4 致命（退出码 21）"
+    },
+    {
+      "code": "db_open_failed",
+      "mode": "bootstrap",
+      "command": "initialize",
+      "real_path": "M9-03 DB 无法打开（退出码 22）"
+    },
+    {
+      "code": "schema_checksum_mismatch",
+      "mode": "bootstrap",
+      "command": "initialize",
+      "real_path": "M9-03 已应用迁移 checksum 不符（退出码 22）"
+    }
+  ]
+}

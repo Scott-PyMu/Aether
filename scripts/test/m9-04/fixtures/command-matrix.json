@@ -1,0 +1,788 @@
+{
+  "schema": "aether.m9-04.command-matrix.v1",
+  "source": "P2 计划 M9-04 DoD-2 / ADR-029 D-029-4",
+  "counts": {
+    "total": 63,
+    "with_valid": 63,
+    "with_extra_invalid": 14
+  },
+  "placeholders": {
+    "$ULID": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+    "$CLIENT_MSG_ID": "01J8ZQ5R0N7W9Y8X6V4T2S0K1N",
+    "$ROOT": "workspace root (夹具内创建)",
+    "$FILE": "可访问引用文件（夹具内创建）",
+    "$MISSING": "不存在的路径（fixture 内确定）",
+    "": "65 个字符（测试内展开）",
+    "$LONG_TITLE": "257 个字符（测试内展开）",
+    "$TOO_LARGE_TEXT": "1MiB+1 字节（测试内展开）",
+    "$LONG_PRESET_NAME": "65 个字符（测试内展开）"
+  },
+  "commands": [
+    {
+      "index": 1,
+      "command": "runtimes_list",
+      "valid": null,
+      "extra_invalid": []
+    },
+    {
+      "index": 2,
+      "command": "session_list",
+      "valid": {},
+      "extra_invalid": []
+    },
+    {
+      "index": 3,
+      "command": "session_create",
+      "valid": {
+        "title": "会话"
+      },
+      "extra_invalid": [
+        {
+          "id": "title_too_large",
+          "params": {
+            "title": "$LONG_TITLE"
+          },
+          "code": "too_large",
+          "field": "title"
+        },
+        {
+          "id": "thinking_depth_out_of_range",
+          "params": {
+            "title": "t",
+            "thinking_depth": 9
+          },
+          "code": "out_of_range",
+          "field": "thinking_depth"
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "command": "session_search",
+      "valid": {
+        "query": "会话",
+        "limit": 20,
+        "offset": 0
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 5,
+      "command": "session_rename",
+      "valid": {
+        "session_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+        "title": "新标题"
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 6,
+      "command": "session_delete",
+      "valid": {
+        "session_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M"
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 7,
+      "command": "session_send",
+      "valid": {
+        "session_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+        "text": "你好",
+        "client_msg_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1N"
+      },
+      "extra_invalid": [
+        {
+          "id": "text_too_large",
+          "params": {
+            "session_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+            "text": "$TOO_LARGE_TEXT",
+            "client_msg_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1N"
+          },
+          "code": "too_large",
+          "field": "text"
+        }
+      ]
+    },
+    {
+      "index": 8,
+      "command": "session_interrupt",
+      "valid": {
+        "session_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M"
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 9,
+      "command": "session_pause",
+      "valid": {
+        "session_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M"
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 10,
+      "command": "session_resume",
+      "valid": {
+        "session_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M"
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 11,
+      "command": "session_dispose",
+      "valid": {
+        "session_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M"
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 12,
+      "command": "messages_page",
+      "valid": {
+        "session_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+        "max_bytes": 65536
+      },
+      "extra_invalid": [
+        {
+          "id": "session_id_invalid_format",
+          "params": {
+            "session_id": "not-a-ulid"
+          },
+          "code": "invalid_format",
+          "field": "session_id"
+        },
+        {
+          "id": "paging_limit_zero",
+          "params": {
+            "session_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+            "limit": 0
+          },
+          "code": "out_of_range",
+          "field": "limit"
+        },
+        {
+          "id": "max_bytes_below_min",
+          "params": {
+            "session_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+            "max_bytes": 65535
+          },
+          "code": "out_of_range",
+          "field": "max_bytes"
+        },
+        {
+          "id": "max_bytes_above_max",
+          "params": {
+            "session_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+            "max_bytes": 1572865
+          },
+          "code": "out_of_range",
+          "field": "max_bytes"
+        },
+        {
+          "id": "cursor_and_last_seq_mutually_exclusive",
+          "params": {
+            "session_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+            "last_seq": 1,
+            "next_cursor": "opaque"
+          },
+          "code": "invalid_value",
+          "field": "next_cursor"
+        },
+        {
+          "id": "cursor_tampered",
+          "params": {
+            "session_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+            "next_cursor": "not*base64url"
+          },
+          "code": "invalid_value",
+          "field": "next_cursor"
+        }
+      ]
+    },
+    {
+      "index": 13,
+      "command": "permissions_pending",
+      "valid": {},
+      "extra_invalid": []
+    },
+    {
+      "index": 14,
+      "command": "permission_resolve",
+      "valid": {
+        "request_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+        "decision": "session"
+      },
+      "extra_invalid": [
+        {
+          "id": "decision_invalid_enum",
+          "params": {
+            "request_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+            "decision": "bogus"
+          },
+          "code": "invalid_enum",
+          "field": null
+        }
+      ]
+    },
+    {
+      "index": 15,
+      "command": "session_permission_mode_set",
+      "valid": {
+        "session_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+        "permission_mode": "workspace_write"
+      },
+      "extra_invalid": [
+        {
+          "id": "permission_mode_invalid_enum",
+          "params": {
+            "session_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+            "permission_mode": "bogus"
+          },
+          "code": "invalid_enum",
+          "field": "permission_mode"
+        }
+      ]
+    },
+    {
+      "index": 16,
+      "command": "rules_list",
+      "valid": null,
+      "extra_invalid": []
+    },
+    {
+      "index": 17,
+      "command": "rule_add",
+      "valid": {
+        "name": "允许读",
+        "resource": "fs.read",
+        "action": "read",
+        "target_kind": "path",
+        "target": "$ROOT",
+        "decision": "allow"
+      },
+      "extra_invalid": [
+        {
+          "id": "resource_invalid_enum",
+          "params": {
+            "name": "r",
+            "resource": "bogus",
+            "action": "read",
+            "target_kind": "path",
+            "decision": "allow"
+          },
+          "code": "invalid_enum",
+          "field": "resource"
+        },
+        {
+          "id": "priority_out_of_range",
+          "params": {
+            "name": "r",
+            "resource": "fs.read",
+            "action": "read",
+            "target_kind": "path",
+            "decision": "allow",
+            "priority": 101
+          },
+          "code": "out_of_range",
+          "field": "priority"
+        }
+      ]
+    },
+    {
+      "index": 18,
+      "command": "rule_update",
+      "valid": {
+        "rule_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+        "name": "改名"
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 19,
+      "command": "rule_delete",
+      "valid": {
+        "rule_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M"
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 20,
+      "command": "rule_toggle",
+      "valid": {
+        "rule_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+        "enabled": false
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 21,
+      "command": "settings_get",
+      "valid": {
+        "key": "backup.reminder"
+      },
+      "extra_invalid": [
+        {
+          "id": "key_invalid_enum",
+          "params": {
+            "key": "theme"
+          },
+          "code": "invalid_enum",
+          "field": "key"
+        }
+      ]
+    },
+    {
+      "index": 22,
+      "command": "settings_set",
+      "valid": {
+        "key": "backup.reminder",
+        "value": true
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 23,
+      "command": "backup_create",
+      "valid": {},
+      "extra_invalid": []
+    },
+    {
+      "index": 24,
+      "command": "backup_list",
+      "valid": null,
+      "extra_invalid": []
+    },
+    {
+      "index": 25,
+      "command": "backup_restore",
+      "valid": {
+        "source": {
+          "internal": {
+            "id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M"
+          }
+        }
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 26,
+      "command": "app_restart",
+      "valid": {
+        "confirm": true
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 27,
+      "command": "run_retry",
+      "valid": {
+        "run_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M"
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 28,
+      "command": "runtime_retry",
+      "valid": {
+        "runtime_id": "mock"
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 29,
+      "command": "runtime_enable",
+      "valid": {
+        "runtime_id": "mock"
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 30,
+      "command": "runtime_disable",
+      "valid": {
+        "runtime_id": "mock"
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 31,
+      "command": "workspace_set",
+      "valid": {
+        "workspace_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M"
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 32,
+      "command": "workspaces_list",
+      "valid": null,
+      "extra_invalid": []
+    },
+    {
+      "index": 33,
+      "command": "workspace_create",
+      "valid": {
+        "name": "工作区",
+        "root_path": "$ROOT"
+      },
+      "extra_invalid": [
+        {
+          "id": "name_leading_space",
+          "params": {
+            "name": " 工作区",
+            "root_path": "$ROOT"
+          },
+          "code": "invalid_format",
+          "field": "name"
+        }
+      ]
+    },
+    {
+      "index": 34,
+      "command": "workspace_update",
+      "valid": {
+        "workspace_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+        "name": "改名"
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 35,
+      "command": "workspace_delete",
+      "valid": {
+        "workspace_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M"
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 36,
+      "command": "session_workspace_assign",
+      "valid": {
+        "session_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+        "workspace_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M"
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 37,
+      "command": "ref_pick",
+      "valid": {
+        "kind": "file"
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 38,
+      "command": "artifacts_list",
+      "valid": {
+        "session_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M"
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 39,
+      "command": "artifact_add",
+      "valid": {
+        "session_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+        "path": "$FILE"
+      },
+      "extra_invalid": [
+        {
+          "id": "path_artifact_path_rejected",
+          "params": {
+            "session_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+            "path": "$MISSING"
+          },
+          "code": "artifact_path_rejected",
+          "field": null
+        }
+      ]
+    },
+    {
+      "index": 40,
+      "command": "artifact_remove",
+      "valid": {
+        "session_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+        "artifact_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M"
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 41,
+      "command": "providers_list",
+      "valid": null,
+      "extra_invalid": []
+    },
+    {
+      "index": 42,
+      "command": "provider_create",
+      "valid": {
+        "name": "自定义",
+        "type": "custom",
+        "base_url": "https://api.example.com",
+        "api_key": "unit-placeholder",
+        "enabled": true
+      },
+      "extra_invalid": [
+        {
+          "id": "type_invalid_enum",
+          "params": {
+            "name": "n",
+            "type": "bogus",
+            "enabled": true
+          },
+          "code": "invalid_enum",
+          "field": null
+        }
+      ]
+    },
+    {
+      "index": 43,
+      "command": "provider_update",
+      "valid": {
+        "id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+        "name": "改名",
+        "enabled": true
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 44,
+      "command": "provider_delete",
+      "valid": {
+        "id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M"
+      },
+      "extra_invalid": [
+        {
+          "id": "id_invalid_format",
+          "params": {
+            "id": "not-a-ulid"
+          },
+          "code": "invalid_format",
+          "field": "id"
+        }
+      ]
+    },
+    {
+      "index": 45,
+      "command": "provider_toggle",
+      "valid": {
+        "id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+        "enabled": true
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 46,
+      "command": "provider_model_add",
+      "valid": {
+        "provider_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+        "model_id": "deepseek-v4-pro",
+        "display_name": "DeepSeek V4 Pro"
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 47,
+      "command": "provider_model_toggle",
+      "valid": {
+        "provider_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+        "model_id": "deepseek-v4-pro",
+        "enabled": false
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 48,
+      "command": "provider_test",
+      "valid": {
+        "provider_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M"
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 49,
+      "command": "provider_models_fetch",
+      "valid": {
+        "provider_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M"
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 50,
+      "command": "presets_list",
+      "valid": null,
+      "extra_invalid": []
+    },
+    {
+      "index": 51,
+      "command": "preset_add",
+      "valid": {
+        "name": "预设",
+        "system_prompt": "你是助手"
+      },
+      "extra_invalid": [
+        {
+          "id": "name_too_large",
+          "params": {
+            "name": "$LONG_PRESET_NAME",
+            "system_prompt": "p"
+          },
+          "code": "too_large",
+          "field": "name"
+        }
+      ]
+    },
+    {
+      "index": 52,
+      "command": "preset_update",
+      "valid": {
+        "preset_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+        "name": "改名"
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 53,
+      "command": "preset_delete",
+      "valid": {
+        "preset_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M"
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 54,
+      "command": "export_diagnostics",
+      "valid": {
+        "target_dir": "$ROOT"
+      },
+      "extra_invalid": [
+        {
+          "id": "target_dir_path_rejected",
+          "params": {
+            "target_dir": "relative\\dir"
+          },
+          "code": "path_rejected",
+          "field": null
+        }
+      ]
+    },
+    {
+      "index": 55,
+      "command": "session_export",
+      "valid": {
+        "session_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M"
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 56,
+      "command": "archive_export",
+      "valid": null,
+      "extra_invalid": []
+    },
+    {
+      "index": 57,
+      "command": "audit_query",
+      "valid": {
+        "max_bytes": 65536
+      },
+      "extra_invalid": [
+        {
+          "id": "actor_invalid_enum",
+          "params": {
+            "actor": "bogus"
+          },
+          "code": "invalid_enum",
+          "field": "actor"
+        },
+        {
+          "id": "ts_window_inverted",
+          "params": {
+            "from_ts": 10,
+            "to_ts": 5
+          },
+          "code": "invalid_value",
+          "field": null
+        },
+        {
+          "id": "max_bytes_below_min",
+          "params": {
+            "max_bytes": 65535
+          },
+          "code": "out_of_range",
+          "field": "max_bytes"
+        },
+        {
+          "id": "max_bytes_above_max",
+          "params": {
+            "max_bytes": 1572865
+          },
+          "code": "out_of_range",
+          "field": "max_bytes"
+        },
+        {
+          "id": "cursor_and_offset_mutually_exclusive",
+          "params": {
+            "offset": 10,
+            "next_cursor": "opaque"
+          },
+          "code": "invalid_value",
+          "field": "next_cursor"
+        },
+        {
+          "id": "cursor_tampered",
+          "params": {
+            "next_cursor": "not*base64url"
+          },
+          "code": "invalid_value",
+          "field": "next_cursor"
+        }
+      ]
+    },
+    {
+      "index": 58,
+      "command": "audit_export",
+      "valid": {
+        "actor": "system",
+        "target_dir": "$ROOT"
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 59,
+      "command": "health",
+      "valid": null,
+      "extra_invalid": []
+    },
+    {
+      "index": 60,
+      "command": "startup_get",
+      "valid": null,
+      "extra_invalid": []
+    },
+    {
+      "index": 61,
+      "command": "startup_pick_target",
+      "valid": null,
+      "extra_invalid": []
+    },
+    {
+      "index": 62,
+      "command": "startup_migrate",
+      "valid": {
+        "target_dir": "$ROOT"
+      },
+      "extra_invalid": []
+    },
+    {
+      "index": 63,
+      "command": "app_exit",
+      "valid": {
+        "confirm": true
+      },
+      "extra_invalid": []
+    }
+  ]
+}

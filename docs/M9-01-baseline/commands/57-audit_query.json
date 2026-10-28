@@ -17,7 +17,9 @@
       "from_ts",
       "to_ts",
       "limit",
-      "offset"
+      "offset",
+      "max_bytes",
+      "next_cursor"
     ],
     "field_types": {
       "session_id": "Option<String>",
@@ -27,7 +29,9 @@
       "from_ts": "Option<i64>",
       "to_ts": "Option<i64>",
       "limit": "Option<u32>",
-      "offset": "Option<u64>"
+      "offset": "Option<u64>",
+      "max_bytes": "Option<u32>",
+      "next_cursor": "Option<String>"
     }
   },
   "accepted_shape": {},
@@ -89,6 +93,55 @@
       "expect": {
         "result": "rejected",
         "code": "invalid_value"
+      }
+    },
+    {
+      "id": "max_bytes_below_min",
+      "stage": "semantic_validation",
+      "params": {
+        "max_bytes": 65535
+      },
+      "expect": {
+        "result": "rejected",
+        "code": "out_of_range",
+        "field": "max_bytes"
+      }
+    },
+    {
+      "id": "max_bytes_above_max",
+      "stage": "semantic_validation",
+      "params": {
+        "max_bytes": 1572865
+      },
+      "expect": {
+        "result": "rejected",
+        "code": "out_of_range",
+        "field": "max_bytes"
+      }
+    },
+    {
+      "id": "cursor_and_offset_mutually_exclusive",
+      "stage": "semantic_validation",
+      "params": {
+        "offset": 10,
+        "next_cursor": "opaque"
+      },
+      "expect": {
+        "result": "rejected",
+        "code": "invalid_value",
+        "field": "next_cursor"
+      }
+    },
+    {
+      "id": "cursor_tampered",
+      "stage": "semantic_validation",
+      "params": {
+        "next_cursor": "not*base64url"
+      },
+      "expect": {
+        "result": "rejected",
+        "code": "invalid_value",
+        "field": "next_cursor"
       }
     }
   ],

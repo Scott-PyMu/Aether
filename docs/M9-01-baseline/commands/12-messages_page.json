@@ -13,12 +13,16 @@
     ],
     "optional": [
       "last_seq",
-      "limit"
+      "limit",
+      "max_bytes",
+      "next_cursor"
     ],
     "field_types": {
       "session_id": "String",
       "last_seq": "Option<u64>",
-      "limit": "Option<u32>"
+      "limit": "Option<u32>",
+      "max_bytes": "Option<u32>",
+      "next_cursor": "Option<String>"
     }
   },
   "accepted_shape": {
@@ -93,6 +97,59 @@
         "result": "rejected",
         "code": "out_of_range",
         "field": "limit"
+      }
+    },
+    {
+      "id": "max_bytes_below_min",
+      "stage": "semantic_validation",
+      "params": {
+        "session_id": "01J00000000000000000000000",
+        "max_bytes": 65535
+      },
+      "expect": {
+        "result": "rejected",
+        "code": "out_of_range",
+        "field": "max_bytes"
+      }
+    },
+    {
+      "id": "max_bytes_above_max",
+      "stage": "semantic_validation",
+      "params": {
+        "session_id": "01J00000000000000000000000",
+        "max_bytes": 1572865
+      },
+      "expect": {
+        "result": "rejected",
+        "code": "out_of_range",
+        "field": "max_bytes"
+      }
+    },
+    {
+      "id": "cursor_and_last_seq_mutually_exclusive",
+      "stage": "semantic_validation",
+      "params": {
+        "session_id": "01J00000000000000000000000",
+        "last_seq": 1,
+        "next_cursor": "opaque"
+      },
+      "expect": {
+        "result": "rejected",
+        "code": "invalid_value",
+        "field": "next_cursor"
+      }
+    },
+    {
+      "id": "cursor_tampered",
+      "stage": "semantic_validation",
+      "params": {
+        "session_id": "01J00000000000000000000000",
+        "next_cursor": "not*base64url"
+      },
+      "expect": {
+        "result": "rejected",
+        "code": "invalid_value",
+        "field": "next_cursor"
       }
     }
   ],

@@ -523,6 +523,8 @@ fn readback_after_cleanup_keeps_gap_contract() {
             session_id: SESSION_ID.to_owned(),
             last_seq: Some(1_000),
             limit: Some(500),
+            max_bytes: None,
+            next_cursor: None,
         })
         .expect_err("缺口 11000 > 10k 必须拒绝自动补发");
     assert_eq!(error.code.as_str(), "readback_gap_too_large");
@@ -534,6 +536,8 @@ fn readback_after_cleanup_keeps_gap_contract() {
             session_id: SESSION_ID.to_owned(),
             last_seq: Some(11_500),
             limit: Some(500),
+            max_bytes: None,
+            next_cursor: None,
         })
         .expect("缺口 ≤10k 可补读");
     assert_eq!(page["complete"], true);

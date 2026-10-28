@@ -1,0 +1,158 @@
+{
+  "schema": "aether.m9-04.golden.v1",
+  "note": "请求按内层 DTO（无 {payload} 包装）；响应为脚本化后端返回值的结构化比较（命令层必须原样透传）。",
+  "placeholders": {
+    "$ULID": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+    "$CLIENT_MSG_ID": "01J8ZQ5R0N7W9Y8X6V4T2S0K1N"
+  },
+  "counts": {
+    "cases": 13,
+    "groups": 8
+  },
+  "cases": [
+    {
+      "command": "session_create",
+      "group": "session",
+      "params": {
+        "title": "会话"
+      },
+      "expected": {
+        "session_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+        "status": "idle"
+      }
+    },
+    {
+      "command": "session_send",
+      "group": "session",
+      "params": {
+        "session_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+        "text": "你好",
+        "client_msg_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1N"
+      },
+      "expected": {
+        "session_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+        "run_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+        "queued": false
+      }
+    },
+    {
+      "command": "messages_page",
+      "group": "messages",
+      "params": {
+        "session_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+        "max_bytes": 65536
+      },
+      "expected": {
+        "session_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+        "max_seq": null,
+        "events": [],
+        "messages": [],
+        "complete": true,
+        "messages_has_more": false
+      }
+    },
+    {
+      "command": "health",
+      "group": "health",
+      "params": null,
+      "expected": {
+        "storage_state": "normal",
+        "write_queue_depth": 0,
+        "runtimes": [],
+        "ts": 1
+      }
+    },
+    {
+      "command": "backup_create",
+      "group": "backup",
+      "params": {},
+      "expected": {
+        "id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+        "path": "backups/aether.db"
+      }
+    },
+    {
+      "command": "backup_list",
+      "group": "backup",
+      "params": null,
+      "expected": {
+        "backups": []
+      }
+    },
+    {
+      "command": "backup_restore",
+      "group": "backup",
+      "params": {
+        "source": {
+          "internal": {
+            "id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M"
+          }
+        }
+      },
+      "expected": {
+        "restart_required": true
+      }
+    },
+    {
+      "command": "permissions_pending",
+      "group": "permissions",
+      "params": {},
+      "expected": []
+    },
+    {
+      "command": "permission_resolve",
+      "group": "permissions",
+      "params": {
+        "request_id": "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+        "decision": "session"
+      },
+      "expected": {
+        "resolved": true
+      }
+    },
+    {
+      "command": "settings_get",
+      "group": "settings",
+      "params": {
+        "key": "backup.reminder"
+      },
+      "expected": {
+        "key": "backup.reminder",
+        "value": true
+      }
+    },
+    {
+      "command": "settings_set",
+      "group": "settings",
+      "params": {
+        "key": "backup.reminder",
+        "value": true
+      },
+      "expected": {
+        "key": "backup.reminder",
+        "value": true
+      }
+    },
+    {
+      "command": "audit_query",
+      "group": "audit",
+      "params": {
+        "max_bytes": 65536
+      },
+      "expected": {
+        "rows": [],
+        "limit": 100,
+        "offset": 0,
+        "has_more": false
+      }
+    },
+    {
+      "command": "providers_list",
+      "group": "providers",
+      "params": null,
+      "expected": {
+        "providers": []
+      }
+    }
+  ]
+}

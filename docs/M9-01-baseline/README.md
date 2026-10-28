@@ -55,6 +55,11 @@ pnpm verify:m9-01-baseline   # 存在性 / 哈希 / 条目数=63 / 计数自洽 
 
 ## 变更规则
 
+> **M9-04 已登记增量（2026-10-27）**：按 ADR-009 §9 / ADR-018 A-1 为
+> `messages_page`/`audit_query` 追加可选 `max_bytes`/`next_cursor`，并为
+> `MessagesPageResponse` 追加 `next_cursor`/`messages_has_more`；既有字段/用例
+> 未改，`recorded_at`/`head_commit` 未重录。对照报告见 `docs/M9-04-证据.md` §4。
+
 1. **M9-04/M9-13 只新增**：可以新增 RPC golden、可以新增对照报告，**不得修改**本目录已冻结的期望值。
 2. 任何契约变更（命令增删、错误码增删、事件类型增删、设置键增删、迁移修改）**先走 ADR**，
    升设计文档版本，再重录基线（`pnpm baseline:m9-01:record`）并在证据中记录 diff。

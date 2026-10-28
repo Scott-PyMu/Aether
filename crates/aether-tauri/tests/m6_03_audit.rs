@@ -1098,3 +1098,102 @@ fn terminal_tool_events(events: &[EventEnvelope]) -> Vec<(String, String)> {
         })
         .collect()
 }
+
+#[test]
+fn audit_query_budget_truncates_cursor_resumes_and_tamper_is_rejected() {
+    let fixture = AuditFixture::open();
+    for index in 0..10 {
+        fixture.insert_audit(audit_record(
+            &format!("01J{index:023}"),
+            Some(SESSION_A),
+            "agent",
+            "tool.call",
+            Some("mock.echo"),
+            Some(&format!("{{\"payload\":\"{}\"}}", "x".repeat(8 * 1024))),
+            "success",
+            1_000 + index,
+        ));
+    }
+    let base = AuditQueryRequest {
+        actor: Some("agent".to_owned()),
+        max_bytes: Some(64 * 1024),
+        limit: Some(500),
+        ..AuditQueryRequest::default()
+    };
+    let first = fixture.query(&base);
+    let first_rows = first["rows"].as_array().expect("rows");
+    assert!(
+        first_rows.len() < 10,
+        "64KiB 预算必须截断 10×8KiB 审计行：{}",
+        first_rows.len()
+    );
+    assert_eq!(first["has_more"], json!(true), "预算截断必须 has_more=true");
+    let mut ids: Vec<String> = first_rows
+        .iter()
+        .map(|row| row["id"].as_str().expect("id").to_owned())
+        .collect();
+    let mut next = first["next_cursor"].as_str().map(str::to_owned);
+    let mut pages = 1;
+    while let Some(token) = next.take() {
+        pages += 1;
+        assert!(pages <= 10, "审计续读不得死循环（零推进）");
+        let page = fixture.query(&AuditQueryRequest {
+            actor: Some("agent".to_owned()),
+            max_bytes: Some(64 * 1024),
+            limit: Some(500),
+            next_cursor: Some(token),
+            ..AuditQueryRequest::default()
+        });
+        ids.extend(
+            page["rows"]
+                .as_array()
+                .expect("rows")
+                .iter()
+                .map(|row| row["id"].as_str().expect("id").to_owned()),
+        );
+        next = page["next_cursor"].as_str().map(str::to_owned);
+    }
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), 10, "游标续读必须覆盖全部 10 行且无重复：{ids:?}");
+
+    // 篡改过滤条件（actor）→ filter_hash 不匹配 → invalid_value。
+    let token = aether_tauri::ipc::cursor::encode_cursor(
+        aether_tauri::ipc::cursor::STREAM_AUDIT,
+        0,
+        "deadbeef",
+    );
+    let error = fixture
+        .archive
+        .audit_query(&AuditQueryRequest {
+            actor: Some("agent".to_owned()),
+            max_bytes: Some(64 * 1024),
+            limit: Some(500),
+            next_cursor: Some(token),
+            ..AuditQueryRequest::default()
+        })
+        .expect_err("游标过滤条件不匹配必须拒绝");
+    assert_eq!(error.code.as_str(), "invalid_value");
+    assert_eq!(error.field.as_deref(), Some("next_cursor"));
+
+    // 零推进：游标已指向末尾 → 空页 + 无 next_cursor。
+    let fingerprint = base.filter_fingerprint();
+    let end = aether_tauri::ipc::cursor::encode_cursor(
+        aether_tauri::ipc::cursor::STREAM_AUDIT,
+        10,
+        &fingerprint,
+    );
+    let page = fixture.query(&AuditQueryRequest {
+        actor: Some("agent".to_owned()),
+        max_bytes: Some(64 * 1024),
+        limit: Some(500),
+        next_cursor: Some(end),
+        ..AuditQueryRequest::default()
+    });
+    assert!(
+        page["rows"].as_array().is_some_and(Vec::is_empty),
+        "已到末尾必须空页：{page}"
+    );
+    assert!(page.get("next_cursor").is_none(), "空页不得返回游标");
+    assert_eq!(page["has_more"], json!(false));
+}

@@ -553,6 +553,8 @@ fn run_e2e() {
                     session_id: first_id.to_owned(),
                     last_seq: None,
                     limit: Some(200),
+                    max_bytes: None,
+                    next_cursor: None,
                 })
             );
         }
@@ -758,6 +760,8 @@ fn run_e2e() {
             session_id: read_only_id.to_owned(),
             last_seq: None,
             limit: Some(50),
+            max_bytes: None,
+            next_cursor: None,
         })
         .expect("只读历史可读");
     assert!(page.get("events").is_some());

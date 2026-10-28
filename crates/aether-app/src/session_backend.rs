@@ -57,6 +57,8 @@ use crate::ipc::dto::{
     SessionRenameRequest, SessionSearchRequest, SessionSendRequest, SessionWorkspaceAssignRequest,
     WorkspaceCreateRequest, WorkspaceDeleteRequest, WorkspaceUpdateRequest, WorkspacesListRequest,
 };
+use crate::ipc::business::BusinessCode;
+use crate::ipc::cursor;
 use crate::ipc::error::{IpcError, IpcErrorCode};
 use crate::ipc::path::ArtifactPath;
 use crate::json_payload::JsonPayload;
@@ -93,6 +95,11 @@ pub struct MessagesPageResponse {
     pub messages: Option<Vec<Message>>,
     /// 本页是否已到最新（`false` = 可能仍有后续缺口，调用方续读）。
     pub complete: bool,
+    /// 不透明续读游标（仅 events 补读流；ADR-009 §9；无更多条目时省略）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+    /// 最近一页 `messages` 是否因预算/页大小被截断（ADR-009 §9；补读页恒 `false`）。
+    pub messages_has_more: bool,
 }
 
 /// 非阻断警告条目（ADR-010 决策 4：`warnings[].code` 为独立命名空间，非
@@ -1544,7 +1551,8 @@ impl IpcBackend for SessionBackend {
                      请先等待 run 结束或中断",
                     session_id.as_str(),
                     session.status.as_str()
-                )));
+                ))
+                .with_business_code(BusinessCode::SessionBusy));
             }
             let target = reads
                 .workspace(&workspace_id)
@@ -2177,8 +2185,25 @@ impl IpcBackend for SessionBackend {
     fn messages_page(&self, request: &MessagesPageRequest) -> Result<Value, IpcError> {
         let reads = self.reads_required()?.clone();
         let session_id = request.session_id.clone();
-        let last_seq = request.last_seq;
         let limit = request.limit.unwrap_or(500) as usize;
+        let max_bytes = cursor::validate_max_bytes(request.max_bytes, "max_bytes")? as usize;
+        let filter_hash = messages_filter_hash(&session_id, limit);
+        // 游标（ADR-009 §9）：仅 events 补读流；`pos` 即续读 `last_seq`。
+        let cursor_pos = match &request.next_cursor {
+            Some(token) => {
+                let (pos, hash) = cursor::decode_cursor(token, cursor::STREAM_EVENTS)?;
+                if hash != filter_hash {
+                    return Err(IpcError::at_field(
+                        IpcErrorCode::InvalidValue,
+                        "next_cursor",
+                        "游标与当前过滤条件不匹配（session_id/limit 已变化），请从首页重新读取",
+                    ));
+                }
+                Some(pos)
+            }
+            None => None,
+        };
+        let last_seq = cursor_pos.or(request.last_seq);
         let gap_limit = self.gap_limit;
         self.call(async move {
             let session_id = parse_session_id(&session_id)?;
@@ -2196,7 +2221,9 @@ impl IpcBackend for SessionBackend {
                 .max_seq(&session_id)
                 .await
                 .map_err(|error| IpcError::internal(format!("events.max(seq) 读取失败：{error}")))?;
-            let events = match last_seq {
+            // 多取 1 条探测「还有下一页」（不改变单条/分页上限）。
+            let fetch_limit = limit.saturating_add(1);
+            let mut events = match last_seq {
                 Some(last_seq) => {
                     if let Some(max_seq) = max_seq {
                         let gap = max_seq.saturating_sub(last_seq);
@@ -2210,33 +2237,107 @@ impl IpcBackend for SessionBackend {
                         }
                     }
                     reads
-                        .events_page(&session_id, Some(last_seq), limit)
+                        .events_page(&session_id, Some(last_seq), fetch_limit)
                         .await
                         .map_err(|error| {
                             IpcError::internal(format!("补读分页失败：{error}"))
                         })?
                 }
                 None => reads
-                    .events_latest(&session_id, limit)
+                    .events_latest(&session_id, fetch_limit)
                     .await
                     .map_err(|error| IpcError::internal(format!("最近事件分页失败：{error}")))?,
             };
+            // 分页上限 500：多取的一条只用于 `has_more` 探测，不进入响应。
+            let store_more_events = events.len() > limit;
+            if store_more_events {
+                if last_seq.is_some() {
+                    events.truncate(limit);
+                } else {
+                    // 最近一页保持「尾部」语义：丢弃最早的一条。
+                    let drop = events.len() - limit;
+                    events.drain(0..drop);
+                }
+            }
             // 最近一页附带消息历史（工作台基线；`messages` 表尾部 limit 条，升序；
             // 无消息为 `Some([])`；补读热路径不读消息表，字段省略）。
-            let messages = if last_seq.is_none() {
-                Some(
-                    reads
-                        .messages_latest(&session_id, limit)
-                        .await
-                        .map_err(|error| IpcError::internal(format!("消息历史分页失败：{error}")))?,
-                )
+            let (mut messages, mut messages_has_more) = if last_seq.is_none() {
+                let mut latest = reads
+                    .messages_latest(&session_id, fetch_limit)
+                    .await
+                    .map_err(|error| IpcError::internal(format!("消息历史分页失败：{error}")))?;
+                let more = latest.len() > limit;
+                if more {
+                    let drop = latest.len() - limit;
+                    latest.drain(0..drop);
+                }
+                (Some(latest), more)
+            } else {
+                (None, false)
+            };
+            // 预算：events 优先（补读主路径），messages 使用剩余预算；各至少 1 条。
+            let (budgeted_events, events_truncated) =
+                cursor::fit_budget(events, max_bytes)?;
+            let used_events = cursor::value_bytes(&budgeted_events)?;
+            let remaining = max_bytes.saturating_sub(used_events).max(1);
+            if let Some(items) = messages.take() {
+                let (budgeted, budget_truncated) = cursor::fit_budget_tail(items, remaining)?;
+                messages_has_more = messages_has_more || budget_truncated;
+                messages = Some(budgeted);
+            }
+            // 整帧 ≤2MiB（D6）：两数组叠加仍超限时，先裁 messages，再裁 events。
+            let mut events = budgeted_events;
+            if let Some(items) = &mut messages {
+                let total = cursor::value_bytes(&events)?
+                    .saturating_add(cursor::value_bytes(items)?);
+                if total > cursor::FRAME_LIMIT_BYTES && items.len() > 1 {
+                    items.drain(0..items.len() - 1);
+                    messages_has_more = true;
+                }
+            }
+            let messages_bytes = match &messages {
+                Some(items) => cursor::value_bytes(items)?,
+                None => 0,
+            };
+            let total = cursor::value_bytes(&events)?.saturating_add(messages_bytes);
+            if total > cursor::FRAME_LIMIT_BYTES {
+                if events.len() > 1 {
+                    events.drain(0..events.len() - 1);
+                }
+                let messages_bytes = match &messages {
+                    Some(items) => cursor::value_bytes(items)?,
+                    None => 0,
+                };
+                let retry = cursor::value_bytes(&events)?.saturating_add(messages_bytes);
+                if retry > cursor::FRAME_LIMIT_BYTES {
+                    return Err(IpcError::too_large(
+                        "result",
+                        format!(
+                            "分页响应 {retry} 字节超过单帧上限 {}（单条载荷超限）",
+                            cursor::FRAME_LIMIT_BYTES
+                        ),
+                    ));
+                }
+            }
+            // `next_cursor` 仅用于 events 补读流（ADR-009 §9）：最近一页的
+            // `complete` 语义不变（更早历史属「基线」，不构成后续缺口）。
+            let more_events = last_seq.is_some() && (store_more_events || events_truncated);
+            let next_cursor = if more_events && !events.is_empty() {
+                let pos = events.last().map(|event| event.seq).unwrap_or_default();
+                Some(cursor::encode_cursor(
+                    cursor::STREAM_EVENTS,
+                    pos,
+                    &filter_hash,
+                ))
             } else {
                 None
             };
             let complete = match (last_seq, max_seq) {
+                // 补读分支：无更多条目且末条到达最新水位才 complete。
                 (Some(last_seq), Some(max_seq)) => {
-                    // `last_seq >= max_seq` 视为已到最新（空 events + complete=true）。
-                    last_seq >= max_seq || events.last().map(|event| event.seq) == Some(max_seq)
+                    !more_events
+                        && (last_seq >= max_seq
+                            || events.last().map(|event| event.seq) == Some(max_seq))
                 }
                 (Some(_), None) => true,
                 // 最近一页即会话尾部（更早历史属于「基线」，不构成后续缺口）。
@@ -2249,6 +2350,8 @@ impl IpcBackend for SessionBackend {
                 events,
                 messages,
                 complete,
+                next_cursor,
+                messages_has_more,
             })
             .map_err(|error| IpcError::internal(format!("消息分页序列化失败：{error}")))
         })
@@ -3176,6 +3279,7 @@ pub const SESSION_SELECTION_BUSY_MESSAGE: &str =
 
 fn selection_busy_error() -> IpcError {
     IpcError::invalid_value(SESSION_SELECTION_BUSY_MESSAGE)
+        .with_business_code(BusinessCode::SessionBusy)
 }
 
 fn readonly_selection_error() -> IpcError {
@@ -3392,15 +3496,18 @@ pub fn map_lifecycle_error(error: LifecycleError) -> IpcError {
         LifecycleError::SessionNotFound { session_id } => {
             IpcError::session_not_found(session_id.as_str())
         }
-        LifecycleError::SessionBusy { .. }
-        | LifecycleError::SessionClosed { .. }
+        LifecycleError::SessionBusy { .. } => IpcError::invalid_value(error.to_string())
+            .with_business_code(BusinessCode::SessionBusy),
+        LifecycleError::SessionPaused { .. } => IpcError::invalid_value(error.to_string())
+            .with_business_code(BusinessCode::SessionPaused),
+        LifecycleError::StorageBackpressure { .. } => IpcError::invalid_value(error.to_string())
+            .with_business_code(BusinessCode::StorageBackpressure),
+        LifecycleError::SessionClosed { .. }
         | LifecycleError::InvalidTransition { .. }
         | LifecycleError::RunNotFound { .. }
         | LifecycleError::RunNotRetryable { .. }
-        | LifecycleError::SessionPaused { .. }
         | LifecycleError::PauseState { .. }
         | LifecycleError::PersistDegraded { .. }
-        | LifecycleError::StorageBackpressure { .. }
         | LifecycleError::AdapterIsolated { .. } => IpcError::invalid_value(error.to_string()),
     }
 }
@@ -3415,6 +3522,7 @@ pub fn map_permission_error(error: PermissionError) -> IpcError {
     match &error {
         PermissionError::NotPending { .. } => {
             IpcError::invalid_value(format!("{error}（permission_not_pending）"))
+                .with_business_code(BusinessCode::PermissionNotPending)
         }
         PermissionError::InvalidResource { .. } => {
             IpcError::invalid_value(format!("{error}（invalid_permission_resource）"))
@@ -3426,6 +3534,11 @@ pub fn map_permission_error(error: PermissionError) -> IpcError {
         | PermissionError::Pipeline { .. }
         | PermissionError::Internal { .. } => IpcError::internal(error.to_string()),
     }
+}
+
+/// `messages_page` 游标过滤指纹（ADR-009 §9：session_id + limit；`max_bytes` 不参与）。
+fn messages_filter_hash(session_id: &str, limit: usize) -> String {
+    cursor::filter_hash(&[cursor::STREAM_EVENTS, session_id, &limit.to_string()])
 }
 
 fn now_ms() -> i64 {

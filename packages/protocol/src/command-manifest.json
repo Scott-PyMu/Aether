@@ -1,0 +1,785 @@
+{
+  "schema": "aether.command-manifest.v1",
+  "source": {
+    "commands": "crates/aether-app/src/ipc/dispatch.rs",
+    "params": "crates/aether-app/src/ipc/handlers.rs",
+    "groups": "docs/adr/ADR-029-electron-shell-rust-daemon.md §4.6/§16.1"
+  },
+  "counts": {
+    "total": 63,
+    "daemon": 59,
+    "shell": 4,
+    "ui": 61,
+    "reserved": 2,
+    "groups": 18
+  },
+  "groups": [
+    {
+      "group": "runtime",
+      "count": 4
+    },
+    {
+      "group": "session",
+      "count": 12
+    },
+    {
+      "group": "messages",
+      "count": 1
+    },
+    {
+      "group": "permissions",
+      "count": 2
+    },
+    {
+      "group": "rules",
+      "count": 5
+    },
+    {
+      "group": "settings",
+      "count": 2
+    },
+    {
+      "group": "backup",
+      "count": 3
+    },
+    {
+      "group": "health",
+      "count": 1
+    },
+    {
+      "group": "shell",
+      "count": 4
+    },
+    {
+      "group": "run",
+      "count": 1
+    },
+    {
+      "group": "workspace",
+      "count": 5
+    },
+    {
+      "group": "diagnostics",
+      "count": 1
+    },
+    {
+      "group": "export",
+      "count": 2
+    },
+    {
+      "group": "audit",
+      "count": 2
+    },
+    {
+      "group": "artifacts",
+      "count": 3
+    },
+    {
+      "group": "providers",
+      "count": 9
+    },
+    {
+      "group": "presets",
+      "count": 4
+    },
+    {
+      "group": "startup",
+      "count": 2
+    }
+  ],
+  "commands": [
+    {
+      "index": 1,
+      "name": "runtimes_list",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "runtime",
+      "params": {
+        "style": "none",
+        "dto": null
+      }
+    },
+    {
+      "index": 2,
+      "name": "session_list",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "session",
+      "params": {
+        "style": "strict",
+        "dto": "SessionListRequest"
+      }
+    },
+    {
+      "index": 3,
+      "name": "session_create",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "session",
+      "params": {
+        "style": "strict",
+        "dto": "SessionCreateRequest"
+      }
+    },
+    {
+      "index": 4,
+      "name": "session_search",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "session",
+      "params": {
+        "style": "strict",
+        "dto": "SessionSearchRequest"
+      }
+    },
+    {
+      "index": 5,
+      "name": "session_rename",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "session",
+      "params": {
+        "style": "strict",
+        "dto": "SessionRenameRequest"
+      }
+    },
+    {
+      "index": 6,
+      "name": "session_delete",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "session",
+      "params": {
+        "style": "strict",
+        "dto": "SessionDeleteRequest"
+      }
+    },
+    {
+      "index": 7,
+      "name": "session_send",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "session",
+      "params": {
+        "style": "strict",
+        "dto": "SessionSendRequest"
+      }
+    },
+    {
+      "index": 8,
+      "name": "session_interrupt",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "session",
+      "params": {
+        "style": "strict",
+        "dto": "SessionIdRequest"
+      }
+    },
+    {
+      "index": 9,
+      "name": "session_pause",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "session",
+      "params": {
+        "style": "strict",
+        "dto": "SessionIdRequest"
+      }
+    },
+    {
+      "index": 10,
+      "name": "session_resume",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "session",
+      "params": {
+        "style": "strict",
+        "dto": "SessionIdRequest"
+      }
+    },
+    {
+      "index": 11,
+      "name": "session_dispose",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "session",
+      "params": {
+        "style": "strict",
+        "dto": "SessionIdRequest"
+      }
+    },
+    {
+      "index": 12,
+      "name": "messages_page",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "messages",
+      "params": {
+        "style": "strict",
+        "dto": "MessagesPageRequest"
+      }
+    },
+    {
+      "index": 13,
+      "name": "permissions_pending",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "permissions",
+      "params": {
+        "style": "strict",
+        "dto": "PermissionsPendingRequest"
+      }
+    },
+    {
+      "index": 14,
+      "name": "permission_resolve",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "permissions",
+      "params": {
+        "style": "strict",
+        "dto": "PermissionResolveRequest"
+      }
+    },
+    {
+      "index": 15,
+      "name": "session_permission_mode_set",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "session",
+      "params": {
+        "style": "strict",
+        "dto": "SessionPermissionModeSetRequest"
+      }
+    },
+    {
+      "index": 16,
+      "name": "rules_list",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "rules",
+      "params": {
+        "style": "no_params",
+        "dto": "RulesListRequest"
+      }
+    },
+    {
+      "index": 17,
+      "name": "rule_add",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "rules",
+      "params": {
+        "style": "strict",
+        "dto": "RuleAddRequest"
+      }
+    },
+    {
+      "index": 18,
+      "name": "rule_update",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "rules",
+      "params": {
+        "style": "strict",
+        "dto": "RuleUpdateRequest"
+      }
+    },
+    {
+      "index": 19,
+      "name": "rule_delete",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "rules",
+      "params": {
+        "style": "strict",
+        "dto": "RuleDeleteRequest"
+      }
+    },
+    {
+      "index": 20,
+      "name": "rule_toggle",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "rules",
+      "params": {
+        "style": "strict",
+        "dto": "RuleToggleRequest"
+      }
+    },
+    {
+      "index": 21,
+      "name": "settings_get",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "settings",
+      "params": {
+        "style": "strict",
+        "dto": "SettingsGetRequest"
+      }
+    },
+    {
+      "index": 22,
+      "name": "settings_set",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "settings",
+      "params": {
+        "style": "strict",
+        "dto": "SettingsSetRequest"
+      }
+    },
+    {
+      "index": 23,
+      "name": "backup_create",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "backup",
+      "params": {
+        "style": "strict",
+        "dto": "BackupCreateRequest"
+      }
+    },
+    {
+      "index": 24,
+      "name": "backup_list",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "backup",
+      "params": {
+        "style": "no_params",
+        "dto": "BackupListRequest"
+      }
+    },
+    {
+      "index": 25,
+      "name": "backup_restore",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "backup",
+      "params": {
+        "style": "strict",
+        "dto": "BackupRestoreRequest"
+      }
+    },
+    {
+      "index": 26,
+      "name": "app_restart",
+      "route": "shell",
+      "exposure": "ui",
+      "group": "shell",
+      "params": {
+        "style": "strict",
+        "dto": "AppRestartRequest"
+      }
+    },
+    {
+      "index": 27,
+      "name": "run_retry",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "run",
+      "params": {
+        "style": "strict",
+        "dto": "RunRetryRequest"
+      }
+    },
+    {
+      "index": 28,
+      "name": "runtime_retry",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "runtime",
+      "params": {
+        "style": "strict",
+        "dto": "RuntimeRetryRequest"
+      }
+    },
+    {
+      "index": 29,
+      "name": "runtime_enable",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "runtime",
+      "params": {
+        "style": "strict",
+        "dto": "RuntimeEnableRequest"
+      }
+    },
+    {
+      "index": 30,
+      "name": "runtime_disable",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "runtime",
+      "params": {
+        "style": "strict",
+        "dto": "RuntimeDisableRequest"
+      }
+    },
+    {
+      "index": 31,
+      "name": "workspace_set",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "workspace",
+      "params": {
+        "style": "strict",
+        "dto": "WorkspaceSetRequest"
+      }
+    },
+    {
+      "index": 32,
+      "name": "workspaces_list",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "workspace",
+      "params": {
+        "style": "no_params",
+        "dto": "WorkspacesListRequest"
+      }
+    },
+    {
+      "index": 33,
+      "name": "workspace_create",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "workspace",
+      "params": {
+        "style": "strict",
+        "dto": "WorkspaceCreateRequest"
+      }
+    },
+    {
+      "index": 34,
+      "name": "workspace_update",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "workspace",
+      "params": {
+        "style": "strict",
+        "dto": "WorkspaceUpdateRequest"
+      }
+    },
+    {
+      "index": 35,
+      "name": "workspace_delete",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "workspace",
+      "params": {
+        "style": "strict",
+        "dto": "WorkspaceDeleteRequest"
+      }
+    },
+    {
+      "index": 36,
+      "name": "session_workspace_assign",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "session",
+      "params": {
+        "style": "strict",
+        "dto": "SessionWorkspaceAssignRequest"
+      }
+    },
+    {
+      "index": 37,
+      "name": "ref_pick",
+      "route": "shell",
+      "exposure": "ui",
+      "group": "shell",
+      "params": {
+        "style": "strict",
+        "dto": "RefPickRequest"
+      }
+    },
+    {
+      "index": 38,
+      "name": "artifacts_list",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "artifacts",
+      "params": {
+        "style": "strict",
+        "dto": "ArtifactsListRequest"
+      }
+    },
+    {
+      "index": 39,
+      "name": "artifact_add",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "artifacts",
+      "params": {
+        "style": "strict",
+        "dto": "ArtifactAddRequest"
+      }
+    },
+    {
+      "index": 40,
+      "name": "artifact_remove",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "artifacts",
+      "params": {
+        "style": "strict",
+        "dto": "ArtifactRemoveRequest"
+      }
+    },
+    {
+      "index": 41,
+      "name": "providers_list",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "providers",
+      "params": {
+        "style": "no_params",
+        "dto": "ProvidersListRequest"
+      }
+    },
+    {
+      "index": 42,
+      "name": "provider_create",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "providers",
+      "params": {
+        "style": "strict",
+        "dto": "ProviderCreateRequest"
+      }
+    },
+    {
+      "index": 43,
+      "name": "provider_update",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "providers",
+      "params": {
+        "style": "strict",
+        "dto": "ProviderUpdateRequest"
+      }
+    },
+    {
+      "index": 44,
+      "name": "provider_delete",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "providers",
+      "params": {
+        "style": "strict",
+        "dto": "ProviderDeleteRequest"
+      }
+    },
+    {
+      "index": 45,
+      "name": "provider_toggle",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "providers",
+      "params": {
+        "style": "strict",
+        "dto": "ProviderToggleRequest"
+      }
+    },
+    {
+      "index": 46,
+      "name": "provider_model_add",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "providers",
+      "params": {
+        "style": "strict",
+        "dto": "ProviderModelAddRequest"
+      }
+    },
+    {
+      "index": 47,
+      "name": "provider_model_toggle",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "providers",
+      "params": {
+        "style": "strict",
+        "dto": "ProviderModelToggleRequest"
+      }
+    },
+    {
+      "index": 48,
+      "name": "provider_test",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "providers",
+      "params": {
+        "style": "strict",
+        "dto": "ProviderTestRequest"
+      }
+    },
+    {
+      "index": 49,
+      "name": "provider_models_fetch",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "providers",
+      "params": {
+        "style": "strict",
+        "dto": "ProviderModelsFetchRequest"
+      }
+    },
+    {
+      "index": 50,
+      "name": "presets_list",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "presets",
+      "params": {
+        "style": "no_params",
+        "dto": "PresetsListRequest"
+      }
+    },
+    {
+      "index": 51,
+      "name": "preset_add",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "presets",
+      "params": {
+        "style": "strict",
+        "dto": "PresetAddRequest"
+      }
+    },
+    {
+      "index": 52,
+      "name": "preset_update",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "presets",
+      "params": {
+        "style": "strict",
+        "dto": "PresetUpdateRequest"
+      }
+    },
+    {
+      "index": 53,
+      "name": "preset_delete",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "presets",
+      "params": {
+        "style": "strict",
+        "dto": "PresetDeleteRequest"
+      }
+    },
+    {
+      "index": 54,
+      "name": "export_diagnostics",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "diagnostics",
+      "params": {
+        "style": "strict",
+        "dto": "ExportDiagnosticsRequest"
+      }
+    },
+    {
+      "index": 55,
+      "name": "session_export",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "export",
+      "params": {
+        "style": "strict",
+        "dto": "SessionExportRequest"
+      }
+    },
+    {
+      "index": 56,
+      "name": "archive_export",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "export",
+      "params": {
+        "style": "no_params",
+        "dto": "ArchiveExportRequest"
+      }
+    },
+    {
+      "index": 57,
+      "name": "audit_query",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "audit",
+      "params": {
+        "style": "no_params",
+        "dto": "AuditQueryRequest"
+      }
+    },
+    {
+      "index": 58,
+      "name": "audit_export",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "audit",
+      "params": {
+        "style": "no_params",
+        "dto": "AuditExportRequest"
+      }
+    },
+    {
+      "index": 59,
+      "name": "health",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "health",
+      "params": {
+        "style": "no_params",
+        "dto": "HealthRequest"
+      }
+    },
+    {
+      "index": 60,
+      "name": "startup_get",
+      "route": "daemon",
+      "exposure": "reserved",
+      "group": "startup",
+      "params": {
+        "style": "no_params",
+        "dto": "StartupGetRequest"
+      }
+    },
+    {
+      "index": 61,
+      "name": "startup_pick_target",
+      "route": "shell",
+      "exposure": "ui",
+      "group": "shell",
+      "params": {
+        "style": "no_params",
+        "dto": "StartupPickTargetRequest"
+      }
+    },
+    {
+      "index": 62,
+      "name": "startup_migrate",
+      "route": "daemon",
+      "exposure": "reserved",
+      "group": "startup",
+      "params": {
+        "style": "strict",
+        "dto": "StartupMigrateRequest"
+      }
+    },
+    {
+      "index": 63,
+      "name": "app_exit",
+      "route": "shell",
+      "exposure": "ui",
+      "group": "shell",
+      "params": {
+        "style": "strict",
+        "dto": "AppExitRequest"
+      }
+    }
+  ]
+}

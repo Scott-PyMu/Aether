@@ -8,6 +8,8 @@ use std::fmt;
 
 use serde::Serialize;
 
+use super::business::BusinessCode;
+
 /// 结构化错误码（稳定枚举，新增取值需走设计变更评审）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
@@ -91,6 +93,44 @@ pub enum IpcErrorCode {
 }
 
 impl IpcErrorCode {
+    /// 32 枚举全集（声明顺序 = `error_codes.json` 的 `ipc` 顺序；M9-04 矩阵用）。
+    ///
+    /// **不得**据此扩展枚举：新增码必须先走 ADR 并登记（ADR-029 R-P0-2）。
+    pub const ALL: [Self; 32] = [
+        Self::InvalidJson,
+        Self::UnknownField,
+        Self::MissingField,
+        Self::InvalidType,
+        Self::InvalidValue,
+        Self::InvalidEnum,
+        Self::TooLarge,
+        Self::OutOfRange,
+        Self::InvalidFormat,
+        Self::PathRejected,
+        Self::StartupBlocked,
+        Self::MigrationFailed,
+        Self::Internal,
+        Self::CoreNotReady,
+        Self::NotImplemented,
+        Self::ReadbackGapTooLarge,
+        Self::ArtifactPathRejected,
+        Self::BuiltinProviderUndeletable,
+        Self::ProviderNotFound,
+        Self::ProviderModelNotFound,
+        Self::RuleNotFound,
+        Self::RuntimeBusy,
+        Self::NoCandidateRuntime,
+        Self::PauseUnsupported,
+        Self::ProviderUnreachable,
+        Self::ProviderAuthFailed,
+        Self::ProviderError,
+        Self::PresetNotFound,
+        Self::BuiltinPresetUndeletable,
+        Self::WorkspaceNotFound,
+        Self::WorkspaceInUse,
+        Self::SessionNotFound,
+    ];
+
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::InvalidJson => "invalid_json",
@@ -130,12 +170,17 @@ impl IpcErrorCode {
 }
 
 /// IPC 命令错误的线上形态：`{ "code": "...", "message": "...", "field": "..." }`。
+// `business_code`（ADR-029 §4.3 / M9-04）是**传输层增量**：仅由 JSON-RPC 映射写入
+// `error.data.business_code`，不改变本结构的序列化形状（字段**非 `pub`** 且
+// `serde(skip)`，M9-01 HEAD golden 保持 0 差异），也不进入 32 枚举计数。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 pub struct IpcError {
     pub code: IpcErrorCode,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub field: Option<String>,
+    #[serde(skip)]
+    business: Option<BusinessCode>,
 }
 
 impl IpcError {
@@ -144,6 +189,7 @@ impl IpcError {
             code,
             message: message.into(),
             field: None,
+            business: None,
         }
     }
 
@@ -156,7 +202,20 @@ impl IpcError {
             code,
             message: message.into(),
             field: Some(field.into()),
+            business: None,
         }
+    }
+
+    /// 附加稳定业务码（`error.data.business_code`；不改变 `aether_code`/32 枚举）。
+    #[must_use]
+    pub fn with_business_code(mut self, code: BusinessCode) -> Self {
+        self.business = Some(code);
+        self
+    }
+
+    /// 业务码（JSON-RPC 映射读取；`None` = 不输出该字段）。
+    pub fn business_code(&self) -> Option<BusinessCode> {
+        self.business
     }
 
     pub fn invalid_json(message: impl Into<String>) -> Self {

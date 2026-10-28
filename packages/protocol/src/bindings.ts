@@ -156,6 +156,10 @@ export type AuditQueryRequest = {
 	to_ts?: number | null,
 	limit?: number | null,
 	offset?: number | null,
+	/**  响应预算（ADR-018 A-1：64KiB–1.5MiB，缺省 1MiB）。 */
+	max_bytes?: number | null,
+	/**  不透明游标（与 `offset` 互斥）。 */
+	next_cursor?: string | null,
 };
 
 export type BackupCreateRequest = {
@@ -323,6 +327,10 @@ export type MessagesPageRequest = {
 	session_id: string,
 	last_seq?: number | null,
 	limit?: number | null,
+	/**  响应预算（ADR-009 §9：64KiB–1.5MiB，缺省 1MiB）。 */
+	max_bytes?: number | null,
+	/**  不透明游标（仅 events 补读流；与 `last_seq` 互斥）。 */
+	next_cursor?: string | null,
 };
 
 /**  权限决议（D9；M6-01/ADR-019 启用 `always` 持久授权「记住」）。 */

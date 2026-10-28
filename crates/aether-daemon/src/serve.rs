@@ -283,12 +283,18 @@ impl Server for DaemonServer {
     }
 }
 
-/// `IpcError` → JSON-RPC 失败（传输码 + `aether_code`；业务码由 M9-04 逐项补齐）。
+/// `IpcError` → JSON-RPC 失败（传输码 + `aether_code` + `business_code`）。
+///
+/// `data.aether_code` 只取 32 枚举；业务码走 `data.business_code`（ADR-029 §4.3/§16.2；
+/// M9-04 逐项可达）。省略 `business_code` 时形状与 M9-01 基线一致。
 pub fn map_ipc_error(error: IpcError) -> RpcFailure {
     let transport = transport_code_for(error.code);
     let mut failure = RpcFailure::transport(transport, error.code.as_str(), error.message.clone());
     if let Some(field) = &error.field {
         failure = failure.with_detail("field", field.clone());
+    }
+    if let Some(business) = error.business_code() {
+        failure = failure.with_business(business.as_str());
     }
     failure
 }
@@ -573,6 +579,48 @@ mod tests {
         assert_eq!(failure.transport_code(), code::INVALID_PARAMS);
         assert_eq!(failure.aether_code(), "unknown_field");
         assert_eq!(failure.details(), Some(&json!({"field": "payload"})));
+    }
+
+    /// M9-04 DoD-2：`IpcErrorCode` 32 枚举逐项映射，`aether_code` 均落在 32 集合内。
+    #[test]
+    fn all_32_ipc_codes_map_to_transport_and_aether_code() {
+        assert_eq!(IpcErrorCode::ALL.len(), 32);
+        for ipc_code in IpcErrorCode::ALL {
+            let failure = map_ipc_error(IpcError::new(ipc_code, "injected"));
+            assert_eq!(failure.aether_code(), ipc_code.as_str());
+            assert!(
+                [
+                    code::INVALID_PARAMS,
+                    code::METHOD_NOT_FOUND,
+                    code::CORE_NOT_READY,
+                    code::APPLICATION_ERROR,
+                ]
+                .contains(&failure.transport_code()),
+                "{} 的传输码未分类：{}",
+                ipc_code.as_str(),
+                failure.transport_code()
+            );
+            assert!(
+                failure.business_code().is_none(),
+                "未附加业务码时不得输出 business_code"
+            );
+        }
+    }
+
+    /// M9-04 DoD-2：9 业务码逐项经 `error.data.business_code` 承载（不占 32 枚举）。
+    #[test]
+    fn all_9_business_codes_are_carried_in_error_data() {
+        use aether_app::ipc::BusinessCode;
+        assert_eq!(BusinessCode::ALL.len(), 9);
+        for business in BusinessCode::ALL {
+            let failure = map_ipc_error(
+                IpcError::invalid_value("injected").with_business_code(business),
+            );
+            assert_eq!(failure.business_code(), Some(business.as_str()));
+            // 业务码不改变既有 `invalid_value` 的传输分类（参数校验家族 -32602）。
+            assert_eq!(failure.transport_code(), code::INVALID_PARAMS);
+            assert_eq!(failure.aether_code(), "invalid_value");
+        }
     }
 
     #[test]
