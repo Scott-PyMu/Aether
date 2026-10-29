@@ -9,7 +9,16 @@
  *            session_send.client_msg_id 必填 ULID（ADR-005 幂等键）
  *   DoD4     静态检查：capabilities 最小 allowlist、devtools 仅 debug（cargo tree）
  *
- * 用法：node scripts/test/m1-08/verify-m1-08.mjs [--skip-e2e] [--skip-tests]
+ * 用法：node scripts/test/m1-08/verify-m1-08.mjs [--skip-e2e] [--skip-tests] [--full]
+ *
+ * 内存口径（默认低内存；2026-10-29 本机 OOM 后调整）：
+ *   - `cargo test -p aether-tauri` 会并行链接 50+ 个测试目标；默认改为
+ *     `-j 1 -- --test-threads=1`，并设置
+ *     `CARGO_BUILD_JOBS=1` / `CARGO_PROFILE_TEST_DEBUG=0` /
+ *     `CARGO_PROFILE_DEV_DEBUG=0` / `CARGO_PROFILE_TEST_CODEGEN_UNITS=1` /
+ *     `CARGO_INCREMENTAL=0`；
+ *   - 时间会明显变长（每个 target 串行链接/运行），但峰值内存显著下降；
+ *   - CI/高内存环境可加 `--full` 恢复旧的并行行为。
  */
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -22,15 +31,30 @@ import { buildEnv } from "./env.mjs";
 const args = process.argv.slice(2);
 const skipE2e = args.includes("--skip-e2e");
 const skipTests = args.includes("--skip-tests");
+const fullMode = args.includes("--full");
 
 const env = buildEnv();
+if (!fullMode) {
+  // 低内存默认值；显式环境变量优先（例如 CI 已设置更高并发）。
+  env.CARGO_BUILD_JOBS ??= "1";
+  env.CARGO_PROFILE_TEST_DEBUG ??= "0";
+  env.CARGO_PROFILE_DEV_DEBUG ??= "0";
+  env.CARGO_PROFILE_TEST_CODEGEN_UNITS ??= "1";
+  env.CARGO_INCREMENTAL ??= "0";
+  console.log(
+    "[m1-08] 低内存模式：CARGO_BUILD_JOBS=1 / test+dev debug=0 / test codegen-units=1 / incremental=0（--full 关闭）",
+  );
+}
 const checks = [];
 const record = (name, exit, expect = 0) => checks.push({ name, exit, expect });
 
 if (!skipTests) {
+  const testArgs = fullMode
+    ? ["test", "-p", "aether-tauri"]
+    : ["test", "-p", "aether-tauri", "-j", "1", "--", "--test-threads=1"];
   record(
     "Rust 单测矩阵：cargo test -p aether-tauri（DoD3 + 导航 + 基线 + shell 冒烟）",
-    run(bin("cargo"), ["test", "-p", "aether-tauri"], { env }),
+    run(bin("cargo"), testArgs, { env }),
   );
 }
 
