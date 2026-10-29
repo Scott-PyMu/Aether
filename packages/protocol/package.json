@@ -13,8 +13,8 @@
   "types": "./src/index.ts",
   "main": "./src/index.ts",
   "scripts": {
-    "generate": "node ../../scripts/ci/protocol-types.mjs generate && node ../../scripts/ci/command-manifest.mjs generate && node ../../scripts/ci/error-codes.mjs generate && node ../../scripts/ci/protocol-client.mjs generate && node ../../scripts/ci/bindings.mjs generate",
-    "check": "node ../../scripts/ci/protocol-types.mjs check && node ../../scripts/ci/command-manifest.mjs check && node ../../scripts/ci/error-codes.mjs check && node ../../scripts/ci/protocol-client.mjs check && node ../../scripts/ci/bindings.mjs check",
+    "generate": "node ../../scripts/ci/protocol-types.mjs generate && node ../../scripts/ci/command-manifest.mjs generate && node ../../scripts/ci/path-commands.mjs generate && node ../../scripts/ci/error-codes.mjs generate && node ../../scripts/ci/protocol-client.mjs generate && node ../../scripts/ci/bindings.mjs generate",
+    "check": "node ../../scripts/ci/protocol-types.mjs check && node ../../scripts/ci/command-manifest.mjs check && node ../../scripts/ci/path-commands.mjs check && node ../../scripts/ci/error-codes.mjs check && node ../../scripts/ci/protocol-client.mjs check && node ../../scripts/ci/bindings.mjs check",
     "test": "vitest run",
     "coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit"

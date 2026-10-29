@@ -1,0 +1,17 @@
+{
+  "schema": "aether.electron-fuses.v1",
+  "description": "M9-10 DoD-3（ADR-029 §5.1）：打包后由 scripts/ci/electron-fuses.mjs 翻转并断言；all 9 fuses 必须显式声明（strictlyRequireAllFuses）。",
+  "version": "1",
+  "strictlyRequireAllFuses": true,
+  "options": {
+    "runAsNode": false,
+    "enableCookieEncryption": true,
+    "enableNodeOptionsEnvironmentVariable": false,
+    "enableNodeCliInspectArguments": false,
+    "enableEmbeddedAsarIntegrityValidation": false,
+    "onlyLoadAppFromAsar": true,
+    "loadBrowserProcessSpecificV8Snapshot": false,
+    "grantFileProtocolExtraPrivileges": false,
+    "wasmTrapHandlers": true
+  }
+}

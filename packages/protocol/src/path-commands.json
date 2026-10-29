@@ -1,0 +1,145 @@
+{
+  "schema": "aether.path-commands.v1",
+  "sources": {
+    "commands": "crates/aether-app/src/ipc/handlers.rs",
+    "dto": "crates/aether-app/src/ipc/dto.rs",
+    "required": "docs/adr/ADR-029-electron-shell-rust-daemon.md §5.3"
+  },
+  "counts": {
+    "commands": 10,
+    "required": 8
+  },
+  "required": [
+    "artifact_add",
+    "workspace_set",
+    "startup_migrate",
+    "backup_restore",
+    "backup_create",
+    "export_diagnostics",
+    "session_export",
+    "archive_export"
+  ],
+  "commands": [
+    {
+      "name": "artifact_add",
+      "dto": "ArtifactAddRequest",
+      "path_fields": [
+        {
+          "name": "path",
+          "type": "String"
+        }
+      ],
+      "validator": "resolve_path",
+      "error_code": "artifact_path_rejected"
+    },
+    {
+      "name": "workspace_set",
+      "dto": "WorkspaceSetRequest",
+      "path_fields": [
+        {
+          "name": "root_path",
+          "type": "Option<String>"
+        }
+      ],
+      "validator": "canonical_root_path",
+      "error_code": "path_rejected"
+    },
+    {
+      "name": "workspace_create",
+      "dto": "WorkspaceCreateRequest",
+      "path_fields": [
+        {
+          "name": "root_path",
+          "type": "String"
+        }
+      ],
+      "validator": "canonical_root_path",
+      "error_code": "path_rejected"
+    },
+    {
+      "name": "startup_migrate",
+      "dto": "StartupMigrateRequest",
+      "path_fields": [
+        {
+          "name": "target_dir",
+          "type": "String"
+        }
+      ],
+      "validator": "migrate",
+      "error_code": "path_rejected"
+    },
+    {
+      "name": "backup_create",
+      "dto": "BackupCreateRequest",
+      "path_fields": [
+        {
+          "name": "target_dir",
+          "type": "Option<String>"
+        }
+      ],
+      "validator": "canonical_target_dir",
+      "error_code": "path_rejected"
+    },
+    {
+      "name": "backup_restore",
+      "dto": "BackupRestoreRequest",
+      "path_fields": [
+        {
+          "name": "path",
+          "type": "String",
+          "variant": "external"
+        }
+      ],
+      "validator": "canonical_external_path",
+      "error_code": "path_rejected"
+    },
+    {
+      "name": "export_diagnostics",
+      "dto": "ExportDiagnosticsRequest",
+      "path_fields": [
+        {
+          "name": "target_dir",
+          "type": "String"
+        }
+      ],
+      "validator": "canonical_target_dir",
+      "error_code": "path_rejected"
+    },
+    {
+      "name": "session_export",
+      "dto": "SessionExportRequest",
+      "path_fields": [
+        {
+          "name": "target_dir",
+          "type": "Option<String>"
+        }
+      ],
+      "validator": "canonical_target_dir",
+      "error_code": "path_rejected"
+    },
+    {
+      "name": "archive_export",
+      "dto": "ArchiveExportRequest",
+      "path_fields": [
+        {
+          "name": "target_dir",
+          "type": "Option<String>"
+        }
+      ],
+      "validator": "canonical_target_dir",
+      "error_code": "path_rejected"
+    },
+    {
+      "name": "audit_export",
+      "dto": "AuditExportRequest",
+      "path_fields": [
+        {
+          "name": "target_dir",
+          "type": "Option<String>"
+        }
+      ],
+      "validator": "canonical_target_dir",
+      "error_code": "path_rejected"
+    }
+  ]
+}

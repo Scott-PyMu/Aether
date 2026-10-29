@@ -14,7 +14,7 @@
  * `build-manifest.json`（证据/排查用；不是协议生成物）。
  */
 import { builtinModules } from "node:module";
-import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -23,6 +23,9 @@ import { build } from "vite";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const outDir = path.join(appRoot, "electron", "dist");
+const fusesConfig = JSON.parse(
+  readFileSync(path.join(appRoot, "electron", "fuses.json"), "utf8"),
+);
 const entries = [
   { name: "main", input: path.join(appRoot, "electron", "main.ts") },
   { name: "preload", input: path.join(appRoot, "electron", "preload.ts") },
@@ -92,6 +95,7 @@ const manifest = {
   preload: "preload.cjs",
   fatal_preload: "fatalPreload.cjs",
   keychain_preload: "keychainPreload.cjs",
+  fuses: fusesConfig,
 };
 writeFileSync(
   path.join(outDir, "build-manifest.json"),

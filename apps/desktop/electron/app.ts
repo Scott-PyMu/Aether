@@ -32,6 +32,7 @@ import {
 import type { AetherEvent } from "@aether/protocol";
 
 import commandManifest from "../../../packages/protocol/src/command-manifest.json";
+import { BrowserHost, type BrowserBounds } from "./browserHost";
 import { DaemonClient, AetherRpcError, type DaemonNotification } from "./daemonClient";
 import { DaemonRestartPolicy } from "./daemonLifecycle";
 import {
@@ -101,12 +102,13 @@ import {
   ShellLocalError,
   type RefPickKind,
 } from "./shellLocal";
+import { guardRpcRequest } from "./rpcGuard";
 import { runStartupSequence, type StartupFailure } from "./startup";
 
-/** 主 UI IPC 参数上限（ADR-029 D6：2MiB）。 */
-const MAX_RPC_PAYLOAD_BYTES = 2 * 1024 * 1024;
-/** main 并发请求上限（ADR-029 §5.1：64）。 */
-const MAX_CONCURRENT_RPC = 64;
+/** 主 UI 命令白名单（63 条；main 第一道，daemon 最终权威）。 */
+const COMMAND_NAMES: ReadonlySet<string> = new Set(
+  commandManifest.commands.map((command) => command.name),
+);
 /** 单次离线诊断日志行数。 */
 const DIAGNOSTICS_LINES = DIAGNOSTICS_LOG_LINES;
 
@@ -125,6 +127,7 @@ interface ShellRuntime {
   keychainWindow: BrowserWindow | null;
   client: DaemonClient | null;
   bridge: MainEventBridge | null;
+  browserHost: BrowserHost | null;
   ready: boolean;
   starting: boolean;
   fatal: StartupFailure | null;
@@ -164,6 +167,7 @@ interface KeychainHooks {
 
 let keychainHooks: KeychainHooks | null = null;
 let concurrentRpc = 0;
+const hardenedContents = new WeakSet<WebContents>();
 
 const initialDataDir = resolveDataDir();
 const runtime: ShellRuntime = {
@@ -176,6 +180,7 @@ const runtime: ShellRuntime = {
   keychainWindow: null,
   client: null,
   bridge: null,
+  browserHost: null,
   ready: false,
   starting: false,
   fatal: null,
@@ -282,6 +287,7 @@ function installLifecycle(): void {
       return;
     }
     clearRestartTimer();
+    runtime.browserHost?.dispose();
     const client = runtime.client;
     if (client === null) {
       return;
@@ -353,6 +359,9 @@ async function onReady(): Promise<void> {
   Menu.setApplicationMenu(null);
   registerAppProtocol();
   installSessionSecurity();
+  installWebContentsHardening();
+  installCertificatePolicy();
+  installBrowserHost();
   installIpcHandlers();
   installKeychainHooksOnce();
   installE2EHook();
@@ -418,6 +427,10 @@ function installSessionSecurity(): void {
     callback(false);
   });
   defaultSession.setPermissionCheckHandler(() => false);
+  defaultSession.setCertificateVerifyProc((_request, callback) => {
+    // -3 = 使用 Chromium 默认校验（证书错误默认拒绝；不提供「继续访问」）。
+    callback(-3);
+  });
   defaultSession.webRequest.onHeadersReceived((details, callback) => {
     if (
       runtime.devServerUrl !== null &&
@@ -433,6 +446,42 @@ function installSessionSecurity(): void {
     }
     callback({});
   });
+}
+
+/** 所有新建 WebContents 统一加固（ADR-029 §5.1）。 */
+function installWebContentsHardening(): void {
+  app.on("web-contents-created", (_event, contents) => {
+    hardenContents(contents);
+  });
+}
+
+/** 证书错误显式拒绝（浏览器视图/任何 contents 均不提供继续访问后门）。 */
+function installCertificatePolicy(): void {
+  app.on("certificate-error", (event, contents, url, error, _certificate, callback) => {
+    event.preventDefault();
+    runtime.logger.log("warn", "certificate.rejected", {
+      url,
+      error,
+      type: contents.getType(),
+    });
+    callback(false);
+  });
+}
+
+/** `WebContentsView` PoC 宿主（M9-10；完整 UI-06 属 P4）。 */
+function installBrowserHost(): void {
+  const downloadsDir =
+    process.env.AETHER_E2E === "1" &&
+    typeof process.env.AETHER_E2E_DOWNLOADS_DIR === "string"
+      ? path.resolve(process.env.AETHER_E2E_DOWNLOADS_DIR)
+      : app.getPath("downloads");
+  runtime.browserHost = new BrowserHost({
+    logger: runtime.logger,
+    downloadsDir,
+    getParent: () => runtime.mainWindow,
+    openExternal,
+  });
+  runtime.logger.log("info", "browser.host.installed", { downloadsDir });
 }
 
 /** 创建主窗口（S-00 启动页）→ 窗口可见 → spawn daemon → initialize。 */
@@ -1074,6 +1123,21 @@ function waitForWindowReady(win: BrowserWindow, timeoutMs = 1_500): Promise<void
 
 /** 统一加固 WebContents（导航/新窗口/webview/权限/DevTools）。 */
 function hardenContents(contents: WebContents): void {
+  if (hardenedContents.has(contents)) {
+    return;
+  }
+  hardenedContents.add(contents);
+  const type = contents.getType();
+  if (type === "browserView") {
+    // WebContentsView 由 `BrowserHost` 按 ADR-029 §5.2 单独接线；
+    // 主 UI 的 `aether://app` 导航白名单不得套用到浏览器视图。
+    return;
+  }
+  if (type === "webview") {
+    runtime.logger.log("warn", "webview.destroyed", {});
+    contents.close();
+    return;
+  }
   contents.setWindowOpenHandler(({ url }) => {
     const decision = decideWindowOpen(url);
     if (decision === "external") {
@@ -1240,43 +1304,40 @@ function parseRpcEnvelope(payload: unknown): { method: string; params?: unknown 
 }
 
 async function dispatchRpc(method: string, params: unknown): Promise<unknown> {
-  const names = new Set(commandManifest.commands.map((command) => command.name));
-  if (!names.has(method)) {
-    throw new AetherRpcError(-32601, `未知命令：${method}`, {
-      aether_code: "not_implemented",
-    });
-  }
-  const size = payloadSize(params);
-  if (size > MAX_RPC_PAYLOAD_BYTES) {
-    throw new AetherRpcError(-32003, "请求参数超过 2MiB 上限", {
-      aether_code: "too_large",
-    });
-  }
-  if (concurrentRpc >= MAX_CONCURRENT_RPC) {
-    throw new AetherRpcError(-32603, "并发请求超过 64，已拒绝", {
-      aether_code: "internal",
+  const decision = guardRpcRequest({
+    method,
+    params,
+    inFlight: concurrentRpc,
+    commands: COMMAND_NAMES,
+  });
+  if (!decision.ok) {
+    throw new AetherRpcError(decision.rejection.code, decision.rejection.message, {
+      aether_code: decision.rejection.aetherCode,
+      ...(decision.rejection.field === undefined
+        ? {}
+        : { field: decision.rejection.field }),
     });
   }
 
-  if (isShellLocalCommand(method)) {
-    const outcome = await handleShellLocalCommand(method, params, {
-      pick: pickPath,
-      requestExit: () => requestQuit(),
-      requestRestart: requestRestart,
-    });
-    if (outcome.after !== undefined) {
-      setImmediate(outcome.after);
-    }
-    return outcome.result;
-  }
-
-  const client = runtime.client;
-  if (!runtime.ready || client === null || client.isClosed) {
-    throw AetherRpcError.coreNotReady();
-  }
   concurrentRpc += 1;
-  const requestStartedAt = Date.now();
   try {
+    if (isShellLocalCommand(method)) {
+      const outcome = await handleShellLocalCommand(method, params, {
+        pick: pickPath,
+        requestExit: () => requestQuit(),
+        requestRestart: requestRestart,
+      });
+      if (outcome.after !== undefined) {
+        setImmediate(outcome.after);
+      }
+      return outcome.result;
+    }
+
+    const client = runtime.client;
+    if (!runtime.ready || client === null || client.isClosed) {
+      throw AetherRpcError.coreNotReady();
+    }
+    const requestStartedAt = Date.now();
     const result = await client.request(method, params);
     if (method === "health" && runtime.uiReadyAt === null) {
       runtime.uiReadyAt = Date.now();
@@ -1440,17 +1501,6 @@ function toWireError(error: unknown): {
   };
 }
 
-function payloadSize(params: unknown): number {
-  if (params === undefined) {
-    return 0;
-  }
-  try {
-    return Buffer.byteLength(JSON.stringify(params), "utf8");
-  } catch {
-    return Number.POSITIVE_INFINITY;
-  }
-}
-
 function requestQuit(): void {
   runtime.logger.log("info", "app.exit.requested", { daemonPid: runtime.client?.pid ?? null });
   app.quit();
@@ -1597,6 +1647,21 @@ function installE2EHook(): void {
     retryDaemon: () => {
       retryDaemonNow();
       return true;
+    },
+    browser: {
+      open: (input: { id: string; url: string; bounds?: BrowserBounds }) =>
+        runtime.browserHost?.open(input) ?? Promise.resolve(null),
+      close: (id: string) => runtime.browserHost?.close(id) ?? false,
+      evaluate: (id: string, script: string) =>
+        runtime.browserHost?.evaluate(id, script) ?? Promise.resolve(null),
+      snapshot: () => runtime.browserHost?.snapshot() ?? [],
+      downloads: () => runtime.browserHost?.downloads() ?? [],
+      requestDownload: (id: string, url: string) =>
+        runtime.browserHost?.requestDownload(id, url) ?? false,
+      confirmDownload: (downloadId: string) =>
+        runtime.browserHost?.confirmDownload(downloadId) ?? false,
+      cancelDownload: (downloadId: string) =>
+        runtime.browserHost?.cancelDownload(downloadId) ?? false,
     },
   };
   (globalThis as unknown as { __aetherShell: typeof hook }).__aetherShell = hook;
