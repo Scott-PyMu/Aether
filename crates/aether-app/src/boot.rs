@@ -11,6 +11,8 @@ pub struct BackendBundle {
     pub shutdown: Option<std::sync::Arc<shutdown::AppShutdown>>,
     /// 事件管线句柄（壳层据此接线 ether://event 桥；无核心/降级启动为 None）。
     pub pipeline: Option<aether_control::EventPipeline>,
+    /// 单写队列句柄（事件桥升级审计出口；无核心/降级启动为 None）。
+    pub write: Option<aether_store::WriteQueue>,
 }
 
 /// 构造命令后端（ADR-007 `health` 真实接线 + M2-01 `runtime_*` 接线 + M2-07 巡检
@@ -36,6 +38,7 @@ pub fn build_backend(
             backend: std::sync::Arc::new(ipc::backend::NotImplementedBackend),
             shutdown: None,
             pipeline: None,
+            write: None,
         };
     }
     let data_dir = std::path::PathBuf::from(startup.snapshot().data_dir);
@@ -397,8 +400,10 @@ pub fn build_backend(
         None => Vec::new(),
     };
 
-    // 壳层需要管线句柄接线事件桥（`AppShutdown::new` 会取走管线所有权）。
+    // 壳层需要管线句柄接线事件桥（`AppShutdown::new` 会取走管线所有权）；
+    // 升级审计同样需要单写队列（后段 `write_slot` 会被装饰器消费，先克隆）。
     let pipeline_for_bridge = pipeline.clone();
+    let write_for_bridge = write_slot.clone();
     let orchestrator = if supervisor.is_some() || pipeline.is_some() || storage_slot.is_some() {
         let orchestrator = shutdown::AppShutdown::new(
             pipeline,
@@ -549,6 +554,6 @@ pub fn build_backend(
         backend: std::sync::Arc::new(session_backend),
         shutdown: orchestrator,
         pipeline: pipeline_for_bridge,
+        write: write_for_bridge,
     }
 }
-

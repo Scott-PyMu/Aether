@@ -1,0 +1,31 @@
+{
+  "schema": "aether.m9-05.event-types/1",
+  "source": "设计文档附录 B / aether_core::EventType",
+  "mvp": [
+    "session.created",
+    "session.updated",
+    "session.status_changed",
+    "session.closed",
+    "run.started",
+    "run.completed",
+    "run.failed",
+    "run.cancelled",
+    "message.delta",
+    "message.completed",
+    "tool.call_started",
+    "tool.call_completed",
+    "tool.call_failed",
+    "permission.requested",
+    "permission.resolved",
+    "runtime.status_changed",
+    "usage",
+    "log",
+    "error"
+  ],
+  "reserved": [
+    "message.reasoning_delta",
+    "subagent.spawned",
+    "subagent.completed",
+    "workflow.*"
+  ]
+}

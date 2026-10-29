@@ -1,0 +1,51 @@
+{
+  "schema": "aether.m9-05.event-envelope/1",
+  "method": "aether.event",
+  "channel": "aether:event",
+  "domain_channel": "aether://event",
+  "fields": [
+    "v",
+    "id",
+    "session_id",
+    "run_id",
+    "runtime_id",
+    "seq",
+    "ts",
+    "type",
+    "payload"
+  ],
+  "event": {
+    "v": 1,
+    "id": "01J00000000000000000000001",
+    "session_id": "01J00000000000000000000S05",
+    "run_id": null,
+    "runtime_id": "mock",
+    "seq": 1,
+    "ts": 1700000000000,
+    "type": "session.updated",
+    "payload": {
+      "session_id": "01J00000000000000000000S05",
+      "changed_fields": ["title"],
+      "title": "M9-05"
+    }
+  },
+  "notification": {
+    "jsonrpc": "2.0",
+    "method": "aether.event",
+    "params": {
+      "v": 1,
+      "id": "01J00000000000000000000001",
+      "session_id": "01J00000000000000000000S05",
+      "run_id": null,
+      "runtime_id": "mock",
+      "seq": 1,
+      "ts": 1700000000000,
+      "type": "session.updated",
+      "payload": {
+        "session_id": "01J00000000000000000000S05",
+        "changed_fields": ["title"],
+        "title": "M9-05"
+      }
+    }
+  }
+}

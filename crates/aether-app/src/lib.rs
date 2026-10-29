@@ -29,6 +29,7 @@ pub mod core_health;
 pub mod credential_broker;
 pub mod diagnostics_control;
 pub mod disk;
+pub mod event_bridge;
 pub mod ipc;
 pub mod isolation;
 pub mod json_payload;

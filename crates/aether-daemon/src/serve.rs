@@ -16,9 +16,14 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use aether_app::boot;
+use aether_app::event_bridge::{
+    DeliveryConfig, DeliveryHandle, EventBridge, EventSink, SinkError, DELIVERY_SHUTDOWN_TIMEOUT,
+};
 use aether_app::ipc::{is_shell_local, IpcError, IpcErrorCode, IpcState, COMMANDS};
 use aether_app::logging::{self, LogSink, DEFAULT_RING_CAPACITY};
 use aether_app::{core_version, version};
+use aether_core::EventEnvelope;
+use aether_rpc::Notification;
 use aether_rpc::{
     code, encode_line, Connection, DaemonPhase, Frame, FrameReader, Handled, RpcFailure, Server,
 };
@@ -65,6 +70,45 @@ impl Default for Transport {
     }
 }
 
+/// JSON-RPC 通知方法名（ADR-029 §4.4：`aether.event`）。
+pub const EVENT_METHOD: &str = "aether.event";
+
+/// 事件通知帧（`params` = EventEnvelope 9 字段；无 `id`）。
+pub fn event_notification(event: &EventEnvelope) -> Value {
+    let params = match serde_json::to_value(event) {
+        Ok(value) => value,
+        Err(error) => {
+            // 不可达路径（EventEnvelope 只含可序列化类型）：以占位 payload 保持 9 字段形状。
+            tracing::error!(error = %error, "事件信封序列化失败（保持 JSON-RPC 形状）");
+            json!({
+                "v": aether_core::EVENT_ENVELOPE_VERSION,
+                "id": event.id.as_str(),
+                "session_id": event.session_id.as_str(),
+                "run_id": event.run_id.as_ref().map(aether_core::RunId::as_str),
+                "runtime_id": event.runtime_id.as_str(),
+                "seq": event.seq,
+                "ts": event.ts,
+                "type": event.event_type().as_str(),
+                "payload": Value::Null,
+            })
+        }
+    };
+    Notification::new(EVENT_METHOD, params).to_value()
+}
+
+/// 事件桥传输出口：`aether.event` JSON-RPC notification → stdout（只允许 JSONL）。
+struct TransportEventSink {
+    transport: Transport,
+}
+
+impl EventSink for TransportEventSink {
+    fn send(&self, event: &EventEnvelope) -> Result<(), SinkError> {
+        self.transport
+            .send(&event_notification(event))
+            .map_err(|error| SinkError::new(format!("stdout 写入失败：{error}")))
+    }
+}
+
 /// 阶段单元（`DaemonPhase` + `since_ms`）。
 struct PhaseCell {
     phase: DaemonPhase,
@@ -80,6 +124,8 @@ pub struct DaemonServer {
     log_sink: Option<Arc<LogSink>>,
     transport: Transport,
     warm: Option<JoinHandle<()>>,
+    /// 事件桥句柄（预热完成、管线可用后注入；关闭时先停桥再停管线）。
+    event_bridge: Arc<Mutex<Option<DeliveryHandle>>>,
     shutdown_counter: u64,
 }
 
@@ -103,6 +149,7 @@ impl DaemonServer {
             log_sink,
             transport,
             warm: None,
+            event_bridge: Arc::new(Mutex::new(None)),
             shutdown_counter: 0,
         }
     }
@@ -137,9 +184,29 @@ impl DaemonServer {
             .send(&aether_rpc::Notification::new("daemon.status", params).to_value());
     }
 
-    /// 进入关闭序列：停止预热等待、阶段置 `shutting_down`。
+    /// 进入关闭序列：先停事件桥（避免关闭后继续写 stdout），再停预热等待。
     fn begin_shutdown(&mut self) {
         self.set_phase(DaemonPhase::ShuttingDown, Some("shutdown"));
+        let bridge = match self.event_bridge.lock() {
+            Ok(mut guard) => guard.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        if let Some(mut bridge) = bridge {
+            let metrics = bridge.metrics();
+            let stopped = self
+                .runtime
+                .block_on(bridge.shutdown(DELIVERY_SHUTDOWN_TIMEOUT));
+            tracing::info!(
+                stopped,
+                forwarded = metrics.forwarded,
+                dropped_delta = metrics.dropped_delta,
+                lagged = metrics.lagged_events,
+                readback_events = metrics.readback_events,
+                readback_failures = metrics.readback_failures,
+                connection_rebuilds = metrics.connection_rebuilds,
+                "事件桥已停止（先于管线关闭；daemon 未重启）"
+            );
+        }
         if let Some(warm) = self.warm.take() {
             let handle = self.runtime.clone();
             let joined = handle.block_on(async {
@@ -196,36 +263,107 @@ impl DaemonServer {
         let transport = self.transport.clone();
         let log_sink = self.log_sink.clone();
         let handle = self.runtime.clone();
+        let bridge_slot = Arc::clone(&self.event_bridge);
         let resource_dir = resource_dir_from_exe();
         self.warm = Some(self.runtime.spawn(async move {
             let blocker = handle.clone();
+            let bridge_runtime = handle.clone();
+            let bridge_transport = transport.clone();
             let joined = tokio::task::spawn_blocking(move || {
                 let bundle = boot::build_backend(&gate, resource_dir, log_sink, &blocker);
                 let _ = state.install_backend(bundle.backend);
                 if let Some(orchestrator) = bundle.shutdown {
                     let _ = state.install_shutdown(orchestrator);
                 }
-                degraded_snapshot(&state)
+                // M9-05：落盘后事件 → `aether.event` 通知（先日志后广播由管线保证）。
+                let bridge = bundle.pipeline.map(|pipeline| {
+                    let mut bridge = EventBridge::new(
+                        pipeline,
+                        Arc::new(TransportEventSink {
+                            transport: bridge_transport,
+                        }),
+                    )
+                    .with_config(DeliveryConfig::default());
+                    if let Some(write) = bundle.write {
+                        bridge = bridge.with_audit_write(write);
+                    }
+                    bridge.spawn(&bridge_runtime)
+                });
+                let degraded = degraded_snapshot(&state);
+                (bridge, degraded)
             })
             .await;
-            let (next, reason) = match joined {
-                Ok(Some(reason)) => (DaemonPhase::Degraded, Some(reason)),
-                Ok(None) => (DaemonPhase::Ready, None),
+            let (next, reason, bridge) = match joined {
+                Ok((bridge, Some(reason))) => (DaemonPhase::Degraded, Some(reason), bridge),
+                Ok((bridge, None)) => (DaemonPhase::Ready, None, bridge),
                 Err(error) => (
                     DaemonPhase::Degraded,
                     Some(format!("预热任务失败：{error}")),
+                    None,
                 ),
             };
-            let since_ms = {
+            let shutting_down = {
                 let mut cell = match phase.lock() {
                     Ok(guard) => guard,
                     Err(poisoned) => poisoned.into_inner(),
                 };
-                cell.phase = next;
-                cell.since_ms = now_ms();
+                if cell.phase == DaemonPhase::ShuttingDown {
+                    true
+                } else {
+                    cell.phase = next;
+                    cell.since_ms = now_ms();
+                    false
+                }
+            };
+            match bridge {
+                Some(Ok(bridge)) if !shutting_down => {
+                    {
+                        let mut slot = match bridge_slot.lock() {
+                            Ok(guard) => guard,
+                            Err(poisoned) => poisoned.into_inner(),
+                        };
+                        *slot = Some(bridge);
+                    }
+                    // 关闭可能与预热完成并发：安装后复核，避免关闭后继续投递。
+                    let shutting_down_now = match phase.lock() {
+                        Ok(guard) => guard.phase == DaemonPhase::ShuttingDown,
+                        Err(poisoned) => poisoned.into_inner().phase == DaemonPhase::ShuttingDown,
+                    };
+                    if shutting_down_now {
+                        let handle = {
+                            let mut guard = match bridge_slot.lock() {
+                                Ok(guard) => guard,
+                                Err(poisoned) => poisoned.into_inner(),
+                            };
+                            guard.take()
+                        };
+                        if let Some(mut handle) = handle {
+                            let _ = handle.shutdown(DELIVERY_SHUTDOWN_TIMEOUT).await;
+                        }
+                    }
+                }
+                Some(Ok(mut bridge)) => {
+                    let _ = bridge.shutdown(DELIVERY_SHUTDOWN_TIMEOUT).await;
+                }
+                Some(Err(error)) => {
+                    tracing::error!(error = %error, "事件桥启动失败（业务命令仍可用；事件不投递）");
+                }
+                None => {}
+            }
+            let since_ms = {
+                let cell = match phase.lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
                 cell.since_ms
             };
-            let mut params = json!({"phase": next.as_str(), "since_ms": since_ms});
+            // 关闭已开始则不得回退阶段（shutting_down 优先于预热完成）。
+            let status_phase = if shutting_down {
+                DaemonPhase::ShuttingDown
+            } else {
+                next
+            };
+            let mut params = json!({"phase": status_phase.as_str(), "since_ms": since_ms});
             if let Some(reason) = &reason {
                 if let Some(object) = params.as_object_mut() {
                     object.insert("reason".to_owned(), Value::from(reason.clone()));
@@ -233,7 +371,11 @@ impl DaemonServer {
             }
             let _ =
                 transport.send(&aether_rpc::Notification::new("daemon.status", params).to_value());
-            tracing::info!(phase = next.as_str(), reason = ?reason, "预热阶段结束");
+            tracing::info!(
+                phase = status_phase.as_str(),
+                reason = ?reason,
+                "预热阶段结束"
+            );
         }));
     }
 }
@@ -613,9 +755,8 @@ mod tests {
         use aether_app::ipc::BusinessCode;
         assert_eq!(BusinessCode::ALL.len(), 9);
         for business in BusinessCode::ALL {
-            let failure = map_ipc_error(
-                IpcError::invalid_value("injected").with_business_code(business),
-            );
+            let failure =
+                map_ipc_error(IpcError::invalid_value("injected").with_business_code(business));
             assert_eq!(failure.business_code(), Some(business.as_str()));
             // 业务码不改变既有 `invalid_value` 的传输分类（参数校验家族 -32602）。
             assert_eq!(failure.transport_code(), code::INVALID_PARAMS);
@@ -629,5 +770,40 @@ mod tests {
             assert!(is_shell_local(method));
         }
         assert!(!is_shell_local("health"));
+    }
+
+    /// M9-05 DoD-1：`aether.event` 通知无 `id`，`params` 恰好 9 字段（附录 B 语义不变）。
+    #[test]
+    fn event_notification_is_aether_event_with_nine_fields() {
+        use aether_core::{
+            EventEnvelope, EventId, EventPayload, RunId, RuntimeId, SessionId,
+            SessionUpdatedPayload, ENVELOPE_FIELDS,
+        };
+        let session = SessionId::new("01J0000000000000000000000A").expect("session");
+        let event = EventEnvelope {
+            v: aether_core::EVENT_ENVELOPE_VERSION,
+            id: EventId::new("01J00000000000000000000001").expect("id"),
+            session_id: session.clone(),
+            run_id: Some(RunId::new("01J000000000000000000000R1").expect("run")),
+            runtime_id: RuntimeId::new("mock").expect("runtime"),
+            seq: 7,
+            ts: 1_700_000_000_000,
+            payload: EventPayload::SessionUpdated(SessionUpdatedPayload {
+                session_id: session,
+                changed_fields: vec!["title".to_owned()],
+                title: Some("M9-05".to_owned()),
+            }),
+        };
+        let frame = event_notification(&event);
+        assert_eq!(frame["jsonrpc"], json!("2.0"));
+        assert_eq!(frame["method"], json!(EVENT_METHOD));
+        assert!(frame.get("id").is_none(), "通知不得携带 id");
+        let params = frame["params"].as_object().expect("params 对象");
+        assert_eq!(params.len(), 9, "EventEnvelope 必须恰好 9 字段");
+        for field in ENVELOPE_FIELDS {
+            assert!(params.contains_key(field), "缺少信封字段 {field}");
+        }
+        assert_eq!(params["seq"], json!(7));
+        assert_eq!(params["type"], json!("session.updated"));
     }
 }

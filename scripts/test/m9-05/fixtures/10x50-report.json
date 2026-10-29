@@ -1,0 +1,21 @@
+{
+  "schema": "aether.m9-05.10x50-report/1",
+  "recorded_at": "2026-10-28T21:43:00+08:00",
+  "platform": "Windows x64",
+  "command": "cargo test -p aether-app --test m9_05_event_bridge ten_sessions -- --nocapture",
+  "report": {
+    "sessions": 10,
+    "deltas_per_second": 50,
+    "elapsed_ms": 1633,
+    "control_expected": 20,
+    "control_received": 20,
+    "control_lost": 0,
+    "deltas_received": 500,
+    "dropped_delta": 0,
+    "p95_ms": 1
+  },
+  "thresholds": {
+    "control_lost_max": 0,
+    "p95_ms_max": 150
+  }
+}
