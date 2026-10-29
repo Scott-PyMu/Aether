@@ -43,6 +43,7 @@ pub mod codec;
 pub mod connection;
 pub mod initialize;
 pub mod message;
+pub mod server_request;
 
 pub use codec::{encode_line, Frame, FrameError, FrameReader, MAX_FRAME_BYTES};
 pub use connection::{Connection, Handled, RpcFailure, Server};
@@ -51,6 +52,11 @@ pub use initialize::{
     PROTOCOL_MAJOR, PROTOCOL_VERSION,
 };
 pub use message::{ErrorData, ErrorObject, Id, Notification, Request, Response, JSONRPC_VERSION};
+pub use server_request::{
+    ClientResponse, DialogPickParams, DialogPickResult, PendingServerRequests, PickKind,
+    RegistrationError, ResponseDisposition, ServerRequest, ServerRequestError,
+    ServerRequestExpiry, DIALOG_PICK_METHOD, DIALOG_PICK_TIMEOUT_MS, SERVER_REQUEST_TIMEOUT_MS,
+};
 
 /// JSON-RPC 传输/类别错误码（ADR-029 §4.3；`error.code` 的唯一取值集合）。
 pub mod code {

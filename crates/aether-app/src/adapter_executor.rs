@@ -194,20 +194,24 @@ impl ToolCallAuditSink {
 struct SessionMappingGate {
     inner: Arc<PermissionServiceGate>,
     forward: Arc<Mutex<ForwardState>>,
+    /// 核心会话 → 在途 run 取消令牌（M9-06：权限等待可经 `session_interrupt` /
+    /// `session_pause` / `dispose` 级联取消；设计 D8/M2-05）。
+    cancel_tokens: Arc<Mutex<HashMap<SessionId, Arc<aether_control::RunCancelToken>>>>,
 }
 
 impl PermissionGate for SessionMappingGate {
     fn decide(&self, mut request: PermissionLoopRequest) -> PermissionGateFuture<'_> {
-        if let Some(adapter_session) = request.session_id.as_deref() {
-            let mapped = lock(&self.forward)
-                .sessions
-                .get(adapter_session)
-                .map(|session| session.as_str().to_owned());
-            if let Some(core_session) = mapped {
-                request.session_id = Some(core_session);
-            }
+        let mapped = request
+            .session_id
+            .as_deref()
+            .and_then(|adapter_session| lock(&self.forward).sessions.get(adapter_session).cloned());
+        let cancel = mapped
+            .as_ref()
+            .and_then(|session| lock(&self.cancel_tokens).get(session).cloned());
+        if let Some(core_session) = mapped {
+            request.session_id = Some(core_session.as_str().to_owned());
         }
-        self.inner.decide(request)
+        self.inner.decide_with_cancel(request, cancel)
     }
 }
 
@@ -348,6 +352,28 @@ fn connection_supports_thinking_depth(client: &AdapterSessionClient) -> bool {
     }
 }
 
+/// 在途 run 取消令牌登记守卫（M9-06）：run 结束时摘除（仅当仍是本次 run 的令牌）。
+///
+/// `run_retry`/暂停恢复可能在旧执行器 future 收尾前注册新令牌；`Arc::ptr_eq` 保证
+/// 旧守卫不会误删新 run 的取消树。
+struct CancelTokenGuard {
+    map: Arc<Mutex<HashMap<SessionId, Arc<aether_control::RunCancelToken>>>>,
+    session: SessionId,
+    token: Arc<aether_control::RunCancelToken>,
+}
+
+impl Drop for CancelTokenGuard {
+    fn drop(&mut self) {
+        let mut map = lock(&self.map);
+        let current = map.get(&self.session).map(Arc::clone);
+        if let Some(current) = current {
+            if Arc::ptr_eq(&current, &self.token) {
+                map.remove(&self.session);
+            }
+        }
+    }
+}
+
 /// 生产 run 执行器（克隆共享同一实例）。
 #[derive(Clone)]
 pub struct AdapterRunExecutor {
@@ -363,6 +389,9 @@ pub struct AdapterRunExecutor {
     clients: Arc<AsyncMutex<HashMap<String, Arc<AdapterSessionClient>>>>,
     /// 核心会话 → (runtime_id, 适配器会话 id)。
     adapter_sessions: Arc<Mutex<HashMap<SessionId, (String, String)>>>,
+    /// 核心会话 → 当前在途 run 的取消令牌（M9-06：权限等待可经取消树级联取消；
+    /// 设计 D8/M2-05 口径）。run 结束即摘除；同一会话内串行。
+    cancel_tokens: Arc<Mutex<HashMap<SessionId, Arc<aether_control::RunCancelToken>>>>,
     /// 事件转发状态（与转发任务共享）。
     forward: Arc<Mutex<ForwardState>>,
     /// 工具调用终态审计出口（M6-03/ADR-023）。
@@ -389,6 +418,7 @@ impl AdapterRunExecutor {
             permission_probes: Arc::new(Mutex::new(Vec::new())),
             clients: Arc::new(AsyncMutex::new(HashMap::new())),
             adapter_sessions: Arc::new(Mutex::new(HashMap::new())),
+            cancel_tokens: Arc::new(Mutex::new(HashMap::new())),
             forward: Arc::new(Mutex::new(ForwardState::default())),
             tool_audit,
         }
@@ -522,6 +552,7 @@ impl AdapterRunExecutor {
             let mapping: Arc<dyn PermissionGate> = Arc::new(SessionMappingGate {
                 inner: gate,
                 forward: Arc::clone(&self.forward),
+                cancel_tokens: Arc::clone(&self.cancel_tokens),
             });
             let loop_ = PermissionLoop::new(mapping);
             lock(&self.permission_probes).push(loop_.probe());
@@ -676,6 +707,18 @@ impl AdapterRunExecutor {
     }
 
     async fn execute_inner(&self, request: &RunRequest) -> Result<ExecutorOutcome, ErrorInfo> {
+        // M9-06：登记本次 run 的取消令牌——适配器 `permission.request` 映射到核心会话后，
+        // 权限等待绑定同一取消树（`session_interrupt`/`session_pause`/`dispose` 级联取消，
+        // 审计 `permission.cancelled`；设计 D8/M2-05）。
+        let _cancel_guard = {
+            let token = Arc::new(request.cancel.clone());
+            lock(&self.cancel_tokens).insert(request.session_id.clone(), Arc::clone(&token));
+            CancelTokenGuard {
+                map: Arc::clone(&self.cancel_tokens),
+                session: request.session_id.clone(),
+                token,
+            }
+        };
         let session = self
             .reads
             .session(&request.session_id)

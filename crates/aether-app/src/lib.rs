@@ -35,6 +35,7 @@ pub mod isolation;
 pub mod json_payload;
 pub mod logging;
 pub mod permission_loop;
+pub mod permission_notice;
 pub mod picker;
 pub mod preset_control;
 pub mod provider_catalog;

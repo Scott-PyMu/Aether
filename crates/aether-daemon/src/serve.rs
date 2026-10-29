@@ -21,6 +21,10 @@ use aether_app::event_bridge::{
 };
 use aether_app::ipc::{is_shell_local, IpcError, IpcErrorCode, IpcState, COMMANDS};
 use aether_app::logging::{self, LogSink, DEFAULT_RING_CAPACITY};
+use aether_app::permission_notice::{
+    DispatchPendingCount, PermissionNotice, PermissionNoticeBridge, PermissionNoticeHandle,
+    PermissionNoticeSink, NOTICE_SHUTDOWN_TIMEOUT, PERMISSION_PENDING_METHOD,
+};
 use aether_app::{core_version, version};
 use aether_core::EventEnvelope;
 use aether_rpc::Notification;
@@ -109,6 +113,27 @@ impl EventSink for TransportEventSink {
     }
 }
 
+/// `permission.pending` 通知帧（`params` = `{count, session_id?}`；无 `id`）。
+///
+/// M9-06 DoD-5：仅刷新提示；决议仍走 `permissions_pending` / `permission_resolve`
+/// （ADR-029 §4.4/§16.4），本函数不携带任何决议字段。
+pub fn permission_pending_notification(notice: &PermissionNotice) -> Value {
+    Notification::new(PERMISSION_PENDING_METHOD, notice.to_params()).to_value()
+}
+
+/// 权限通知传输出口：`permission.pending` JSON-RPC notification → stdout。
+struct TransportPermissionNoticeSink {
+    transport: Transport,
+}
+
+impl PermissionNoticeSink for TransportPermissionNoticeSink {
+    fn send(&self, notice: &PermissionNotice) -> Result<(), SinkError> {
+        self.transport
+            .send(&permission_pending_notification(notice))
+            .map_err(|error| SinkError::new(format!("stdout 写入失败：{error}")))
+    }
+}
+
 /// 阶段单元（`DaemonPhase` + `since_ms`）。
 struct PhaseCell {
     phase: DaemonPhase,
@@ -126,6 +151,8 @@ pub struct DaemonServer {
     warm: Option<JoinHandle<()>>,
     /// 事件桥句柄（预热完成、管线可用后注入；关闭时先停桥再停管线）。
     event_bridge: Arc<Mutex<Option<DeliveryHandle>>>,
+    /// 权限待审批通知桥句柄（M9-06；先于事件桥停止）。
+    permission_notice: Arc<Mutex<Option<PermissionNoticeHandle>>>,
     shutdown_counter: u64,
 }
 
@@ -150,6 +177,7 @@ impl DaemonServer {
             transport,
             warm: None,
             event_bridge: Arc::new(Mutex::new(None)),
+            permission_notice: Arc::new(Mutex::new(None)),
             shutdown_counter: 0,
         }
     }
@@ -184,9 +212,28 @@ impl DaemonServer {
             .send(&aether_rpc::Notification::new("daemon.status", params).to_value());
     }
 
-    /// 进入关闭序列：先停事件桥（避免关闭后继续写 stdout），再停预热等待。
+    /// 进入关闭序列：先停通知桥/事件桥（避免关闭后继续写 stdout），再停预热等待。
     fn begin_shutdown(&mut self) {
         self.set_phase(DaemonPhase::ShuttingDown, Some("shutdown"));
+        // M9-06：先停权限通知桥（仅提示通道；先于事件桥/管线）。
+        let notice = match self.permission_notice.lock() {
+            Ok(mut guard) => guard.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        if let Some(mut notice) = notice {
+            let metrics = notice.metrics();
+            let stopped = self
+                .runtime
+                .block_on(notice.shutdown(NOTICE_SHUTDOWN_TIMEOUT));
+            tracing::info!(
+                stopped,
+                sent = metrics.sent,
+                count_failures = metrics.count_failures,
+                sink_errors = metrics.sink_errors,
+                lagged = metrics.lagged_events,
+                "权限通知桥已停止（仅提示通道；不改变决议路径）"
+            );
+        }
         let bridge = match self.event_bridge.lock() {
             Ok(mut guard) => guard.take(),
             Err(poisoned) => poisoned.into_inner().take(),
@@ -264,44 +311,63 @@ impl DaemonServer {
         let log_sink = self.log_sink.clone();
         let handle = self.runtime.clone();
         let bridge_slot = Arc::clone(&self.event_bridge);
+        let notice_slot = Arc::clone(&self.permission_notice);
         let resource_dir = resource_dir_from_exe();
         self.warm = Some(self.runtime.spawn(async move {
             let blocker = handle.clone();
             let bridge_runtime = handle.clone();
             let bridge_transport = transport.clone();
+            let notice_transport = transport.clone();
+            let notice_state = state.clone();
             let joined = tokio::task::spawn_blocking(move || {
                 let bundle = boot::build_backend(&gate, resource_dir, log_sink, &blocker);
                 let _ = state.install_backend(bundle.backend);
                 if let Some(orchestrator) = bundle.shutdown {
                     let _ = state.install_shutdown(orchestrator);
                 }
-                // M9-05：落盘后事件 → `aether.event` 通知（先日志后广播由管线保证）。
-                let bridge = bundle.pipeline.map(|pipeline| {
-                    let mut bridge = EventBridge::new(
-                        pipeline,
-                        Arc::new(TransportEventSink {
-                            transport: bridge_transport,
-                        }),
-                    )
-                    .with_config(DeliveryConfig::default());
-                    if let Some(write) = bundle.write {
-                        bridge = bridge.with_audit_write(write);
-                    }
-                    bridge.spawn(&bridge_runtime)
-                });
                 let degraded = degraded_snapshot(&state);
-                (bridge, degraded)
+                (bundle.pipeline, bundle.write, degraded)
             })
             .await;
-            let (next, reason, bridge) = match joined {
-                Ok((bridge, Some(reason))) => (DaemonPhase::Degraded, Some(reason), bridge),
-                Ok((bridge, None)) => (DaemonPhase::Ready, None, bridge),
-                Err(error) => (
-                    DaemonPhase::Degraded,
-                    Some(format!("预热任务失败：{error}")),
-                    None,
-                ),
+            let (pipeline, write, degraded) = match joined {
+                Ok(parts) => parts,
+                Err(error) => (None, None, Some(format!("预热任务失败：{error}"))),
             };
+            let (next, reason) = match degraded {
+                Some(reason) => (DaemonPhase::Degraded, Some(reason)),
+                None => (DaemonPhase::Ready, None),
+            };
+            // M9-05/M9-06：管线可用后接线事件桥与权限通知桥（均只订阅落盘后广播）。
+            let mut bridge = None;
+            let mut notice = None;
+            if let Some(pipeline) = pipeline {
+                let mut event_bridge = EventBridge::new(
+                    pipeline.clone(),
+                    Arc::new(TransportEventSink {
+                        transport: bridge_transport,
+                    }),
+                )
+                .with_config(DeliveryConfig::default());
+                if let Some(write) = write {
+                    event_bridge = event_bridge.with_audit_write(write);
+                }
+                match event_bridge.spawn(&bridge_runtime) {
+                    Ok(handle) => bridge = Some(handle),
+                    Err(error) => {
+                        tracing::error!(error = %error, "事件桥启动失败（业务命令仍可用；事件不投递）");
+                    }
+                }
+                notice = Some(
+                    PermissionNoticeBridge::new(
+                        pipeline,
+                        Arc::new(DispatchPendingCount::new(notice_state)),
+                        Arc::new(TransportPermissionNoticeSink {
+                            transport: notice_transport,
+                        }),
+                    )
+                    .spawn(&bridge_runtime),
+                );
+            }
             let shutting_down = {
                 let mut cell = match phase.lock() {
                     Ok(guard) => guard,
@@ -315,40 +381,50 @@ impl DaemonServer {
                     false
                 }
             };
-            match bridge {
-                Some(Ok(bridge)) if !shutting_down => {
-                    {
-                        let mut slot = match bridge_slot.lock() {
-                            Ok(guard) => guard,
-                            Err(poisoned) => poisoned.into_inner(),
-                        };
-                        *slot = Some(bridge);
-                    }
-                    // 关闭可能与预热完成并发：安装后复核，避免关闭后继续投递。
-                    let shutting_down_now = match phase.lock() {
-                        Ok(guard) => guard.phase == DaemonPhase::ShuttingDown,
-                        Err(poisoned) => poisoned.into_inner().phase == DaemonPhase::ShuttingDown,
+            if shutting_down {
+                // 关闭已开始：不安装任何投递句柄，直接收口。
+                if let Some(mut handle) = notice.take() {
+                    let _ = handle.shutdown(NOTICE_SHUTDOWN_TIMEOUT).await;
+                }
+                if let Some(mut handle) = bridge.take() {
+                    let _ = handle.shutdown(DELIVERY_SHUTDOWN_TIMEOUT).await;
+                }
+            } else {
+                if let Some(handle) = notice.take() {
+                    let mut slot = match notice_slot.lock() {
+                        Ok(guard) => guard,
+                        Err(poisoned) => poisoned.into_inner(),
                     };
-                    if shutting_down_now {
-                        let handle = {
-                            let mut guard = match bridge_slot.lock() {
-                                Ok(guard) => guard,
-                                Err(poisoned) => poisoned.into_inner(),
-                            };
-                            guard.take()
-                        };
-                        if let Some(mut handle) = handle {
-                            let _ = handle.shutdown(DELIVERY_SHUTDOWN_TIMEOUT).await;
-                        }
+                    *slot = Some(handle);
+                }
+                if let Some(handle) = bridge.take() {
+                    let mut slot = match bridge_slot.lock() {
+                        Ok(guard) => guard,
+                        Err(poisoned) => poisoned.into_inner(),
+                    };
+                    *slot = Some(handle);
+                }
+                // 关闭可能与预热完成并发：安装后复核，避免关闭后继续投递。
+                let shutting_down_now = match phase.lock() {
+                    Ok(guard) => guard.phase == DaemonPhase::ShuttingDown,
+                    Err(poisoned) => poisoned.into_inner().phase == DaemonPhase::ShuttingDown,
+                };
+                if shutting_down_now {
+                    let notice = match notice_slot.lock() {
+                        Ok(mut guard) => guard.take(),
+                        Err(poisoned) => poisoned.into_inner().take(),
+                    };
+                    if let Some(mut handle) = notice {
+                        let _ = handle.shutdown(NOTICE_SHUTDOWN_TIMEOUT).await;
+                    }
+                    let bridge = match bridge_slot.lock() {
+                        Ok(mut guard) => guard.take(),
+                        Err(poisoned) => poisoned.into_inner().take(),
+                    };
+                    if let Some(mut handle) = bridge {
+                        let _ = handle.shutdown(DELIVERY_SHUTDOWN_TIMEOUT).await;
                     }
                 }
-                Some(Ok(mut bridge)) => {
-                    let _ = bridge.shutdown(DELIVERY_SHUTDOWN_TIMEOUT).await;
-                }
-                Some(Err(error)) => {
-                    tracing::error!(error = %error, "事件桥启动失败（业务命令仍可用；事件不投递）");
-                }
-                None => {}
             }
             let since_ms = {
                 let cell = match phase.lock() {
@@ -805,5 +881,31 @@ mod tests {
         }
         assert_eq!(params["seq"], json!(7));
         assert_eq!(params["type"], json!("session.updated"));
+    }
+
+    /// M9-06 DoD-5：`permission.pending` 通知无 `id`，`params` 只有 `count`/`session_id`，
+    /// 不携带任何决议字段（决议仍只走 `permission_resolve`）。
+    #[test]
+    fn permission_pending_notification_is_a_hint_only() {
+        let notice = PermissionNotice::new(2, Some("01J00000000000000000000S06".to_owned()));
+        let frame = permission_pending_notification(&notice);
+        assert_eq!(frame["jsonrpc"], json!("2.0"));
+        assert_eq!(frame["method"], json!("permission.pending"));
+        assert!(frame.get("id").is_none(), "通知不得携带 id");
+        let params = frame["params"].as_object().expect("params 对象");
+        assert_eq!(params.len(), 2, "只允许 count + session_id：{params:?}");
+        assert_eq!(params["count"], json!(2));
+        assert_eq!(params["session_id"], json!("01J00000000000000000000S06"));
+        for forbidden in ["request_id", "decision", "scope", "ticket_id"] {
+            assert!(
+                !params.contains_key(forbidden),
+                "通知不得携带决议字段 {forbidden}"
+            );
+        }
+
+        let global = permission_pending_notification(&PermissionNotice::new(0, None));
+        let params = global["params"].as_object().expect("params 对象");
+        assert_eq!(params.len(), 1, "无会话时只有 count：{params:?}");
+        assert_eq!(params["count"], json!(0));
     }
 }

@@ -1,0 +1,42 @@
+{
+  "schema": "aether.m9-06.dialog-pick.v1",
+  "method": "dialog.pick",
+  "note": "M9-06 DoD-4：server-initiated 请求仅协议预留；ref_pick/startup_pick_target 固定壳本地（59/4 不变）。",
+  "timeouts_ms": {
+    "default": 300000,
+    "dialog": 120000
+  },
+  "now_ms": 1700000000000,
+  "cases": {
+    "request": {
+      "jsonrpc": "2.0",
+      "id": "srv-1",
+      "method": "dialog.pick",
+      "params": { "kind": "file", "title": "选择文件" }
+    },
+    "normal_response": {
+      "jsonrpc": "2.0",
+      "id": "srv-1",
+      "result": { "path": "C:\\Users\\aether\\notes.md" }
+    },
+    "cancel_response": {
+      "jsonrpc": "2.0",
+      "id": "srv-2",
+      "result": { "path": null }
+    },
+    "timeout_request": {
+      "jsonrpc": "2.0",
+      "id": "srv-3",
+      "method": "dialog.pick",
+      "params": { "kind": "directory" }
+    },
+    "timeout_advance_ms": 120000,
+    "late_response": {
+      "jsonrpc": "2.0",
+      "id": "srv-3",
+      "result": { "path": "C:\\late\\picked" }
+    },
+    "invalid_params": { "kind": "binary" },
+    "invalid_result": { "path": 42 }
+  }
+}

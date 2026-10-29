@@ -1,4 +1,4 @@
-//! 权限回环的核心侧网关接线（M2-10；设计 D9/D6）。
+//! 权限回环的核心侧网关接线（M2-10；设计 D9/D6；M9-06 取消树接线）。
 //!
 //! [`PermissionServiceGate`] 把 [`aether_adapters::permission_loop::PermissionGate`] 薄适配到
 //! [`aether_control::PermissionService`]（组合根职责；服务语义与错误码不改写、不放宽）：
@@ -7,6 +7,10 @@
 //!   （`resource` / `action` / `target` / `content_bytes` / `session_id` / `runtime_id` 原样）；
 //! - 决议映射：[`aether_control::PermissionResolution`] → `PermissionLoopDecision`
 //!   （`decision` / `scope` / `reason` / `timed_out` 原样；`Ask` 不会出现在决议中）；
+//! - 取消（M9-06）：适配器 `permission.request` 经 `AdapterRunExecutor` 映射到核心会话后，
+//!   绑定该会话在途 run 的取消令牌（[`aether_control::RunCancelToken`]）——
+//!   `session_interrupt` / `session_pause` / `dispose` 级联取消等待，按 deny 收口并审计
+//!   `permission.cancelled`（设计 D8/M2-05；不改变 UI 决议路径）；
 //! - 网关错误（非法资源/存储错误/管线错误）以稳定错误码字符串回传回环探针，
 //!   由 `permission_loop` 记为 `gate_failures`（零直通断言随之失败，不静默吞错）。
 //!
@@ -18,7 +22,7 @@ use std::sync::Arc;
 use aether_adapters::permission_loop::{
     PermissionGate, PermissionGateFuture, PermissionLoopDecision, PermissionLoopRequest,
 };
-use aether_control::{PermissionRequest, PermissionService};
+use aether_control::{PermissionRequest, PermissionService, RunCancelToken};
 use aether_core::{RuntimeId, SessionId};
 
 /// 生产网关：`PermissionService`（策略矩阵 / 审批持久化 / 300s 超时 / 审计）。
@@ -36,10 +40,14 @@ impl PermissionServiceGate {
     pub fn service(&self) -> &PermissionService {
         &self.service
     }
-}
 
-impl PermissionGate for PermissionServiceGate {
-    fn decide(&self, request: PermissionLoopRequest) -> PermissionGateFuture<'_> {
+    /// 带取消令牌的决议（M9-06）：令牌命中的等待按 deny 收口（`permission.cancelled`）。
+    pub fn decide_with_cancel(
+        &self,
+        request: PermissionLoopRequest,
+        cancel: Option<Arc<RunCancelToken>>,
+    ) -> PermissionGateFuture<'_> {
+        let service = self.service.clone();
         Box::pin(async move {
             let session_id = request
                 .session_id
@@ -58,7 +66,10 @@ impl PermissionGate for PermissionServiceGate {
                 target: request.target.clone(),
                 content_bytes: request.content_bytes,
             };
-            match self.service.request(control_request).await {
+            match service
+                .request_cancellable(control_request, cancel.as_deref())
+                .await
+            {
                 Ok(resolution) => Ok(PermissionLoopDecision {
                     decision: resolution.decision,
                     scope: resolution.scope,
@@ -68,5 +79,11 @@ impl PermissionGate for PermissionServiceGate {
                 Err(error) => Err(format!("{}: {error}", error.code())),
             }
         })
+    }
+}
+
+impl PermissionGate for PermissionServiceGate {
+    fn decide(&self, request: PermissionLoopRequest) -> PermissionGateFuture<'_> {
+        self.decide_with_cancel(request, None)
     }
 }
