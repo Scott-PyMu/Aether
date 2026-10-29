@@ -6,10 +6,10 @@
  * - `permission_resolve` → 用户决议（`once` / `session` / `deny`；D9）；
  * - `runtime_retry` / `runtime_enable` → M1-10 监督器控制命令（M2-01 已接线）。
  *
- * 本文件是工作台之外「权限/运行时」命令面的类型化封装（可注入替身；生产 = Tauri
- * invoke）。命令名与生成绑定（`packages/protocol/src/bindings.ts`）一致。
+ * 本文件是工作台之外「权限/运行时」命令面的类型化封装（可注入替身；生产 =
+ * `@aether/protocol` client）。命令名与 typed client 一致。
  */
-import { invoke } from "@tauri-apps/api/core";
+import { client } from "@aether/protocol";
 
 /** D9：审批超时（300s；响应携带 `timeout_ms` 时以其为准，常量仅作兜底）。 */
 export const APPROVAL_TIMEOUT_MS = 300_000;
@@ -78,34 +78,31 @@ export interface PermissionIpc {
   disableRuntime(runtimeId: string, confirmTerminate?: boolean): Promise<RuntimeControlResult>;
 }
 
-/** 生产实现（Tauri IPC；命令入参统一 `payload` 包装，与生成绑定一致）。 */
+/** 生产实现（typed client；命令入参为内层 DTO）。 */
 export const permissionIpc: PermissionIpc = {
   async pendingPermissions(sessionId) {
-    return invoke<PendingPermission[]>("permissions_pending", {
-      payload: sessionId ? { session_id: sessionId } : {},
-    });
+    return client.permissionsPending<PendingPermission[]>(
+      sessionId ? { session_id: sessionId } : {},
+    );
   },
   async resolvePermission(requestId, decision) {
-    return invoke<PermissionResolveResult>("permission_resolve", {
-      payload: { request_id: requestId, decision },
+    return client.permissionResolve<PermissionResolveResult>({
+      request_id: requestId,
+      decision,
     });
   },
   async retryRuntime(runtimeId) {
-    return invoke<RuntimeControlResult>("runtime_retry", {
-      payload: { runtime_id: runtimeId },
-    });
+    return client.runtimeRetry<RuntimeControlResult>({ runtime_id: runtimeId });
   },
   async enableRuntime(runtimeId) {
-    return invoke<RuntimeControlResult>("runtime_enable", {
-      payload: { runtime_id: runtimeId },
-    });
+    return client.runtimeEnable<RuntimeControlResult>({ runtime_id: runtimeId });
   },
   async disableRuntime(runtimeId, confirmTerminate) {
-    return invoke<RuntimeControlResult>("runtime_disable", {
-      payload: confirmTerminate
+    return client.runtimeDisable<RuntimeControlResult>(
+      confirmTerminate
         ? { runtime_id: runtimeId, confirm_terminate: true }
         : { runtime_id: runtimeId },
-    });
+    );
   },
 };
 

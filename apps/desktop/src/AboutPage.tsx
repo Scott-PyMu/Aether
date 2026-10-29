@@ -9,7 +9,8 @@
 import { APP_VERSION, PROTOCOL_VERSION } from "@aether/protocol";
 
 export interface AboutPageProps {
-  dataDir: string;
+  /** 数据目录（M9 起由 S-12 承接；主 UI 可选展示）。 */
+  dataDir?: string;
   /** Mock-only beta 标记（M2-02M DoD3；real-adapter 路径为 false）。 */
   mockOnly?: boolean;
   onBack: () => void;
@@ -59,9 +60,11 @@ export function AboutPage({
             </div>
             <div className="about-tag">P0 三运行时：Claude Code / Codex / DeepSeek Harness</div>
 
-            <p className="about-data-dir" data-testid="about-data-dir">
-              数据目录：{dataDir}
-            </p>
+            {dataDir ? (
+              <p className="about-data-dir" data-testid="about-data-dir">
+                数据目录：{dataDir}
+              </p>
+            ) : null}
 
             <p className="about-boundary" data-testid="about-security-boundary">
               安全边界：MVP 为信任级模型（非沙箱）——应用本体、官方适配器与 Runtime CLI

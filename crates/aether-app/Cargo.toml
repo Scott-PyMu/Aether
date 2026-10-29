@@ -59,6 +59,9 @@ winreg = "0.55"
 tempfile = "3"
 # M9-05：事件桥 10×50 / 故障注入集成测试需要 #[tokio::test] 宏。
 tokio = { version = "1", features = ["macros"] }
+# M9-08：types.ts 生成（specta serde 形状 + BigInt→number 重映射；仅导出测试使用）。
+specta-serde = "=0.0.12"
+specta-util = "=0.0.12"
 
 [build-dependencies]
 # ADR-015 §2.2#2：注册清单期望摘要表生成（见 build.rs；与运行期同版本、同 Cargo.lock）。

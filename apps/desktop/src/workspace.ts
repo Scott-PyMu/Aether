@@ -8,7 +8,7 @@
  * - M7-08/R15 语义：`workspace_set` 设置**缺省**工作区（记忆注入与权限基准目录），
  *   **仅对新会话生效**；既有会话保持创建时权限基准（左栏树改派不重算）。
  */
-import { invoke } from "@tauri-apps/api/core";
+import { client, tryAetherError } from "@aether/protocol";
 
 /** `workspace_set` 回执（与 `workspaces` 表字段一致）。 */
 export interface WorkspaceSetResult {
@@ -24,16 +24,14 @@ export interface WorkspaceIpc {
   set(rootPath: string): Promise<WorkspaceSetResult>;
 }
 
-/** 生产实现（Tauri IPC）。 */
+/** 生产实现（typed client）。 */
 export const workspaceIpc: WorkspaceIpc = {
   async pickDirectory() {
-    const result = await invoke<{ target_dir: string | null }>("startup_pick_target");
+    const result = await client.startupPickTarget<{ target_dir: string | null }>();
     return result.target_dir ?? null;
   },
   async set(rootPath) {
-    return invoke<WorkspaceSetResult>("workspace_set", {
-      payload: { root_path: rootPath },
-    });
+    return client.workspaceSet<WorkspaceSetResult>({ root_path: rootPath });
   },
 };
 
@@ -108,31 +106,33 @@ export interface WorkspacesIpc {
   pickDirectory(): Promise<string | null>;
 }
 
-/** 生产实现（Tauri IPC；五命令 + 目录选择器）。 */
+/** 生产实现（typed client；五命令 + 目录选择器）。 */
 export const workspacesIpc: WorkspacesIpc = {
   async list() {
-    return invoke<WorkspacesListResult>("workspaces_list", { payload: {} });
+    return client.workspacesList<WorkspacesListResult>();
   },
   async create(input) {
-    return invoke<WorkspaceSummary>("workspace_create", { payload: input });
+    return client.workspaceCreate<WorkspaceSummary>(input);
   },
   async update(workspaceId, name) {
-    return invoke<WorkspaceSummary>("workspace_update", {
-      payload: { workspace_id: workspaceId, name },
+    return client.workspaceUpdate<WorkspaceSummary>({
+      workspace_id: workspaceId,
+      name,
     });
   },
   async remove(workspaceId) {
-    return invoke<WorkspaceDeleteResult>("workspace_delete", {
-      payload: { workspace_id: workspaceId },
+    return client.workspaceDelete<WorkspaceDeleteResult>({
+      workspace_id: workspaceId,
     });
   },
   async assignSession(sessionId, workspaceId) {
-    return invoke<SessionWorkspaceAssignResult>("session_workspace_assign", {
-      payload: { session_id: sessionId, workspace_id: workspaceId },
+    return client.sessionWorkspaceAssign<SessionWorkspaceAssignResult>({
+      session_id: sessionId,
+      workspace_id: workspaceId,
     });
   },
   async pickDirectory() {
-    const result = await invoke<{ target_dir: string | null }>("startup_pick_target");
+    const result = await client.startupPickTarget<{ target_dir: string | null }>();
     return result.target_dir ?? null;
   },
 };
@@ -144,8 +144,16 @@ export interface WorkspaceIpcError {
   field?: string;
 }
 
-/** 错误对象归一（非结构化错误 → `internal`）。 */
+/** 错误对象归一（typed client / 旧结构化错误；非结构化错误 → `internal`）。 */
 export function workspaceErrorOf(error: unknown): WorkspaceIpcError {
+  const normalized = tryAetherError(error);
+  if (normalized) {
+    return {
+      code: normalized.primary_code,
+      message: normalized.message,
+      field: normalized.field,
+    };
+  }
   if (typeof error === "object" && error !== null) {
     const candidate = error as Partial<WorkspaceIpcError>;
     if (typeof candidate.code === "string") {

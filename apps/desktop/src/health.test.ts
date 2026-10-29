@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { invoke } from "@tauri-apps/api/core";
+import { client } from "@aether/protocol";
 
 import {
   fetchHealth,
@@ -9,9 +9,20 @@ import {
   type HealthReport,
 } from "./health";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@aether/protocol", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@aether/protocol")>();
+  return {
+    ...actual,
+    client: {
+      ...actual.client,
+      health: vi.fn(),
+      appRestart: vi.fn(),
+    },
+  };
+});
 
-const invokeMock = vi.mocked(invoke);
+const healthMock = vi.mocked(client.health);
+const restartMock = vi.mocked(client.appRestart);
 
 const normalReport: HealthReport = {
   storage_state: "normal",
@@ -21,31 +32,30 @@ const normalReport: HealthReport = {
 };
 
 beforeEach(() => {
-  invokeMock.mockReset();
+  healthMock.mockReset();
+  restartMock.mockReset();
 });
 
 describe("health IPC 契约（ADR-007 附录 A）", () => {
   it("fetchHealth 调用无参数 `health` 并透传报告形状", async () => {
-    invokeMock.mockResolvedValue(normalReport);
+    healthMock.mockResolvedValue(normalReport);
     const report = await fetchHealth();
-    expect(invokeMock).toHaveBeenCalledWith("health");
+    expect(healthMock).toHaveBeenCalledWith();
     expect(report).toEqual(normalReport);
     expect(report.runtimes?.[0]?.status).toBe("ready");
   });
 
   it("runtimes 允许 null（监督器未接线）与 []（已接线无 runtime）", async () => {
-    invokeMock.mockResolvedValue({ ...normalReport, runtimes: null });
+    healthMock.mockResolvedValue({ ...normalReport, runtimes: null });
     expect((await fetchHealth()).runtimes).toBeNull();
-    invokeMock.mockResolvedValue({ ...normalReport, runtimes: [] });
+    healthMock.mockResolvedValue({ ...normalReport, runtimes: [] });
     expect((await fetchHealth()).runtimes).toEqual([]);
   });
 
   it("requestAppRestart 复用 app_restart 且显式 confirm:true（ADR-004）", async () => {
-    invokeMock.mockResolvedValue(undefined);
+    restartMock.mockResolvedValue({ restarting: true });
     await requestAppRestart();
-    expect(invokeMock).toHaveBeenCalledWith("app_restart", {
-      payload: { confirm: true },
-    });
+    expect(restartMock).toHaveBeenCalledWith({ confirm: true });
   });
 
   it("轮询与超时口径为 D2 常量（5s / 15s）", () => {

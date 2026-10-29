@@ -6,9 +6,9 @@
  * - `audit_export` → `{ export: ArchiveReport }`（kind=`audit` 的 JSONL + manifest）；
  *   外部目录复用 `startup_pick_target` 选择器（不新增命令）。
  *
- * 本文件是审计命令面的类型化封装（可注入替身；生产 = Tauri invoke）。
+ * 本文件是审计命令面的类型化封装（可注入替身；生产 = `@aether/protocol` client）。
  */
-import { invoke } from "@tauri-apps/api/core";
+import { client } from "@aether/protocol";
 
 import type { ArchiveReport } from "./archive";
 
@@ -69,27 +69,23 @@ export function filtersPayload(filters: AuditFilters): Record<string, unknown> {
   return payload;
 }
 
-/** 生产实现（Tauri IPC；命令入参统一 `payload` 包装，与生成绑定一致）。 */
+/** 生产实现（typed client；命令入参为内层 DTO）。 */
 export const auditIpc: AuditIpc = {
   async query(filters, page) {
-    return invoke<AuditQueryResponse>("audit_query", {
-      payload: {
-        ...filtersPayload(filters),
-        ...(page?.limit !== undefined ? { limit: page.limit } : {}),
-        ...(page?.offset !== undefined ? { offset: page.offset } : {}),
-      },
+    return client.auditQuery<AuditQueryResponse>({
+      ...filtersPayload(filters),
+      ...(page?.limit !== undefined ? { limit: page.limit } : {}),
+      ...(page?.offset !== undefined ? { offset: page.offset } : {}),
     });
   },
   async exportAudit(filters, targetDir) {
-    return invoke<AuditExportResponse>("audit_export", {
-      payload: {
-        ...filtersPayload(filters),
-        ...(targetDir ? { target_dir: targetDir } : {}),
-      },
+    return client.auditExport<AuditExportResponse>({
+      ...filtersPayload(filters),
+      ...(targetDir ? { target_dir: targetDir } : {}),
     });
   },
   async pickTargetDir() {
-    const result = await invoke<{ target_dir: string | null }>("startup_pick_target");
+    const result = await client.startupPickTarget<{ target_dir: string | null }>();
     return result.target_dir ?? null;
   },
 };

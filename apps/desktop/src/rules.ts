@@ -7,9 +7,9 @@
  * - `rule_delete` / `rule_toggle` → 删除 / 启停（`rule_id` 不存在 → `rule_not_found`）。
  *
  * 规则在档位矩阵之上叠加（deny 收紧恒允许；allow 仅免逐次审批，不越过硬边界）；
- * 本文件是规则管理页的类型化封装（可注入替身；生产 = Tauri invoke）。
+ * 本文件是规则管理页的类型化封装（可注入替身；生产 = `@aether/protocol` client）。
  */
-import { invoke } from "@tauri-apps/api/core";
+import { client } from "@aether/protocol";
 
 /** `rules_list` 元素（`permission_rules` 表投影；字段与表列一致）。 */
 export interface RuleEntry {
@@ -62,25 +62,26 @@ export interface RulesIpc {
   ): Promise<{ rule_id: string; enabled: boolean }>;
 }
 
-/** 生产实现（Tauri IPC；命令入参统一 `payload` 包装，与生成绑定一致）。 */
+/** 生产实现（typed client；命令入参为内层 DTO）。 */
 export const rulesIpc: RulesIpc = {
   async listRules() {
-    return invoke<RuleEntry[]>("rules_list", { payload: null });
+    return client.rulesList<RuleEntry[]>();
   },
   async addRule(input) {
-    return invoke<RuleEntry>("rule_add", { payload: input });
+    return client.ruleAdd<RuleEntry>(input);
   },
   async updateRule(input) {
-    return invoke<RuleEntry>("rule_update", { payload: input });
+    return client.ruleUpdate<RuleEntry>(input);
   },
   async deleteRule(ruleId) {
-    return invoke<{ rule_id: string; deleted: boolean }>("rule_delete", {
-      payload: { rule_id: ruleId },
+    return client.ruleDelete<{ rule_id: string; deleted: boolean }>({
+      rule_id: ruleId,
     });
   },
   async toggleRule(ruleId, enabled) {
-    return invoke<{ rule_id: string; enabled: boolean }>("rule_toggle", {
-      payload: { rule_id: ruleId, enabled },
+    return client.ruleToggle<{ rule_id: string; enabled: boolean }>({
+      rule_id: ruleId,
+      enabled,
     });
   },
 };

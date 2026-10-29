@@ -1,10 +1,10 @@
 /**
  * `health` IPC 接口（M2-07 DoD5；ADR-007 附录 A）。
  *
- * 与 Rust 侧 `HealthReport` 的 JSON 形状一致（snake_case）；T14（M3-01）生成
- * tauri-specta bindings 前，此文件是唯一前端契约来源。
+ * 与 Rust 侧 `HealthReport` 的 JSON 形状一致（snake_case）；M9-08 起经
+ * `@aether/protocol` typed client 调用。
  */
-import { invoke } from "@tauri-apps/api/core";
+import { client } from "@aether/protocol";
 
 /** UI 轮询周期（D2/ADR-007 A.3：每 5s 调 `health`）。 */
 export const HEALTH_POLL_INTERVAL_MS = 5_000;
@@ -62,7 +62,7 @@ export interface HealthReport {
 }
 
 export async function fetchHealth(): Promise<HealthReport> {
-  return invoke<HealthReport>("health");
+  return client.health<HealthReport>();
 }
 
 /**
@@ -70,5 +70,5 @@ export async function fetchHealth(): Promise<HealthReport> {
  * 复用 ADR-004 `app_restart` 契约：显式 `confirm:true`。
  */
 export async function requestAppRestart(): Promise<void> {
-  await invoke("app_restart", { payload: { confirm: true } });
+  await client.appRestart({ confirm: true });
 }

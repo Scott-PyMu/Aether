@@ -7,6 +7,8 @@
  * - 核心返回 `readback_gap_too_large`（缺口 >10k，D4）时抛
  *   {@link ReadbackGapTooLargeError}（**同码透传**，EventStore 转 `historyTooLarge`）。
  */
+import { aetherErrorCode } from "@aether/protocol";
+
 import type { EventBackfillSource, EventPage } from "./eventStore";
 import { ReadbackGapTooLargeError } from "./eventStore";
 import {
@@ -19,13 +21,9 @@ import {
 /** 补读单页条数（D7 分页上限 500）。 */
 export const BACKFILL_PAGE_LIMIT = 500;
 
-/** 判断 IPC 错误是否为补读缺口过大（同码透传）。 */
+/** 判断 IPC 错误是否为补读缺口过大（同码透传；兼容 AetherError/旧 code 对象）。 */
 export function isReadbackGapTooLarge(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) {
-    return false;
-  }
-  const record = error as Record<string, unknown>;
-  return record.code === "readback_gap_too_large";
+  return aetherErrorCode(error) === "readback_gap_too_large";
 }
 
 /** `messages_page` 调用签名（测试可注入）。 */

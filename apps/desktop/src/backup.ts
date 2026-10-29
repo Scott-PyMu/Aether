@@ -10,9 +10,9 @@
  *   序列在无写者窗口执行 D13 七步 3–6；恢复成功则应用重启）。
  * - 外部目录选择复用 `startup_pick_target`（M1-06 系统目录选择器抽象；不新增命令）。
  *
- * 本文件是备份命令面的类型化封装（可注入替身；生产 = Tauri invoke）。
+ * 本文件是备份命令面的类型化封装（可注入替身；生产 = `@aether/protocol` client）。
  */
-import { invoke } from "@tauri-apps/api/core";
+import { client } from "@aether/protocol";
 
 /** 备份台账记录（`backups` 表行 + 产物元数据）。 */
 export interface BackupRecord {
@@ -116,28 +116,22 @@ export interface BackupIpc {
   pickTargetDir(): Promise<string | null>;
 }
 
-/** 生产实现（Tauri IPC；命令入参统一 `payload` 包装，与生成绑定一致）。 */
+/** 生产实现（typed client；命令入参为内层 DTO）。 */
 export const backupIpc: BackupIpc = {
   async list() {
-    return invoke<BackupListResponse>("backup_list");
+    return client.backupList<BackupListResponse>();
   },
   async create(label, targetDir) {
-    return invoke<BackupCreateResult>("backup_create", {
-      payload: {
-        ...(label ? { label } : {}),
-        ...(targetDir ? { target_dir: targetDir } : {}),
-      },
+    return client.backupCreate<BackupCreateResult>({
+      ...(label ? { label } : {}),
+      ...(targetDir ? { target_dir: targetDir } : {}),
     });
   },
   async restore(source) {
-    return invoke<BackupRestoreResult>("backup_restore", {
-      payload: { source },
-    });
+    return client.backupRestore<BackupRestoreResult>({ source });
   },
   async pickTargetDir() {
-    const result = await invoke<{ target_dir: string | null }>(
-      "startup_pick_target",
-    );
+    const result = await client.startupPickTarget<{ target_dir: string | null }>();
     return result.target_dir ?? null;
   },
 };

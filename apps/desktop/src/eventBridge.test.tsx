@@ -2,10 +2,12 @@
  * `aether://event` 监听接线测试（M3-01；D7 单通道）。
  */
 import type { AetherEvent } from "@aether/protocol";
+import { client } from "@aether/protocol";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  defaultAetherEventListener,
   registerAetherEventListener,
   useAetherEventBridge,
   type AetherEventHandler,
@@ -34,6 +36,22 @@ afterEach(() => {
 });
 
 describe("eventBridge（M3-01）", () => {
+  it("defaultAetherEventListener 经 client.onEvent 订阅并转发 9 字段事件", async () => {
+    const captured: AetherEventHandler[] = [];
+    const dispose = vi.fn();
+    const spy = vi.spyOn(client, "onEvent").mockImplementation((handler) => {
+      captured.push(handler);
+      return dispose;
+    });
+    const handler = vi.fn();
+    const unlisten = await defaultAetherEventListener(handler);
+    captured[0]?.(makeEvent(9));
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({ seq: 9 }));
+    unlisten();
+    expect(dispose).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+
   it("监听回调把事件接入 EventStore；解除函数可用", async () => {
     const store = new EventStore();
     const captured: AetherEventHandler[] = [];

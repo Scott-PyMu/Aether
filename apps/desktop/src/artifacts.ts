@@ -5,10 +5,10 @@
  * 不读文件字节**；引用不预授权——Agent 读取仍走 `fs.read` 权限门、写入仍走
  * `fs.write` 审批（D9 不变）。
  *
- * 命令与生成绑定一致（`ref_pick` / `artifacts_list` / `artifact_add` /
- * `artifact_remove`；T14 生成物 `packages/protocol/src/bindings.ts`）。
+ * 命令与 typed client 一致（`ref_pick` / `artifacts_list` / `artifact_add` /
+ * `artifact_remove`；`@aether/protocol` client）。
  */
-import { invoke } from "@tauri-apps/api/core";
+import { client } from "@aether/protocol";
 
 /** 系统选择器 kind（`ref_pick`；`null` 返回 = 用户取消）。 */
 export type RefKind = "file" | "directory";
@@ -37,28 +37,25 @@ export interface ArtifactsIpc {
   remove(sessionId: string, artifactId: string): Promise<boolean>;
 }
 
-/** 生产实现（Tauri IPC；命令入参统一 `payload` 包装，与生成绑定一致）。 */
+/** 生产实现（typed client；命令入参为内层 DTO）。 */
 export const artifactsIpc: ArtifactsIpc = {
   async pick(kind) {
-    const result = await invoke<{ path: string | null }>("ref_pick", {
-      payload: { kind },
-    });
+    const result = await client.refPick<{ path: string | null }>({ kind });
     return result.path ?? null;
   },
   async list(sessionId) {
-    const result = await invoke<{ artifacts: ArtifactEntry[] }>("artifacts_list", {
-      payload: { session_id: sessionId },
+    const result = await client.artifactsList<{ artifacts: ArtifactEntry[] }>({
+      session_id: sessionId,
     });
     return result.artifacts;
   },
   async add(sessionId, path) {
-    return invoke<ArtifactEntry>("artifact_add", {
-      payload: { session_id: sessionId, path },
-    });
+    return client.artifactAdd<ArtifactEntry>({ session_id: sessionId, path });
   },
   async remove(sessionId, artifactId) {
-    const result = await invoke<{ removed: boolean }>("artifact_remove", {
-      payload: { session_id: sessionId, artifact_id: artifactId },
+    const result = await client.artifactRemove<{ removed: boolean }>({
+      session_id: sessionId,
+      artifact_id: artifactId,
     });
     return result.removed;
   },

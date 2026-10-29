@@ -5,9 +5,9 @@
  *   （密钥模式 0 命中，`scanned_clean=true` 为守门结果）；目标目录为外部路径
  *   （系统目录选择器选择；缺省复用 `startup_pick_target`，不新增命令）。
  *
- * 本文件是诊断命令面的类型化封装（可注入替身；生产 = Tauri invoke）。
+ * 本文件是诊断命令面的类型化封装（可注入替身；生产 = `@aether/protocol` client）。
  */
-import { invoke } from "@tauri-apps/api/core";
+import { client } from "@aether/protocol";
 
 import type { BackupCapacity } from "./backup";
 
@@ -33,21 +33,19 @@ export interface DiagnosticsIpc {
   capacity(): Promise<BackupCapacity>;
 }
 
-/** 生产实现（Tauri IPC；命令入参统一 `payload` 包装，与生成绑定一致）。 */
+/** 生产实现（typed client；命令入参为内层 DTO）。 */
 export const diagnosticsIpc: DiagnosticsIpc = {
   async exportDiagnostics(targetDir) {
-    return invoke<DiagnosticsExportResult>("export_diagnostics", {
-      payload: { target_dir: targetDir },
+    return client.exportDiagnostics<DiagnosticsExportResult>({
+      target_dir: targetDir,
     });
   },
   async pickTargetDir() {
-    const result = await invoke<{ target_dir: string | null }>(
-      "startup_pick_target",
-    );
+    const result = await client.startupPickTarget<{ target_dir: string | null }>();
     return result.target_dir ?? null;
   },
   async capacity() {
-    const result = await invoke<{ capacity: BackupCapacity }>("backup_list");
+    const result = await client.backupList<{ capacity: BackupCapacity }>();
     return result.capacity;
   },
 };

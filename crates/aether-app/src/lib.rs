@@ -38,6 +38,7 @@ pub mod permission_loop;
 pub mod permission_notice;
 pub mod picker;
 pub mod preset_control;
+pub mod protocol;
 pub mod provider_catalog;
 pub mod provider_connectivity;
 pub mod provider_control;

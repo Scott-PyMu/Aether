@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Aether 协议类型定义与生成物宿主（D6/D7）：bindings.ts 由 tauri-specta 生成，禁止手改",
+  "description": "Aether 协议类型定义与生成物宿主（D6/D7）：types.ts/client.ts 由 aether-app 生成，bindings.ts 为迁移期 Tauri 对照生成物；均禁止手改",
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -13,8 +13,8 @@
   "types": "./src/index.ts",
   "main": "./src/index.ts",
   "scripts": {
-    "generate": "node ../../scripts/ci/bindings.mjs generate && node ../../scripts/ci/error-codes.mjs generate && node ../../scripts/ci/command-manifest.mjs generate",
-    "check": "node ../../scripts/ci/bindings.mjs check && node ../../scripts/ci/error-codes.mjs check && node ../../scripts/ci/command-manifest.mjs check",
+    "generate": "node ../../scripts/ci/protocol-types.mjs generate && node ../../scripts/ci/command-manifest.mjs generate && node ../../scripts/ci/error-codes.mjs generate && node ../../scripts/ci/protocol-client.mjs generate && node ../../scripts/ci/bindings.mjs generate",
+    "check": "node ../../scripts/ci/protocol-types.mjs check && node ../../scripts/ci/command-manifest.mjs check && node ../../scripts/ci/error-codes.mjs check && node ../../scripts/ci/protocol-client.mjs check && node ../../scripts/ci/bindings.mjs check",
     "test": "vitest run",
     "coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit"

@@ -2,9 +2,9 @@
  * 启动门 IPC 接口（M1-06 / A4）。
  *
  * 与 Rust 侧 `StartupSnapshot` / `DetectionReport` 的 JSON 形状一致（snake_case）；
- * T14（M3-01）生成 tauri-specta bindings 前，此文件是唯一前端契约来源。
+ * M9-08 起经 `@aether/protocol` typed client 调用。
  */
-import { invoke } from "@tauri-apps/api/core";
+import { aetherErrorCode, client, tryAetherError } from "@aether/protocol";
 
 export type StartupPhase = "ready" | "blocked_sync_dir" | "blocked_error";
 
@@ -64,21 +64,17 @@ export interface StartupSnapshot {
 }
 
 export async function fetchStartup(): Promise<StartupSnapshot> {
-  return invoke<StartupSnapshot>("startup_get");
+  return client.startupGet<StartupSnapshot>();
 }
 
 export async function migrateDataDir(
   targetDir: string,
 ): Promise<StartupSnapshot> {
-  return invoke<StartupSnapshot>("startup_migrate", {
-    payload: { target_dir: targetDir },
-  });
+  return client.startupMigrate<StartupSnapshot>({ target_dir: targetDir });
 }
 
 export async function pickMigrationTarget(): Promise<string | null> {
-  const result = await invoke<{ target_dir: string | null }>(
-    "startup_pick_target",
-  );
+  const result = await client.startupPickTarget<{ target_dir: string | null }>();
   return result.target_dir ?? null;
 }
 
@@ -86,32 +82,20 @@ export async function pickMigrationTarget(): Promise<string | null> {
  * 退出应用（ADR-006 v0.3：显式 `confirm:true`，与 `app_restart` 的 confirm 约定一致）。
  */
 export async function exitApp(): Promise<void> {
-  await invoke("app_exit", { payload: { confirm: true } });
+  await client.appExit({ confirm: true });
 }
 
 /** 将 IPC 结构化错误转为可展示文本（`message` 优先，兜底 String(error)）。 */
 export function describeIpcError(error: unknown): string {
-  if (typeof error === "object" && error !== null) {
-    const record = error as Record<string, unknown>;
-    if (typeof record.message === "string" && record.message.length > 0) {
-      return record.message;
-    }
-  }
-  return String(error);
+  return tryAetherError(error)?.message ?? String(error);
 }
 
 /**
- * 提取 IPC 结构化错误码（无 `code` 字段时返回 `null`）。
+ * 提取 IPC 结构化错误码（`business_code` 优先，其次 `aether_code`；无结构化错误返回 `null`）。
  *
  * M3-06：`health` 的启动序列过渡窗口返回 `core_not_ready`（ADR-007 增量 2）——
  * UI 按结构化错误码判别 `core-not-ready-banner`，不做文案匹配。
  */
 export function ipcErrorCode(error: unknown): string | null {
-  if (typeof error === "object" && error !== null) {
-    const code = (error as Record<string, unknown>).code;
-    if (typeof code === "string" && code.length > 0) {
-      return code;
-    }
-  }
-  return null;
+  return aetherErrorCode(error);
 }

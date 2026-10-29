@@ -1,11 +1,10 @@
 /**
  * 会话工作台 IPC 契约（M3-02；设计 D7、UI-01/02/05）。
  *
- * 与 Rust 侧 `session_backend.rs` 的 JSON 形状一致（snake_case）；T14 生成绑定
- * （`packages/protocol/src/bindings.ts`）经 `payload` 透传，本文件是工作台使用的
- * 类型化封装（命令名与 DTO 字段与生成物一致）。
+ * 与 Rust 侧 `session_backend.rs` 的 JSON 形状一致（snake_case）；M9-08 起经
+ * `@aether/protocol` typed client 调用（命令名与 DTO 字段与生成物一致）。
  */
-import { invoke } from "@tauri-apps/api/core";
+import { client } from "@aether/protocol";
 import type { AetherEvent } from "@aether/protocol";
 
 /** 会话状态（与附录 C `sessions.status` CHECK 枚举一一对应）。 */
@@ -293,9 +292,9 @@ export interface SessionReference {
 }
 
 /**
- * 工作台使用的会话命令面（可注入替身；生产 = Tauri invoke）。
+ * 工作台使用的会话命令面（可注入替身；生产 = `@aether/protocol` typed client）。
  *
- * 生产监听/命令名与生成绑定一致（`runtimes_list` / `session_list` / `session_create` /
+ * 生产监听/命令名与 typed client 一致（`runtimes_list` / `session_list` / `session_create` /
  * `session_send` / `session_interrupt` / `session_dispose` / `messages_page`）。
  */
 export interface SessionIpc {
@@ -341,66 +340,62 @@ export interface SessionIpc {
   }>;
 }
 
-/** 生产实现（Tauri IPC；命令入参统一 `payload` 包装，与生成绑定一致）。 */
+/** 生产实现（typed client；命令入参为内层 DTO，不再包 `payload`）。 */
 export const sessionIpc: SessionIpc = {
   async listRuntimes() {
-    return invoke<RuntimeInfo[]>("runtimes_list");
+    return client.runtimesList<RuntimeInfo[]>();
   },
   async listSessions(filter = {}) {
-    return invoke<SessionSummary[]>("session_list", { payload: filter });
+    return client.sessionList<SessionSummary[]>(filter);
   },
   async searchSessions(input) {
-    return invoke<SessionSearchHit[]>("session_search", { payload: input });
+    return client.sessionSearch<SessionSearchHit[]>(input);
   },
   async renameSession(sessionId, title) {
-    return invoke<SessionRenameResult>("session_rename", {
-      payload: { session_id: sessionId, title },
+    return client.sessionRename<SessionRenameResult>({
+      session_id: sessionId,
+      title,
     });
   },
   async deleteSession(sessionId) {
-    return invoke<SessionDeleteResult>("session_delete", {
-      payload: { session_id: sessionId },
-    });
+    return client.sessionDelete<SessionDeleteResult>({ session_id: sessionId });
   },
   async createSession(input) {
-    return invoke<SessionSummary>("session_create", { payload: input });
+    return client.sessionCreate<SessionSummary>(input);
   },
   async sendMessage(input) {
-    return invoke<SessionSendResult>("session_send", { payload: input });
+    return client.sessionSend<SessionSendResult>(input);
   },
   async interruptSession(sessionId) {
-    return invoke<SessionInterruptReport>("session_interrupt", {
-      payload: { session_id: sessionId },
+    return client.sessionInterrupt<SessionInterruptReport>({
+      session_id: sessionId,
     });
   },
   async pauseSession(sessionId) {
-    return invoke<SessionPauseResult>("session_pause", {
-      payload: { session_id: sessionId },
-    });
+    return client.sessionPause<SessionPauseResult>({ session_id: sessionId });
   },
   async resumeSession(sessionId) {
-    return invoke<SessionResumeResult>("session_resume", {
-      payload: { session_id: sessionId },
-    });
+    return client.sessionResume<SessionResumeResult>({ session_id: sessionId });
   },
   async disposeSession(sessionId) {
-    return invoke<{ session_id: string; status: SessionStatus }>("session_dispose", {
-      payload: { session_id: sessionId },
+    return client.sessionDispose<{ session_id: string; status: SessionStatus }>({
+      session_id: sessionId,
     });
   },
   async messagesPage(input) {
-    return invoke<MessagesPageResult>("messages_page", { payload: input });
+    return client.messagesPage<MessagesPageResult>(input);
   },
   async retryRun(runId) {
-    return invoke<RunRetryResult>("run_retry", { payload: { run_id: runId } });
+    return client.runRetry<RunRetryResult>({ run_id: runId });
   },
   async setPermissionMode(sessionId, mode) {
-    return invoke<{
+    return client.sessionPermissionModeSet<{
       session_id: string;
       permission_mode: string;
       previous_permission_mode: string;
-    }>("session_permission_mode_set", {
-      payload: { session_id: sessionId, permission_mode: mode },
+    }>({
+      session_id: sessionId,
+      permission_mode: mode,
     });
   },
 };

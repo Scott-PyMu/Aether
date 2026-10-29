@@ -1,13 +1,14 @@
 /**
- * `aether://event` 监听接线（M3-01 / D7 单通道）。
+ * `aether:event` 监听接线（M3-01 / D7 单通道；M9-08 typed client）。
  *
- * 核心侧事件桥把落盘后的事件广播到单通道 `aether://event`（信封含 `session_id`，
- * UI 侧过滤）；本模块把生成绑定的类型化监听器接到 {@link EventStore}。
+ * 核心侧事件桥把落盘后的事件经 Electron main 转发到单通道 `aether:event`
+ * （信封含 `session_id`，UI 侧过滤）；本模块把 typed client 的 `onEvent`
+ * 接到 {@link EventStore}。
  *
- * 生产监听经 tauri-specta 生成物（`packages/protocol/src/bindings.ts` 的
- * `events.aetherEvent.listen`，禁止手改，AGENTS §2.8）；测试注入替身监听器。
+ * 生产监听经 `@aether/protocol` 的 `client.onEvent`（禁止手改生成物，AGENTS §2.8）；
+ * 测试注入替身监听器。
  */
-import type { AetherEvent } from "@aether/protocol";
+import { client, type AetherEvent } from "@aether/protocol";
 import { useEffect, useState } from "react";
 
 import type { EventStore } from "./eventStore";
@@ -20,15 +21,11 @@ export type AetherEventListener = (
   handler: AetherEventHandler,
 ) => Promise<() => void>;
 
-/** 生产监听器：经生成绑定订阅单通道。 */
+/** 生产监听器：经 typed client 订阅单通道。 */
 export async function defaultAetherEventListener(
   handler: AetherEventHandler,
 ): Promise<() => void> {
-  const { events } = await import("@aether/protocol");
-  const unlisten = await events.aetherEvent.listen((event) => {
-    handler(event.payload);
-  });
-  return unlisten;
+  return client.onEvent(handler);
 }
 
 /** 注册到 EventStore（返回解除函数）。 */

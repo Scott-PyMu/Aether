@@ -7,9 +7,10 @@
  * - `preset_delete` → 删除（**内置不可删**：`builtin_preset_undeletable`；内置可编辑）。
  *
  * 预设提示词与工作区记忆注入的合成由核心完成（预设块置前、记忆块后置，禁止静默覆盖）；
- * 本文件是预设管理页与新建会话入口的类型化封装（可注入替身；生产 = Tauri invoke）。
+ * 本文件是预设管理页与新建会话入口的类型化封装（可注入替身；生产 =
+ * `@aether/protocol` client）。
  */
-import { invoke } from "@tauri-apps/api/core";
+import { client } from "@aether/protocol";
 
 /** `presets_list` 元素（`presets` 表投影；字段与表列一致）。 */
 export interface PresetEntry {
@@ -44,21 +45,21 @@ export interface PresetsIpc {
   deletePreset(presetId: string): Promise<{ preset_id: string; deleted: boolean }>;
 }
 
-/** 生产实现（Tauri IPC；命令入参统一 `payload` 包装，与生成绑定一致）。 */
+/** 生产实现（typed client；命令入参为内层 DTO）。 */
 export const presetsIpc: PresetsIpc = {
   async listPresets() {
-    const result = await invoke<{ presets: PresetEntry[] }>("presets_list", { payload: null });
+    const result = await client.presetsList<{ presets: PresetEntry[] }>();
     return result.presets;
   },
   async addPreset(input) {
-    return invoke<PresetEntry>("preset_add", { payload: input });
+    return client.presetAdd<PresetEntry>(input);
   },
   async updatePreset(input) {
-    return invoke<PresetEntry>("preset_update", { payload: input });
+    return client.presetUpdate<PresetEntry>(input);
   },
   async deletePreset(presetId) {
-    return invoke<{ preset_id: string; deleted: boolean }>("preset_delete", {
-      payload: { preset_id: presetId },
+    return client.presetDelete<{ preset_id: string; deleted: boolean }>({
+      preset_id: presetId,
     });
   },
 };

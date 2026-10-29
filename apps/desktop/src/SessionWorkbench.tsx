@@ -9,10 +9,10 @@
  * - 右栏（RuntimePanel S-04 + PermissionPanel S-03；<1280px 折叠为抽屉）。
  *
  * 依赖注入：`store`（EventStore，默认 `appEventStore`）、`ipc`（会话命令面，默认
- * Tauri 生产实现）与 `permissionIpc`（权限/运行时控制命令面，默认 Tauri 生产实现）
- * ——E2E/单测注入替身即可覆盖完整交互路径。
+ * `@aether/protocol` typed client）与 `permissionIpc`（权限/运行时控制命令面，默认
+ * typed client）——E2E/单测注入替身即可覆盖完整交互路径。
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 
 import { appEventStore } from "./aetherStore";
 import { archiveIpc as productionArchiveIpc, type ArchiveIpc } from "./archive";
@@ -1206,51 +1206,43 @@ export function SessionWorkbench({
   }, [addReference, artifactsIpcProp, reportError]);
 
   /**
-   * M7-06/ADR-024：拖拽注入（Tauri OS 级拖放事件；命中输入区 bounds 才接收）。
-   * 非 Tauri 环境（vitest/jsdom）静默跳过（动态导入失败/调用抛错均忽略）。
+   * M7-06/ADR-024：拖拽注入（DOM `drop` + preload `pathForFile`；ADR-029 §7）。
+   * 命中输入区即接收；非 Electron 环境（vitest/jsdom）无 `window.aether` 时静默跳过。
    */
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let disposed = false;
-    void (async () => {
-      try {
-        const { getCurrentWebview } = await import("@tauri-apps/api/webview");
-        const off = await getCurrentWebview().onDragDropEvent((event) => {
-          if (event.payload.type !== "drop") {
-            return;
-          }
-          const paths = event.payload.paths ?? [];
-          if (paths.length === 0) {
-            return;
-          }
-          const container = composerRef.current;
-          if (container) {
-            const rect = container.getBoundingClientRect();
-            const scale = window.devicePixelRatio || 1;
-            const x = event.payload.position.x / scale;
-            const y = event.payload.position.y / scale;
-            if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
-              return;
-            }
-          }
-          for (const path of paths) {
-            addReference(path, kindForPath(path));
-          }
-        });
-        if (disposed) {
-          off();
-        } else {
-          unlisten = off;
-        }
-      } catch {
-        /* 非 Tauri 环境（测试/浏览器）无拖放通道 */
+  const onComposerDragOver = useCallback((event: DragEvent<HTMLDivElement>) => {
+    if (event.dataTransfer?.types.includes("Files")) {
+      event.preventDefault();
+    }
+  }, []);
+
+  const onComposerDrop = useCallback(
+    (event: DragEvent<HTMLDivElement>) => {
+      const files = Array.from(event.dataTransfer?.files ?? []);
+      if (files.length === 0) {
+        return;
       }
-    })();
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
-  }, [addReference]);
+      event.preventDefault();
+      const container = composerRef.current;
+      if (container) {
+        const rect = container.getBoundingClientRect();
+        if (
+          event.clientX < rect.left ||
+          event.clientX > rect.right ||
+          event.clientY < rect.top ||
+          event.clientY > rect.bottom
+        ) {
+          return;
+        }
+      }
+      for (const file of files) {
+        const path = window.aether?.pathForFile(file);
+        if (path) {
+          addReference(path, kindForPath(path));
+        }
+      }
+    },
+    [addReference],
+  );
 
   const onInterrupt = useCallback(async () => {
     if (!activeSessionId) {
@@ -2222,7 +2214,13 @@ export function SessionWorkbench({
           </div>
 
           <div className="input-area">
-          <div className="composer input-box" data-testid="composer" ref={composerRef}>
+          <div
+            className="composer input-box"
+            data-testid="composer"
+            ref={composerRef}
+            onDragOver={onComposerDragOver}
+            onDrop={onComposerDrop}
+          >
             {/* M7-06/ADR-024 A-3：随消息附带的文件引用（拖拽 / `@` 入口；锚点
                 `file-reference`）。**引用 ≠ 预授权**：Agent 读取仍走 fs.read 权限门。 */}
             <div

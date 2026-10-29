@@ -1,15 +1,15 @@
 /**
  * 模型与供应商配置 IPC 契约（M3-11；ADR-010 决策 3/4；UI-UX S-05/§2.4/§7.3）。
  *
- * - 命令与生成绑定一致（`providers_list` / `provider_create` / `provider_update` /
- *   `provider_delete` / `provider_toggle` / `provider_model_add` /
- *   `provider_model_toggle`；T14 生成物 `packages/protocol/src/bindings.ts`）；
+ * - 命令与 typed client 一致（`providers_list` / `provider_create` /
+ *   `provider_update` / `provider_delete` / `provider_toggle` /
+ *   `provider_model_add` / `provider_model_toggle`；`@aether/protocol` client）；
  * - 密钥语义（D10）：`api_key` 明文仅经本地 IPC 传输，核心写 keyring（A3 降级走
  *   加密文件）后只返回/落库 `api_key_ref`；前端不缓存明文；
  * - 模型选择器派生（M3-11 前置登记，UI-UX §2.4/§9 Q2）：仅启用供应商的启用模型
  *   出现；与新建表单手动输入共存（同一草稿字段），运行期只读。
  */
-import { invoke } from "@tauri-apps/api/core";
+import { client } from "@aether/protocol";
 
 /** 供应商类型（ADR-010 决策 3：创建后不可改）。 */
 export type ProviderType = "anthropic" | "openai" | "deepseek" | "google" | "custom";
@@ -135,48 +135,45 @@ export interface ProvidersIpc {
   fetchModels(providerId: string): Promise<ProviderModelsFetchResult>;
 }
 
-/** 生产实现（Tauri IPC；命令入参统一 `payload` 包装，与生成绑定一致）。 */
+/** 生产实现（typed client；命令入参为内层 DTO）。 */
 export const providersIpc: ProvidersIpc = {
   async list() {
-    const result = await invoke<{ providers: ProviderEntry[] }>("providers_list");
+    const result = await client.providersList<{ providers: ProviderEntry[] }>();
     return result.providers;
   },
   async create(input) {
-    return invoke<ProviderEntry>("provider_create", { payload: input });
+    return client.providerCreate<ProviderEntry>(input);
   },
   async update(input) {
-    return invoke<ProviderEntry>("provider_update", { payload: input });
+    return client.providerUpdate<ProviderEntry>(input);
   },
   async remove(id) {
-    const result = await invoke<{ deleted: boolean }>("provider_delete", {
-      payload: { id },
-    });
+    const result = await client.providerDelete<{ deleted: boolean }>({ id });
     return result.deleted;
   },
   async toggle(id, enabled) {
-    return invoke<{ id: string; enabled: boolean }>("provider_toggle", {
-      payload: { id, enabled },
-    });
+    return client.providerToggle<{ id: string; enabled: boolean }>({ id, enabled });
   },
   async addModel(providerId, modelId, displayName) {
-    return invoke<ProviderModel>("provider_model_add", {
-      payload: { provider_id: providerId, model_id: modelId, display_name: displayName },
+    return client.providerModelAdd<ProviderModel>({
+      provider_id: providerId,
+      model_id: modelId,
+      display_name: displayName,
     });
   },
   async toggleModel(providerId, modelId, enabled) {
-    return invoke<{ provider_id: string; model_id: string; enabled: boolean }>(
-      "provider_model_toggle",
-      { payload: { provider_id: providerId, model_id: modelId, enabled } },
-    );
+    return client.providerModelToggle<{
+      provider_id: string;
+      model_id: string;
+      enabled: boolean;
+    }>({ provider_id: providerId, model_id: modelId, enabled });
   },
   async test(providerId) {
-    return invoke<ProviderTestResult>("provider_test", {
-      payload: { provider_id: providerId },
-    });
+    return client.providerTest<ProviderTestResult>({ provider_id: providerId });
   },
   async fetchModels(providerId) {
-    return invoke<ProviderModelsFetchResult>("provider_models_fetch", {
-      payload: { provider_id: providerId },
+    return client.providerModelsFetch<ProviderModelsFetchResult>({
+      provider_id: providerId,
     });
   },
 };

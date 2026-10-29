@@ -117,7 +117,7 @@ export function parseLayoutValue(raw: unknown): LayoutLoadResult {
   };
 }
 
-/** 读取并解析持久化布局；设置不可用（invoke 失败）→ 视为首次运行。 */
+/** 读取并解析持久化布局；设置不可用（IPC 失败）→ 视为首次运行。 */
 export async function loadLayout(ipc: SettingsIpc): Promise<LayoutLoadResult> {
   try {
     const result = await ipc.get(UI_LAYOUT_KEY);

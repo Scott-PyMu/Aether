@@ -51,11 +51,11 @@ export interface SettingsSecurityLevel {
 }
 
 export interface SettingsPageProps {
-  /** 数据目录（启动快照投影；只读展示）。 */
-  dataDir: string;
+  /** 数据目录（M9 起由 S-12 承接；主 UI 可选展示）。 */
+  dataDir?: string;
   /** 安全级别（启动快照投影；缺省 = 未探测）。 */
   securityLevel?: SettingsSecurityLevel | null;
-  /** IPC 契约（缺省 = 生产 Tauri 实现；测试注入替身）。 */
+  /** IPC 契约（缺省 = typed client 生产实现；测试注入替身）。 */
   ipc?: SettingsIpc;
   /** 工作区绑定 IPC 契约（M3-08；缺省 = 生产实现；测试注入替身）。 */
   workspace?: WorkspaceIpc;
@@ -423,7 +423,9 @@ export function SettingsPage({
           <>
         <section className="settings-section">
           <h3>数据与安全</h3>
-          <p data-testid="settings-data-dir">数据目录：{dataDir}</p>
+          {dataDir ? (
+            <p data-testid="settings-data-dir">数据目录：{dataDir}</p>
+          ) : null}
           <p
             data-testid="settings-security-level"
             data-level={securityLevelValue}

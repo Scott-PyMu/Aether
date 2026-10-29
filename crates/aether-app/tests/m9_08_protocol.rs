@@ -1,0 +1,238 @@
+//! M9-08 协议类型导出与事件/错误形状冻结。
+//!
+//! - 事件：`AetherEvent` 与 `aether_core::EventEnvelope` 的 JSON 形状逐字节同构
+//!   （9 字段；ADR-029 §4.4）；
+//! - 错误：`AetherErrorData` 只含 `aether_code` / `business_code?` / `details?`
+//!   （ADR-029 §4.3）；
+//! - `types.ts`：由本文件的 `export_protocol_types`（`--ignored`）生成，禁止手改
+//!   （AGENTS §2.8）；校验入口 `pnpm --filter @aether/protocol check`。
+#![cfg_attr(
+    test,
+    allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)
+)]
+
+use std::borrow::Cow;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use aether_app::ipc::dto::*;
+use aether_app::ipc::error::IpcError;
+use aether_app::protocol::{AetherErrorData, AetherEvent, AETHER_EVENT_FIELDS};
+use aether_app::session_backend::{SessionSummary, SessionWarning};
+use specta::datatype::{DataType, Primitive};
+use specta::{Format, Type, Types};
+use specta_typescript::{Number, Typescript};
+use specta_util::Remapper;
+
+/// specta serde 形状 + `u64/i64` → TS `number`（与既有绑定口径一致：seq/ts 远小于 2^53）。
+struct SerdeNumberFormat;
+
+impl SerdeNumberFormat {
+    fn remapper() -> Remapper {
+        let number = <Number as Type>::definition(&mut Types::default());
+        let mut remapper = Remapper::new();
+        for primitive in [
+            Primitive::usize,
+            Primitive::isize,
+            Primitive::u64,
+            Primitive::i64,
+            Primitive::u128,
+            Primitive::i128,
+        ] {
+            remapper = remapper.rule(DataType::Primitive(primitive), number.clone());
+        }
+        remapper
+    }
+}
+
+impl Format for SerdeNumberFormat {
+    fn map_types(&'_ self, types: &Types) -> Result<Cow<'_, Types>, specta::FormatError> {
+        let types = specta_serde::PhasesFormat.map_types(types)?;
+        Ok(Cow::Owned(Self::remapper().remap_types(types.into_owned())))
+    }
+
+    fn map_type(
+        &'_ self,
+        types: &Types,
+        dt: &DataType,
+    ) -> Result<Cow<'_, DataType>, specta::FormatError> {
+        let dt = specta_serde::PhasesFormat.map_type(types, dt)?;
+        Ok(Cow::Owned(Self::remapper().remap_dt(dt.into_owned())))
+    }
+}
+
+macro_rules! register_types {
+    ($types:expr, $($ty:ty),* $(,)?) => {
+        $(
+            let _ = <$ty as Type>::definition($types);
+        )*
+    };
+}
+
+fn register_all(types: &mut Types) {
+    register_types!(
+        types,
+        AppExitRequest,
+        AppRestartRequest,
+        ArchiveExportRequest,
+        ArtifactAddRequest,
+        ArtifactRemoveRequest,
+        ArtifactsListRequest,
+        AuditExportRequest,
+        AuditQueryRequest,
+        BackupCreateRequest,
+        BackupListRequest,
+        BackupRestoreRequest,
+        BackupSource,
+        ExportDiagnosticsRequest,
+        HealthRequest,
+        IpcError,
+        MessagesPageRequest,
+        PermissionDecision,
+        PermissionResolveRequest,
+        PermissionsPendingRequest,
+        PresetAddRequest,
+        PresetDeleteRequest,
+        PresetUpdateRequest,
+        PresetsListRequest,
+        ProviderCreateRequest,
+        ProviderDeleteRequest,
+        ProviderModelAddRequest,
+        ProviderModelToggleRequest,
+        ProviderModelsFetchRequest,
+        ProviderTestRequest,
+        ProviderToggleRequest,
+        ProviderType,
+        ProviderUpdateRequest,
+        ProvidersListRequest,
+        RefPickKind,
+        RefPickRequest,
+        RuleAddRequest,
+        RuleDeleteRequest,
+        RuleToggleRequest,
+        RuleUpdateRequest,
+        RulesListRequest,
+        RunRetryRequest,
+        RuntimeDisableRequest,
+        RuntimeEnableRequest,
+        RuntimeRetryRequest,
+        SessionCreateRequest,
+        SessionDeleteRequest,
+        SessionIdRequest,
+        SessionListRequest,
+        SessionPermissionModeSetRequest,
+        SessionRenameRequest,
+        SessionSearchRequest,
+        SessionSendRequest,
+        SessionStatus,
+        SessionWorkspaceAssignRequest,
+        SessionExportRequest,
+        SettingsGetRequest,
+        SettingsSetRequest,
+        StartupGetRequest,
+        StartupMigrateRequest,
+        StartupPickTargetRequest,
+        WorkspaceCreateRequest,
+        WorkspaceDeleteRequest,
+        WorkspaceSetRequest,
+        WorkspaceUpdateRequest,
+        WorkspacesListRequest,
+        SessionSummary,
+        SessionWarning,
+        AetherEvent,
+        AetherErrorData,
+    );
+}
+
+/// `packages/protocol/src/types.ts`（生成物；相对 crate 清单目录）。
+fn protocol_types_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("packages")
+        .join("protocol")
+        .join("src")
+        .join("types.ts")
+}
+
+/// M9-08 生成入口：`cargo test -p aether-app --test m9_08_protocol -- --ignored --nocapture`。
+#[test]
+#[ignore = "M9-08 types.ts 生成入口（由 scripts/ci/protocol-types.mjs 调用）"]
+fn export_protocol_types() {
+    let mut types = Types::default();
+    register_all(&mut types);
+    let rendered = Typescript::default()
+        .header(
+            "// This file has been generated by aether-app (M9-08). Do not edit manually.\n\
+             // Source: crates/aether-app/src/{protocol,ipc/dto,ipc/error,session_backend}.rs\n",
+        )
+        .export(&types, SerdeNumberFormat)
+        .expect("导出 types.ts 失败");
+    let path = protocol_types_path();
+    fs::write(&path, rendered.as_bytes()).expect("写入 types.ts 失败");
+    println!(
+        "AETHER_PROTOCOL_TYPES_EXPORTED path={} bytes={}",
+        path.to_string_lossy().replace('\\', "/"),
+        rendered.len()
+    );
+}
+
+#[test]
+fn aether_event_matches_core_envelope_nine_fields() {
+    use aether_core::{
+        EventEnvelope, EventId, EventPayload, RunId, RuntimeId, SessionId, SessionUpdatedPayload,
+    };
+
+    let session = SessionId::new("01J0000000000000000000000A").expect("session");
+    let envelope = EventEnvelope {
+        v: aether_core::EVENT_ENVELOPE_VERSION,
+        id: EventId::new("01J00000000000000000000001").expect("id"),
+        session_id: session.clone(),
+        run_id: Some(RunId::new("01J000000000000000000000R1").expect("run")),
+        runtime_id: RuntimeId::new("mock").expect("runtime"),
+        seq: 7,
+        ts: 1_700_000_000_000,
+        payload: EventPayload::SessionUpdated(SessionUpdatedPayload {
+            session_id: session,
+            changed_fields: vec!["title".to_owned()],
+            title: Some("M9-08".to_owned()),
+        }),
+    };
+
+    let core_json = serde_json::to_value(&envelope).expect("核心事件序列化");
+    let event = AetherEvent::from_envelope(&envelope).expect("转换 AetherEvent");
+    let event_json = serde_json::to_value(&event).expect("AetherEvent 序列化");
+
+    assert_eq!(core_json, event_json, "AetherEvent 必须与 EventEnvelope 同构");
+    let object = event_json.as_object().expect("事件 JSON 对象");
+    assert_eq!(object.len(), 9, "事件信封必须恰好 9 字段");
+    assert_eq!(AETHER_EVENT_FIELDS.len(), 9);
+    for field in AETHER_EVENT_FIELDS {
+        assert!(object.contains_key(field), "缺少事件字段 {field}");
+    }
+    assert_eq!(object["type"], serde_json::json!("session.updated"));
+    assert_eq!(object["seq"], serde_json::json!(7));
+}
+
+#[test]
+fn aether_error_data_carries_optional_business_code_and_details() {
+    let plain = AetherErrorData {
+        aether_code: "invalid_value".to_owned(),
+        business_code: None,
+        details: None,
+    };
+    let value = serde_json::to_value(&plain).expect("错误数据序列化");
+    assert_eq!(value, serde_json::json!({ "aether_code": "invalid_value" }));
+
+    let business = AetherErrorData {
+        aether_code: "invalid_value".to_owned(),
+        business_code: Some("session_busy".to_owned()),
+        details: Some(aether_app::json_payload::JsonPayload(serde_json::json!({
+            "field": "provider_id"
+        }))),
+    };
+    let value = serde_json::to_value(&business).expect("业务码序列化");
+    assert_eq!(value["aether_code"], serde_json::json!("invalid_value"));
+    assert_eq!(value["business_code"], serde_json::json!("session_busy"));
+    assert_eq!(value["details"]["field"], serde_json::json!("provider_id"));
+}

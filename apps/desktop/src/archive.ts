@@ -7,9 +7,9 @@
  * - `archive_export` → 全库归档（容量「一键归档」；锚点 `archive`）；
  *   外部目录复用 `startup_pick_target` 选择器（不新增命令）。
  *
- * 本文件是归档命令面的类型化封装（可注入替身；生产 = Tauri invoke）。
+ * 本文件是归档命令面的类型化封装（可注入替身；生产 = `@aether/protocol` client）。
  */
-import { invoke } from "@tauri-apps/api/core";
+import { client } from "@aether/protocol";
 
 /** 归档计数（按行 kind）。 */
 export interface ArchiveCounts {
@@ -48,23 +48,21 @@ export interface ArchiveIpc {
   pickTargetDir(): Promise<string | null>;
 }
 
-/** 生产实现（Tauri IPC；命令入参统一 `payload` 包装，与生成绑定一致）。 */
+/** 生产实现（typed client；命令入参为内层 DTO，不再包 `payload`）。 */
 export const archiveIpc: ArchiveIpc = {
   async exportSession(sessionId, targetDir) {
-    return invoke<ArchiveExportResponse>("session_export", {
-      payload: {
-        session_id: sessionId,
-        ...(targetDir ? { target_dir: targetDir } : {}),
-      },
+    return client.sessionExport<ArchiveExportResponse>({
+      session_id: sessionId,
+      ...(targetDir ? { target_dir: targetDir } : {}),
     });
   },
   async exportAll(targetDir) {
-    return invoke<ArchiveExportResponse>("archive_export", {
-      payload: targetDir ? { target_dir: targetDir } : {},
-    });
+    return client.archiveExport<ArchiveExportResponse>(
+      targetDir ? { target_dir: targetDir } : {},
+    );
   },
   async pickTargetDir() {
-    const result = await invoke<{ target_dir: string | null }>("startup_pick_target");
+    const result = await client.startupPickTarget<{ target_dir: string | null }>();
     return result.target_dir ?? null;
   },
 };

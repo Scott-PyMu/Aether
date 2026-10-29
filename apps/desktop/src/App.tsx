@@ -9,15 +9,21 @@ import { EventBridgeIndicator } from "./EventBridgeIndicator";
 import { HealthMonitor } from "./HealthMonitor";
 import { SessionWorkbench } from "./SessionWorkbench";
 import { SettingsPage } from "./SettingsPage";
-import { StartupGate } from "./StartupGate";
-import { describeIpcError, fetchStartup, type StartupSnapshot } from "./startup";
+import { fetchStartup, type StartupSnapshot } from "./startup";
 
 /** 单窗口覆盖层视图（M3-04/M3-05；UI-UX §1.1：不使用 URL 路由）。 */
 type AppView = "workbench" | "backup" | "diagnostics" | "settings" | "about" | "audit";
 
+/**
+ * 主界面（M9-08；ADR-029 §7）。
+ *
+ * M9 起启动门由 Electron main 的 S-00/S-12 承接：main 在 `runStartupSequence`
+ * 成功后才加载本 renderer（`loadMainRenderer`），renderer **不以启动快照为门**
+ * （不渲染 S-01/S-01a）；启动快照仅用于数据目录/安全级别的只读展示，
+ * 失败时主界面照常渲染。
+ */
 export function App() {
   const [startup, setStartup] = useState<StartupSnapshot | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
   const [view, setView] = useState<AppView>("workbench");
   /**
    * M7-09/ADR-026：新建会话入口当前选中的 Agent 预设（提升到 `App` 以便设置页
@@ -35,51 +41,17 @@ export function App() {
           setStartup(snapshot);
         }
       })
-      .catch((error: unknown) => {
-        if (active) {
-          setLoadError(describeIpcError(error));
-        }
+      .catch(() => {
+        /* M9：启动快照失败不阻断主界面（S-12 由 main 独立 renderer 承接）。 */
       });
     return () => {
       active = false;
     };
   }, []);
 
-  const onSnapshot = useCallback((snapshot: StartupSnapshot) => {
-    setStartup(snapshot);
+  const onPresetsChanged = useCallback(() => {
+    setPresetsVersion((value) => value + 1);
   }, []);
-
-  if (loadError) {
-    return (
-      <main className="app" data-testid="startup-load-error">
-        <div className="boot-screen">
-          <div className="boot-card">
-            <div className="about-logo">A</div>
-            <h1>Aether</h1>
-            <p className="boot-error">启动自检失败：{loadError}</p>
-          </div>
-        </div>
-      </main>
-    );
-  }
-
-  if (!startup) {
-    return (
-      <main className="app" data-testid="startup-loading">
-        <div className="boot-screen">
-          <div className="boot-card">
-            <div className="about-logo">A</div>
-            <h1>Aether</h1>
-            <p>正在执行启动自检…</p>
-          </div>
-        </div>
-      </main>
-    );
-  }
-
-  if (startup.phase !== "ready") {
-    return <StartupGate snapshot={startup} onSnapshot={onSnapshot} />;
-  }
 
   return (
     <main className="app">
@@ -95,7 +67,7 @@ export function App() {
           onOpenAbout={() => setView("about")}
           appVersion={APP_VERSION}
           protocolVersion={PROTOCOL_VERSION}
-          dataDir={startup.data_dir}
+          dataDir={startup?.data_dir}
           statusSlot={
             <>
               <HealthMonitor onOpenDiagnostics={() => setView("diagnostics")} />
@@ -114,11 +86,11 @@ export function App() {
         ) : null}
         {view === "settings" ? (
           <SettingsPage
-            dataDir={startup.data_dir}
-            securityLevel={startup.security_level ?? null}
+            dataDir={startup?.data_dir}
+            securityLevel={startup?.security_level ?? null}
             activePresetId={activePresetId}
             onActivePresetChange={setActivePresetId}
-            onPresetsChanged={() => setPresetsVersion((value) => value + 1)}
+            onPresetsChanged={onPresetsChanged}
             onBack={() => setView("workbench")}
             onOpenBackup={() => setView("backup")}
             onOpenDiagnostics={() => setView("diagnostics")}
@@ -127,7 +99,7 @@ export function App() {
         ) : null}
         {view === "about" ? (
           <AboutPage
-            dataDir={startup.data_dir}
+            dataDir={startup?.data_dir}
             onBack={() => setView("workbench")}
             onOpenDiagnostics={() => setView("diagnostics")}
           />

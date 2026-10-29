@@ -19,7 +19,7 @@
  *
  * 未登记键由核心返回 `invalid_enum`（默认拒绝）。工作区绑定键归 M3-08。
  */
-import { invoke } from "@tauri-apps/api/core";
+import { client } from "@aether/protocol";
 
 /** 备份提醒开关设置键（M3-05 登记；稳定契约）。 */
 export const BACKUP_REMINDER_KEY = "backup.reminder";
@@ -61,14 +61,12 @@ export interface SettingsIpc {
   set(key: string, value: unknown): Promise<SettingsGetResult>;
 }
 
-/** 生产实现（Tauri IPC）。 */
+/** 生产实现（typed client）。 */
 export const settingsIpc: SettingsIpc = {
   async get(key) {
-    return invoke<SettingsGetResult>("settings_get", { payload: { key } });
+    return client.settingsGet<SettingsGetResult>({ key });
   },
   async set(key, value) {
-    return invoke<SettingsGetResult>("settings_set", {
-      payload: { key, value },
-    });
+    return client.settingsSet<SettingsGetResult>({ key, value });
   },
 };
