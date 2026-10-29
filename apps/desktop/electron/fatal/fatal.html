@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Aether — 核心未能启动</title>
+    <link rel="stylesheet" href="./fatal.css" />
+  </head>
+  <body>
+    <main
+      class="shell-fatal"
+      data-testid="shell-fatal"
+      data-reason=""
+      role="alert"
+      aria-live="assertive"
+    >
+      <div class="shell-fatal-card">
+        <div class="shell-fatal-mark" aria-hidden="true">!</div>
+        <h1 class="shell-fatal-title">核心未能启动</h1>
+        <p class="shell-fatal-message" data-testid="shell-fatal-message"></p>
+
+        <dl class="shell-fatal-details">
+          <dt>原因</dt>
+          <dd data-testid="shell-fatal-reason"></dd>
+          <dt>日志路径</dt>
+          <dd><code data-testid="shell-fatal-log-path"></code></dd>
+          <dt>数据目录</dt>
+          <dd><code data-testid="shell-fatal-data-dir"></code></dd>
+        </dl>
+
+        <section class="shell-fatal-manual" data-testid="shell-fatal-manual-move">
+          <h2>手动移动数据目录</h2>
+          <pre data-testid="shell-fatal-manual-move-text"></pre>
+        </section>
+
+        <div class="shell-fatal-actions">
+          <button type="button" class="primary" data-testid="shell-fatal-retry">重试</button>
+          <button type="button" data-testid="shell-fatal-export-diagnostics">
+            离线导出诊断
+          </button>
+          <button type="button" class="danger" data-testid="shell-fatal-exit">退出</button>
+        </div>
+        <p class="shell-fatal-result" data-testid="shell-fatal-export-result" data-result=""></p>
+        <p class="shell-fatal-note">
+          离线导出不依赖核心进程；诊断文件会自动脱敏密钥与令牌。M9 不提供自动迁移按钮：
+          数据目录问题请按上方说明手动处理或联系维护者。
+        </p>
+      </div>
+    </main>
+    <script type="module" src="./fatal.js"></script>
+  </body>
+</html>

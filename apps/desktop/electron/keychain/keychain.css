@@ -1,0 +1,94 @@
+:root {
+  color-scheme: dark;
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  background: #101318;
+  color: #e7eaf0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(circle at 50% 0%, #1b2430 0%, #101318 55%);
+}
+
+.keychain {
+  width: min(620px, 92vw);
+  padding: 32px 16px;
+}
+
+.keychain-card {
+  border: 1px solid #2b3442;
+  border-radius: 14px;
+  background: #161b22;
+  padding: 28px 32px 24px;
+  box-shadow: 0 18px 48px rgb(0 0 0 / 45%);
+}
+
+.keychain h1 {
+  margin: 0 0 10px;
+  font-size: 21px;
+  font-weight: 600;
+}
+
+.keychain-reason,
+.keychain-notice,
+.keychain-note {
+  color: #c3cad6;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.keychain-notice {
+  min-height: 20px;
+  color: #ffb3b3;
+}
+
+.keychain-note {
+  color: #7f8998;
+  font-size: 12px;
+}
+
+.keychain-passphrase {
+  display: grid;
+  gap: 6px;
+  margin: 16px 0;
+  font-size: 13px;
+  color: #aab4c3;
+}
+
+.keychain-passphrase input {
+  border: 1px solid #39465a;
+  border-radius: 8px;
+  background: #0f1318;
+  color: #e7eaf0;
+  padding: 9px 12px;
+  font-size: 14px;
+}
+
+.keychain-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.keychain-actions button {
+  border: 1px solid #39465a;
+  background: #1d2633;
+  color: #e7eaf0;
+  border-radius: 8px;
+  padding: 9px 18px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.keychain-actions button.primary {
+  border-color: #3f6ea8;
+  background: #1f3a5c;
+}

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Aether — 密钥访问授权</title>
+    <link rel="stylesheet" href="./keychain.css" />
+  </head>
+  <body>
+    <main
+      class="keychain"
+      data-testid="keychain-reauth"
+      data-scope="provider"
+      data-mode="reauth"
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="keychain-title"
+    >
+      <section class="keychain-card">
+        <h1 id="keychain-title">需要重新授权密钥访问</h1>
+        <p class="keychain-reason" data-testid="keychain-reauth-reason"></p>
+        <label class="keychain-passphrase" data-testid="keychain-reauth-passphrase">
+          <span>备份口令（仅在口令模式/降级恢复时需要）</span>
+          <input type="password" autocomplete="off" spellcheck="false" />
+        </label>
+        <p class="keychain-notice" data-testid="keychain-reauth-notice"></p>
+        <div class="keychain-actions">
+          <button type="button" class="primary" data-testid="keychain-reauth-retry">
+            重试授权
+          </button>
+          <button type="button" data-testid="keychain-reauth-skip">跳过（只读/降级）</button>
+        </div>
+        <p class="keychain-note">
+          不会删除旧密钥条目；跳过将进入降级状态，备份等依赖密钥的功能不可用。
+        </p>
+      </section>
+    </main>
+    <script type="module" src="./keychain.js"></script>
+  </body>
+</html>

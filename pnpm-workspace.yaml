@@ -2,6 +2,8 @@ packages:
   - apps/*
   - packages/*
 
-# pnpm 10 默认阻止依赖 postinstall；esbuild 需要其安装脚本以校验原生二进制。
+# pnpm 10 默认阻止依赖 postinstall；esbuild 需要其安装脚本以校验原生二进制；
+# Electron（M9-07）需要 postinstall 下载对应平台的 Electron 二进制。
 onlyBuiltDependencies:
   - esbuild
+  - electron

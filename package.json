@@ -2,6 +2,7 @@
   "name": "@aether/root",
   "private": true,
   "version": "0.1.0",
+  "main": "apps/desktop/electron/dist/main.cjs",
   "packageManager": "pnpm@10.34.5",
   "engines": {
     "node": ">=20"
@@ -85,12 +86,16 @@
     "verify:m9-03": "node scripts/test/m9-03/verify-m9-03.mjs",
     "verify:m9-04": "node scripts/test/m9-04/verify-m9-04.mjs",
     "verify:m9-05": "node scripts/test/m9-05/verify-m9-05.mjs",
+    "verify:m9-07": "node scripts/test/m9-07/verify-m9-07.mjs",
+    "e2e:m9-07": "node scripts/test/m9-07/e2e-electron.mjs",
+    "e2e:m9-07:dev": "node scripts/test/m9-07/e2e-dev.mjs",
     "verify:m9-06": "node scripts/test/m9-06/verify-m9-06.mjs",
     "generate:error-codes": "node scripts/ci/error-codes.mjs generate",
     "generate:command-manifest": "node scripts/ci/command-manifest.mjs generate",
     "baseline:m9-01:record": "node scripts/ci/m9-01-baseline.mjs record",
     "stats:m9-01": "node scripts/ci/m9-01-stats.mjs",
     "dev:desktop": "node scripts/ci/dev-desktop.mjs",
+    "build:desktop": "pnpm --filter @aether/desktop build",
     "smoke": "node scripts/test/smoke-desktop.mjs",
     "ci:local": "node scripts/test/ci-local.mjs"
   },

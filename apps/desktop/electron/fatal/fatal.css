@@ -1,0 +1,164 @@
+:root {
+  color-scheme: dark;
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  background: #101318;
+  color: #e7eaf0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(circle at 50% 0%, #1b2430 0%, #101318 55%);
+}
+
+.shell-fatal {
+  width: min(860px, 92vw);
+  padding: 32px 16px;
+}
+
+.shell-fatal-card {
+  border: 1px solid #2b3442;
+  border-radius: 14px;
+  background: #161b22;
+  padding: 28px 32px 24px;
+  box-shadow: 0 18px 48px rgb(0 0 0 / 45%);
+}
+
+.shell-fatal-mark {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: #7a2b2b;
+  color: #ffd9d9;
+  display: grid;
+  place-items: center;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.shell-fatal-title {
+  margin: 18px 0 8px;
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.shell-fatal-message {
+  margin: 0 0 18px;
+  color: #c3cad6;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.shell-fatal-details {
+  display: grid;
+  grid-template-columns: 88px 1fr;
+  gap: 8px 16px;
+  margin: 0 0 20px;
+  font-size: 13px;
+}
+
+.shell-fatal-details dt {
+  color: #8d97a6;
+}
+
+.shell-fatal-details dd {
+  margin: 0;
+  min-width: 0;
+  word-break: break-all;
+}
+
+.shell-fatal-details code {
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  color: #cfe3ff;
+}
+
+.shell-fatal-manual {
+  border-top: 1px solid #2b3442;
+  padding-top: 16px;
+}
+
+.shell-fatal-manual h2 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #aab4c3;
+}
+
+.shell-fatal-manual pre {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: #0f1318;
+  border: 1px solid #242c37;
+  color: #b8c2d0;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.shell-fatal-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 22px;
+}
+
+.shell-fatal-actions button {
+  border: 1px solid #39465a;
+  background: #1d2633;
+  color: #e7eaf0;
+  border-radius: 8px;
+  padding: 9px 18px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.shell-fatal-actions button:hover {
+  background: #253142;
+}
+
+.shell-fatal-actions button.primary {
+  border-color: #3f6ea8;
+  background: #1f3a5c;
+}
+
+.shell-fatal-actions button.primary:hover {
+  background: #26476e;
+}
+
+.shell-fatal-actions button.danger {
+  border-color: #6b3434;
+  background: #3a2020;
+}
+
+.shell-fatal-actions button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.shell-fatal-result {
+  min-height: 20px;
+  margin: 14px 0 0;
+  font-size: 13px;
+  color: #9fd0a8;
+}
+
+.shell-fatal-result[data-result="failed"] {
+  color: #ffb3b3;
+}
+
+.shell-fatal-note {
+  margin: 16px 0 0;
+  color: #7f8998;
+  font-size: 12px;
+  line-height: 1.6;
+}

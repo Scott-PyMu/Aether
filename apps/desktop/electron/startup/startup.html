@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Aether — 启动自检</title>
+    <link rel="stylesheet" href="./startup.css" />
+  </head>
+  <body>
+    <main class="startup" data-testid="startup-loading" role="status" aria-live="polite">
+      <div class="startup-logo" aria-hidden="true">A</div>
+      <h1>Aether</h1>
+      <p>正在执行启动自检…</p>
+      <p class="startup-hint">窗口已就绪，正在连接核心进程。</p>
+    </main>
+  </body>
+</html>
