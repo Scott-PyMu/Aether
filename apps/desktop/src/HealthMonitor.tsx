@@ -108,7 +108,7 @@ export function HealthMonitor({ onOpenDiagnostics }: HealthMonitorProps = {}) {
     );
   }
 
-  if (status === "normal") {
+  if (status === "normal" && errorCode !== "core_not_ready") {
     return (
       <p className="health-normal" data-testid="health-normal">
         核心正常（storage_state=normal）
@@ -116,14 +116,14 @@ export function HealthMonitor({ onOpenDiagnostics }: HealthMonitorProps = {}) {
     );
   }
 
-  // M3-06：启动序列过渡窗口（ADR-007 增量 2）——后端注入前 `health` 返回
-  // `core_not_ready`；按结构化错误码判别（不做文案匹配），完成后自动消失。
-  if (status === "loading" && errorCode === "core_not_ready") {
+  // M3-06/M9-09：启动过渡窗口或 daemon 崩溃重启窗口——后端返回
+  // `core_not_ready` 时即使上一轮状态为 normal 也显示核心横幅（保留窗口）。
+  if (errorCode === "core_not_ready") {
     return (
       <section className="health-starting" data-testid="core-not-ready-banner" role="status">
         <p className="health-title">核心启动中…</p>
         <p className="health-detail">
-          启动序列尚未完成（存储/管线注入前）；启动门命令（startup_*）仍可用。
+          启动序列尚未完成（存储/管线注入前）或核心正在重启；功能暂不可用。
         </p>
       </section>
     );

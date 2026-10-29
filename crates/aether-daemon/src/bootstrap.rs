@@ -387,6 +387,28 @@ mod tests {
     }
 
     #[test]
+    fn lock_is_acquired_before_a4_check() {
+        // ADR-029 §3.5-4 顺序：解析数据目录 → 取 OS 锁 → A4 → DB。
+        // 即使目录命中 A4，第二个核心也必须先得到 data_dir_locked（20），
+        // 而不是随 A4 判定结果变化。
+        let home = tempfile::tempdir().expect("临时 home");
+        let data_dir = home
+            .path()
+            .join("Library")
+            .join("Mobile Documents")
+            .join("Aether");
+        let _held = DataDirLock::acquire(&data_dir).expect("测试先持有锁");
+        match bootstrap_with_gate(gate_at(
+            &data_dir,
+            sample_context(PlatformKind::MacOs, Some(home.path().to_path_buf())),
+        )) {
+            Err((BootstrapError::DataDirLocked { .. }, _)) => {}
+            Err((other, _)) => panic!("期望先命中 DataDirLocked，实际 {other:?}"),
+            Ok(_) => panic!("锁被占用时不得启动"),
+        }
+    }
+
+    #[test]
     fn a4_reject_is_fatal_21_with_sync_dir_blocked() {
         let home = tempfile::tempdir().expect("临时 home");
         let data_dir = home

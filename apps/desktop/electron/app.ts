@@ -33,6 +33,14 @@ import type { AetherEvent } from "@aether/protocol";
 
 import commandManifest from "../../../packages/protocol/src/command-manifest.json";
 import { DaemonClient, AetherRpcError, type DaemonNotification } from "./daemonClient";
+import { DaemonRestartPolicy } from "./daemonLifecycle";
+import {
+  DAEMON_SHUTDOWN_BUDGET_MS,
+  MAIN_EXIT_HARD_BUDGET_MS,
+  T11_BUDGET_MS,
+  daemonSpawnOptions,
+  killDaemonTree,
+} from "./daemonTree";
 import {
   daemonLogPathFor,
   resolveDataDir,
@@ -124,8 +132,11 @@ interface ShellRuntime {
   versions: RuntimeVersions;
   windowCreatedAt: number;
   windowReadyAt: number | null;
+  uiReadyAt: number | null;
+  sessionCreateMs: number | null;
   daemonSpawnedAt: number | null;
   daemonSpawnCount: number;
+  daemonEverReady: boolean;
   secondInstanceCount: number;
   initializeMs: number | null;
   withinTarget: boolean | null;
@@ -136,6 +147,13 @@ interface ShellRuntime {
   quitting: boolean;
   suppressAllClosed: boolean;
   keychainState: KeychainViewState;
+  keychainPrompted: boolean;
+  secretsPassphrase: string | null;
+  restartPolicy: DaemonRestartPolicy;
+  restartTimer: ReturnType<typeof setTimeout> | null;
+  restartScheduledAt: number | null;
+  shutdownStartedAt: number | null;
+  shutdownElapsedMs: number | null;
 }
 
 interface KeychainHooks {
@@ -165,8 +183,11 @@ const runtime: ShellRuntime = {
   versions: {},
   windowCreatedAt: 0,
   windowReadyAt: null,
+  uiReadyAt: null,
+  sessionCreateMs: null,
   daemonSpawnedAt: null,
   daemonSpawnCount: 0,
+  daemonEverReady: false,
   secondInstanceCount: 0,
   initializeMs: null,
   withinTarget: null,
@@ -182,6 +203,13 @@ const runtime: ShellRuntime = {
     reason: "旧 Keychain 条目需要重新授权（M9-09 preflight）。",
     notice: "",
   },
+  keychainPrompted: false,
+  secretsPassphrase: null,
+  restartPolicy: new DaemonRestartPolicy(),
+  restartTimer: null,
+  restartScheduledAt: null,
+  shutdownStartedAt: null,
+  shutdownElapsedMs: null,
 };
 
 /** 主 UI preload 白名单（E2E/静态校验共享；防止新增成员）。 */
@@ -253,24 +281,53 @@ function installLifecycle(): void {
     if (runtime.quitting) {
       return;
     }
+    clearRestartTimer();
     const client = runtime.client;
     if (client === null) {
       return;
     }
     event.preventDefault();
     runtime.quitting = true;
-    runtime.logger.log("info", "app.shutdown.start", { daemonPid: client.pid });
+    runtime.shutdownStartedAt = Date.now();
+    runtime.logger.log("info", "app.shutdown.start", {
+      daemonPid: client.pid,
+      gracefulBudgetMs: DAEMON_SHUTDOWN_BUDGET_MS,
+      hardBudgetMs: MAIN_EXIT_HARD_BUDGET_MS,
+      t11BudgetMs: T11_BUDGET_MS,
+    });
     void (async () => {
-      const exit = await client.shutdown(8_200);
+      const started = Date.now();
+      const exit = await client.shutdown(DAEMON_SHUTDOWN_BUDGET_MS);
       if (exit === null) {
-        runtime.logger.log("warn", "app.shutdown.force", { daemonPid: client.pid });
-        client.kill("SIGTERM");
-        await client.waitForExit(1_300);
+        const elapsed = Date.now() - started;
+        const remaining = Math.max(0, MAIN_EXIT_HARD_BUDGET_MS - elapsed);
+        runtime.logger.log("warn", "app.shutdown.force", {
+          daemonPid: client.pid,
+          elapsedMs: elapsed,
+          remainingMs: remaining,
+        });
+        const killed = await killDaemonTree({
+          pid: client.pid ?? 0,
+          timeoutMs: remaining,
+        });
+        runtime.logger.log(killed.killed ? "warn" : "error", "app.shutdown.tree_kill", {
+          daemonPid: client.pid,
+          ...killed,
+        });
+        const untilT11 = Math.max(0, T11_BUDGET_MS - (Date.now() - started));
+        await client.waitForExit(untilT11);
       }
       runtime.client = null;
       runtime.bridge?.dispose();
       runtime.bridge = null;
-      runtime.logger.log("info", "app.shutdown.done", { exit });
+      runtime.shutdownElapsedMs = Date.now() - started;
+      const withinT11 = runtime.shutdownElapsedMs <= T11_BUDGET_MS;
+      runtime.logger.log(withinT11 ? "info" : "error", "app.shutdown.done", {
+        exit,
+        elapsedMs: runtime.shutdownElapsedMs,
+        t11BudgetMs: T11_BUDGET_MS,
+        withinT11,
+      });
       app.quit();
     })();
   });
@@ -297,6 +354,7 @@ async function onReady(): Promise<void> {
   registerAppProtocol();
   installSessionSecurity();
   installIpcHandlers();
+  installKeychainHooksOnce();
   installE2EHook();
   runtime.logger.log("info", "app.start", {
     version: app.getVersion(),
@@ -399,14 +457,19 @@ async function createMainWindowAndStart(): Promise<void> {
     });
     hardenContents(win.webContents);
     const ready = waitForWindowReady(win);
-    await win.loadFile(shellAsset("startup", "startup.html"));
+    const loaded = win.loadFile(shellAsset("startup", "startup.html"));
+    // 提前挂接拒绝处理，避免 ready 先完成时出现 unhandled rejection；后续仍会 await。
+    void loaded.catch(() => {});
+    // 窗口可见预算 = 进程启动 → `ready-to-show`/1.5s 兜底显示；页面加载完成不推迟
+    // 可见计时（DoD-1 口径），但 daemon 仍在启动页加载完成后才 spawn。
     await ready;
     runtime.windowReadyAt = Date.now();
     runtime.logger.log("info", "window.ready", {
       visibleMs: runtime.windowReadyAt - runtime.startedAt,
     });
+    await loaded;
     runtime.suppressAllClosed = false;
-    await startDaemonForWindow(win);
+    await startDaemonForWindow(win, { loadRenderer: true });
   } catch (error) {
     runtime.logger.log("error", "startup.window_failed", { error: errorText(error) });
     runtime.suppressAllClosed = false;
@@ -429,7 +492,10 @@ async function createMainWindowAndStart(): Promise<void> {
   }
 }
 
-async function startDaemonForWindow(win: BrowserWindow): Promise<void> {
+async function startDaemonForWindow(
+  win: BrowserWindow,
+  options: { loadRenderer: boolean; restart?: boolean } = { loadRenderer: true },
+): Promise<void> {
   const resolution = resolveDataDir();
   if (resolution.dataDir !== runtime.dataDir) {
     runtime.dataDir = resolution.dataDir;
@@ -448,63 +514,14 @@ async function startDaemonForWindow(win: BrowserWindow): Promise<void> {
     dataDir: runtime.dataDir,
     dataDirSource: resolution.source,
     runtimeBundle: process.env[RUNTIME_BUNDLE_ENV] ?? null,
+    restart: options.restart === true,
   });
 
   const outcome = await runStartupSequence({
     windowCreatedAt: runtime.windowCreatedAt,
     context: { logPath, dataDir: runtime.dataDir },
     initializeParams: initializeParams(app.getVersion()),
-    createClient: (attempt) => {
-      runtime.daemonSpawnCount += 1;
-      if (runtime.daemonSpawnedAt === null) {
-        runtime.daemonSpawnedAt = Date.now();
-      }
-      const client = new DaemonClient({
-        spawn: (command, args, options) =>
-          spawn(command, [...args], {
-            ...options,
-            stdio: ["pipe", "pipe", "pipe"],
-          }),
-        spawnSpec: {
-          command: binary,
-          args: daemonArguments(process.env),
-          env: process.env,
-          cwd: app.getAppPath(),
-        },
-        onNotification: handleDaemonNotification,
-        onBootstrapError: (error) => {
-          runtime.logger.log("error", "daemon.bootstrap_error", {
-            aetherCode: error.aetherCode,
-            businessCode: error.businessCode,
-            message: error.message,
-            logPath: error.data?.log_path,
-          });
-        },
-        onStderrLine: (line) => {
-          runtime.lastStderr = `${runtime.lastStderr}\n${line}`.slice(-16_384);
-          runtime.logger.log("debug", "daemon.stderr", { line });
-        },
-        onExit: (exit) => {
-          runtime.logger.log("warn", "daemon.exit", {
-            code: exit.code,
-            signal: exit.signal,
-          });
-          if (runtime.ready && !runtime.quitting) {
-            // M9-09：退避重启/横幅；M9-07 只记录，不杀在途 run。
-            runtime.logger.log("warn", "daemon.exit.after_ready", {
-              code: exit.code,
-              signal: exit.signal,
-            });
-          }
-        },
-      });
-      runtime.logger.log("info", "daemon.spawn", {
-        attempt,
-        binary,
-        args: daemonArguments(process.env),
-      });
-      return client;
-    },
+    createClient: (attempt) => createDaemonClient(binary, attempt),
     onAttemptEnd: (trace) => {
       runtime.logger.log(trace.outcome === "ready" ? "info" : "error", "startup.attempt", {
         ...trace,
@@ -515,6 +532,7 @@ async function startDaemonForWindow(win: BrowserWindow): Promise<void> {
   if (outcome.ok) {
     runtime.client = outcome.client as DaemonClient;
     runtime.ready = true;
+    runtime.daemonEverReady = true;
     runtime.initializeMs = outcome.initializeMs;
     runtime.withinTarget = outcome.withinTarget;
     runtime.retried = outcome.retried;
@@ -524,7 +542,9 @@ async function startDaemonForWindow(win: BrowserWindow): Promise<void> {
       core: outcome.result.coreVersion,
     };
     runtime.dataDir = outcome.result.dataDir || runtime.dataDir;
-    runtime.logger.log("info", "startup.ready", {
+    runtime.restartPolicy.markReady();
+    runtime.restartScheduledAt = null;
+    runtime.logger.log("info", options.restart ? "daemon.restart.ready" : "startup.ready", {
       attempts: outcome.attempts.length,
       initializeMs: outcome.initializeMs,
       withinTarget: outcome.withinTarget,
@@ -532,9 +552,28 @@ async function startDaemonForWindow(win: BrowserWindow): Promise<void> {
       daemonVersion: outcome.result.daemonVersion,
       coreVersion: outcome.result.coreVersion,
       dataDir: outcome.result.dataDir,
+      daemonPid: runtime.client.pid,
+      restartAttempt: runtime.restartPolicy.snapshot().attempt,
     });
     installEventBridge();
-    await loadMainRenderer(win);
+    if (options.loadRenderer) {
+      await loadMainRenderer(win);
+    }
+    return;
+  }
+
+  if (options.restart === true) {
+    // 重启失败：保留窗口/主 UI，按退避继续重试；不切 S-12（S-12 只用于首次启动失败）。
+    runtime.ready = false;
+    runtime.lastStderr = outcome.client?.stderrTail ?? runtime.lastStderr;
+    outcome.client?.kill("SIGTERM");
+    runtime.logger.log("error", "daemon.restart.failed", {
+      reason: outcome.fatal.reason,
+      message: outcome.fatal.message,
+      attempts: outcome.attempts.length,
+      retried: outcome.retried,
+    });
+    scheduleDaemonRestartAfterFailure();
     return;
   }
 
@@ -555,6 +594,190 @@ async function startDaemonForWindow(win: BrowserWindow): Promise<void> {
   });
   outcome.client?.kill("SIGTERM");
   showFatalWindow(outcome);
+}
+
+/** 构造一次 daemon 客户端（spawn + 通知/退出/崩溃恢复接线）。 */
+function createDaemonClient(binary: string, attempt: number): DaemonClient {
+  runtime.daemonSpawnCount += 1;
+  if (runtime.daemonSpawnedAt === null) {
+    runtime.daemonSpawnedAt = Date.now();
+  }
+  let captured: DaemonClient | null = null;
+  const env = daemonEnv();
+  const client = new DaemonClient({
+    spawn: (command, args, options) =>
+      spawn(command, [...args], {
+        ...options,
+        ...daemonSpawnOptions(),
+        stdio: ["pipe", "pipe", "pipe"],
+      }),
+    spawnSpec: {
+      command: binary,
+      args: daemonArguments(env),
+      env,
+      cwd: app.getAppPath(),
+    },
+    onNotification: handleDaemonNotification,
+    onBootstrapError: (error) => {
+      runtime.logger.log("error", "daemon.bootstrap_error", {
+        aetherCode: error.aetherCode,
+        businessCode: error.businessCode,
+        message: error.message,
+        logPath: error.data?.log_path,
+      });
+    },
+    onStderrLine: (line) => {
+      // 持续 drain stderr（ADR-029 §3.5-3）：避免 pipe 满阻塞 daemon。
+      runtime.lastStderr = `${runtime.lastStderr}\n${line}`.slice(-16_384);
+      runtime.logger.log("debug", "daemon.stderr", { line });
+    },
+    onExit: (exit) => {
+      handleDaemonExit(captured, exit.code, exit.signal);
+    },
+  });
+  captured = client;
+  runtime.logger.log("info", "daemon.spawn", {
+    attempt,
+    binary,
+    args: daemonArguments(env),
+    passphraseMode: runtime.secretsPassphrase === null ? "none" : "configured",
+  });
+  return client;
+}
+
+/** daemon 环境：口令只在内存中透传（不落盘/不日志；诊断包剔除）。 */
+function daemonEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  if (runtime.secretsPassphrase !== null) {
+    env.AETHER_SECRETS_PASSPHRASE = runtime.secretsPassphrase;
+  }
+  return env;
+}
+
+/**
+ * daemon 在 ready 后退出：保留窗口 + 退避重启（M9-09 DoD-3）。
+ *
+ * 控制投递队列满由事件桥处理，不进入本函数（ADR-029 §3.7：不重启 daemon）。
+ */
+function handleDaemonExit(
+  client: DaemonClient | null,
+  code: number | null,
+  signal: NodeJS.Signals | null,
+): void {
+  const isCurrent = client !== null && client === runtime.client;
+  runtime.logger.log("warn", "daemon.exit", {
+    code,
+    signal,
+    current: isCurrent,
+    everReady: runtime.daemonEverReady,
+    quitting: runtime.quitting,
+  });
+  if (client !== null && !isCurrent) {
+    // 旧客户端（重启后）的迟到退出：只记录，不触发第二次重启。
+    return;
+  }
+  runtime.ready = false;
+  runtime.phase = "failed";
+  runtime.bridge?.dispose();
+  runtime.bridge = null;
+  runtime.client = null;
+  if (runtime.quitting) {
+    return;
+  }
+  if (!runtime.daemonEverReady) {
+    // 首次启动失败由 runStartupSequence/S-12 处理，不进入崩溃退避。
+    return;
+  }
+  const decision = runtime.restartPolicy.recordStop(Date.now(), code, signal);
+  runtime.logger.log(decision.restart ? "warn" : "error", "daemon.restart.decision", {
+    ...decision,
+    code,
+    signal,
+  });
+  if (!decision.restart) {
+    runtime.restartScheduledAt = null;
+    runtime.logger.log("error", "daemon.restart.paused", {
+      stopsInWindow: decision.stopsInWindow,
+      totalStops: runtime.restartPolicy.snapshot().totalStops,
+      message: "60s 内停止 ≥5 次，已停止自动重启；等待手动重试",
+    });
+    return;
+  }
+  scheduleDaemonRestart(decision.delayMs);
+}
+
+/** 安排一次退避重启（幂等：覆盖旧计时器）。 */
+function scheduleDaemonRestart(delayMs: number): void {
+  clearRestartTimer();
+  if (runtime.quitting || runtime.fatal !== null) {
+    return;
+  }
+  runtime.restartScheduledAt = Date.now() + delayMs;
+  runtime.logger.log("info", "daemon.restart.scheduled", {
+    delayMs,
+    scheduledAt: runtime.restartScheduledAt,
+    attempt: runtime.restartPolicy.snapshot().attempt,
+  });
+  runtime.restartTimer = setTimeout(() => {
+    runtime.restartTimer = null;
+    void restartDaemon();
+  }, Math.max(0, delayMs));
+}
+
+/** 重启失败（进程未起来）：把本次失败计入停止窗口，继续下一档退避。 */
+function scheduleDaemonRestartAfterFailure(): void {
+  const decision = runtime.restartPolicy.recordStop(Date.now(), null, null);
+  runtime.logger.log(decision.restart ? "warn" : "error", "daemon.restart.failure_decision", {
+    ...decision,
+  });
+  if (!decision.restart) {
+    runtime.restartScheduledAt = null;
+    runtime.logger.log("error", "daemon.restart.paused", {
+      stopsInWindow: decision.stopsInWindow,
+      message: "60s 内停止 ≥5 次，已停止自动重启；等待手动重试",
+    });
+    return;
+  }
+  scheduleDaemonRestart(decision.delayMs);
+}
+
+/** 执行重启（保留窗口；不重复创建 BrowserWindow，不重新加载主 UI）。 */
+async function restartDaemon(): Promise<void> {
+  const win = runtime.mainWindow;
+  if (runtime.quitting || runtime.fatal !== null || runtime.starting || runtime.ready) {
+    return;
+  }
+  if (win === null || win.isDestroyed()) {
+    return;
+  }
+  runtime.logger.log("info", "daemon.restart.start", {
+    scheduledAt: runtime.restartScheduledAt,
+  });
+  runtime.starting = true;
+  try {
+    await startDaemonForWindow(win, { loadRenderer: false, restart: true });
+  } catch (error) {
+    runtime.logger.log("error", "daemon.restart.error", { error: errorText(error) });
+    scheduleDaemonRestartAfterFailure();
+  } finally {
+    runtime.starting = false;
+  }
+}
+
+/** 手动重试（S-09/诊断入口；清空熔断并立即重启）。 */
+function retryDaemonNow(): void {
+  runtime.logger.log("info", "daemon.restart.manual", {
+    paused: runtime.restartPolicy.isPaused,
+  });
+  runtime.restartPolicy.manualRetry();
+  scheduleDaemonRestart(0);
+}
+
+function clearRestartTimer(): void {
+  if (runtime.restartTimer !== null) {
+    clearTimeout(runtime.restartTimer);
+    runtime.restartTimer = null;
+  }
 }
 
 /** 事件桥：daemon `aether.event` → 单通道 FIFO + 16ms 批处理 → renderer。 */
@@ -609,29 +832,30 @@ function handleDaemonNotification(notification: DaemonNotification): void {
   if (notification.method === "daemon.status") {
     const params = notification.params as { phase?: unknown; reason?: unknown } | undefined;
     const phase = typeof params?.phase === "string" ? params.phase : null;
+    const reason = typeof params?.reason === "string" ? params.reason : null;
     runtime.phase = phase;
     runtime.logger.log("info", "daemon.status", {
       phase,
-      reason: params?.reason ?? null,
+      reason,
     });
-    if (phase === "failed" && runtime.ready) {
-      runtime.logger.log("error", "daemon.status.failed");
-      // initialize 已完成后的 failed：壳级兜底（M9-09 会接管重启/退避）。
-      showFatalWindow({
-        ok: false,
-        client: runtime.client,
-        fatal: {
-          reason: "handshake_failed",
-          message: "核心进入 failed 阶段，无法继续提供服务。",
-          logPath: daemonLogPathFor(runtime.dataDir),
-          dataDir: runtime.dataDir,
-          phase: "failed",
-          attempts: 1,
-        },
-        attempts: [],
-        retried: false,
-        exit: null,
+    if (
+      reason === "keychain_reauth_required" &&
+      process.env.AETHER_SKIP_KEYCHAIN_PREFLIGHT !== "1"
+    ) {
+      // M9-09 DoD-8：旧 Tauri 条目在新签名身份下不可读 → S-13（不删除旧条目）。
+      runtime.logger.log("warn", "keychain.preflight.reauth", { phase });
+      runtime.keychainPrompted = true;
+      showKeychainPrompt({
+        scope: "provider",
+        mode: "reauth",
+        reason:
+          "旧 Keychain 条目无法在新应用身份下读取，或 OS 凭据库不可用；请重试授权，或输入口令以降级方式打开。",
+        notice: "不会删除任何旧条目。",
       });
+    }
+    if (phase === "failed" && runtime.ready) {
+      // M9-09：保留窗口，由健康横幅提示；进程退出后走退避重启（不切 S-12）。
+      runtime.logger.log("error", "daemon.status.failed", { reason });
     }
     return;
   }
@@ -720,9 +944,90 @@ export function showKeychainPrompt(state?: Partial<KeychainViewState>): void {
   void win.loadFile(shellAsset("keychain", "keychain.html"));
 }
 
-/** M9-09 注入 Keychain 动作实现（本任务默认返回未接线）。 */
+/** M9-09 注入 Keychain 动作实现（重授权/口令降级/跳过）。 */
 export function installKeychainHooks(hooks: KeychainHooks): void {
   keychainHooks = hooks;
+}
+
+/** 生产接线（S-13；不删除旧条目）。 */
+function installKeychainHooksOnce(): void {
+  installKeychainHooks({
+    retry: async () => {
+      runtime.logger.log("info", "keychain.retry.restart", {});
+      const restarted = await restartDaemonForKeychain();
+      if (!restarted) {
+        return { ok: false, error: "Keychain 重授权启动失败；旧密钥条目未删除" };
+      }
+      closeKeychainWindow();
+      runtime.keychainPrompted = false;
+      return { ok: true };
+    },
+    submitPassphrase: async (passphrase: string) => {
+      if (passphrase.trim().length === 0) {
+        return { ok: false, error: "口令不能为空" };
+      }
+      runtime.logger.log("info", "keychain.passphrase.restart", {});
+      const restarted = await restartDaemonForKeychain(passphrase);
+      if (restarted) {
+        closeKeychainWindow();
+        runtime.keychainPrompted = false;
+        return { ok: true };
+      }
+      return { ok: false, error: "口令降级启动失败；旧密钥条目未删除" };
+    },
+    skip: async () => {
+      runtime.logger.log("warn", "keychain.preflight.skipped", {
+        scope: runtime.keychainState.scope,
+        mode: runtime.keychainState.mode,
+      });
+      runtime.keychainState = {
+        ...runtime.keychainState,
+        mode: "degraded",
+        notice: "已跳过 Keychain 授权；相关密钥功能不可用（旧条目未删除）。",
+      };
+      runtime.keychainPrompted = false;
+      closeKeychainWindow();
+      return { ok: true };
+    },
+  });
+}
+
+/** 口令降级：重启 daemon 并注入一次性环境变量（不落盘/不日志）。 */
+async function restartDaemonForKeychain(passphrase?: string): Promise<boolean> {
+  const win = runtime.mainWindow;
+  if (win === null || win.isDestroyed()) {
+    return false;
+  }
+  const previous = runtime.client;
+  runtime.client = null;
+  runtime.ready = false;
+  runtime.bridge?.dispose();
+  runtime.bridge = null;
+  if (typeof passphrase === "string" && passphrase.length > 0) {
+    runtime.secretsPassphrase = passphrase;
+  }
+  if (previous !== null) {
+    const exit = await previous.shutdown(DAEMON_SHUTDOWN_BUDGET_MS);
+    if (exit === null) {
+      await killDaemonTree({ pid: previous.pid ?? 0, timeoutMs: 2_000 });
+      await previous.waitForExit(1_000);
+    }
+  }
+  runtime.starting = true;
+  try {
+    await startDaemonForWindow(win, { loadRenderer: false, restart: true });
+  } finally {
+    runtime.starting = false;
+  }
+  return runtime.ready;
+}
+
+function closeKeychainWindow(): void {
+  const win = runtime.keychainWindow;
+  runtime.keychainWindow = null;
+  if (win !== null && !win.isDestroyed()) {
+    win.destroy();
+  }
 }
 
 /** 创建安全 BrowserWindow（DoD-2/DoD-5）。 */
@@ -970,8 +1275,25 @@ async function dispatchRpc(method: string, params: unknown): Promise<unknown> {
     throw AetherRpcError.coreNotReady();
   }
   concurrentRpc += 1;
+  const requestStartedAt = Date.now();
   try {
-    return await client.request(method, params);
+    const result = await client.request(method, params);
+    if (method === "health" && runtime.uiReadyAt === null) {
+      runtime.uiReadyAt = Date.now();
+      runtime.logger.log("info", "ui.ready", {
+        uiReadyMs: runtime.uiReadyAt - runtime.startedAt,
+      });
+    }
+    if (method === "session_create" && runtime.sessionCreateMs === null) {
+      const elapsed = Date.now() - requestStartedAt;
+      runtime.sessionCreateMs = elapsed;
+      runtime.logger.log("info", "session.create.timing", {
+        sessionCreateMs: elapsed,
+        uiReadyAt: runtime.uiReadyAt,
+        withinTarget: elapsed < 2_000,
+      });
+    }
+    return result;
   } finally {
     concurrentRpc -= 1;
   }
@@ -1229,9 +1551,12 @@ function installE2EHook(): void {
       startedAt: runtime.startedAt,
       windowCreatedAt: runtime.windowCreatedAt,
       windowReadyAt: runtime.windowReadyAt,
+      uiReadyAt: runtime.uiReadyAt,
+      sessionCreateMs: runtime.sessionCreateMs,
       daemonSpawnedAt: runtime.daemonSpawnedAt,
       daemonPid: runtime.client?.pid ?? null,
       daemonSpawnCount: runtime.daemonSpawnCount,
+      daemonEverReady: runtime.daemonEverReady,
       ready: runtime.ready,
       phase: runtime.phase,
       fatal: runtime.fatal?.fatal ?? null,
@@ -1251,7 +1576,28 @@ function installE2EHook(): void {
       },
       externalOpens: [...runtime.externalOpens],
       devToolsAutoOpen: devToolsAutoOpen(process.env),
+      restart: {
+        ...runtime.restartPolicy.snapshot(),
+        scheduledAt: runtime.restartScheduledAt,
+        timerPending: runtime.restartTimer !== null,
+      },
+      shutdown: {
+        startedAt: runtime.shutdownStartedAt,
+        elapsedMs: runtime.shutdownElapsedMs,
+        gracefulBudgetMs: DAEMON_SHUTDOWN_BUDGET_MS,
+        hardBudgetMs: MAIN_EXIT_HARD_BUDGET_MS,
+        t11BudgetMs: T11_BUDGET_MS,
+      },
+      keychain: {
+        ...runtime.keychainState,
+        prompted: runtime.keychainPrompted,
+        passphraseSupplied: runtime.secretsPassphrase !== null,
+      },
     }),
+    retryDaemon: () => {
+      retryDaemonNow();
+      return true;
+    },
   };
   (globalThis as unknown as { __aetherShell: typeof hook }).__aetherShell = hook;
 }

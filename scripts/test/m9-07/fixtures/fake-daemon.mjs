@@ -17,7 +17,7 @@
  * - bootstrap:<business_code>：立即首帧错误并退出
  * - exit：立即退出（无首帧）
  */
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, writeFileSync, appendFileSync } from "node:fs";
 import process from "node:process";
 import readline from "node:readline";
 
@@ -28,6 +28,12 @@ const logPath =
   (process.env.AETHER_DATA_DIR
     ? `${process.env.AETHER_DATA_DIR}/logs/aetherd.log`
     : "aetherd.log");
+
+/** M9-09：ready 后立即崩溃（用于退避重启/熔断 E2E）。 */
+const crashAfterReady =
+  mode === "crash_after_ready" ||
+  mode === "crash_loop" ||
+  (mode === "crash_after_ready_once" && onceState());
 
 const BOOTSTRAP = {
   sync_dir_blocked: { aether_code: "startup_blocked", exit: 21 },
@@ -102,6 +108,14 @@ if (mode === "timeout_once" && onceState()) {
     } catch {
       return;
     }
+    const requestLog = process.env.AETHER_FAKE_REQUEST_LOG;
+    if (requestLog && typeof frame.method === "string") {
+      try {
+        appendFileSync(requestLog, `${frame.method}\n`, "utf8");
+      } catch {
+        // 记录失败不影响协议响应。
+      }
+    }
     if (frame.method === "initialize") {
       if (mode === "handshake") {
         send({
@@ -129,6 +143,9 @@ if (mode === "timeout_once" && onceState()) {
             phase: mode === "degraded" ? "degraded" : "ready",
             since_ms: Date.now(),
           });
+          if (crashAfterReady) {
+            setTimeout(() => process.exit(1), 50);
+          }
         }, 120);
       };
       if (mode === "delayed") {
@@ -147,7 +164,57 @@ if (mode === "timeout_once" && onceState()) {
       return;
     }
     if (frame.method === "session_list") {
-      result(frame.id, { sessions: [] });
+      // UI `listSessions` 期望数组（真实 daemon 同口径）；空数组避免渲染异常。
+      result(frame.id, []);
+      return;
+    }
+    if (frame.method === "runtimes_list") {
+      // UI 工作台按数组渲染；返回空数组（不是对象）避免假 daemon 触发渲染异常。
+      result(frame.id, []);
+      return;
+    }
+    if (frame.method === "permissions_pending") {
+      result(frame.id, []);
+      return;
+    }
+    if (frame.method === "startup_get") {
+      result(frame.id, {
+        phase: "ready",
+        data_dir: process.env.AETHER_DATA_DIR ?? process.cwd(),
+        data_dir_source: "env_override",
+        security_level: { level: "os", detail: "e2e fake" },
+      });
+      return;
+    }
+    if (frame.method === "settings_get") {
+      result(frame.id, {
+        key: frame.params?.key ?? "",
+        value: null,
+      });
+      return;
+    }
+    if (frame.method === "settings_set") {
+      result(frame.id, { key: frame.params?.key ?? "", updated: true });
+      return;
+    }
+    if (frame.method === "presets_list") {
+      result(frame.id, { presets: [] });
+      return;
+    }
+    if (frame.method === "providers_list") {
+      result(frame.id, { providers: [] });
+      return;
+    }
+    if (frame.method === "workspaces_list") {
+      result(frame.id, {
+        workspaces: [],
+        unassigned: {
+          name: "未分配",
+          root_path: null,
+          active_sessions: 0,
+          total_sessions: 0,
+        },
+      });
       return;
     }
     if (frame.method === "shutdown") {

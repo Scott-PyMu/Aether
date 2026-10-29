@@ -132,6 +132,17 @@ describe("HealthMonitor（M2-07 DoD4/DoD5）", () => {
     expect(screen.getByTestId("health-loading")).toBeTruthy();
   });
 
+  // M9-09：daemon 崩溃重启窗口——上一轮 normal，最近一次 health 失败为
+  // `core_not_ready` 时也必须立即显示横幅（不等到 15s S-09）。
+  it("daemon 崩溃窗口：normal + core_not_ready → core-not-ready-banner", () => {
+    pollingMock.mockReturnValue(
+      state({ status: "normal", error: "核心未连接", errorCode: "core_not_ready" }),
+    );
+    render(<HealthMonitor />);
+    expect(screen.getByTestId("core-not-ready-banner")).toBeTruthy();
+    expect(screen.queryByTestId("health-normal")).toBeNull();
+  });
+
   it("正常态与加载态锚点（E2E 断言用）", () => {
     pollingMock.mockReturnValue(state({ status: "normal" }));
     const { unmount } = render(<HealthMonitor />);

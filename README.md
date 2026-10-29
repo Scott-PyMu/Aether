@@ -4,6 +4,7 @@
 
 - 基线：《设计文档》**v1.28**（含 ADR-001–015、017–029；ADR-029 **v0.4** = Electron + aetherd 第三轮整改）、《需求文档》v0.18、《实施计划与验收标准》v1.24、`docs/P2-架构迁移-实施计划与验收标准.md` v0.5（含 M10 详细 DoD/G9–G13）、`docs/UI-UX-设计规格.md` v0.17（S-01 不可达/S-12/S-13）。
 - 状态：**P2-M9 架构迁移**（先迁移、后 P2 功能）；Tauri 仅开发对照，**无回退包**。
+- **旧内测包手工卸载**：曾安装 Tauri 内测构建的机器没有 MSI 升级链/回退包；请先手工卸载旧包，再安装 Electron 构建。卸载不会删除数据目录；但**不得双开**同一数据目录（daemon 的 `.aetherd.lock` OS 独占锁会以 `data_dir_locked` 拒绝第二个核心）。
 - 迁移期说明：下方 `tauri dev` / Tauri 打包仅用于开发对照；Electron 开发/打包命令在 M9-07/M9-08 落地后以 `pnpm dev:desktop` / `pnpm package:desktop` 为准。
 
 ## 架构总览

@@ -33,6 +33,7 @@ pub mod event_bridge;
 pub mod ipc;
 pub mod isolation;
 pub mod json_payload;
+pub mod keychain_preflight;
 pub mod logging;
 pub mod permission_loop;
 pub mod permission_notice;

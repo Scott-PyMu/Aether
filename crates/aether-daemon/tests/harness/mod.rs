@@ -341,6 +341,18 @@ impl Daemon {
     pub fn id(&self) -> u32 {
         self.child.id()
     }
+
+    /// 关闭 stdin（模拟 Electron 崩溃：daemon 必须走 EOF 优雅关闭）。
+    pub fn close_stdin(&mut self) {
+        self.stdin = None;
+    }
+
+    /// 强杀（测试故障注入：模拟 `kill -9`；不走 stdin EOF 优雅关闭）。
+    pub fn kill_hard(&mut self) {
+        self.stdin = None;
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
 }
 
 impl Drop for Daemon {

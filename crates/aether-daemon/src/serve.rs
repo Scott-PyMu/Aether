@@ -13,7 +13,7 @@
 use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use aether_app::boot;
 use aether_app::event_bridge::{
@@ -43,6 +43,45 @@ use crate::bootstrap::{Bootstrap, BootstrapError, EXIT_INTERNAL};
 pub const WARM_JOIN_BUDGET: Duration = Duration::from_secs(5);
 /// 关闭序列结束后等待 tokio 运行时收尾的时间（超出即放弃后台任务）。
 pub const RUNTIME_SHUTDOWN_BUDGET: Duration = Duration::from_secs(2);
+/// daemon 关闭总预算（ADR-029 §3.6：8.2s；阶段超时继续下一阶段）。
+pub const DAEMON_SHUTDOWN_BUDGET: Duration = Duration::from_millis(8_200);
+
+/// 在硬预算内等待同步任务完成；超时返回 `None`（调用方记录并放行退出）。
+///
+/// 关闭序列不能被单个卡住的阶段拖过 T11：超时后线程继续运行，但进程即将退出，
+/// 由 OS 回收（D2「保证能退出优先」）。
+pub fn join_with_budget<T, F>(budget: Duration, task: F) -> Option<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(task());
+    });
+    receiver.recv_timeout(budget).ok()
+}
+
+/// 测试故障注入：模拟 checkpoint / 写队列卡住（仅 debug 构建；release 为空实现）。
+///
+/// `AETHER_TEST_SHUTDOWN_STALL=checkpoint|write_queue` 时在关闭编排前阻塞 30s，
+/// 用于断言 main 在 9.5s 强杀、T11 ≤10s、无孤儿。**不进入 63 命令/事件/manifest**。
+fn apply_test_shutdown_stall() {
+    #[cfg(debug_assertions)]
+    {
+        let Ok(kind) = std::env::var("AETHER_TEST_SHUTDOWN_STALL") else {
+            return;
+        };
+        if kind == "checkpoint" || kind == "write_queue" {
+            tracing::warn!(kind = %kind, "测试故障注入：关闭阶段卡住 30s（debug build）");
+            std::thread::sleep(Duration::from_secs(30));
+        }
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = std::env::var("AETHER_TEST_SHUTDOWN_STALL");
+    }
+}
 
 /// stdout 传输（唯一 JSONL 出口）。
 #[derive(Clone)]
@@ -213,7 +252,8 @@ impl DaemonServer {
     }
 
     /// 进入关闭序列：先停通知桥/事件桥（避免关闭后继续写 stdout），再停预热等待。
-    fn begin_shutdown(&mut self) {
+    fn begin_shutdown(&mut self, budget: Duration) {
+        let started = Instant::now();
         self.set_phase(DaemonPhase::ShuttingDown, Some("shutdown"));
         // M9-06：先停权限通知桥（仅提示通道；先于事件桥/管线）。
         let notice = match self.permission_notice.lock() {
@@ -222,9 +262,10 @@ impl DaemonServer {
         };
         if let Some(mut notice) = notice {
             let metrics = notice.metrics();
-            let stopped = self
-                .runtime
-                .block_on(notice.shutdown(NOTICE_SHUTDOWN_TIMEOUT));
+            let step_budget = budget
+                .saturating_sub(started.elapsed())
+                .min(NOTICE_SHUTDOWN_TIMEOUT);
+            let stopped = self.runtime.block_on(notice.shutdown(step_budget));
             tracing::info!(
                 stopped,
                 sent = metrics.sent,
@@ -240,9 +281,10 @@ impl DaemonServer {
         };
         if let Some(mut bridge) = bridge {
             let metrics = bridge.metrics();
-            let stopped = self
-                .runtime
-                .block_on(bridge.shutdown(DELIVERY_SHUTDOWN_TIMEOUT));
+            let step_budget = budget
+                .saturating_sub(started.elapsed())
+                .min(DELIVERY_SHUTDOWN_TIMEOUT);
+            let stopped = self.runtime.block_on(bridge.shutdown(step_budget));
             tracing::info!(
                 stopped,
                 forwarded = metrics.forwarded,
@@ -256,15 +298,18 @@ impl DaemonServer {
         }
         if let Some(warm) = self.warm.take() {
             let handle = self.runtime.clone();
+            let step_budget = budget
+                .saturating_sub(started.elapsed())
+                .min(WARM_JOIN_BUDGET);
             let joined = handle.block_on(async {
-                tokio::time::timeout(WARM_JOIN_BUDGET, warm)
+                tokio::time::timeout(step_budget, warm)
                     .await
                     .map(|result| result.is_ok())
                     .unwrap_or(false)
             });
             if !joined {
                 tracing::warn!(
-                    budget_ms = WARM_JOIN_BUDGET.as_millis(),
+                    budget_ms = step_budget.as_millis(),
                     "预热未在预算内结束：继续关闭序列（退出优先）"
                 );
             }
@@ -272,24 +317,38 @@ impl DaemonServer {
     }
 
     /// 执行 D2 关闭序列（存储五步 + 适配器终止段；未接线则直接通过）。
-    fn shutdown_backend(&self) {
-        if let Some(orchestrator) = self.state.shutdown_orchestrator() {
-            let report = orchestrator.run_blocking();
-            tracing::info!(
-                total_ms = report.total_ms,
-                within_budget = report.within_budget,
-                deadline_expired = report.deadline_expired,
-                pipeline_shutdown_ok = report.pipeline_shutdown_ok,
-                adapters = report.adapters.len(),
-                storage_closed = report.storage.is_some(),
-                wal_bytes_after = report
-                    .storage
-                    .as_ref()
-                    .map_or(0, |storage| storage.wal_bytes_after),
-                "关闭序列完成（D2 五步 + T11 预算）"
-            );
-        } else {
+    fn shutdown_backend(&self, budget: Duration) {
+        apply_test_shutdown_stall();
+        let Some(orchestrator) = self.state.shutdown_orchestrator() else {
             tracing::info!("关闭序列：无核心编排对象（启动未完成或降级启动），直接退出");
+            return;
+        };
+        if budget.is_zero() {
+            tracing::warn!("关闭序列预算已耗尽：跳过核心编排（退出优先）");
+            return;
+        }
+        match join_with_budget(budget, move || orchestrator.run_blocking()) {
+            Some(report) => {
+                tracing::info!(
+                    total_ms = report.total_ms,
+                    within_budget = report.within_budget,
+                    deadline_expired = report.deadline_expired,
+                    pipeline_shutdown_ok = report.pipeline_shutdown_ok,
+                    adapters = report.adapters.len(),
+                    storage_closed = report.storage.is_some(),
+                    wal_bytes_after = report
+                        .storage
+                        .as_ref()
+                        .map_or(0, |storage| storage.wal_bytes_after),
+                    "关闭序列完成（D2 五步 + T11 预算）"
+                );
+            }
+            None => {
+                tracing::warn!(
+                    budget_ms = budget.as_millis(),
+                    "关闭序列未在 8.2s 预算内完成：记录并放行进程退出（退出优先）"
+                );
+            }
         }
     }
 
@@ -321,17 +380,26 @@ impl DaemonServer {
             let notice_state = state.clone();
             let joined = tokio::task::spawn_blocking(move || {
                 let bundle = boot::build_backend(&gate, resource_dir, log_sink, &blocker);
+                let keychain_reauth = bundle
+                    .keychain_preflight
+                    .as_ref()
+                    .is_some_and(|report| report.needs_reauth());
                 let _ = state.install_backend(bundle.backend);
                 if let Some(orchestrator) = bundle.shutdown {
                     let _ = state.install_shutdown(orchestrator);
                 }
                 let degraded = degraded_snapshot(&state);
-                (bundle.pipeline, bundle.write, degraded)
+                (bundle.pipeline, bundle.write, degraded, keychain_reauth)
             })
             .await;
-            let (pipeline, write, degraded) = match joined {
+            let (pipeline, write, degraded, keychain_reauth) = match joined {
                 Ok(parts) => parts,
-                Err(error) => (None, None, Some(format!("预热任务失败：{error}"))),
+                Err(error) => (
+                    None,
+                    None,
+                    Some(format!("预热任务失败：{error}")),
+                    false,
+                ),
             };
             let (next, reason) = match degraded {
                 Some(reason) => (DaemonPhase::Degraded, Some(reason)),
@@ -447,6 +515,18 @@ impl DaemonServer {
             }
             let _ =
                 transport.send(&aether_rpc::Notification::new("daemon.status", params).to_value());
+            if keychain_reauth {
+                // M9-09 DoD-8：S-13 触发（只读 preflight 发现旧条目不可读；不删除）。
+                let notice = json!({
+                    "phase": status_phase.as_str(),
+                    "since_ms": now_ms(),
+                    "reason": "keychain_reauth_required"
+                });
+                let _ = transport.send(
+                    &aether_rpc::Notification::new("daemon.status", notice).to_value(),
+                );
+                tracing::warn!("Keychain preflight 需要重授权/口令降级（S-13；旧条目不删除）");
+            }
             tracing::info!(
                 phase = status_phase.as_str(),
                 reason = ?reason,
@@ -717,15 +797,22 @@ pub fn run_stdio(bootstrap: Bootstrap) -> u8 {
         }
     }
 
-    server.begin_shutdown();
-    server.shutdown_backend();
+    let shutdown_started = Instant::now();
+    server.begin_shutdown(DAEMON_SHUTDOWN_BUDGET);
+    let remaining = DAEMON_SHUTDOWN_BUDGET.saturating_sub(shutdown_started.elapsed());
+    server.shutdown_backend(remaining);
     drop(connection);
     let oversized_frames = frames.oversized_frames();
     drop(frames);
-    runtime.shutdown_timeout(RUNTIME_SHUTDOWN_BUDGET);
+    let remaining = DAEMON_SHUTDOWN_BUDGET.saturating_sub(shutdown_started.elapsed());
+    runtime.shutdown_timeout(RUNTIME_SHUTDOWN_BUDGET.min(remaining));
+    let shutdown_ms = u64::try_from(shutdown_started.elapsed().as_millis()).unwrap_or(u64::MAX);
     tracing::info!(
         frames = frames_seen,
         oversized = oversized_frames,
+        shutdown_ms,
+        budget_ms = DAEMON_SHUTDOWN_BUDGET.as_millis(),
+        within_budget = shutdown_started.elapsed() <= DAEMON_SHUTDOWN_BUDGET,
         "aetherd 退出"
     );
     drop(bootstrap);
@@ -759,8 +846,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn shutdown_budget_is_frozen_at_8_2s() {
+        assert_eq!(DAEMON_SHUTDOWN_BUDGET, Duration::from_millis(8_200));
+        assert!(DAEMON_SHUTDOWN_BUDGET < Duration::from_secs(10), "必须小于 T11 10s");
+    }
+
+    #[test]
+    fn join_with_budget_returns_value_within_budget() {
+        assert_eq!(join_with_budget(Duration::from_millis(500), || 7_u8), Some(7));
+    }
+
+    #[test]
+    fn join_with_budget_returns_none_when_stuck() {
+        let started = Instant::now();
+        let result = join_with_budget(Duration::from_millis(30), || {
+            std::thread::sleep(Duration::from_millis(250));
+            7_u8
+        });
+        assert_eq!(result, None);
+        assert!(
+            started.elapsed() < Duration::from_millis(200),
+            "预算必须硬约束（实测 {:?}）",
+            started.elapsed()
+        );
+    }
+
+    #[test]
     fn transport_mapping_covers_all_32_codes() {
-        // 32 枚举逐个映射（编译期穷尽性由 match 保证；此处锁定关键分类）。
         assert_eq!(
             transport_code_for(IpcErrorCode::UnknownField),
             code::INVALID_PARAMS

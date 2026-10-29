@@ -9,6 +9,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { EventStore } from "./eventStore";
+import { publishHealthState, resetHealthBusForTests } from "./healthBus";
 import { SessionWorkbench } from "./SessionWorkbench";
 import type {
   MessagesPageResult,
@@ -150,6 +151,7 @@ function newStore(): EventStore {
 
 afterEach(() => {
   cleanup();
+  resetHealthBusForTests();
   for (const store of stores.splice(0)) {
     store.dispose();
   }
@@ -375,5 +377,40 @@ describe("SessionWorkbench（M3-02）", () => {
     render(<SessionWorkbench store={newStore()} ipc={ipc} />);
     const error = await screen.findByTestId("workbench-error");
     expect(error.textContent).toContain("监督器未接线");
+  });
+
+  it("M9-09：健康恢复后重新拉 session_list / messages_page", async () => {
+    resetHealthBusForTests();
+    publishHealthState({
+      status: "normal",
+      report: null,
+      error: null,
+      errorCode: null,
+    });
+    const listSessions = vi.fn(async () => [sessionSummary("idle")]);
+    const messagesPage = vi.fn(async () => emptyPage());
+    const ipc = fakeIpc({ listSessions, messagesPage });
+    render(<SessionWorkbench store={newStore()} ipc={ipc} />);
+    await waitFor(() => expect(listSessions).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(messagesPage).toHaveBeenCalled());
+
+    act(() => {
+      publishHealthState({
+        status: "normal",
+        report: null,
+        error: "核心未连接",
+        errorCode: "core_not_ready",
+      });
+    });
+    act(() => {
+      publishHealthState({
+        status: "normal",
+        report: null,
+        error: null,
+        errorCode: null,
+      });
+    });
+    await waitFor(() => expect(listSessions).toHaveBeenCalledTimes(2));
+    expect(messagesPage.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 });

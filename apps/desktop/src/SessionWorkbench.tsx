@@ -783,6 +783,35 @@ export function SessionWorkbench({
     void refreshSessions();
   }, [refreshRuntimes, refreshSessions]);
 
+  // M9-09：daemon 崩溃重启后，健康状态会从 `normal` 掉到 `loading/core_not_ready`
+  // （或 `unresponsive`）再回到 `normal`；此时重新拉 `session_list`，并重读当前会话
+  // `messages_page`，补上崩溃窗口内可能遗漏的状态（不新增 IPC/事件类型）。
+  const healthEverNormal = useRef(false);
+  const previousHealthStatus = useRef(storageHealth.status);
+  const previousHealthError = useRef(storageHealth.errorCode);
+  useEffect(() => {
+    const previousStatus = previousHealthStatus.current;
+    const previousError = previousHealthError.current;
+    previousHealthStatus.current = storageHealth.status;
+    previousHealthError.current = storageHealth.errorCode;
+    if (storageHealth.status === "normal") {
+      const recovered = previousStatus !== "normal" || previousError === "core_not_ready";
+      if (healthEverNormal.current && recovered) {
+        void refreshSessions();
+        if (activeSessionId) {
+          void loadMessages(activeSessionId);
+        }
+      }
+      healthEverNormal.current = true;
+    }
+  }, [
+    activeSessionId,
+    loadMessages,
+    refreshSessions,
+    storageHealth.errorCode,
+    storageHealth.status,
+  ]);
+
   // M3-03：运行时状态随既有 `health` 轮询（5s）变化刷新注册表快照——不新增轮询循环，
   // 仅在摘要签名（id/status/reason）变化时重取（disabled/degraded 徽标与恢复入口联动）。
   // `health.runtimes` 为数组（含 `[]`，监督器已接线）时附加就绪标记，覆盖启动过渡窗口

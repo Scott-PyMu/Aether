@@ -13,6 +13,8 @@ pub struct BackendBundle {
     pub pipeline: Option<aether_control::EventPipeline>,
     /// 单写队列句柄（事件桥升级审计出口；无核心/降级启动为 None）。
     pub write: Option<aether_store::WriteQueue>,
+    /// M9-09：Keychain preflight（只读；无密钥存储/降级启动为 None）。
+    pub keychain_preflight: Option<crate::keychain_preflight::KeychainPreflightReport>,
 }
 
 /// 构造命令后端（ADR-007 `health` 真实接线 + M2-01 `runtime_*` 接线 + M2-07 巡检
@@ -39,6 +41,7 @@ pub fn build_backend(
             shutdown: None,
             pipeline: None,
             write: None,
+            keychain_preflight: None,
         };
     }
     let data_dir = std::path::PathBuf::from(startup.snapshot().data_dir);
@@ -356,6 +359,38 @@ pub fn build_backend(
         provider_env_hook.wire(reads.clone(), boot_secrets.clone());
         provider_catalog.wire(reads.clone());
     }
+    // M9-09 DoD-8：Keychain 启动 preflight（只读探测旧 Tauri 条目；绝不删除）。
+    // 旧条目在新签名身份下不可读（或密钥存储未挂载）→ 报告 `mode=reauth`；daemon
+    // 预热完成后经 `daemon.status.reason=keychain_reauth_required` 通知 main 显示 S-13。
+    let keychain_preflight = if backup_deps.is_some() {
+        let provider_ids = match reads.as_ref() {
+            Some(reads) => match handle.block_on(reads.providers()) {
+                Ok(providers) => providers
+                    .into_iter()
+                    .filter(|provider| provider.api_key_ref.is_some())
+                    .map(|provider| provider.id)
+                    .collect(),
+                Err(error) => {
+                    tracing::warn!(error = %error, "Keychain preflight 读取供应商清单失败（跳过条目探测）");
+                    Vec::new()
+                }
+            },
+            None => Vec::new(),
+        };
+        let store = boot_secrets.as_ref().map(|store| store.as_ref() as &dyn aether_security::SecretStore);
+        let report = crate::keychain_preflight::run_boot(store, &provider_ids);
+        tracing::info!(
+            scope = %report.scope,
+            mode = %report.mode,
+            readable = report.readable,
+            missing = report.missing,
+            unavailable = report.unavailable,
+            "Keychain preflight 完成（只读；不删除旧条目）"
+        );
+        Some(report)
+    } else {
+        None
+    };
     // ADR-028：本地凭据 broker（仅本机通道；失败时适配器回退单供应商 env）。
     if let Some(info) = credential_broker::start(provider_env_hook.clone(), &data_dir, &handle) {
         provider_env_hook.set_broker_info(info);
@@ -555,5 +590,6 @@ pub fn build_backend(
         shutdown: orchestrator,
         pipeline: pipeline_for_bridge,
         write: write_for_bridge,
+        keychain_preflight,
     }
 }
