@@ -4,7 +4,7 @@
  * 覆盖：文件/目录选择、取消、非法参数、非法路径（不存在/相对路径/控制字符/
  * 超长）、对话框错误，以及 `startup_pick_target` 的通用目录选择器语义。
  */
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -25,6 +25,11 @@ function tempDir(prefix = "aether-m9-06-"): string {
   const dir = mkdtempSync(path.join(os.tmpdir(), prefix));
   roots.push(dir);
   return dir;
+}
+
+/** Windows CI 的 `%TEMP%` 可能是 8.3 短路径（RUNNER~1）；断言与实现一样用 canonical 长路径。 */
+function canonical(value: string): string {
+  return realpathSync.native(value);
 }
 
 function dialogReturning(
@@ -64,7 +69,7 @@ describe("壳本地命令（M9-06 DoD-3）", () => {
 
     const outcome = await handleShellLocalCommand(REF_PICK_METHOD, { kind: "file" }, dialog);
 
-    expect(outcome).toEqual({ ok: true, result: { path: file } });
+    expect(outcome).toEqual({ ok: true, result: { path: canonical(file) } });
     expect(calls).toEqual([{ properties: ["openFile"] }]);
   });
 
@@ -76,7 +81,7 @@ describe("壳本地命令（M9-06 DoD-3）", () => {
       { kind: "directory" },
       picked.dialog,
     );
-    expect(directory).toEqual({ ok: true, result: { path: root } });
+    expect(directory).toEqual({ ok: true, result: { path: canonical(root) } });
     expect(picked.calls).toEqual([{ properties: ["openDirectory"] }]);
 
     const canceled = dialogReturning([root], { canceled: true });
@@ -95,7 +100,7 @@ describe("壳本地命令（M9-06 DoD-3）", () => {
 
     for (const params of [null, undefined, {}]) {
       const outcome = await handleShellLocalCommand(STARTUP_PICK_TARGET_METHOD, params, dialog);
-      expect(outcome).toEqual({ ok: true, result: { target_dir: root } });
+      expect(outcome).toEqual({ ok: true, result: { target_dir: canonical(root) } });
     }
     expect(calls).toEqual([
       { properties: ["openDirectory"] },
@@ -190,7 +195,7 @@ describe("壳本地命令（M9-06 DoD-3）", () => {
     const { dialog } = dialogReturning([link]);
     expect(await handleShellLocalCommand(REF_PICK_METHOD, { kind: "file" }, dialog)).toEqual({
       ok: true,
-      result: { path: target },
+      result: { path: canonical(target) },
     });
   });
 
