@@ -76,12 +76,10 @@ function verifyWindows(artifact, installed) {
     fail("未提供 Windows 签名产物（--artifact/--installed）");
     return;
   }
-  const results = readAuthenticode(targets);
   const configured = Boolean(
     process.env.CSC_LINK || process.env.CSC_NAME || process.env.AETHER_WIN_CERT_FILE,
   );
-  const unsigned = results.filter((result) => result.status === "NotSigned");
-  if (!configured && unsigned.length === results.length) {
+  if (!configured) {
     // ADR-030（M9-11）：Windows 允许无证书发布（Proma 同口径），但必须记录
     // unsigned + 哈希 + SmartScreen 指引；macOS 仍强制签名/公证。
     note(
@@ -90,6 +88,7 @@ function verifyWindows(artifact, installed) {
     );
     return;
   }
+  const results = readAuthenticode(targets);
   const expected = process.env.AETHER_WIN_SIGNER_SUBJECT ?? "";
   for (const result of results) {
     if (result.status !== "Valid") {
