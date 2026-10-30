@@ -158,6 +158,12 @@ function electronDistForArch() {
   if (process.env.AETHER_ELECTRON_DIST) return path.resolve(process.env.AETHER_ELECTRON_DIST);
   if (arch === hostArch && platform === process.platform) {
     const dist = path.join(repoRoot, "apps", "desktop", "node_modules", "electron", "dist");
+    if (!existsSync(dist)) {
+      // CI 上 Electron 的 postinstall 可能未落 dist（或缓存未恢复）；交给
+      // electron-builder 下载对应平台发行包。
+      console.log(`[package] 未找到本机 Electron dist（${dist}）：由 electron-builder 下载`);
+      return null;
+    }
     // M9-07 开发/E2E 会在 Electron 发行目录创建 `Aether.exe` 硬链接（单实例命名管道
     // 需要产品名）。打包必须只保留 `electron.exe`，否则该 250MB 副本会被一并装入 MSI。
     const stray = path.join(dist, "Aether.exe");
