@@ -24,6 +24,7 @@ import {
   browserWebPreferences,
   decideBrowserNavigation,
   decideBrowserWindowOpen,
+  markBrowserContents,
   type BrowserDownload,
 } from "./browserView";
 import type { ShellLogger } from "./shellLog";
@@ -131,6 +132,7 @@ export class BrowserHost {
     const view = new WebContentsView({
       webPreferences: { ...browserWebPreferences(), partition },
     });
+    markBrowserContents(view.webContents);
     const entry: BrowserEntry = {
       id: input.id,
       view,

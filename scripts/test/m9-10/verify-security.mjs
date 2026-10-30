@@ -161,6 +161,7 @@ const appSource = read("apps/desktop/electron/app.ts");
 for (const [label, pattern] of [
   ["全局 web-contents-created 加固", /web-contents-created/],
   ["统一 hardenContents", /hardenContents\(/],
+  ["浏览器视图标记跳过主 UI 白名单", /isBrowserContents\(contents\)/],
   ["新窗口拦截", /setWindowOpenHandler/],
   ["顶层导航拦截", /will-navigate/],
   ["webview 拦截", /will-attach-webview/],
@@ -292,6 +293,7 @@ for (const [label, pattern] of [
   ["权限默认拒绝", /decideBrowserPermission[\s\S]{0,80}return false/],
   ["文件名清洗", /sanitizeDownloadFileName/],
   ["确认状态机", /class BrowserDownloadGate/],
+  ["contents 标记", /export function markBrowserContents/],
 ]) {
   expectMatch(browserView, pattern, `browserView.ts 缺少${label}`);
 }
@@ -307,6 +309,7 @@ const browserHost = read("apps/desktop/electron/browserHost.ts");
 for (const [label, pattern] of [
   ["WebContentsView", /new WebContentsView\(/],
   ["partition 注入", /webPreferences: \{ \.\.\.browserWebPreferences\(\), partition \}/],
+  ["contents 标记", /markBrowserContents\(view\.webContents\)/],
   ["权限拒绝", /setPermissionRequestHandler[\s\S]{0,160}callback\(false\)/],
   ["权限检查拒绝", /setPermissionCheckHandler\(\(\) => false\)/],
   ["证书默认校验", /setCertificateVerifyProc/],

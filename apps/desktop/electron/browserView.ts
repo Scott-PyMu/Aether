@@ -22,6 +22,22 @@ export const MAX_DOWNLOAD_FILE_NAME = 128;
 const PARTITION_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 const WINDOWS_RESERVED = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?$/i;
 
+/**
+ * 浏览器视图 contents 标记：`web-contents-created` 在 `new WebContentsView()`
+ * 内同步触发，无法先于事件注册；main 的统一加固延迟到 `setImmediate`，由
+ * `BrowserHost` 在创建后同步标记，避免把主 UI 的 `aether://app` 白名单误套到
+ * 浏览器视图（Electron 45 的 `getType()` 对 WebContentsView 仍返回 `window`）。
+ */
+const browserContentsRegistry = new WeakSet<object>();
+
+export function markBrowserContents(contents: object): void {
+  browserContentsRegistry.add(contents);
+}
+
+export function isBrowserContents(contents: object): boolean {
+  return browserContentsRegistry.has(contents);
+}
+
 /** 由视图 id 生成独立 partition（拒绝非法 id，避免拼出共享/越权分区）。 */
 export function browserPartition(id: string): string {
   if (!PARTITION_ID.test(id)) {

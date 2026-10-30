@@ -33,6 +33,7 @@ import type { AetherEvent } from "@aether/protocol";
 
 import commandManifest from "../../../packages/protocol/src/command-manifest.json";
 import { BrowserHost, type BrowserBounds } from "./browserHost";
+import { BROWSER_PARTITION_PREFIX, isBrowserContents } from "./browserView";
 import { DaemonClient, AetherRpcError, type DaemonNotification } from "./daemonClient";
 import { DaemonRestartPolicy } from "./daemonLifecycle";
 import {
@@ -451,7 +452,16 @@ function installSessionSecurity(): void {
 /** 所有新建 WebContents 统一加固（ADR-029 §5.1）。 */
 function installWebContentsHardening(): void {
   app.on("web-contents-created", (_event, contents) => {
-    hardenContents(contents);
+    // `WebContentsView` 的创建事件同步触发；延迟到下一轮事件循环，等
+    // `BrowserHost` 完成标记后再决定是否套用主 UI 规则。
+    setImmediate(() => {
+      if (contents.isDestroyed()) {
+        return;
+      }
+      if (!isBrowserContents(contents)) {
+        hardenContents(contents);
+      }
+    });
   });
 }
 
@@ -1127,10 +1137,24 @@ function hardenContents(contents: WebContents): void {
     return;
   }
   hardenedContents.add(contents);
+  if (isBrowserContents(contents)) {
+    return;
+  }
   const type = contents.getType();
-  if (type === "browserView") {
+  const lastPreferences = (
+    contents as unknown as {
+      getLastWebPreferences?: () => { partition?: unknown } | undefined;
+    }
+  ).getLastWebPreferences?.();
+  const partition =
+    typeof lastPreferences?.partition === "string"
+      ? lastPreferences.partition
+      : "";
+  if (type === "browserView" || partition.startsWith(BROWSER_PARTITION_PREFIX)) {
     // WebContentsView 由 `BrowserHost` 按 ADR-029 §5.2 单独接线；
-    // 主 UI 的 `aether://app` 导航白名单不得套用到浏览器视图。
+    // 主 UI 的 `aether://app` 导航白名单不得套用到浏览器视图
+    // （Electron 45 的 `WebContents.getType()` 对 WebContentsView 仍返回
+    // `window`，因此以 partition 前缀为准）。
     return;
   }
   if (type === "webview") {

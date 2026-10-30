@@ -336,7 +336,30 @@ async function main() {
     JSON.stringify({ a: globalsA.cookie, b: globalsB.cookie }),
   );
 
-  // ===== 2. window.open / file:// =====
+  // ===== 2. window.open / file:// / 页面内 http 导航 =====
+  const navView = await browserCall("open", {
+    id: "poc-nav",
+    url: `${bases.httpBase}/a`,
+    bounds: { x: 0, y: 0, width: 640, height: 400 },
+  });
+  assert("导航视图创建", navView !== null);
+  await evalIn("poc-nav", `location.href = ${JSON.stringify(`${bases.httpBase}/b`)}; true`);
+  const navigated = await waitFor(
+    async () => {
+      const current = (await browserCall("snapshot")).find(
+        (item) => item.id === "poc-nav",
+      );
+      return current?.url.endsWith("/b") ? current : null;
+    },
+    10_000,
+    "浏览器视图页面内 http 导航",
+  );
+  record(
+    "DoD-4 浏览器视图页面内 http 导航允许（主 UI 白名单不误套）",
+    navigated.url.startsWith(`${bases.httpBase}/b`),
+    navigated.url,
+  );
+
   const beforeWindows = app.windows().length;
   const openResult = await evalIn(
     "poc-a",
@@ -504,6 +527,17 @@ async function main() {
     fetchResult.startsWith("blocked:"),
     fetchResult,
   );
+
+  const finalState = await snapshot();
+  const shellLog = readFileSync(finalState.shellLogPath, "utf8")
+    .split(/\r?\n/)
+    .filter((line) =>
+      /child_process|renderer\.gone|daemon\.exit|network|certificate\.rejected/i.test(
+        line,
+      ),
+    );
+  console.log("[m9-10-e2e] 壳层进程日志诊断：");
+  for (const line of shellLog) console.log(`  ${line}`);
 }
 
 function killApp() {

@@ -13,13 +13,14 @@ import {
   decideBrowserNavigation,
   decideBrowserPermission,
   decideBrowserWindowOpen,
+  isBrowserContents,
+  markBrowserContents,
   sanitizeDownloadFileName,
   uniqueDownloadPath,
 } from "./browserView";
 
 describe("browserView security", () => {
-  it("每个视图独立 persist partition；非法 id 拒绝", () => {
-    expect(browserPartition("session-01")).toBe(
+  it("每个视图独立 persist partition；非法 id 拒绝", () => {    expect(browserPartition("session-01")).toBe(
       `${BROWSER_PARTITION_PREFIX}session-01`,
     );
     expect(browserPartition("workspace.alpha_2")).toBe(
@@ -28,6 +29,13 @@ describe("browserView security", () => {
     for (const invalid of ["", "../x", "a/b", "a b", "-a", "a".repeat(65)]) {
       expect(() => browserPartition(invalid)).toThrow(TypeError);
     }
+  });
+
+  it("浏览器 contents 标记：创建后同步登记，统一加固跳过", () => {
+    const contents = {};
+    expect(isBrowserContents(contents)).toBe(false);
+    markBrowserContents(contents);
+    expect(isBrowserContents(contents)).toBe(true);
   });
 
   it("无 preload / 无 Node / sandbox", () => {
