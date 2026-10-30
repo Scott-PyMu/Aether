@@ -510,6 +510,7 @@ for (const doc of [
   "docs/M9-11-证据.md",
   "docs/M9-11-旧包手工卸载说明.md",
   "docs/M9-11-阈值阻塞与ADR建议.md",
+  "docs/M9-11-macOS-暂停记录.md",
   "docs/adr/ADR-030-M9-11-打包基线与无证书发布.md",
 ]) {
   check(`文档存在：${doc}`, existsSync(path.join(repoRoot, doc)), doc);

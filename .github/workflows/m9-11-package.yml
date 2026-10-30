@@ -72,6 +72,10 @@ jobs:
 
   macos-arm64:
     name: macOS arm64 DMG + sign/notarize + smoke
+    # 2026-10-30 暂停：仓库尚无 Apple Developer ID/公证 secrets。
+    # 补齐 secrets 后，在仓库 Actions Variables 设置
+    # `M9_11_MAC_SIGNING_READY=true`，再重跑本 workflow 即恢复。
+    if: vars.M9_11_MAC_SIGNING_READY == 'true'
     runs-on: macos-14
     env:
       MAC_CERTS: ${{ secrets.MAC_CERTS }}
@@ -141,6 +145,9 @@ jobs:
 
   macos-x64:
     name: macOS x64 DMG + sign/notarize + smoke
+    # 同 macos-arm64：待 Apple 签名/公证 secrets 就绪并设置
+    # `M9_11_MAC_SIGNING_READY=true` 后恢复。
+    if: vars.M9_11_MAC_SIGNING_READY == 'true'
     runs-on: macos-15-intel
     env:
       MAC_CERTS: ${{ secrets.MAC_CERTS }}
