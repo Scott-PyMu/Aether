@@ -1,0 +1,25 @@
+{
+  "name": "@aether/adapter-host",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Aether 适配器宿主：单二进制 + --adapter 分发（M9-11 包体优化；复用各适配器 CLI）",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "build:bun": "bun build src/main.ts --compile --outfile dist/aether-adapter-host"
+  },
+  "dependencies": {
+    "@aether/adapter-claude-code": "workspace:*",
+    "@aether/adapter-codex": "workspace:*",
+    "@aether/adapter-dsh": "workspace:*",
+    "@aether/adapter-mock": "workspace:*",
+    "@aether/adapter-sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.2",
+    "@vitest/coverage-v8": "2.1.9",
+    "typescript": "5.9.3",
+    "vitest": "2.1.9"
+  }
+}

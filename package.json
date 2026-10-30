@@ -2,6 +2,8 @@
   "name": "@aether/root",
   "private": true,
   "version": "0.1.0",
+  "description": "Aether multi-agent orchestration desktop",
+  "author": "Aether",
   "main": "apps/desktop/electron/dist/main.cjs",
   "packageManager": "pnpm@10.34.5",
   "engines": {
@@ -108,10 +110,18 @@
     "stats:m9-01": "node scripts/ci/m9-01-stats.mjs",
     "dev:desktop": "node scripts/ci/dev-desktop.mjs",
     "build:desktop": "pnpm --filter @aether/desktop build",
+    "package:desktop": "node scripts/ci/package-desktop.mjs",
+    "package:desktop:test": "node scripts/ci/package-desktop.mjs --variant test",
+    "smoke:installer": "node scripts/test/m9-11/smoke-installer.mjs",
+    "smoke:installer:linux": "node scripts/test/m9-11/smoke-linux.mjs",
+    "smoke:installer:macos": "node scripts/test/m9-11/smoke-macos.mjs",
+    "verify:m9-11": "node scripts/test/m9-11/verify-m9-11.mjs",
+    "verify:signatures": "node scripts/test/m9-11/signatures.mjs",
     "smoke": "node scripts/test/smoke-desktop.mjs",
     "ci:local": "node scripts/test/ci-local.mjs"
   },
   "devDependencies": {
+    "electron-builder": "26.18.0",
     "license-checker": "25.0.1"
   }
 }

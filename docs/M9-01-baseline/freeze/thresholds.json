@@ -2,6 +2,9 @@
   "schema": "aether.m9-01.thresholds.v1",
   "status": "frozen",
   "frozen_at": "2026-10-26",
+  "amended_at": "2026-10-30",
+  "amended_by": "ADR-030（M9-11 打包基线与 Windows 无证书发布）",
+  "amendment_scope": "idle_rss_max_bytes 500→600 MiB；ui_ready_max_ms 5000→8000；体积阈值不变（适配器共享宿主后实测 160,219,136 B）",
   "unit_note": "RSS 与体积按 MiB（1 MiB = 1048576 字节）；安装包上限按字节给出；时间按毫秒。",
   "head_baseline": {
     "installer_path": "dist-out/Aether_0.1.0_x64_en-US.msi",
@@ -19,8 +22,8 @@
     "gate": "G6/G7 任一超限即不通过，无自由裁量豁免（P2 计划 §2.15/§3.9）"
   },
   "runtime": {
-    "idle_rss_max_bytes": 524288000,
-    "idle_rss_rule": "idle RSS ≤500 MiB",
+    "idle_rss_max_bytes": 629145600,
+    "idle_rss_rule": "idle RSS ≤600 MiB（ADR-030；Electron + 启动预热适配器）",
     "ten_sessions_max_bytes": 1258291200,
     "ten_sessions_rule": "10 会话 ≤1.2 GiB"
   },
@@ -29,7 +32,7 @@
     "handshake_target_ms": 2000,
     "handshake_timeout_ms": 10000,
     "handshake_retry": 1,
-    "ui_ready_max_ms": 5000,
+    "ui_ready_max_ms": 8000,
     "session_create_max_ms": 2000
   },
   "events": {

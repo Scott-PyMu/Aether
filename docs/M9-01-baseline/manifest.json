@@ -466,7 +466,7 @@
     },
     {
       "path": "docs/M9-01-baseline/freeze/thresholds.json",
-      "sha256": "09d3c14e29da813de68c2dd6fbeb6ad97e69841f9aba48c0aa4a49a3720118d2",
+      "sha256": "e58e7678bb94d7b9fdbf52455571aaba5a7d90702067eb5e516d8b18b51ad1d1",
       "purpose": "硬阈值冻结"
     }
   ],
@@ -474,5 +474,7 @@
   "frozen": {
     "rule": "M9-04/M9-13 只新增，不改期望值；命令/错误码/事件/设置/迁移变更必须先走 ADR。",
     "recorded_before": "M9-02（抽取 aether-app 之前）"
-  }
+  },
+  "amended_at": "2026-10-30T13:56:30+08:00",
+  "amendment": "ADR-030"
 }

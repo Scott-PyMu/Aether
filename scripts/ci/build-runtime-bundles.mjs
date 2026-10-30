@@ -91,34 +91,44 @@ if (includeMock) {
 rmSync(outDir, { recursive: true, force: true });
 mkdirSync(outDir, { recursive: true });
 
-const entries = [];
+// M9-11 包体优化：三/四个适配器共享**一个** Bun 宿主二进制（各 92MB 运行时只保留
+// 一份），通过 `--adapter <id>` 分发；线协议/参数/日志前缀不变。
+// 参见 `packages/adapter-host/src/common.ts`。
+const hostEntry = includeMock
+  ? path.join(repoRoot, "packages", "adapter-host", "src", "main-test.ts")
+  : path.join(repoRoot, "packages", "adapter-host", "src", "main.ts");
 for (const runtime of runtimes) {
   const packageJson = path.join(repoRoot, runtime.packageDir, "package.json");
-  const mainTs = path.join(repoRoot, runtime.packageDir, "src", "main.ts");
-  if (!existsSync(packageJson) || !existsSync(mainTs)) {
+  if (!existsSync(packageJson)) {
     console.error(`[runtime-bundle] 缺少适配器包：${runtime.packageDir}`);
     process.exit(1);
   }
-  const programName = `${runtime.binaryName}${exeSuffix}`;
-  const programPath = path.join(outDir, programName);
-  const args = ["build", mainTs, "--compile", "--outfile", programPath];
-  if (target) args.push("--target", target);
-  console.log(`$ ${bun} ${args.join(" ")}   # ${runtime.id}`);
-  const code = run(bun, args, { cwd: repoRoot });
-  if (code !== 0) {
-    console.error(`[runtime-bundle] 适配器编译失败：${runtime.id}`);
-    process.exit(code);
-  }
-  entries.push({
-    id: runtime.id,
-    name: runtime.name,
-    kind: runtime.kind,
-    version: packageVersion(runtime.packageDir),
-    protocol: "1.0",
-    program: programName,
-    args: runtime.extraArgs,
-  });
 }
+if (!existsSync(hostEntry)) {
+  console.error(`[runtime-bundle] 缺少适配器宿主入口：${hostEntry}`);
+  process.exit(1);
+}
+
+const hostName = `aether-adapter-host${exeSuffix}`;
+const hostPath = path.join(outDir, hostName);
+const hostArgs = ["build", hostEntry, "--compile", "--outfile", hostPath];
+if (target) hostArgs.push("--target", target);
+console.log(`$ ${bun} ${hostArgs.join(" ")}   # adapter-host（${includeMock ? "含 Mock" : "官方三运行时"}）`);
+const hostCode = run(bun, hostArgs, { cwd: repoRoot });
+if (hostCode !== 0) {
+  console.error("[runtime-bundle] 适配器宿主编译失败");
+  process.exit(hostCode);
+}
+
+const entries = runtimes.map((runtime) => ({
+  id: runtime.id,
+  name: runtime.name,
+  kind: runtime.kind,
+  version: packageVersion(runtime.packageDir),
+  protocol: "1.0",
+  program: hostName,
+  args: ["--adapter", runtime.id, ...runtime.extraArgs],
+}));
 
 const manifest = { schema_version: 1, runtimes: entries };
 writeFileSync(
@@ -127,11 +137,8 @@ writeFileSync(
   "utf8",
 );
 
-const digests = {};
-for (const entry of entries) {
-  const data = readFileSync(path.join(outDir, entry.program));
-  digests[entry.program] = `sha256:${createHash("sha256").update(data).digest("hex")}`;
-}
+const hostDigest = `sha256:${createHash("sha256").update(readFileSync(hostPath)).digest("hex")}`;
+const digests = { [hostName]: hostDigest };
 writeFileSync(
   path.join(outDir, "digests.json"),
   `${JSON.stringify({ schema_version: 1, digests }, null, 2)}\n`,
@@ -139,7 +146,7 @@ writeFileSync(
 );
 
 console.log(
-  `[runtime-bundle] 产出 ${entries.length} 个运行时（目录 ${path.relative(repoRoot, outDir)}）：` +
+  `[runtime-bundle] 产出 ${entries.length} 个运行时（宿主 ${hostName}；目录 ${path.relative(repoRoot, outDir)}）：` +
     entries.map((entry) => entry.id).join(", ") +
     (includeMock ? "（含 Mock 测试构建）" : ""),
 );

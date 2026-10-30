@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  M9-11 DoD-2 / ADR-029 §8.1：macOS hardened runtime 最小 entitlements。
+  仅保留 Electron/V8 在 arm64 hardened runtime 下运行所必需的两项：
+    - allow-jit：V8 JIT；
+    - allow-unsigned-executable-memory：V8 代码页（Electron 官方要求）。
+  不授予网络/文件/Keychain 例外；Keychain 访问由签名身份（Team ID）约束（M9-09 §5.4）。
+  `entitlementsInherit` 复用同一文件（子进程/helper 继承）。
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+</dict>
+</plist>

@@ -55,6 +55,7 @@ import {
   resolveDaemonBinary,
 } from "./daemonPaths";
 import { MainEventBridge } from "./eventBridge";
+import { shellAssetCandidates } from "./shellPaths";
 import {
   FATAL_EXIT_CHANNEL,
   FATAL_EXPORT_CHANNEL,
@@ -674,7 +675,10 @@ function createDaemonClient(binary: string, attempt: number): DaemonClient {
       command: binary,
       args: daemonArguments(env),
       env,
-      cwd: app.getAppPath(),
+      // cwd 必须是**真实目录**：打包后 `app.getAppPath()` 是 `resources/app.asar`
+      // （文件），作为 cwd 会让 Windows `spawn` 直接 ENOENT（M9-11 打包冒烟实测）。
+      // daemon 的资源解析以可执行文件路径为锚，不依赖 cwd。
+      cwd: path.dirname(binary),
     },
     onNotification: handleDaemonNotification,
     onBootstrapError: (error) => {
@@ -1557,13 +1561,16 @@ function keychainPreloadPath(): string {
   return path.join(__dirname, "keychainPreload.cjs");
 }
 
-/** shell 页面资源：构建后 `dist/shell/...`；源码目录兜底便于调试。 */
+/** shell 页面资源：打包后优先 `app.asar.unpacked`（file:// 不读 asar）；源码目录兜底。 */
 function shellAsset(page: string, file: string): string {
-  const built = path.join(__dirname, "shell", page, file);
-  if (existsSync(built)) {
-    return built;
-  }
-  return path.join(__dirname, "..", page, file);
+  const candidates = shellAssetCandidates({
+    page,
+    file,
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    dirname: __dirname,
+  });
+  return candidates.find((candidate) => existsSync(candidate)) ?? path.join(__dirname, "..", page, file);
 }
 
 function isEventEnvelope(value: unknown): value is AetherEvent {

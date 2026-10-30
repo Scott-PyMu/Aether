@@ -1,0 +1,247 @@
+name: m9-11-package
+
+# M9-11 最小跨平台打包/冒烟 job（P2 计划 §2.11；ADR-030）。
+# - Windows：release + test MSI、安装/卸载/数据保留、会话/发送/中断/备份、unsigned 政策；
+# - macOS：per-arch DMG（arm64/x64）、Developer ID/公证、codesign/spctl/stapler、DMG 冒烟；
+# - Linux：deb/AppImage 构建 + xvfb 启动冒烟（不纳入签名发布门禁）。
+# 产物与证据统一上传 dist-out/。
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "apps/desktop/electron-builder.config.mjs"
+      - "apps/desktop/electron/**"
+      - "packages/adapter-host/**"
+      - "scripts/ci/package-desktop.mjs"
+      - "scripts/ci/build-runtime-bundles.mjs"
+      - "scripts/ci/electron-after-pack.cjs"
+      - "scripts/test/m9-11/**"
+      - ".github/workflows/m9-11-package.yml"
+
+concurrency:
+  group: m9-11-package-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  AETHER_BUILD_VARIANT: release
+
+jobs:
+  windows:
+    name: Windows MSI + installer smoke
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Package release MSI
+        run: pnpm package:desktop
+      - name: Release installer smoke
+        run: pnpm smoke:installer
+      - name: Package test MSI (Mock)
+        run: pnpm package:desktop:test
+      - name: Test installer functional smoke
+        run: pnpm smoke:installer --variant test
+      - name: Verify M9-11 (Windows)
+        run: pnpm verify:m9-11
+      - name: Verify signatures policy (ADR-030 unsigned)
+        run: node scripts/test/m9-11/signatures.mjs --artifact (Get-ChildItem dist-out\Aether-0.1.0-x64.msi).FullName
+        shell: pwsh
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: m9-11-windows
+          path: |
+            dist-out/*
+          retention-days: 30
+
+  macos-arm64:
+    name: macOS arm64 DMG + sign/notarize + smoke
+    runs-on: macos-14
+    env:
+      MAC_CERTS: ${{ secrets.MAC_CERTS }}
+      MAC_CERTS_PASSWORD: ${{ secrets.MAC_CERTS_PASSWORD }}
+      MAC_IDENTITY: ${{ secrets.MAC_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      AETHER_MAC_IDENTITY: ${{ secrets.MAC_IDENTITY }}
+      AETHER_MAC_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      AETHER_NOTARIZE: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Require macOS signing secrets
+        shell: bash
+        run: |
+          if [ -z "${MAC_CERTS}" ] || [ -z "${MAC_IDENTITY}" ] || [ -z "${APPLE_ID}" ] || [ -z "${APPLE_APP_SPECIFIC_PASSWORD}" ] || [ -z "${APPLE_TEAM_ID}" ]; then
+            echo "::error::M9-11 DoD-2: MAC_CERTS / MAC_IDENTITY / APPLE_* secrets missing; macOS cannot pass G6 unsigned."
+            exit 1
+          fi
+      - name: Import Developer ID certificate
+        shell: bash
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          echo "$MAC_CERTS" | base64 -d > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -P "$MAC_CERTS_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          rm "$RUNNER_TEMP/cert.p12"
+      - name: Package arm64 DMG
+        shell: bash
+        env:
+          CSC_NAME: ${{ secrets.MAC_IDENTITY }}
+        run: pnpm package:desktop --arch arm64
+      - name: Verify signature/notarization
+        shell: bash
+        run: |
+          DMG=$(ls dist-out/*arm64.dmg | tail -1)
+          node scripts/test/m9-11/signatures.mjs --artifact "$DMG"
+      - name: DMG smoke
+        run: pnpm smoke:installer:macos
+      - name: Verify M9-11 (macOS)
+        run: pnpm verify:m9-11
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: m9-11-macos-arm64
+          path: |
+            dist-out/*
+          retention-days: 30
+
+  macos-x64:
+    name: macOS x64 DMG + sign/notarize + smoke
+    runs-on: macos-15-intel
+    env:
+      MAC_CERTS: ${{ secrets.MAC_CERTS }}
+      MAC_CERTS_PASSWORD: ${{ secrets.MAC_CERTS_PASSWORD }}
+      MAC_IDENTITY: ${{ secrets.MAC_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      AETHER_MAC_IDENTITY: ${{ secrets.MAC_IDENTITY }}
+      AETHER_MAC_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      AETHER_NOTARIZE: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Require macOS signing secrets
+        shell: bash
+        run: |
+          if [ -z "${MAC_CERTS}" ] || [ -z "${MAC_IDENTITY}" ] || [ -z "${APPLE_ID}" ] || [ -z "${APPLE_APP_SPECIFIC_PASSWORD}" ] || [ -z "${APPLE_TEAM_ID}" ]; then
+            echo "::error::M9-11 DoD-2: MAC_CERTS / MAC_IDENTITY / APPLE_* secrets missing; macOS cannot pass G6 unsigned."
+            exit 1
+          fi
+      - name: Import Developer ID certificate
+        shell: bash
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          echo "$MAC_CERTS" | base64 -d > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -P "$MAC_CERTS_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          rm "$RUNNER_TEMP/cert.p12"
+      - name: Package x64 DMG
+        shell: bash
+        env:
+          CSC_NAME: ${{ secrets.MAC_IDENTITY }}
+        run: pnpm package:desktop --arch x64
+      - name: Verify signature/notarization
+        shell: bash
+        run: |
+          DMG=$(ls dist-out/*x64.dmg | tail -1)
+          node scripts/test/m9-11/signatures.mjs --artifact "$DMG"
+      - name: DMG smoke
+        run: pnpm smoke:installer:macos
+      - name: Verify M9-11 (macOS)
+        run: pnpm verify:m9-11
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: m9-11-macos-x64
+          path: |
+            dist-out/*
+          retention-days: 30
+
+  linux:
+    name: Linux deb/AppImage + xvfb smoke
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libarchive-tools rpm fakeroot xvfb \
+            libgtk-3-0 libnss3 libasound2 libgbm1 libxss1 libxtst6 \
+            libdbus-1-dev pkg-config libssl-dev build-essential
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Package deb + AppImage
+        run: pnpm package:desktop --linux
+      - name: Linux AppImage/deb smoke
+        run: pnpm smoke:installer:linux
+      - name: Verify M9-11 (Linux)
+        run: pnpm verify:m9-11
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: m9-11-linux
+          path: |
+            dist-out/*
+          retention-days: 30
