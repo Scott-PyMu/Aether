@@ -33,6 +33,13 @@ import { resolveElectronExecutable } from "../../ci/electron-bin.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const appRoot = path.join(repoRoot, "apps", "desktop");
+// 本机宿主机 %TEMP% 的 ACL 会让 Electron/Chromium 无法创建进程锁/下载临时文件
+// （`Lock file can not be created: 拒绝访问 (0x5)`）。E2E 的 Playwright artifacts
+// 与 Electron 子进程统一改用工作区临时目录；CI 的 %TEMP% 可写时同样成立。
+const e2eTempRoot = path.join(repoRoot, "dist-out", "m9-10-tmp");
+mkdirSync(e2eTempRoot, { recursive: true });
+process.env.TEMP = e2eTempRoot;
+process.env.TMP = e2eTempRoot;
 const requireFromDesktop = createRequire(path.join(appRoot, "package.json"));
 const { _electron } = requireFromDesktop("playwright-core");
 const electronPath = resolveElectronExecutable({ repoRoot });
@@ -94,10 +101,11 @@ function workspace(label) {
   const userData = path.join(root, "user");
   const downloads = path.join(root, "downloads");
   const registry = path.join(root, "registry");
-  for (const dir of [dataDir, userData, downloads, registry]) {
+  const tmp = path.join(root, "tmp");
+  for (const dir of [dataDir, userData, downloads, registry, tmp]) {
     mkdirSync(dir, { recursive: true });
   }
-  const item = { root, dataDir, userData, downloads, registry };
+  const item = { root, dataDir, userData, downloads, registry, tmp };
   workspaces.push(item);
   return item;
 }
@@ -115,6 +123,8 @@ function launchEnv(ws) {
     AETHERD_EXTRA_ARGS: JSON.stringify([fakeDaemon]),
     AETHER_FAKE_MODE: "healthy",
     AETHER_FAKE_STATE: path.join(ws.root, "fake-state"),
+    TEMP: ws.tmp,
+    TMP: ws.tmp,
   };
 }
 
@@ -465,15 +475,25 @@ async function main() {
     confirmed.state === "confirmed",
     JSON.stringify(confirmed),
   );
-  const saved =
-    existsSync(confirmed.savePath) &&
-    readFileSync(confirmed.savePath, "utf8") === "downloaded-content";
-  if (saved) {
-    record("DoD-4 确认后写入 Downloads（内容一致）", true, confirmed.savePath);
+  const completed = await waitFor(
+    async () => {
+      const downloads = await browserCall("downloads");
+      const item = downloads.find((entry) => entry.id === pending.id);
+      return item?.state === "confirmed" &&
+        existsSync(item.savePath) &&
+        readFileSync(item.savePath, "utf8") === "downloaded-content"
+        ? item
+        : null;
+    },
+    15_000,
+    "确认后写入 Downloads",
+  ).catch(() => null);
+  if (completed !== null) {
+    record("DoD-4 确认后写入 Downloads（内容一致）", true, completed.savePath);
   } else {
     note(
       "确认后写入 Downloads（字节落盘）未验证",
-      "本机 Electron 45 + Playwright `_electron`/--no-sandbox 下 Chromium 将下载标记为 interrupted（公网 URL 与全新 partition 同样）；确认门与隔离区→最终路径移动由 `downloadFiles.test.ts` 覆盖",
+      "本机 Electron/Chromium 下载临时文件不可写；确认门与隔离区→最终路径移动由 `downloadFiles.test.ts` 覆盖",
     );
   }
 

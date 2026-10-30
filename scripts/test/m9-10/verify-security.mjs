@@ -332,6 +332,9 @@ const e2e = read("scripts/test/m9-10/e2e-security.mjs");
 for (const [label, pattern] of [
   ["独立 partition", /persist:aether-browser:/],
   ["localStorage/cookie 隔离", /localStorage\/cookie 互不可读/],
+  ["TEMP/TMP 工作区隔离", /process\.env\.TEMP = e2eTempRoot/],
+  ["子进程 TEMP/TMP", /TEMP: ws\.tmp/],
+  ["页面内 http 导航", /页面内 http 导航/],
   ["window.open", /window\.open/],
   ["file:// 拒绝", /file:\/\/\/C:\/Windows\/win\.ini/],
   ["证书错误", /ERR_CERT|CERT_/],
