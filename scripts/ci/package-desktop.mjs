@@ -307,10 +307,18 @@ function assertUnpacked() {
 
 function artifactsOf(extension) {
   if (!existsSync(outDir)) return [];
-  const prefix =
-    variant === "test" ? `Aether-${version}-test-${arch}.` : `Aether-${version}-${arch}.`;
+  const variantSuffix = variant === "test" ? "-test" : "";
+  // electron-builder 的 `${arch}` 在 Linux 展开为 x86_64/amd64（AppImage/deb），
+  // macOS/Windows 为 arm64/x64；同时兼容旧命名。
+  const archAliases =
+    platform === "linux"
+      ? ["x64", "x86_64", "amd64", arch]
+      : [arch];
+  const prefixes = archAliases.map(
+    (alias) => `Aether-${version}${variantSuffix}-${alias}.`,
+  );
   return readdirSync(outDir)
-    .filter((name) => name.startsWith(prefix) && name.endsWith(extension))
+    .filter((name) => prefixes.some((prefix) => name.startsWith(prefix)) && name.endsWith(extension))
     .map((name) => path.join(outDir, name))
     .filter((file) => statSync(file).isFile());
 }

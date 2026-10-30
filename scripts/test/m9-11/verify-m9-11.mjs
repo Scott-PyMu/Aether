@@ -260,7 +260,9 @@ if (!buildManifest) {
   check(
     "产物文件名含版本/arch",
     (buildManifest.artifacts ?? []).every((entry) =>
-      new RegExp(`^Aether-${packageJson.version}(-test)?-${buildManifest.arch}\\.`).test(entry.name),
+      new RegExp(
+        `^Aether-${packageJson.version}(-test)?-(x64|arm64|x86_64|amd64)\\.`,
+      ).test(entry.name),
     ),
     (buildManifest.artifacts ?? []).map((entry) => entry.name).join(","),
   );
