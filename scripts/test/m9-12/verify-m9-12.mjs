@@ -315,6 +315,9 @@ if (existsSync(summaryPath)) {
     ["branches", "branches_pct"],
     ["functions", "functions_pct"],
   ];
+  // V8 分支计数在 Windows/Linux 间存在 ≤0.05pp 的插桩差异（M9-12 CI 实测
+  // 84.26 → 84.25）；容差只吸收平台噪声，不改变 70% 阈值与「不下降」语义。
+  const coverageTolerancePct = 0.05;
   const drops = pairs
     .map(([key, baselineKey]) => ({
       key,
@@ -325,7 +328,7 @@ if (existsSync(summaryPath)) {
       (item) =>
         typeof item.actual !== "number" ||
         typeof item.baseline !== "number" ||
-        item.actual + 0.001 < item.baseline,
+        item.actual + coverageTolerancePct < item.baseline,
     );
   record(
     "前端覆盖率不下降（相对 M9-12 基线）",

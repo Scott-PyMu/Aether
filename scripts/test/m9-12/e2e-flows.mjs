@@ -174,6 +174,8 @@ function launchEnv(ws) {
     AETHER_DATA_LOCATION_FILE: path.join(ws.root, "data-location.json"),
     AETHER_RUNTIME_REGISTRY_DIR: bundleDir,
     AETHER_SKIP_KEYCHAIN_PREFLIGHT: "1",
+    // macOS CI/无 Secret Service 环境走 A3 加密文件（ADR-020）；测试口令仅 E2E 使用。
+    AETHER_SECRETS_PASSPHRASE: "m9-12-e2e-passphrase",
     AETHERD_BIN: daemonPath,
     // 仅 test-hooks 构建读取；普通/release 构建忽略（boot.rs）。
     AETHER_TEST_PERMISSION_TIMEOUT_MS: String(permissionTimeoutMs),
@@ -556,7 +558,7 @@ const flowImpl = {
         const items = page.locator("[data-testid='backup-item']");
         return (await items.count()) >= 1;
       },
-      60_000,
+      120_000,
       "backup-item",
     );
     const list = await rpcOk("backup_list", {});

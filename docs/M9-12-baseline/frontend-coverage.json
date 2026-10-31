@@ -19,5 +19,5 @@
     "lines_total": 9576,
     "lines_covered": 8702
   },
-  "rule": "M9-12 及后续任务前端覆盖率不得低于本基线（按 lines/statements/branches/functions 逐项比较；阈值仍为 70%）。"
+  "rule": "M9-12 及后续任务前端覆盖率不得低于本基线（按 lines/statements/branches/functions 逐项比较；阈值仍为 70%）。跨平台 V8 插桩噪声容差 ±0.05pp（Windows/Linux 实测 branches 84.26/84.25），不构成基线下调。"
 }

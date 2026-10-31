@@ -1148,6 +1148,10 @@ jobs:
           cache: pnpm
       - name: 安装前端依赖
         run: pnpm install --frozen-lockfile
+      - name: 安装 Linux 系统依赖（协议生成物校验需要 Tauri/keyring 构建）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - name: 生成物/错误码/基线（diff=0）
         run: |
           set -o pipefail

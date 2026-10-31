@@ -365,7 +365,7 @@ mod tests {
         std::fs::write(outside.join("secret.bin"), vec![0x33; 16]).unwrap();
         #[cfg(unix)]
         {
-            std::os::unix::fs::symlink(&outside.join("secret.bin"), root.join("link.bin")).unwrap();
+            std::os::unix::fs::symlink(outside.join("secret.bin"), root.join("link.bin")).unwrap();
             let validator = ArtifactValidator::new(root);
             let error = validator.validate(&params(vec![entry("link.bin", 16)]));
             assert!(
