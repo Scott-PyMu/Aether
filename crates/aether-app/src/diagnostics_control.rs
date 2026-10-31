@@ -30,11 +30,12 @@ use crate::backup_control::{file_len, CapacityConfig, SpaceProbe, BACKUP_COMMAND
 use crate::core_health::HealthProvider;
 use crate::ipc::backend::IpcBackend;
 use crate::ipc::dto::{
-    AppRestartRequest, ArchiveExportRequest, BackupCreateRequest, BackupRestoreRequest,
-    ExportDiagnosticsRequest, MessagesPageRequest, PermissionResolveRequest,
-    PermissionsPendingRequest, RunRetryRequest, RuntimeEnableRequest, RuntimeRetryRequest,
-    SessionCreateRequest, SessionExportRequest, SessionIdRequest, SessionListRequest,
-    SessionSendRequest, SettingsGetRequest, SettingsSetRequest, WorkspaceSetRequest,
+    AppRestartRequest, ArchiveExportRequest, AuditExportRequest, AuditQueryRequest,
+    BackupCreateRequest, BackupRestoreRequest, ExportDiagnosticsRequest, MessagesPageRequest,
+    PermissionResolveRequest, PermissionsPendingRequest, RunRetryRequest, RuntimeEnableRequest,
+    RuntimeRetryRequest, SessionCreateRequest, SessionExportRequest, SessionIdRequest,
+    SessionListRequest, SessionSendRequest, SettingsGetRequest, SettingsSetRequest,
+    WorkspaceSetRequest,
 };
 use crate::ipc::error::{IpcError, IpcErrorCode};
 use crate::logging::LogSink;
@@ -785,6 +786,20 @@ impl IpcBackend for DiagnosticsControlBackend {
         canonical_target_dir: Option<&Path>,
     ) -> Result<Value, IpcError> {
         self.inner.archive_export(request, canonical_target_dir)
+    }
+
+    /// M9-12：审计查询/导出由内层 `ArchiveControlBackend` 实现，诊断装饰器必须
+    /// 显式透传（与 `session_export`/`archive_export` 同口径）。
+    fn audit_query(&self, request: &AuditQueryRequest) -> Result<Value, IpcError> {
+        self.inner.audit_query(request)
+    }
+
+    fn audit_export(
+        &self,
+        request: &AuditExportRequest,
+        canonical_target_dir: Option<&Path>,
+    ) -> Result<Value, IpcError> {
+        self.inner.audit_export(request, canonical_target_dir)
     }
 }
 

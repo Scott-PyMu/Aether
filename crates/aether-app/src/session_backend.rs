@@ -2824,6 +2824,21 @@ impl IpcBackend for SessionBackend {
     ) -> Result<Value, IpcError> {
         self.inner.archive_export(request, canonical_target_dir)
     }
+
+    /// M9-12：M6-03 审计命令由 `ArchiveControlBackend` 实现在内层，`SessionBackend`
+    /// 作为外层装饰器必须显式委派，否则生产链路命中 trait 默认 `not_implemented`
+    /// （M9-12 E2E 发现；`audit_query`/`audit_export` 不经过会话状态机）。
+    fn audit_query(&self, request: &crate::ipc::dto::AuditQueryRequest) -> Result<Value, IpcError> {
+        self.inner.audit_query(request)
+    }
+
+    fn audit_export(
+        &self,
+        request: &crate::ipc::dto::AuditExportRequest,
+        canonical_target_dir: Option<&std::path::Path>,
+    ) -> Result<Value, IpcError> {
+        self.inner.audit_export(request, canonical_target_dir)
+    }
 }
 
 fn parse_session_id(value: &str) -> Result<SessionId, IpcError> {
