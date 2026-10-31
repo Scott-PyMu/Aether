@@ -187,7 +187,7 @@ jobs:
   # M1-08：Tauri 壳与安全基线（CSP 真实阻断、外链导航拦截、IPC 参数校验矩阵、
   # capabilities 最小 allowlist、devtools 仅 debug）——E2E 需要真实 WebView2。
   security-baseline:
-    name: Tauri security baseline (M1-08)
+    name: Electron security baseline (M9-10 ← M1-08)
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v6
@@ -207,11 +207,11 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.4.2"
-      - name: M1-08 验证（单测矩阵 + 静态检查 + CSP/导航 E2E）
+      - name: M9-10 安全基线（Electron flags/CSP/导航/preload/fuses/路径，替代 M1-08 Tauri E2E）
         shell: bash
         run: |
           set -o pipefail
-          node scripts/test/m1-08/verify-m1-08.mjs --full 2>&1 | tee m1-08-verify.log
+          pnpm verify:security 2>&1 | tee m1-08-verify.log
       - name: 失败诊断（公开 annotation，便于无凭据取证）
         if: failure()
         shell: bash
@@ -518,7 +518,7 @@ jobs:
 
   # M1-06：数据目录检测/迁移流/单实例（A4/评审#9）——T13/T12 E2E 需要真实 WebView2。
   data-dir-guard:
-    name: Data dir guard (M1-06)
+    name: Data dir/lifecycle (M9-09 ← M1-06)
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v6
@@ -533,11 +533,14 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: M1-06 验证（Win 三类样本 + 20 对照样本 + 拒绝启动/迁移/单实例 E2E）
+      - name: M9-09 生命周期/数据锁（替代 M1-06 Tauri/WebView2 E2E）
         shell: bash
         run: |
           set -o pipefail
-          node scripts/test/m1-06/verify-m1-06.mjs 2>&1 | tee m1-06-verify.log
+          {
+            cargo test -p aether-daemon --test m9_09_lifecycle -j 1 -- --test-threads=1
+            pnpm verify:m9-09
+          } 2>&1 | tee m1-06-verify.log
       - name: 失败诊断（公开 annotation，便于无凭据取证）
         if: failure()
         shell: bash
@@ -950,7 +953,7 @@ jobs:
   # 解析与取消；边界（无目录列举/文件读取、不触发 workspace_set、不产生事件）；
   # 前端面板 E2E 锚点与 T14 生成物幂等。
   m3-09-artifacts:
-    name: File reference panel (M3-09)
+    name: Typed client/protocol (M9-08 ← M3-09)
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v6
@@ -972,11 +975,15 @@ jobs:
       - name: 安装 Linux 系统依赖（keyring/secret-service 需要 libdbus）
         run: sudo apt-get install -y libdbus-1-dev pkg-config
 
-      - name: M3-09 验证（迁移/引用后端/选择器/前端面板/边界/T14）
+      - name: M9-08 typed client / 引用面板（替代 M3-09 Tauri 静态检查）
         shell: bash
         run: |
           set -o pipefail
-          node scripts/test/m3-09/verify-m3-09.mjs 2>&1 | tee m3-09-verify.log
+          {
+            pnpm --filter @aether/protocol check
+            pnpm verify:error-codes
+            pnpm --filter @aether/desktop test -- src/m3_09_file_panel.test.tsx
+          } 2>&1 | tee m3-09-verify.log
       - name: M3-09 失败诊断（公开 annotation，便于无凭据取证）
         if: failure()
         shell: bash
@@ -1005,7 +1012,7 @@ jobs:
   # IPC 响应与诊断包明文 0 命中；供应商页与模型选择器 E2E（含共存口径登记）；
   # 会话透传与 T14 生成物幂等。
   m3-11-providers:
-    name: Model & provider config (M3-11)
+    name: Provider/model config (M9-08 ← M3-11)
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v6
@@ -1027,11 +1034,15 @@ jobs:
       - name: 安装 Linux 系统依赖（keyring/secret-service 需要 libdbus）
         run: sudo apt-get install -y libdbus-1-dev pkg-config
 
-      - name: M3-11 验证（迁移/命令矩阵/密钥路径/前端 E2E/T14）
+      - name: M9-08 typed client / 供应商配置（替代 M3-11 Tauri 静态检查）
         shell: bash
         run: |
           set -o pipefail
-          node scripts/test/m3-11/verify-m3-11.mjs 2>&1 | tee m3-11-verify.log
+          {
+            pnpm --filter @aether/protocol check
+            pnpm verify:error-codes
+            pnpm --filter @aether/desktop test -- src/m3_11_providers.test.tsx
+          } 2>&1 | tee m3-11-verify.log
       - name: M3-11 失败诊断（公开 annotation，便于无凭据取证）
         if: failure()
         shell: bash
