@@ -15,6 +15,7 @@
  *   cargo llvm-cov report --workspace --exclude aether-tauri --json --summary-only \
  *     --output-path scripts/test/.tmp/m9-12/coverage/llvm-cov.json
  */
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -44,15 +45,40 @@ function walk(root, base = root, out = []) {
   return out;
 }
 
-/** G8 待删除面：Tauri crate + Tauri 专用生成物（迁移期仅开发对照）。 */
+/**
+ * G8 待删除面：Tauri crate + Tauri 专用生成物（迁移期仅开发对照）。
+ *
+ * 以 `git ls-files` 的**已跟踪**文件为准，避免把本地 `runtime-bundle/` 等
+ * gitignored 构建产物算入删除清单（CI 与本机应得到同一计数）。
+ */
 function buildDeletionList() {
   const entries = [];
-  const tauriDir = path.join(repoRoot, "crates", "aether-tauri");
-  for (const rel of walk(tauriDir).sort()) {
-    entries.push({
-      path: `crates/aether-tauri/${rel}`,
-      bytes: statSync(path.join(tauriDir, rel)).size,
-    });
+  const tracked = spawnSync("git", ["ls-files", "-z", "--", "crates/aether-tauri"], {
+    cwd: repoRoot,
+    encoding: "buffer",
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  if (tracked.status === 0) {
+    for (const rel of tracked.stdout
+      .toString("utf8")
+      .split("\0")
+      .filter(Boolean)
+      .sort()) {
+      const full = path.join(repoRoot, rel);
+      entries.push({
+        path: rel.split(path.sep).join("/"),
+        bytes: existsSync(full) ? statSync(full).size : 0,
+      });
+    }
+  } else {
+    // 非 git 工作树（极少见）：回退为目录遍历。
+    const tauriDir = path.join(repoRoot, "crates", "aether-tauri");
+    for (const rel of walk(tauriDir).sort()) {
+      entries.push({
+        path: `crates/aether-tauri/${rel}`,
+        bytes: statSync(path.join(tauriDir, rel)).size,
+      });
+    }
   }
   // `bindings.ts` 为 tauri-specta 迁移期生成物；M9-08 起前端不再消费，G8 一并移除。
   const bindings = path.join(repoRoot, "packages", "protocol", "src", "bindings.ts");
