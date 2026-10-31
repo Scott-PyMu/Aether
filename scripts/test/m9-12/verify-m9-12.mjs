@@ -229,7 +229,7 @@ record(
   "覆盖率门禁口径：--exclude aether-tauri --fail-under-lines 70（M9-02～G8）",
   workflow.includes("cargo llvm-cov --workspace --exclude aether-tauri") &&
     workflow.includes("--fail-under-lines 70") &&
-    workflow.includes("cargo llvm-cov report --workspace --exclude aether-tauri") &&
+    workflow.includes("cargo llvm-cov report --json --summary-only") &&
     workflow.includes("coverage-incremental.mjs"),
   "gate + report + incremental",
 );

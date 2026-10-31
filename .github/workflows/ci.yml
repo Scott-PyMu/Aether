@@ -998,8 +998,9 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p scripts/test/.tmp/m9-12/coverage
-          cargo llvm-cov report --workspace --exclude aether-tauri \
-            --json --summary-only \
+          # report 子命令不支持 --exclude/--workspace；复用上一步 profdata，
+          # incremental 脚本只聚合 aether-app/rpc/daemon（Tauri 文件不参与增量数字）。
+          cargo llvm-cov report --json --summary-only \
             --output-path scripts/test/.tmp/m9-12/coverage/llvm-cov.json
           node scripts/test/m9-12/coverage-incremental.mjs \
             --report scripts/test/.tmp/m9-12/coverage/llvm-cov.json
