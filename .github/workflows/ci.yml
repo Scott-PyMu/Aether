@@ -199,6 +199,8 @@ jobs:
           cache: pnpm
       - name: 安装前端依赖
         run: pnpm install --frozen-lockfile
+      - name: 构建 Electron renderer/main（verify:security 需要 dist）
+        run: pnpm build:desktop
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2

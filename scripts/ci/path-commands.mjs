@@ -227,7 +227,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     console.error(`[path-commands] 阻断：生成物缺失（${TARGET}）。先运行 generate。`);
     process.exit(1);
   }
-  if (current !== rendered) {
+  const normalize = (value) => value.replace(/\r\n/g, "\n");
+  if (normalize(current) !== normalize(rendered)) {
     console.error(`[path-commands] 阻断：${TARGET} 与重新生成结果不一致（diff=0 要求）。`);
     process.exit(1);
   }
