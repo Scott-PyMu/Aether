@@ -1,0 +1,19 @@
+{
+  "schema": "aether.m9-12.e2e-flows.v1",
+  "source": "P2 计划 M9-12 DoD-2",
+  "flows": [
+    "session_create",
+    "session_send",
+    "session_interrupt",
+    "permission_allow",
+    "permission_deny",
+    "permission_timeout",
+    "backup",
+    "export",
+    "audit",
+    "pause_resume",
+    "settings",
+    "providers",
+    "presets"
+  ]
+}

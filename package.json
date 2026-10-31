@@ -117,6 +117,10 @@
     "smoke:installer:macos": "node scripts/test/m9-11/smoke-macos.mjs",
     "verify:m9-11": "node scripts/test/m9-11/verify-m9-11.mjs",
     "verify:signatures": "node scripts/test/m9-11/signatures.mjs",
+    "prepare:m9-12:e2e": "node scripts/test/m9-12/prepare-e2e.mjs",
+    "e2e:m9-12": "node scripts/test/m9-12/e2e-flows.mjs",
+    "verify:m9-12": "node scripts/test/m9-12/verify-m9-12.mjs",
+    "coverage:m9-12": "node scripts/test/m9-12/coverage-incremental.mjs",
     "smoke": "node scripts/test/smoke-desktop.mjs",
     "ci:local": "node scripts/test/ci-local.mjs"
   },

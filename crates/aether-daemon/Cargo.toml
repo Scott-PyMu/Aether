@@ -12,6 +12,11 @@ authors.workspace = true
 name = "aetherd"
 path = "src/main.rs"
 
+# M9-12（ADR-029 §7/§8.2 P2-10）：E2E 专用测试钩子。feature 不改变命令面（仍
+# 63/59/4），只在 `aether-app` 内启用审批超时注入点；release 构建不启用。
+[features]
+test-hooks = ["aether-app/test-hooks"]
+
 # 依赖方向（AGENTS §2.1 / ADR-029 §3.3）：daemon → app → core/store/adapters/control/security；
 # `aether-rpc` 为叶子基础设施。**不得**依赖 `aether-tauri`（ADR-029 §3.3 硬约束）。
 [dependencies]

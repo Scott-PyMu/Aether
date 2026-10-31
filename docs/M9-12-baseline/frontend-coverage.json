@@ -1,0 +1,23 @@
+{
+  "schema": "aether.m9-12.frontend-coverage.v1",
+  "recorded_at": "2026-10-31T14:00:00+08:00",
+  "head_commit": "a2b3f72",
+  "platform": {
+    "os": "win32",
+    "arch": "x64",
+    "node": "v24.14.1"
+  },
+  "command": "pnpm --filter @aether/desktop coverage",
+  "threshold_lines": 70,
+  "test_files": 59,
+  "tests": 364,
+  "total": {
+    "statements_pct": 90.87,
+    "branches_pct": 84.26,
+    "functions_pct": 71.76,
+    "lines_pct": 90.87,
+    "lines_total": 9576,
+    "lines_covered": 8702
+  },
+  "rule": "M9-12 及后续任务前端覆盖率不得低于本基线（按 lines/statements/branches/functions 逐项比较；阈值仍为 70%）。"
+}

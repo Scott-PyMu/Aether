@@ -17,6 +17,36 @@ pub struct BackendBundle {
     pub keychain_preflight: Option<crate::keychain_preflight::KeychainPreflightReport>,
 }
 
+/// M9-12（ADR-029 §7/§8.2 P2-10）：权限服务配置。
+///
+/// 生产路径恒为 D9 的 300s；仅 `test-hooks` feature 构建允许把审批超时压缩到
+/// 可测范围（Playwright E2E 的 permission timeout 场景）。该钩子**不注册命令**，
+/// 也不进入 `command-manifest.json`；普通 debug/release 构建忽略环境变量。
+fn permission_config() -> aether_control::PermissionConfig {
+    #[cfg(feature = "test-hooks")]
+    {
+        if let Ok(raw) = std::env::var("AETHER_TEST_PERMISSION_TIMEOUT_MS") {
+            if let Ok(timeout_ms) = raw.parse::<i64>() {
+                if timeout_ms > 0 {
+                    let sweep_tick_ms = (timeout_ms / 10).clamp(50, 1_000);
+                    return aether_control::PermissionConfig {
+                        ask_timeout_ms: timeout_ms,
+                        sweep_tick: std::time::Duration::from_millis(sweep_tick_ms as u64),
+                        wait_timeout: Some(std::time::Duration::from_millis(
+                            (timeout_ms as u64).saturating_add(5_000),
+                        )),
+                    };
+                }
+            }
+            tracing::warn!(
+                value = %raw,
+                "AETHER_TEST_PERMISSION_TIMEOUT_MS 非法（test-hooks）；回退 300s"
+            );
+        }
+    }
+    aether_control::PermissionConfig::default()
+}
+
 /// 构造命令后端（ADR-007 `health` 真实接线 + M2-01 `runtime_*` 接线 + M2-07 巡检
 /// + M2-08 启动序列与退出编排）。
 ///
@@ -175,7 +205,7 @@ pub fn build_backend(
                 match aether_security::PolicyEngine::new(&data_dir) {
                     Ok(policy) => {
                         let service = aether_control::PermissionService::new(
-                            aether_control::PermissionConfig::default(),
+                            permission_config(),
                             std::sync::Arc::new(aether_control::SystemClock),
                             policy,
                             write.clone(),

@@ -10,6 +10,13 @@ authors.workspace = true
 
 # 依赖方向（AGENTS §2.1）：aether-app 依赖 core/store/adapters/control/security；
 # **不得**依赖 tauri/electron/node 或窗口/对话框实现（DoD-1：cargo tree 无 tauri/wry/webkit）。
+# M9-12（ADR-029 §7/§8.2 P2-10）：仅测试构建启用的 hooks。`test-hooks` 不注册任何
+# 业务命令、不进入 `COMMANDS`/`command-manifest.json`；当前仅用于 Playwright E2E 把
+# 300s 审批超时压缩到可测时长（`AETHER_TEST_PERMISSION_TIMEOUT_MS`）。release/普通
+# debug 构建不启用该 feature，环境变量被忽略。
+[features]
+test-hooks = []
+
 [dependencies]
 aether-core.workspace = true
 aether-store.workspace = true

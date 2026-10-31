@@ -956,6 +956,9 @@ jobs:
           AETHER_COVERAGE_LINES: "70"
         run: pnpm -r --if-present coverage
 
+      - name: M9-12 前端覆盖率不下降（基线 docs/M9-12-baseline）
+        run: pnpm verify:m9-12
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
@@ -989,6 +992,28 @@ jobs:
           cargo llvm-cov --workspace --exclude aether-tauri \
             --ignore-filename-regex='(\.cargo/registry|/rustc/|(crates/)?aether-(app|rpc|daemon)/)' \
             --fail-under-lines 70 2>&1 | tee llvm-cov.log
+      - name: 增量覆盖 + Tauri 删除文件清单（M9-12 / ADR-029 §8.2 P2-7）
+        # 复用上一步 profdata（report 不重跑测试），对 M9-02～G8 迁移层单独归档；
+        # 不改变上面的 70% 门禁口径。
+        run: |
+          set -o pipefail
+          mkdir -p scripts/test/.tmp/m9-12/coverage
+          cargo llvm-cov report --workspace --exclude aether-tauri \
+            --json --summary-only \
+            --output-path scripts/test/.tmp/m9-12/coverage/llvm-cov.json
+          node scripts/test/m9-12/coverage-incremental.mjs \
+            --report scripts/test/.tmp/m9-12/coverage/llvm-cov.json
+      - name: 归档覆盖率证据（M9-12）
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: m9-12-coverage
+          path: |
+            llvm-cov.log
+            apps/desktop/coverage/coverage-summary.json
+            scripts/test/.tmp/m9-12/coverage/
+          if-no-files-found: warn
+          retention-days: 30
       - name: 覆盖率失败诊断（公开 annotation，便于无凭据取证）
         if: failure()
         run: |
@@ -1107,5 +1132,338 @@ jobs:
           path: |
             scripts/test/.tmp/m7-05/evidence-*/
             m7-05-verify.log
+          if-no-files-found: warn
+          retention-days: 30
+
+  # ===== M9-12：CI 从 Tauri 构建切到 Electron + daemon（ADR-029 §8.2） =====
+  m9-12-gates:
+    name: M9-12 frontend/protocol gates
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+      - name: 生成物/错误码/基线（diff=0）
+        run: |
+          set -o pipefail
+          {
+            pnpm --filter @aether/protocol check
+            pnpm verify:error-codes
+            pnpm verify:m9-01-baseline
+          } 2>&1 | tee m9-12-protocol.log
+      - name: 前端测试 / 类型检查 / 构建
+        run: |
+          set -o pipefail
+          {
+            pnpm -r --workspace-concurrency=1 test
+            pnpm -r --if-present typecheck
+            pnpm -r --if-present build
+          } 2>&1 | tee m9-12-frontend.log
+      - name: M9-12 静态门禁
+        run: pnpm verify:m9-12
+      - name: 失败诊断
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "### M9-12 gates 失败（摘要 + tail 40）"
+            echo '```text'
+            grep -E "FAIL|failed|panicked|assertion|error\[|Tests " m9-12-protocol.log m9-12-frontend.log 2>/dev/null | tail -20 || true
+            echo '--- tail 40 ---'
+            tail -40 m9-12-protocol.log m9-12-frontend.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: 归档 M9-12 前端/协议证据
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: m9-12-gates
+          path: |
+            m9-12-protocol.log
+            m9-12-frontend.log
+          if-no-files-found: warn
+          retention-days: 30
+
+  m9-12-rust-gates:
+    name: M9-12 Rust build/test/clippy/deny
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-deny
+      - name: 安装 Linux 系统依赖（keyring/secret-service + Tauri 对照 clippy）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: Rust 构建/测试（Electron 架构；Tauri 仅开发对照）
+        run: |
+          set -o pipefail
+          {
+            cargo build --workspace --exclude aether-tauri
+            cargo test --workspace --exclude aether-tauri -j 1
+            cargo test -p aether-daemon --test m9_12_regressions -j 1 -- --test-threads=1
+          } 2>&1 | tee m9-12-rust.log
+      - name: clippy（全 workspace，-D warnings）
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo clippy --workspace --all-targets -- -D warnings 2>&1 | tee -a m9-12-rust.log
+      - name: cargo deny
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo deny check 2>&1 | tee -a m9-12-rust.log
+      - name: 失败诊断
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "### M9-12 Rust gates 失败（关键行 + tail 40）"
+            echo '```text'
+            grep -E "FAILED|panicked|assertion|error\[|warning:" m9-12-rust.log 2>/dev/null | tail -20 || true
+            echo '--- tail 40 ---'
+            tail -40 m9-12-rust.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: 归档 M9-12 Rust 证据
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: m9-12-rust
+          path: m9-12-rust.log
+          if-no-files-found: warn
+          retention-days: 30
+
+  m9-12-e2e-windows:
+    name: M9-12 Playwright Electron E2E (Windows)
+    runs-on: windows-2022
+    env:
+      CARGO_BUILD_JOBS: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+      - name: 构建 Electron renderer/main/preload
+        run: pnpm build:desktop
+      - name: 准备 Mock runtime-bundle + aetherd --features test-hooks
+        run: pnpm prepare:m9-12:e2e
+      - name: Playwright Electron E2E（13 条用户路径）
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm e2e:m9-12 2>&1 | tee m9-12-e2e.log
+      - name: 失败诊断
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "### M9-12 E2E 失败（FAIL 行 + tail 50）"
+            echo '```text'
+            grep -E "^FAIL|等待超时|致命失败|Error:" m9-12-e2e.log 2>/dev/null | tail -20 || true
+            echo '--- tail 50 ---'
+            tail -50 m9-12-e2e.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: 归档 trace/screenshot/evidence（不静默重试）
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: m9-12-e2e-windows
+          path: |
+            m9-12-e2e.log
+            dist-out/m9-12-e2e/**/trace.zip
+            dist-out/m9-12-e2e/**/screenshots/**
+            dist-out/m9-12-e2e/**/evidence.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  m9-12-e2e-macos:
+    name: M9-12 Playwright Electron E2E (macOS)
+    runs-on: macos-14
+    env:
+      CARGO_BUILD_JOBS: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+      - name: 构建 Electron renderer/main/preload
+        run: pnpm build:desktop
+      - name: 准备 Mock runtime-bundle + aetherd --features test-hooks
+        run: pnpm prepare:m9-12:e2e
+      - name: Playwright Electron E2E（13 条用户路径）
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm e2e:m9-12 2>&1 | tee m9-12-e2e-macos.log
+      - name: 失败诊断
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "### M9-12 macOS E2E 失败（FAIL 行 + tail 50）"
+            echo '```text'
+            grep -E "^FAIL|等待超时|致命失败|Error:" m9-12-e2e-macos.log 2>/dev/null | tail -20 || true
+            echo '--- tail 50 ---'
+            tail -50 m9-12-e2e-macos.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: 归档 trace/screenshot/evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: m9-12-e2e-macos
+          path: |
+            m9-12-e2e-macos.log
+            dist-out/m9-12-e2e/**/trace.zip
+            dist-out/m9-12-e2e/**/screenshots/**
+            dist-out/m9-12-e2e/**/evidence.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  m9-12-installer-windows:
+    name: M9-12 MSI silent install/uninstall smoke
+    runs-on: windows-2022
+    env:
+      CARGO_BUILD_JOBS: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+      - name: 打包 test MSI（含 Mock，仅测试构建）
+        run: pnpm package:desktop:test
+      - name: MSI 静默安装/首启/会话/发送/中断/卸载（可复跑）
+        run: pnpm smoke:installer --variant test
+      - name: 归档安装冒烟证据
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: m9-12-installer-windows
+          path: |
+            dist-out/*.msi
+            dist-out/*.txt
+            scripts/test/.tmp/m9-11/installer-smoke-*
+          if-no-files-found: warn
+          retention-days: 30
+
+  m9-12-installer-macos:
+    name: M9-12 DMG mount/copy/launch smoke (macOS)
+    runs-on: macos-14
+    env:
+      CARGO_BUILD_JOBS: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+      - name: 打包 per-arch DMG（unsigned 冒烟；签名/公证仍由 M9-11 G6 管）
+        run: pnpm package:desktop --mac
+      - name: DMG 挂载/复制/启动
+        run: pnpm smoke:installer:macos
+      - name: 归档 DMG 冒烟证据
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: m9-12-installer-macos
+          path: |
+            dist-out/*.dmg
+            dist-out/*.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  m9-12-linux-build-smoke:
+    name: M9-12 Linux build + xvfb smoke
+    runs-on: ubuntu-22.04
+    env:
+      CARGO_BUILD_JOBS: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - name: 安装 Linux 系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libarchive-tools rpm fakeroot xvfb \
+            libgtk-3-0 libnss3 libasound2 libgbm1 libxss1 libxtst6 \
+            libdbus-1-dev pkg-config libssl-dev build-essential
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+      - name: 打包 deb + AppImage
+        run: pnpm package:desktop --linux
+      - name: Linux deb/AppImage xvfb 冒烟
+        run: pnpm smoke:installer:linux
+      - name: M9-12 静态门禁（Linux 构建范围）
+        run: pnpm verify:m9-12
+      - name: 归档 Linux 产物/冒烟证据
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: m9-12-linux
+          path: |
+            dist-out/*.deb
+            dist-out/*.AppImage
+            dist-out/*.json
           if-no-files-found: warn
           retention-days: 30
