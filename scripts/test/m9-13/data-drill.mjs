@@ -58,8 +58,7 @@ const noSandbox =
 mkdirSync(outDir, { recursive: true });
 
 function fail(message) {
-  console.error(`[m9-13-data] FAIL ${message}`);
-  process.exit(1);
+  throw new Error(message);
 }
 
 function sleep(ms) {
@@ -539,4 +538,20 @@ async function main() {
   console.log("AETHER_M9_13_DATA PASS");
 }
 
-await main();
+try {
+  await main();
+} catch (error) {
+  const failure = {
+    schema: "aether.m9-13.data-drill.v1",
+    task: "M9-13",
+    finished_at: new Date().toISOString(),
+    platform: { os: process.platform, arch: process.arch, node: process.version },
+    passed: false,
+    error: error?.message ?? String(error),
+    stack: error?.stack ?? null,
+  };
+  mkdirSync(outDir, { recursive: true });
+  writeFileSync(outPath, `${JSON.stringify(failure, null, 2)}\n`, "utf8");
+  console.error(`[m9-13-data] FAIL ${failure.error}`);
+  process.exit(1);
+}

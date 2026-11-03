@@ -1517,6 +1517,16 @@ jobs:
         run: pnpm m9-13:performance
       - name: M9-13 内测数据/备份恢复/安全模式/Keychain
         run: pnpm m9-13:data
+      - name: M9-13 数据步骤失败诊断
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo '### M9-13 data drill failure'
+            echo '```json'
+            cat scripts/test/.tmp/m9-13/data/data-drill.json 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: M9-13 全量回归 + P0/P1 映射
         run: pnpm m9-13:regression
       - name: M9-13 Rust 覆盖率（排除 aether-tauri 窗口）
@@ -1533,6 +1543,22 @@ jobs:
         run: pnpm coverage:m9-13
       - name: M9-13 G7 门禁
         run: pnpm verify:m9-13
+      - name: M9-13 失败诊断（摘要）
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo '### M9-13 failure summary'
+            echo '```json'
+            cat scripts/test/.tmp/m9-13/data/data-drill.json 2>/dev/null || true
+            echo '```'
+            echo '```json'
+            cat scripts/test/.tmp/m9-13/regression/results.json 2>/dev/null | tail -c 4000 || true
+            echo '```'
+            echo '```json'
+            cat scripts/test/.tmp/m9-13/coverage/coverage.json 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: 归档 M9-13 证据
         if: always()
         uses: actions/upload-artifact@v7
