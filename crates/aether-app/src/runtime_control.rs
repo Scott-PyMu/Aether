@@ -28,7 +28,9 @@ use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
 use crate::ipc::backend::IpcBackend;
-use crate::ipc::dto::{RuntimeDisableRequest, RuntimeEnableRequest, RuntimeRetryRequest};
+use crate::ipc::dto::{
+    BackupRestoreRequest, RuntimeDisableRequest, RuntimeEnableRequest, RuntimeRetryRequest,
+};
 use crate::ipc::error::IpcError;
 
 /// 控制命令硬超时（启动含握手/initialize，D6 方法表 10s + 进程启动余量）。
@@ -545,6 +547,20 @@ impl RuntimeControlBackend {
 impl IpcBackend for RuntimeControlBackend {
     fn health(&self) -> Result<Value, IpcError> {
         self.inner.health()
+    }
+
+    /// M9-13 DoD-4（R10-A）：安全模式下备份/恢复装饰器位于本层内层（无写队列），
+    /// 必须显式透传，否则 `backup_restore` 维护例外会被本层的默认实现吞掉。
+    fn backup_list(&self) -> Result<Value, IpcError> {
+        self.inner.backup_list()
+    }
+
+    fn backup_restore(
+        &self,
+        request: &BackupRestoreRequest,
+        canonical_external_path: Option<&Path>,
+    ) -> Result<Value, IpcError> {
+        self.inner.backup_restore(request, canonical_external_path)
     }
 
     fn runtime_retry(&self, request: &RuntimeRetryRequest) -> Result<Value, IpcError> {

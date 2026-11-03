@@ -363,15 +363,27 @@ pub fn build_backend(
                     session_manager: None,
                     security: None,
                 });
-                (
-                    std::sync::Arc::new(core_health::degraded_backend(&reason))
-                        as std::sync::Arc<dyn ipc::IpcBackend>,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                )
+                // M9-13 DoD-4 / ADR-029 §3.5-6（R10-A）：`quick_check` 失败 → 只读
+                // 安全模式；仍允许 `backup_restore` 维护例外（先登记现场日志，恢复由
+                // 下次启动的无写者窗口执行）。只读连接池不启动写任务/不迁移/不写库。
+                let degraded = std::sync::Arc::new(core_health::degraded_backend(&reason));
+                let safe_mode_reads =
+                    aether_store::ReadPool::open_read_only(data_dir.join("aether.db"), 2).ok();
+                let backend: std::sync::Arc<dyn ipc::IpcBackend> = match safe_mode_reads {
+                    Some(reads) => {
+                        let secrets = provider_control::boot_secret_store(&data_dir);
+                        std::sync::Arc::new(backup_control::BackupControlBackend::new(
+                            degraded,
+                            data_dir.clone(),
+                            Some(reads),
+                            None,
+                            handle.clone(),
+                            secrets,
+                        ))
+                    }
+                    None => degraded,
+                };
+                (backend, None, None, None, None, None)
             }
         };
 

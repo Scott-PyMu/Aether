@@ -453,6 +453,14 @@ impl ReadPool {
         })
     }
 
+    /// 只读读连接池（M9-13 R10-A：`quick_check` 失败安全模式下的维护例外）。
+    ///
+    /// 安全模式没有写者，但 `backup_restore` 仍需读取备份台账/设置；该入口只建立
+    /// 只读连接（`SQLITE_OPEN_READ_ONLY`），不启动写任务、不迁移、不写库。
+    pub fn open_read_only(path: impl AsRef<Path>, size: usize) -> Result<Self, StoreError> {
+        Self::open(path.as_ref(), size.max(1))
+    }
+
     /// 读连接数（配置值）。
     pub fn connection_count(&self) -> usize {
         self.connections.len()

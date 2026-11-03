@@ -1,0 +1,40 @@
+{
+  "schema": "aether.m9-13.platform-matrix.v1",
+  "task": "M9-13",
+  "rule": "Win/mac 必跑；Linux 构建 + CI 冒烟必跑（不纳入签名发布门禁）；未跑项必须文档化，不得静默跳过。",
+  "platforms": [
+    {
+      "id": "windows",
+      "required": "本机 + CI",
+      "status": "passed",
+      "evidence": [
+        "scripts/test/.tmp/m9-13/performance/performance.json",
+        "scripts/test/.tmp/m9-13/data/data-drill.json",
+        "scripts/test/.tmp/m9-13/regression/results.json"
+      ],
+      "notes": "本机 Windows x64：性能/数据/回归全量执行。"
+    },
+    {
+      "id": "macos",
+      "required": "CI",
+      "status": "ci-unverified",
+      "ci_run": "41185306916",
+      "evidence": [
+        "docs/M9-12-证据.md#7-跨平台ci-未验证项",
+        "docs/M9-13-证据.md#6-跨平台矩阵"
+      ],
+      "reason": "本机无 macOS；M9-12 CI run 41185306916 的 m9-12-e2e-macos / m9-12-installer-macos 已通过（unsigned 冒烟）；M9-13 CI 运行需在推送后补记 run id。macOS 签名/公证密钥未申请，已登记 docs/M9-13-macOS-密钥登记.md，后续申请后重新验证；未声称 G6 签名/公证通过。"
+    },
+    {
+      "id": "linux",
+      "required": "CI 构建 + 冒烟",
+      "status": "ci-unverified",
+      "ci_run": "41185306916",
+      "evidence": [
+        "docs/M9-12-证据.md#7-跨平台ci-未验证项",
+        "docs/M9-13-证据.md#6-跨平台矩阵"
+      ],
+      "reason": "本机无 Linux；M9-12 CI run 41185306916 的 m9-12-linux-build-smoke 已通过（deb/AppImage + xvfb）；M9-13 CI 运行需在推送后补记 run id。Linux 不纳入签名发布门禁。"
+    }
+  ]
+}

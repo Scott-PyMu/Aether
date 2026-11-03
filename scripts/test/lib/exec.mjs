@@ -47,6 +47,9 @@ export function pnpmCommand() {
     process.env.PNPM_HOME &&
       path.join(process.env.PNPM_HOME, "..", "pnpm", "bin", "pnpm.js"),
     process.env.PNPM_HOME && path.join(process.env.PNPM_HOME, "pnpm.cjs"),
+    // npm 全局安装（Windows）：`pnpm.cmd` 垫片调用 `@pnpm/exe/pnpm.exe`；
+    // Node 可直接 spawn 该 exe（避免 .cmd 需要 shell 的问题）。
+    path.join(appData, "npm", "node_modules", "@pnpm", "exe", "pnpm.exe"),
     path.join(appData, "npm", "node_modules", "pnpm", "bin", "pnpm.cjs"),
     path.join(appData, "npm", "node_modules", "pnpm", "bin", "pnpm.js"),
     localAppData && path.join(localAppData, "pnpm", "pnpm.exe"),

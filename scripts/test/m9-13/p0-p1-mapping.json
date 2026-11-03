@@ -1,0 +1,176 @@
+{
+  "schema": "aether.m9-13.p0-p1-mapping.v1",
+  "baseline": {
+    "design": "v1.28",
+    "p2_plan": "v0.6",
+    "adr": "ADR-029 v0.4 / ADR-030",
+    "head_baseline": "docs/M9-01-baseline/"
+  },
+  "rules": {
+    "p0": "T1–T13/T15 映射复跑；T14 → protocol check + verify:error-codes + 63/59/4 manifest；M1-08 → M9-10 verify:security；M4-05/ADR-001 → M9-11 smoke:installer；T13 A4 仅退出/重试",
+    "p1": "三运行时一致性 / 加密备份恢复 / 规则误配率复跑",
+    "no_silent_skip": "未执行项必须标注 unverified 与原因；不得以 M9-12 证据代替 M9-13 复跑（CI 平台项除外，需注明 run id）"
+  },
+  "p0": [
+    {
+      "id": "T1",
+      "name": "会话创建时延",
+      "mapped_to": "M9-13 性能证据：Electron 真实 daemon + Mock 运行时，sessionCreateMs < 2000ms",
+      "command": "pnpm m9-13:performance",
+      "evidence": "scripts/test/.tmp/m9-13/performance/performance.json#metrics.session_create_ms",
+      "status": "mapped"
+    },
+    {
+      "id": "T2",
+      "name": "事件回显时延",
+      "mapped_to": "M9-05 事件桥 10×50 报告（真实 StoreRuntime + EventPipeline）",
+      "command": "cargo test -p aether-app --test m9_05_event_bridge ten_sessions_fifty_deltas_per_second_keep_all_control_events -j 1 -- --test-threads=1 --nocapture",
+      "evidence": "scripts/test/.tmp/m9-13/performance/performance.json#metrics.ten_by_fifty",
+      "status": "mapped"
+    },
+    {
+      "id": "T3",
+      "name": "并发控制事件不丢",
+      "mapped_to": "M9-05 10×50：控制事件 0 丢失；delta 可丢并计数；补读恢复",
+      "command": "cargo test -p aether-app --test m9_05_event_bridge ten_sessions_fifty_deltas_per_second_keep_all_control_events -j 1 -- --test-threads=1 --nocapture",
+      "evidence": "scripts/test/.tmp/m9-13/performance/performance.json#metrics.ten_by_fifty.control_lost",
+      "status": "mapped"
+    },
+    {
+      "id": "T4",
+      "name": "kill -9 数据完整性（20 次）",
+      "mapped_to": "M3-06 T4 集成（共享 aether-app 核心；Tauri 仅测试宿主，G8 删除）",
+      "command": "cargo test -p aether-tauri --test m3_06_t4 -j 1 -- --test-threads=1 --nocapture",
+      "evidence": "scripts/test/.tmp/m9-13/regression/results.json#T4",
+      "status": "mapped"
+    },
+    {
+      "id": "T5a",
+      "name": "适配器崩溃自愈（30s Ready）",
+      "mapped_to": "aether-adapters M2-02 T5a（真实 Claude Code 夹具）",
+      "command": "cargo test -p aether-adapters --test m2_02_t5a -j 1 -- --test-threads=1",
+      "evidence": "scripts/test/.tmp/m9-13/regression/results.json#T5a",
+      "status": "mapped"
+    },
+    {
+      "id": "T5b",
+      "name": "适配器卡死恢复（120s Ready）",
+      "mapped_to": "aether-adapters M2-08 T5b（Mock 不响应模式）",
+      "command": "cargo test -p aether-adapters --test m2_08_t5b -j 1 -- --test-threads=1",
+      "evidence": "scripts/test/.tmp/m9-13/regression/results.json#T5b",
+      "status": "mapped"
+    },
+    {
+      "id": "T6",
+      "name": "权限审批压测（100 ask）",
+      "mapped_to": "aether-control M2-03 T6（100 并发 ask 无丢失/重复/死锁）",
+      "command": "cargo test -p aether-control --test m2_03_permission t6_100_concurrent_asks_no_loss_no_duplication -j 1 -- --test-threads=1",
+      "evidence": "scripts/test/.tmp/m9-13/regression/results.json#T6",
+      "status": "mapped"
+    },
+    {
+      "id": "T7",
+      "name": "路径逃逸对抗",
+      "mapped_to": "M9-10 路径安全矩阵 + aether-control T7 样本集",
+      "command": "pnpm verify:security",
+      "evidence": "scripts/test/.tmp/m9-13/regression/results.json#T7",
+      "status": "mapped"
+    },
+    {
+      "id": "T8",
+      "name": "磁盘满降级",
+      "mapped_to": "aether-control 空间护栏/持久化降级 + M9-13 安全模式数据演练",
+      "command": "cargo test -p aether-control --test m1_05_store_integration real_store_startup_check_failure_is_recovered_only_by_restart -j 1 -- --test-threads=1",
+      "evidence": "scripts/test/.tmp/m9-13/data/data-drill.json#safe_mode",
+      "status": "mapped"
+    },
+    {
+      "id": "T9",
+      "name": "备份恢复",
+      "mapped_to": "M9-13 数据演练（备份 → 修改 → 恢复 → 行数/哈希/quick_check）+ M5-03 加密备份演练",
+      "command": "pnpm m9-13:data",
+      "evidence": "scripts/test/.tmp/m9-13/data/data-drill.json#backup_restore",
+      "status": "mapped"
+    },
+    {
+      "id": "T10",
+      "name": "协议健壮性",
+      "mapped_to": "aether-rpc 帧/畸形输入单测 + aetherd M9-03 stdio",
+      "command": "cargo test -p aether-rpc -j 1 -- --test-threads=1",
+      "evidence": "scripts/test/.tmp/m9-13/regression/results.json#T10",
+      "status": "mapped"
+    },
+    {
+      "id": "T11",
+      "name": "退出可靠性（≤10s）",
+      "mapped_to": "M9-09 关闭预算/整树回收（Electron E2E + aetherd 进程测试）",
+      "command": "node scripts/test/m9-13/t11-exit.mjs",
+      "evidence": "scripts/test/.tmp/m9-13/regression/results.json#T11",
+      "status": "mapped"
+    },
+    {
+      "id": "T12",
+      "name": "双开防护",
+      "mapped_to": "M9-07 Electron 单实例 E2E",
+      "command": "pnpm e2e:m9-07",
+      "evidence": "scripts/test/.tmp/m9-13/regression/results.json#T12",
+      "status": "mapped"
+    },
+    {
+      "id": "T13",
+      "name": "同步盘防护（A4）",
+      "mapped_to": "M9-09 A4 致命启动 + S-12（仅退出/重试，M9 不暴露迁移入口）",
+      "command": "pnpm verify:m9-09",
+      "evidence": "scripts/test/.tmp/m9-13/regression/results.json#T13",
+      "status": "mapped"
+    },
+    {
+      "id": "T14",
+      "name": "类型契约",
+      "mapped_to": "ADR-029 §10.1 替代：protocol generate/check + 63/59/4 manifest + verify:error-codes",
+      "command": "pnpm --filter @aether/protocol check && pnpm verify:error-codes && pnpm verify:m9-01-baseline",
+      "evidence": "scripts/test/.tmp/m9-13/regression/results.json#T14",
+      "status": "mapped"
+    },
+    {
+      "id": "T15",
+      "name": "覆盖率（>70%）",
+      "mapped_to": "Rust 行覆盖门禁（M9-02～G8 排除 aether-tauri）+ 前端覆盖率不下降；G8 全量对比",
+      "command": "pnpm coverage:m9-13",
+      "evidence": "scripts/test/.tmp/m9-13/coverage/coverage.json",
+      "status": "mapped"
+    }
+  ],
+  "p1": [
+    {
+      "id": "P1-三运行时一致性",
+      "name": "Claude Code / Codex / DSH 一致性",
+      "mapped_to": "aether-adapters M2-02/M2-11 一致性套件（真实夹具）",
+      "command": "cargo test -p aether-adapters --test m2_02_consistency --test m2_11_codex --test m2_11_dsh -j 1 -- --test-threads=1",
+      "evidence": "scripts/test/.tmp/m9-13/regression/results.json#P1-three-runtimes",
+      "status": "mapped"
+    },
+    {
+      "id": "P1-加密备份恢复",
+      "name": "加密备份恢复演练",
+      "mapped_to": "M5-03 两模式（Keychain/口令）演练 + 七步/一致/拒绝路径/扫描 0 命中",
+      "command": "pnpm verify:m5-03:drill",
+      "evidence": "scripts/test/.tmp/m9-13/regression/results.json#P1-encrypted-backup",
+      "status": "mapped"
+    },
+    {
+      "id": "P1-规则误配率",
+      "name": "规则引擎误配率 <5%",
+      "mapped_to": "M6-02 预注册样本 + 双人判定 + 误配率复核",
+      "command": "pnpm verify:m6-02",
+      "evidence": "scripts/test/.tmp/m9-13/regression/results.json#P1-rule-misconfiguration",
+      "status": "mapped"
+    }
+  ],
+  "legacy_mapping": {
+    "M1-08": "pnpm verify:security（M9-10 替代）",
+    "M4-05/ADR-001": "pnpm smoke:installer（M9-11 替代）",
+    "T14": "pnpm --filter @aether/protocol check + pnpm verify:error-codes",
+    "Tauri-only-probes": "Playwright E2E；release/manifest 不包含 test.*/e2e_*"
+  }
+}

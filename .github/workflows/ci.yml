@@ -1472,3 +1472,81 @@ jobs:
             dist-out/*.json
           if-no-files-found: warn
           retention-days: 30
+
+  # M9-13 G7：Windows 全量回归/性能/数据/覆盖率门禁。
+  # macOS/Linux 的构建+冒烟由既有 m9-12-e2e-macos / m9-12-linux-build-smoke 覆盖；
+  # M9-13 平台矩阵在证据文档中登记（macOS 签名密钥待申请，后续重新验证）。
+  m9-13-windows:
+    name: M9-13 regression/performance/data/coverage (Windows)
+    runs-on: windows-2022
+    env:
+      CARGO_BUILD_JOBS: "1"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_PROFILE_TEST_CODEGEN_UNITS: "256"
+      TEMP: ${{ github.workspace }}/dist-out/tmp
+      TMP: ${{ github.workspace }}/dist-out/tmp
+      AETHER_M9_13_REAL_DATA: ${{ github.workspace }}/dist-out/m9-13-fixture
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+      - name: 构建前端
+        run: pnpm build:desktop
+      - name: 准备 Mock runtime-bundle + 同源 aetherd
+        run: pnpm prepare:m9-12:e2e
+      - name: 构建 test MSI（性能/安装冒烟使用）
+        run: pnpm package:desktop:test
+      - name: 生成 M9-13 CI 数据夹具
+        run: node scripts/test/m9-13/seed-fixture.mjs --out dist-out/m9-13-fixture
+      - name: M9-13 性能硬阈值
+        run: pnpm m9-13:performance
+      - name: M9-13 内测数据/备份恢复/安全模式/Keychain
+        run: pnpm m9-13:data
+      - name: M9-13 全量回归 + P0/P1 映射
+        run: pnpm m9-13:regression
+      - name: M9-13 Rust 覆盖率（排除 aether-tauri 窗口）
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p scripts/test/.tmp/m9-13/coverage
+          cargo llvm-cov --workspace --exclude aether-tauri \
+            --ignore-filename-regex='(\.cargo/registry|/rustc/|(crates/)?aether-(app|rpc|daemon)/)' \
+            --fail-under-lines 70 -- --test-threads=1
+          cargo llvm-cov report --json --summary-only \
+            --output-path scripts/test/.tmp/m9-13/coverage/llvm-cov.json
+      - name: M9-13 覆盖率对比
+        run: pnpm coverage:m9-13
+      - name: M9-13 G7 门禁
+        run: pnpm verify:m9-13
+      - name: 归档 M9-13 证据
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: m9-13-windows
+          path: |
+            docs/M9-13-证据.md
+            scripts/test/.tmp/m9-13/
+            scripts/test/.tmp/m9-12/coverage/
+            dist-out/*.msi
+            dist-out/m9-13-fixture/
+            dist-out/m9-13-data/
+            dist-out/m9-13-performance/
+          if-no-files-found: warn
+          retention-days: 30
