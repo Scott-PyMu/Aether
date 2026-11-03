@@ -1483,8 +1483,6 @@ jobs:
       CARGO_BUILD_JOBS: "1"
       CARGO_PROFILE_TEST_DEBUG: "0"
       CARGO_PROFILE_TEST_CODEGEN_UNITS: "256"
-      TEMP: ${{ github.workspace }}/dist-out/tmp
-      TMP: ${{ github.workspace }}/dist-out/tmp
       AETHER_M9_13_REAL_DATA: ${{ github.workspace }}/dist-out/m9-13-fixture
     steps:
       - uses: actions/checkout@v6
