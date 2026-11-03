@@ -1545,18 +1545,16 @@ jobs:
       - name: M9-13 全量回归 + P0/P1 映射
         run: pnpm m9-13:regression
       - name: M9-13 Rust 覆盖率（排除 aether-tauri 窗口）
-        shell: bash
+        shell: powershell
         env:
           TEMP: ${{ github.workspace }}/dist-out/tmp
           TMP: ${{ github.workspace }}/dist-out/tmp
         run: |
-          set -o pipefail
-          mkdir -p dist-out/tmp scripts/test/.tmp/m9-13/coverage
-          cargo llvm-cov --workspace --exclude aether-tauri \
-            --ignore-filename-regex='(\.cargo/registry|/rustc/|(crates/)?aether-(app|rpc|daemon)/)' \
-            --fail-under-lines 70 -- --test-threads=1
-          cargo llvm-cov report --json --summary-only \
-            --output-path scripts/test/.tmp/m9-13/coverage/llvm-cov.json
+          New-Item -ItemType Directory -Force dist-out/tmp,scripts/test/.tmp/m9-13/coverage | Out-Null
+          cargo llvm-cov --workspace --exclude aether-tauri --ignore-filename-regex='(\.cargo/registry|/rustc/|(crates/)?aether-(app|rpc|daemon)/)' --fail-under-lines 70 -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo llvm-cov report --json --summary-only --output-path scripts/test/.tmp/m9-13/coverage/llvm-cov.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: M9-13 覆盖率对比
         run: pnpm coverage:m9-13
       - name: M9-13 G7 门禁
