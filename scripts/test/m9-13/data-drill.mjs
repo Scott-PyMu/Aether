@@ -133,9 +133,25 @@ quick = conn.execute("PRAGMA quick_check").fetchone()[0]
 print(json.dumps({"tables": tables, "migrations": migrations, "counts": counts, "quick_check": quick}, ensure_ascii=False))
 `;
 
+function pythonBinary() {
+  for (const candidate of ["python", "python3"]) {
+    const probe = spawnSync(candidate, ["-c", "import sqlite3"], {
+      encoding: "utf8",
+      env: { ...process.env, PYTHONIOENCODING: "utf-8" },
+      timeout: 30_000,
+    });
+    if (probe.status === 0) return candidate;
+  }
+  return null;
+}
+
 function sqliteSnapshot(dbPath, { checkpoint = false } = {}) {
+  const python = pythonBinary();
+  if (!python) {
+    return { unavailable: true, error: "未找到 python/python3（需要标准库 sqlite3）" };
+  }
   const result = spawnSync(
-    "python",
+    python,
     ["-c", PY_SNAPSHOT, dbPath, checkpoint ? "1" : "0"],
     { encoding: "utf8", env: { ...process.env, PYTHONIOENCODING: "utf-8" }, timeout: 60_000 },
   );
@@ -531,7 +547,15 @@ async function main() {
     console.warn(`[m9-13-data] 清理临时目录失败（忽略）：${error.message}`);
   }
   if (!passed) {
-    console.error(`[m9-13-data] FAIL ${checks.filter((item) => !item.ok).length} 项`);
+    const failed = checks.filter((item) => !item.ok);
+    console.error(`[m9-13-data] FAIL ${failed.length} 项`);
+    for (const item of failed) console.error(`  - ${item.name}：${item.detail}`);
+    console.log(
+      `::error title=M9-13 data checks::${failed
+        .map((item) => `${item.name}（${item.detail}）`)
+        .join("; ")
+        .slice(0, 900)}`,
+    );
     process.exit(1);
   }
   console.log("[m9-13-data] PASS");
