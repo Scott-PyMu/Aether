@@ -112,7 +112,7 @@
       "id": "T12",
       "name": "双开防护",
       "mapped_to": "M9-07 Electron 单实例 E2E",
-      "command": "pnpm e2e:m9-07",
+      "command": "node scripts/test/m9-13/t12-single-instance.mjs",
       "evidence": "scripts/test/.tmp/m9-13/regression/results.json#T12",
       "status": "mapped"
     },

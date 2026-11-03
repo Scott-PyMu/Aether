@@ -237,8 +237,8 @@ const commands = [
   },
   {
     id: "T12",
-    name: "T12 双开防护（M9-07 E2E；先于 T11 避免 cargo test 重建 aetherd）",
-    command: [pnpm.command, [...pnpm.prefix, "e2e:m9-07"]],
+    name: "T12 双开防护（M9-07 单实例场景；先于 T11 避免 cargo test 重建 aetherd）",
+    command: [process.execPath, [path.join(repoRoot, "scripts", "test", "m9-13", "t12-single-instance.mjs")]],
     timeout: 20 * 60 * 1000,
   },
   {
