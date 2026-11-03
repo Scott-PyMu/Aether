@@ -145,6 +145,8 @@ function runSmokeInstaller() {
       : { skipped: true, reason: "--skip-smoke 且无既有 m9-11-smoke-test-*.json" };
   }
   const pnpm = pnpmCommand();
+  const tmpDir = path.join(repoRoot, "dist-out", "tmp");
+  mkdirSync(tmpDir, { recursive: true });
   console.log("[m9-13-performance] 运行安装产物冒烟（M9-11 test MSI；窗口/UI ready/idle RSS）");
   const result = spawnSync(
     pnpm.command,
@@ -152,7 +154,12 @@ function runSmokeInstaller() {
     {
       cwd: repoRoot,
       encoding: "utf8",
-      env: { ...process.env, CARGO_BUILD_JOBS: process.env.CARGO_BUILD_JOBS ?? "1" },
+      env: {
+        ...process.env,
+        CARGO_BUILD_JOBS: process.env.CARGO_BUILD_JOBS ?? "1",
+        TEMP: tmpDir,
+        TMP: tmpDir,
+      },
       timeout: 20 * 60 * 1000,
       maxBuffer: 64 * 1024 * 1024,
     },

@@ -1531,9 +1531,12 @@ jobs:
         run: pnpm m9-13:regression
       - name: M9-13 Rust 覆盖率（排除 aether-tauri 窗口）
         shell: bash
+        env:
+          TEMP: ${{ github.workspace }}/dist-out/tmp
+          TMP: ${{ github.workspace }}/dist-out/tmp
         run: |
           set -o pipefail
-          mkdir -p scripts/test/.tmp/m9-13/coverage
+          mkdir -p dist-out/tmp scripts/test/.tmp/m9-13/coverage
           cargo llvm-cov --workspace --exclude aether-tauri \
             --ignore-filename-regex='(\.cargo/registry|/rustc/|(crates/)?aether-(app|rpc|daemon)/)' \
             --fail-under-lines 70 -- --test-threads=1

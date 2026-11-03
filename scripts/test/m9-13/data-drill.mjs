@@ -167,10 +167,19 @@ function sqliteSnapshot(dbPath, { checkpoint = false } = {}) {
 
 function runCommand(name, args, options = {}) {
   console.log(`\n$ ${[name, ...args].join(" ")}`);
+  const tmpDir = path.join(repoRoot, "dist-out", "tmp");
+  mkdirSync(tmpDir, { recursive: true });
   const result = spawnSync(name, args, {
     cwd: options.cwd ?? repoRoot,
     encoding: "utf8",
-    env: { ...process.env, ...(options.env ?? {}) },
+    env: {
+      ...process.env,
+      ...(options.env ?? {}),
+      // GitHub Windows runner 的默认 TEMP 可能是 8.3 短名（RUNNER~1），
+      // 会被 A4/路径校验拒绝；任务测试统一使用工作区临时目录。
+      TEMP: tmpDir,
+      TMP: tmpDir,
+    },
     timeout: options.timeout ?? 15 * 60 * 1000,
   });
   const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
@@ -475,11 +484,12 @@ async function main() {
     "1",
     "--",
     "--test-threads=1",
+    "--nocapture",
   ]);
   record(
     "安全模式 backup_restore 维护例外（停写→恢复→重启）",
     safeModeTest.exit === 0,
-    `exit=${safeModeTest.exit}`,
+    `exit=${safeModeTest.exit}${safeModeTest.exit === 0 ? "" : `：${safeModeTest.output.trim().split(/\r?\n/).slice(-20).join(" | ")}`}`,
   );
 
   const keychain = await keychainPreflight(root, source, registryDir);
