@@ -1492,6 +1492,9 @@ jobs:
           git config core.autocrlf false
           git config core.eol lf
           git checkout-index -a -f
+          # checkout-index 在部分 Windows 工作区不会重写已存在的 CRLF 文件；
+          # 对所有已跟踪文本文件做一次显式归一（二进制由 grep -I 排除）。
+          git ls-files -z | xargs -0 grep -IlZ '' | xargs -0 sed -i 's/\r$//'
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
