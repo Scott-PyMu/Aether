@@ -151,7 +151,8 @@ record(
 );
 
 // ===== 3. CI 矩阵/步骤 =====
-const workflow = read(".github/workflows/ci.yml");
+// Windows CI checkout 可能启用 core.autocrlf，统一换行后再做 job 块解析。
+const workflow = read(".github/workflows/ci.yml").replace(/\r\n/g, "\n");
 const jobs = {
   gates: jobBlock(workflow, "m9-12-gates"),
   rust: jobBlock(workflow, "m9-12-rust-gates"),

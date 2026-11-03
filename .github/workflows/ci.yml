@@ -1509,6 +1509,14 @@ jobs:
         run: pnpm build:desktop
       - name: 准备 Mock runtime-bundle + 同源 aetherd
         run: pnpm prepare:m9-12:e2e
+      - name: 构建 M9-13 独立适配器夹具（T5a/P1 一致性）
+        shell: bash
+        run: |
+          mkdir -p crates/aether-tauri/runtime-bundle
+          bun build packages/adapter-claude-code/src/main.ts --compile --outfile crates/aether-tauri/runtime-bundle/aether-claude-adapter.exe
+          bun build packages/adapter-codex/src/main.ts --compile --outfile crates/aether-tauri/runtime-bundle/aether-codex-adapter.exe
+          bun build packages/adapter-dsh/src/main.ts --compile --outfile crates/aether-tauri/runtime-bundle/aether-dsh-adapter.exe
+          bun build packages/adapter-mock/src/main.ts --compile --outfile crates/aether-tauri/runtime-bundle/aether-mock-adapter.exe
       - name: 构建 test MSI（性能/安装冒烟使用）
         run: pnpm package:desktop:test
       - name: 生成 M9-13 CI 数据夹具
@@ -1571,9 +1579,5 @@ jobs:
             docs/M9-13-证据.md
             scripts/test/.tmp/m9-13/
             scripts/test/.tmp/m9-12/coverage/
-            dist-out/*.msi
-            dist-out/m9-13-fixture/
-            dist-out/m9-13-data/
-            dist-out/m9-13-performance/
           if-no-files-found: warn
           retention-days: 30

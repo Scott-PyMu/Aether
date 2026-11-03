@@ -127,12 +127,6 @@ const commands = [
     timeout: 15 * 60 * 1000,
   },
   {
-    id: "m9-12-verify",
-    name: "pnpm verify:m9-12",
-    command: [pnpm.command, [...pnpm.prefix, "verify:m9-12"]],
-    timeout: 10 * 60 * 1000,
-  },
-  {
     id: "m9-12-prepare-e2e",
     name: "pnpm prepare:m9-12:e2e（Mock bundle + 同源 aetherd）",
     command: [pnpm.command, [...pnpm.prefix, "prepare:m9-12:e2e"]],
@@ -143,6 +137,12 @@ const commands = [
     name: "pnpm e2e:m9-12（13 条用户路径复跑）",
     command: [pnpm.command, [...pnpm.prefix, "e2e:m9-12"]],
     timeout: 20 * 60 * 1000,
+  },
+  {
+    id: "m9-12-verify",
+    name: "pnpm verify:m9-12",
+    command: [pnpm.command, [...pnpm.prefix, "verify:m9-12"]],
+    timeout: 10 * 60 * 1000,
   },
   {
     id: "smoke-installer",
@@ -236,15 +236,15 @@ const commands = [
     timeout: 10 * 60 * 1000,
   },
   {
-    id: "T11",
-    name: "T11 退出可靠性（M9-09 退出场景；T1 时序由 performance 覆盖）",
-    command: [process.execPath, [path.join(repoRoot, "scripts", "test", "m9-13", "t11-exit.mjs")]],
+    id: "T12",
+    name: "T12 双开防护（M9-07 E2E；先于 T11 避免 cargo test 重建 aetherd）",
+    command: [pnpm.command, [...pnpm.prefix, "e2e:m9-07"]],
     timeout: 20 * 60 * 1000,
   },
   {
-    id: "T12",
-    name: "T12 双开防护（M9-07 E2E）",
-    command: [pnpm.command, [...pnpm.prefix, "e2e:m9-07"]],
+    id: "T11",
+    name: "T11 退出可靠性（M9-09 退出场景；T1 时序由 performance 覆盖）",
+    command: [process.execPath, [path.join(repoRoot, "scripts", "test", "m9-13", "t11-exit.mjs")]],
     timeout: 20 * 60 * 1000,
   },
   {
@@ -330,12 +330,18 @@ for (const entry of commands) {
   console.log(tail);
   const exit = result.status ?? 1;
   const timedOut = result.error?.code === "ETIMEDOUT";
+  const ok = exit === 0 && !timedOut;
+  if (!ok) {
+    console.log(
+      `::error title=M9-13 regression ${entry.id}::${tail.replace(/\r?\n/g, " | ").slice(-900)}`,
+    );
+  }
   results.push({
     id: entry.id,
     name: entry.name,
     command: [name, ...args].join(" "),
     exit,
-    ok: exit === 0 && !timedOut,
+    ok,
     timed_out: timedOut,
     duration_ms: Date.now() - started,
     log: path.relative(repoRoot, logPath).split(path.sep).join("/"),
