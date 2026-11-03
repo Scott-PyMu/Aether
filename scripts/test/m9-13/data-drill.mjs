@@ -553,5 +553,7 @@ try {
   mkdirSync(outDir, { recursive: true });
   writeFileSync(outPath, `${JSON.stringify(failure, null, 2)}\n`, "utf8");
   console.error(`[m9-13-data] FAIL ${failure.error}`);
+  // GitHub Actions 注释（无凭据时可通过 check-runs/annotations 读取）。
+  console.log(`::error title=M9-13 data failure::${failure.error}`);
   process.exit(1);
 }
