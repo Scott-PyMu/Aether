@@ -143,18 +143,15 @@ const manifestNames = (readJson(manifestPath).commands ?? []).map((entry) => ent
 if (JSON.stringify(baselineNames) !== JSON.stringify(manifestNames)) {
   fail("[DoD-1] command-manifest 顺序/名称与 M9-01 基线不一致");
 }
-// 迁移期 commands.rs 的 `collect_commands!` 必须同序同名（M9-02 薄适配口径）。
-const tauriCommands = read("crates/aether-tauri/src/ipc/commands.rs");
-const collect = tauriCommands.match(/tauri_specta::collect_commands!\[([\s\S]*?)\n {4}\]/);
+// M9-14/G8：命令面唯一来源为 `aether-app` 的 `COMMANDS`（Tauri 已退役）。
+const appDispatch = read("crates/aether-app/src/ipc/dispatch.rs");
+const collect = appDispatch.match(/pub const COMMANDS: &\[&str\] = &\[([\s\S]*?)\n\];/);
 if (!collect) {
-  fail("[DoD-1] 无法解析 tauri_specta::collect_commands!");
+  fail("[DoD-1] 无法解析 aether-app COMMANDS");
 } else {
-  const declared = collect[1]
-    .split(/\r?\n/)
-    .map((line) => line.trim().replace(/,$/, ""))
-    .filter(Boolean);
+  const declared = [...collect[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]);
   if (JSON.stringify(declared) !== JSON.stringify(manifestNames)) {
-    fail("[DoD-1] collect_commands! 与 command-manifest 顺序/名称不一致");
+    fail("[DoD-1] aether-app COMMANDS 与 command-manifest 顺序/名称不一致");
   }
 }
 
@@ -386,10 +383,10 @@ const requiredTests = {
     "all_32_ipc_codes_map_to_transport_and_aether_code",
     "all_9_business_codes_are_carried_in_error_data",
   ],
-  "crates/aether-tauri/tests/m3_02_session_backend.rs": [
+  "crates/aether-app/tests/m3_02_session_backend.rs": [
     "messages_page_budget_truncates_cursor_resumes_and_zero_progress_is_safe",
   ],
-  "crates/aether-tauri/tests/m6_03_audit.rs": [
+  "crates/aether-app/tests/m6_03_audit.rs": [
     "audit_query_budget_truncates_cursor_resumes_and_tamper_is_rejected",
   ],
 };

@@ -16,7 +16,7 @@
 //! 接线（ADR-029 D-029-2）：本模块只提供与壳无关的编排对象 [`AppShutdown`] 与
 //! 阶段标志 [`ExitPhase`]/`ExitFlag`；壳层在自身退出回调里取
 //! `IpcState::shutdown_orchestrator()` → 后台执行 [`AppShutdown::run_blocking`] →
-//! `finish_exit_cleanup` → 以原始退出码退出（Tauri 实现见 `aether-tauri::shutdown`）。
+//! `finish_exit_cleanup` → 以原始退出码退出（Electron 实现见 `apps/desktop/electron/daemonLifecycle.ts`）。
 //! 未接线（启动门阻断/测试骨架）时直接放行，不拦截退出。
 
 use std::path::PathBuf;

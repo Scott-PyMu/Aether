@@ -7,8 +7,8 @@
  * - `frontend.invoke_call_sites`：`apps/desktop/src` 下非测试 `.ts/.tsx` 中
  *   `invoke(` / `invoke<T>(` 的调用点总数（按匹配次数计），`invoke_files` 为命中的文件数；
  * - `frontend.test_files`：`apps/desktop/src` 下 `*.test.ts(x)`；
- * - `protocol.bindings_lines`：`packages/protocol/src/bindings.ts` 行数（含空行；
- *   DoD 参照值 1003，不一致时 `matches_dod_reference=false`，以实测为准）；
+ * - `protocol.bindings_lines`：M9-01 录制时 `bindings.ts` 行数（1003，含空行）。
+ *   M9-14/G8 已随 Tauri 退役删除该迁移期生成物；统计保留冻结值，供基线追溯。
  * - `core.lines`：`crates/aether-core/src` 下全部 `.rs` 的总行数；
  * - `core.rust_test_files`：`crates/<crate>/tests` 下全部 `.rs` 文件数。
  *
@@ -24,6 +24,8 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 export const STATS_TARGET = "docs/M9-01-baseline/contract/stats.json";
 const DOD_BINDINGS_LINES = 1003;
+// M9-14/G8：bindings.ts 已删除；保留 M9-01 录制值以维持基线可追溯。
+const RETIRED_BINDINGS_LINES = 1003;
 const SHELL_COMMANDS = ["app_exit", "app_restart", "ref_pick", "startup_pick_target"];
 const RESERVED_COMMANDS = ["startup_get", "startup_migrate"];
 
@@ -43,13 +45,10 @@ function listFiles(relDir, predicate) {
 }
 
 function commandNames() {
-  const source = readFileSync(abs("crates/aether-tauri/src/ipc/commands.rs"), "utf8");
-  const block = source.match(/tauri_specta::collect_commands!\[([\s\S]*?)\n {4}\]/);
-  if (!block) throw new Error("[m9-01-stats] 无法解析 collect_commands!");
-  return block[1]
-    .split(/\r?\n/)
-    .map((line) => line.trim().replace(/,$/, ""))
-    .filter(Boolean);
+  const source = readFileSync(abs("crates/aether-app/src/ipc/dispatch.rs"), "utf8");
+  const block = source.match(/pub const COMMANDS: &\[&str\] = &\[([\s\S]*?)\n\];/);
+  if (!block) throw new Error("[m9-01-stats] 无法解析 aether-app COMMANDS");
+  return [...block[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]);
 }
 
 /** 现算统计（录制与人工复核共用）。 */
@@ -71,8 +70,7 @@ export function collectStats() {
     }
   }
 
-  const bindingsText = readFileSync(abs("packages/protocol/src/bindings.ts"), "utf8");
-  const bindingsLines = countLines(bindingsText);
+  const bindingsLines = RETIRED_BINDINGS_LINES;
 
   const coreFiles = listFiles("crates/aether-core/src", (rel) => rel.endsWith(".rs"));
   const coreLines = coreFiles.reduce(
@@ -109,10 +107,10 @@ export function collectStats() {
       rust_test_files: rustTestFiles,
     },
     method: {
-      commands: "crates/aether-tauri/src/ipc/commands.rs › tauri_specta::collect_commands![...]",
+      commands: "crates/aether-app/src/ipc/dispatch.rs › pub const COMMANDS: &[&str]",
       invoke: "apps/desktop/src/**/*.{ts,tsx}（排除 *.test.ts(x)）› /\\binvoke\\s*(?:<[^>]*>)?\\s*\\(/g",
       frontend_tests: "apps/desktop/src/**/*.test.{ts,tsx}",
-      bindings: "packages/protocol/src/bindings.ts",
+      bindings: "M9-01 冻结值（bindings.ts 已于 M9-14/G8 删除）",
       core: "crates/aether-core/src/**/*.rs",
       rust_tests: "crates/*/tests/**/*.rs",
     },

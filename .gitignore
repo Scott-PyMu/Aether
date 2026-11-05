@@ -10,9 +10,6 @@ coverage/
 *.tsbuildinfo
 .pnpm-store/
 
-# Tauri 生成物（capability schema 由 tauri-build 生成）
-crates/aether-tauri/gen/schemas/
-
 # 编辑器 / 系统
 .DS_Store
 Thumbs.db
@@ -33,8 +30,9 @@ dist-out/
 # M9-11 打包暂存（daemon + runtime-bundle；构建期生成，不入库）
 /build/
 
-# M4-05 运行时包（构建期生成：官方适配器单文件 + 注册清单 + 摘要；随安装包分发）
-crates/aether-tauri/runtime-bundle/
+# 运行时包（构建期生成：官方适配器单文件 + 注册清单 + 摘要；随安装包分发）
+dist-out/runtime-bundle/
+build/stage/*/runtime-bundle/
 
 # 本地设计与流程文档（明确不上传）
 /设计文档.md

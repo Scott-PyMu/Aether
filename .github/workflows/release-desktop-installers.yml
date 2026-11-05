@@ -1,9 +1,9 @@
 name: release-desktop-installers
 
-# 平台安装器唯一产出方（ADR-001）：Windows MSI（WiX，WebView2 embedBootstrapper 内嵌）
-# 与 macOS DMG，均由 Tauri bundler 生成；cargo-dist 生成的 release.yml 负责编排、
-# 归档与创建 Release，本工作流在其后把安装器附加到同一 Release。
-# 设计依据：§2.1 平台交付、§2.2 打包/发布、docs/adr/ADR-001-tauri-identifier-msi.md。
+# M9-14/G8：Electron 为默认发布壳；Tauri 已退役，不生成/不保留回退包。
+# Windows MSI / macOS per-arch DMG / Linux deb+AppImage 均由 electron-builder
+# （`pnpm package:desktop`）产出；发布说明见 docs/M9-14-发布说明.md。
+# 依据：ADR-029 v0.4 §8.1、ADR-030（Windows 无证书可 unsigned；macOS 强制签名/公证）。
 
 on:
   push:
@@ -13,105 +13,266 @@ on:
 permissions:
   contents: write
 
-jobs:
-  desktop-installers:
-    name: Desktop installers (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-2022
-            artifact: "*.msi"
-          - os: macos-14
-            artifact: "*.dmg"
-    steps:
-      - uses: actions/checkout@v4
+env:
+  CARGO_TERM_COLOR: always
+  AETHER_BUILD_VARIANT: release
 
+jobs:
+  windows:
+    name: Windows MSI + installer smoke
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v6
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
-      - name: 安装前端依赖
-        run: pnpm install --frozen-lockfile
-
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-
-      - name: 构建安装器（MSI/DMG）
-        run: node scripts/ci/build-desktop-installer.mjs
-
-      # M4-05 DoD3：签名步骤挂接流水线（MVP 允许空签但流程可执行）。
-      # 未配置证书 secrets 时步骤为 no-op 并输出说明；配置后自动对 MSI 签名。
-      - name: Windows 代码签名（signtool；无证书空签跳过）
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          if (-not $env:WINDOWS_CERT_BASE64) {
-            Write-Host "未配置 WINDOWS_CERT_BASE64：MVP 空签流程通过（SmartScreen 绕过见 docs/打包与发布说明.md）"
-            exit 0
-          }
-          $pfx = Join-Path $env:RUNNER_TEMP "aether-sign.pfx"
-          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERT_BASE64))
-          $msi = Get-ChildItem dist-out/*.msi | Select-Object -First 1
-          & signtool sign /f $pfx /p $env:WINDOWS_CERT_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $msi.FullName
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & signtool verify /pa $msi.FullName
-        env:
-          WINDOWS_CERT_BASE64: ${{ secrets.WINDOWS_CERT_BASE64 }}
-          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
-
-      # M4-05 DoD3：签名后刷新哈希记录（签名改变产物字节）。
-      - name: 刷新产物哈希（签名后）
-        shell: bash
-        run: node scripts/ci/hash-installers.mjs
-
-      - name: macOS 公证（notarytool；无凭据空签跳过）
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          if [ -z "${MACOS_NOTARY_APPLE_ID:-}" ]; then
-            echo "未配置 MACOS_NOTARY_APPLE_ID：MVP 空签流程通过（Gatekeeper 绕过见 docs/打包与发布说明.md）"
-            exit 0
-          fi
-          xcrun notarytool submit dist-out/*.dmg \
-            --apple-id "$MACOS_NOTARY_APPLE_ID" \
-            --team-id "$MACOS_NOTARY_TEAM_ID" \
-            --password "$MACOS_NOTARY_PASSWORD" --wait
-        env:
-          MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
-          MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
-          MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
-
-      - uses: actions/upload-artifact@v7
+      - uses: oven-sh/setup-bun@v2
         with:
-          name: desktop-installers-${{ runner.os }}
+          bun-version: "1.4.2"
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+      - name: 构建 release MSI
+        run: pnpm package:desktop
+      - name: 安装/卸载/功能冒烟
+        run: pnpm smoke:installer
+      - name: 签名策略校验（ADR-030；无证书时记录 unsigned_release）
+        shell: pwsh
+        run: node scripts/test/m9-11/signatures.mjs --artifact (Get-ChildItem dist-out\Aether-*-x64.msi | Select-Object -First 1).FullName
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: release-windows
           path: |
-            dist-out/*
+            dist-out/*.msi
             dist-out/SHA256SUMS.txt
+            dist-out/m9-11-build-manifest.json
           retention-days: 30
 
-      - name: 等待 cargo-dist 创建 Release
+  macos_arm64:
+    name: macOS arm64 DMG (signed/notarized)
+    if: vars.M9_11_MAC_SIGNING_READY == 'true'
+    runs-on: macos-14
+    env:
+      MAC_CERTS: ${{ secrets.MAC_CERTS }}
+      MAC_CERTS_PASSWORD: ${{ secrets.MAC_CERTS_PASSWORD }}
+      MAC_IDENTITY: ${{ secrets.MAC_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      AETHER_MAC_IDENTITY: ${{ secrets.MAC_IDENTITY }}
+      AETHER_MAC_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      AETHER_NOTARIZE: "1"
+      AETHER_REQUIRE_SIGNING: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+      - name: 导入 Developer ID 证书
         shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          tag="${GITHUB_REF_NAME}"
-          for attempt in $(seq 1 80); do
-            if gh release view "$tag" >/dev/null 2>&1; then
-              echo "Release $tag 已就绪"
-              exit 0
-            fi
-            echo "等待 Release $tag ... ($attempt/80)"
-            sleep 30
-          done
-          echo "等待超时：未发现由 cargo-dist 创建的 Release $tag" >&2
-          exit 1
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          echo "$MAC_CERTS" | base64 -d > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -P "$MAC_CERTS_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          rm "$RUNNER_TEMP/cert.p12"
+      - name: 构建/签名/公证 arm64 DMG
+        env:
+          CSC_NAME: ${{ secrets.MAC_IDENTITY }}
+        run: pnpm package:desktop --arch arm64
+      - name: 签名/公证校验
+        shell: bash
+        run: node scripts/test/m9-11/signatures.mjs --artifact "$(ls dist-out/*arm64.dmg | tail -1)"
+      - name: DMG 挂载/复制/启动冒烟
+        run: pnpm smoke:installer:macos
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: release-macos_arm64
+          path: |
+            dist-out/*.dmg
+            dist-out/SHA256SUMS.txt
+            dist-out/m9-11-build-manifest.json
+          retention-days: 30
 
-      - name: 上传安装器到 Release
+  macos_x64:
+    name: macOS x64 DMG (signed/notarized)
+    if: vars.M9_11_MAC_SIGNING_READY == 'true'
+    runs-on: macos-15-intel
+    env:
+      MAC_CERTS: ${{ secrets.MAC_CERTS }}
+      MAC_CERTS_PASSWORD: ${{ secrets.MAC_CERTS_PASSWORD }}
+      MAC_IDENTITY: ${{ secrets.MAC_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      AETHER_MAC_IDENTITY: ${{ secrets.MAC_IDENTITY }}
+      AETHER_MAC_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      AETHER_NOTARIZE: "1"
+      AETHER_REQUIRE_SIGNING: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+      - name: 导入 Developer ID 证书
         shell: bash
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          echo "$MAC_CERTS" | base64 -d > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -P "$MAC_CERTS_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          rm "$RUNNER_TEMP/cert.p12"
+      - name: 构建/签名/公证 x64 DMG
+        env:
+          CSC_NAME: ${{ secrets.MAC_IDENTITY }}
+        run: pnpm package:desktop --arch x64
+      - name: 签名/公证校验
+        shell: bash
+        run: node scripts/test/m9-11/signatures.mjs --artifact "$(ls dist-out/*x64.dmg | tail -1)"
+      - name: DMG 挂载/复制/启动冒烟
+        run: pnpm smoke:installer:macos
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: release-macos_x64
+          path: |
+            dist-out/*.dmg
+            dist-out/SHA256SUMS.txt
+            dist-out/m9-11-build-manifest.json
+          retention-days: 30
+
+  linux:
+    name: Linux deb/AppImage build + smoke
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - name: 安装系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools rpm fakeroot xvfb \
+            libgtk-3-0 libnss3 libasound2 libgbm1 libxss1 libxtst6 \
+            libdbus-1-dev pkg-config libssl-dev build-essential
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+      - name: 构建 deb/AppImage
+        run: pnpm package:desktop --linux
+      - name: Linux 冒烟（不纳入签名发布门禁）
+        run: pnpm smoke:installer:linux
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: release-linux
+          path: |
+            dist-out/*.deb
+            dist-out/*.AppImage
+            dist-out/SHA256SUMS.txt
+            dist-out/m9-11-build-manifest.json
+          retention-days: 30
+
+  publish:
+    name: Publish Electron installers
+    needs: [windows, macos_arm64, macos_x64, linux]
+    if: always()
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: 校验发布矩阵（macOS 签名/公证强制，G6）
+        run: |
+          if [ "${{ needs.windows.result }}" != "success" ] || [ "${{ needs.linux.result }}" != "success" ]; then
+            echo "::error::Windows/Linux 构建或冒烟失败；停止发布。"
+            exit 1
+          fi
+          if [ "${{ vars.M9_11_MAC_SIGNING_READY }}" != "true" ]; then
+            echo "::error::macOS 签名/公证未就绪（M9_11_MAC_SIGNING_READY != true）；拒绝发布。"
+            exit 1
+          fi
+          if [ "${{ needs.macos_arm64.result }}" != "success" ] || [ "${{ needs.macos_x64.result }}" != "success" ]; then
+            echo "::error::macOS arm64/x64 DMG 构建、签名或冒烟失败；停止发布。"
+            exit 1
+          fi
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-windows
+          path: release/windows
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-macos_arm64
+          path: release/macos_arm64
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-macos_x64
+          path: release/macos_x64
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-linux
+          path: release/linux
+      - name: 校验安装器/哈希齐备
+        run: |
+          set -euo pipefail
+          test -n "$(find release -name '*.msi' -print -quit)"
+          test -n "$(find release -name '*.dmg' -print -quit)"
+          test -n "$(find release -name '*.deb' -print -quit)"
+          test -n "$(find release -name '*.AppImage' -print -quit)"
+          find release -type f -printf '%p\n' | sort
+      - name: 生成合并哈希
+        run: |
+          set -euo pipefail
+          find release -type f \( -name '*.msi' -o -name '*.dmg' -o -name '*.deb' -o -name '*.AppImage' \) -print0 \
+            | sort -z | xargs -0 sha256sum > release/SHA256SUMS.txt
+          cat release/SHA256SUMS.txt
+      - name: 创建/更新 Release 并上传安装器
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "${GITHUB_REF_NAME}" dist-out/* --clobber
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME:-manual-$(date +%Y%m%d%H%M%S)}"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" \
+              --title "Aether $tag" \
+              --notes-file docs/M9-14-发布说明.md
+          fi
+          find release -type f \( -name '*.msi' -o -name '*.dmg' -o -name '*.deb' -o -name '*.AppImage' -o -name 'SHA256SUMS.txt' \) -print0 \
+            | xargs -0 gh release upload "$tag" --clobber

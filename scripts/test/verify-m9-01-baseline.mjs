@@ -74,16 +74,14 @@ function readJsonOrNull(rel) {
 }
 
 function currentCommandNames() {
+  // M9-14/G8：命令面唯一来源为 `aether-app` 的 `COMMANDS`（Tauri 已退役）。
   const source = readFileSync(
-    path.join(root, "crates/aether-tauri/src/ipc/commands.rs"),
+    path.join(root, "crates/aether-app/src/ipc/dispatch.rs"),
     "utf8",
   );
-  const block = source.match(/tauri_specta::collect_commands!\[([\s\S]*?)\n {4}\]/);
-  if (!block) throw new Error("无法解析 collect_commands!（命令面契约）");
-  return block[1]
-    .split(/\r?\n/)
-    .map((line) => line.trim().replace(/,$/, ""))
-    .filter(Boolean);
+  const block = source.match(/pub const COMMANDS: &\[&str\] = &\[([\s\S]*?)\n\];/);
+  if (!block) throw new Error("无法解析 aether-app COMMANDS（命令面契约）");
+  return [...block[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]);
 }
 
 const manifestPath = `${BASELINE_DIR}/manifest.json`;

@@ -1,7 +1,12 @@
 /**
- * 本地 CI 聚合入口（与 .github/workflows/ci.yml 的检查步骤等价，便于本地复现）。
+ * 本地 CI 聚合入口（与 .github/workflows/ci.yml 的 M9/G8 检查步骤等价，便于本地复现）。
+ *
+ * M9-14/G8 后：Tauri 已退役，不再构建/测试 `aether-tauri`；默认门禁为
+ * Electron + `aetherd` 架构。历史 P0/P1 验证脚本仍保留在 `scripts/test/` 供追溯，
+ * 但其 Tauri 宿主已按 M9-13 删除清单退役，不再作为默认本地 CI 入口。
+ *
  * 用法：node scripts/test/ci-local.mjs [--quick]
- *   --quick：跳过覆盖率与冒烟（仅做格式/lint/测试/构建/门禁检查）。
+ *   --quick：跳过安装器冒烟与 M9-13 证据型门禁（仅做编译/lint/测试/build/静态门禁）。
  */
 import path from "node:path";
 import process from "node:process";
@@ -12,189 +17,40 @@ const cargo = bin("cargo");
 const node = process.execPath;
 const { command: pnpm, prefix: pnpmPrefix } = pnpmCommand();
 const pnpmRun = (args, options) => run(pnpm, [...pnpmPrefix, ...args], options);
+const script = (...parts) => path.join(repoRoot, "scripts", ...parts);
 
 const checks = [];
 const record = (name, exit, expect = 0) => checks.push({ name, exit, expect });
 
 record("cargo fmt --check", run(cargo, ["fmt", "--all", "--", "--check"]));
 record(
-  "cargo clippy --workspace -- -D warnings",
+  "cargo clippy --workspace --all-targets -- -D warnings",
   run(cargo, ["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]),
 );
 record("cargo check --workspace", run(cargo, ["check", "--workspace"]));
-// 壳层 aether-tauri 的单元测试在 windows-gnu 下因 WebView2Loader/运行时差异无法运行；
-// 壳层验证为构建+冒烟（smoke-desktop），覆盖率门禁同样排除该 crate。
-record("cargo test --workspace（排除壳层）", run(cargo, ["test", "--workspace", "--exclude", "aether-tauri"]));
-record("pnpm version:check", run(node, [path.join(repoRoot, "scripts", "ci", "version.mjs"), "check"]));
+// M9-14/G8：Tauri 已退役；全 workspace 即最终发布面。
+record("cargo test --workspace", run(cargo, ["test", "--workspace", "-j", "1", "--", "--test-threads=1"]));
+record("pnpm version:check", run(node, [script("ci", "version.mjs"), "check"]));
 record("pnpm typecheck", pnpmRun(["-r", "--if-present", "typecheck"]));
 record("pnpm test", pnpmRun(["-r", "--if-present", "test"]));
 record("pnpm build", pnpmRun(["-r", "--if-present", "build"]));
-record("相似度扫描", run(node, [path.join(repoRoot, "scripts", "ci", "similarity-scan.mjs"), "--root", "."]));
-record("npm 许可证检查", run(node, [path.join(repoRoot, "scripts", "ci", "check-npm-licenses.mjs")]));
-record("cargo deny check licenses/bans/sources", run(cargo, ["deny", "check", "licenses", "bans", "sources"]));
-record("verify-version-sync", run(node, [path.join(repoRoot, "scripts", "test", "verify-version-sync.mjs")]));
-record("verify-m1-02", run(node, [path.join(repoRoot, "scripts", "test", "m1-02", "verify-m1-02.mjs")]));
-record("verify-m1-03", run(node, [path.join(repoRoot, "scripts", "test", "m1-03", "verify-m1-03.mjs")]));
-record(
-  "verify-m1-04（单写队列/group commit/读连接池；含 release 基准）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m1-04", "verify-m1-04.mjs")]),
-);
-record(
-  "verify-m1-05（事件管线：sequencer/先日志后广播/delta/补读/降级与重试口径；含证据归档）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m1-05", "verify-m1-05.mjs")]),
-);
-record("verify-m1-07（密钥自检/脱敏/降级演练）", run(node, [path.join(repoRoot, "scripts", "test", "m1-07-verify.mjs")]));
-record(
-  "verify-m1-06（目录检测/迁移流/单实例；E2E 需真实 WebView，见 Windows CI）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m1-06", "verify-m1-06.mjs"), "--skip-e2e"]),
-);
-record(
-  "verify-m1-08（壳与安全基线单测矩阵/静态检查；E2E 需真实 WebView，见 Windows CI）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m1-08", "verify-m1-08.mjs"), "--skip-e2e"]),
-);
-record(
-  "verify-m1-09（线协议/Mock：握手/流式/中断/dispose/健壮性注入/2MiB 契约/吞吐基准；需 Bun，见 CI wire-protocol-mock job）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m1-09", "verify-m1-09.mjs")]),
-);
-record(
-  "verify-m1-10（适配器监督器：状态机/心跳/进程组/台账三条件/终止序列/资源告警/retry·enable）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m1-10", "verify-m1-10.mjs")]),
-);
-record(
-  "verify-m2-01（生命周期：状态机/run 串行/幂等重启重放/ack 快路径/120s 断流/runtime_* IPC）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m2-01", "verify-m2-01.mjs")]),
-);
-record(
-  "verify-m2-02（首个真实适配器 Claude Code：一致性/工具事件/T5a 30s Ready+Mode R 重放；需 Bun）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m2-02", "verify-m2-02.mjs")]),
-);
-record(
-  "verify-m2-03（权限网关：策略矩阵/T7 路径逃逸 100% deny+审计/300s 超时/T6 100 并发）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m2-03", "verify-m2-03.mjs")]),
-);
-record(
-  "verify-m2-04（背压分级与 journal 补读：L2/L3/慢订阅者/Lagged/存储侧背压例外与隔离）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m2-04", "verify-m2-04.mjs")]),
-);
-record(
-  "verify-m2-05（取消树与看门狗：20 会话取消风暴 ≤10s / interrupt 回 idle 可续聊 / 10s dump+强制清理）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m2-05", "verify-m2-05.mjs")]),
-);
-record(
-  "verify-m2-06（关闭序列五步 shadow 日志 / -wal 0 字节无残留句柄 / checkpoint 退避与运行期阈值）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m2-06", "verify-m2-06.mjs")]),
-);
-record(
-  "verify-m2-07（panic 隔离 / unwrap 静态 0 告警 / RSS 巡检与 delta 限流 / UI health 5s·15s / 日志汇聚端；E2E 需真实 WebView，见 Windows CI）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m2-07", "verify-m2-07.mjs"), "--skip-e2e"]),
-);
-record(
-  "verify-m2-08（孤儿清理与退出可靠性：强杀核心重启清理/PID 复用 0 误杀 / T11 退出 ≤10s 无残留 / T5b 心跳熔断 120s 内 Ready）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m2-08", "verify-m2-08.mjs")]),
-);
-record(
-  "verify-m2-09（大行与 OOM 防护：>2MiB 不缓冲断连记错/1–2MiB 内存曲线受控/artifact_ref 附件仅存 artifacts 路径/1.5GiB 压力告警限流不崩溃；需 Bun + ~1.5GiB 内存）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m2-09", "verify-m2-09.mjs")]),
-);
-record(
-  "verify-m2-11（三运行时适配器：Claude/Codex/DSH 单测+集成、DSH DoD1–8、静态合规；需 Bun；真实运行时为 opt-in）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m2-11", "verify-m2-11.mjs")]),
-);
-record(
-  "verify-m2-10（权限回环：适配器文件类工具调用 100% 经 permission.request 回环、零直通；异常路径 deny/超时/once/session/重启 pending；证据可导出归档；需 Bun + 真实 Mock + 真实网关）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m2-10", "verify-m2-10.mjs")]),
-);
-record(
-  "verify-m3-01（前端骨架/类型绑定 T14/EventStore：生成物 diff 校验 + D7 全集静态断言 + 去重/乱序/补读/>10k/16ms/压力/gap 补齐 + 事件桥慢消费不反压）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m3-01", "verify-m3-01.mjs")]),
-);
-record(
-  "verify-m3-02（会话工作台：创建/发送/流式/中断 E2E + 运行时选择器 + 模型透传 + 10k 滚动基准 + messages_page 真实后端与生产补读路径；需 Bun）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m3-02", "verify-m3-02.mjs")]),
-);
-record(
-  "verify-m3-03（权限中心与运行状态面板：审批卡对照/决策/队列/超时 + 降级与 disabled 联动 + IPC 回环到适配器；需 Bun）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m3-03", "verify-m3-03.mjs")]),
-);
-record(
-  "verify-m3-04（备份/恢复与外部路径：T9 一致/七步现场保护与回滚/中断 kill 可回退/外部候选矩阵/空间护栏/命令面与启动恢复链）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m3-04", "verify-m3-04.mjs")]),
-);
-record(
-  "verify-m3-05（诊断与容量巡检：诊断包脱敏 0 命中/日志汇聚整合/阈值参数化容量横幅/7 天未备份提醒开关/降级导出；证据归档）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m3-05", "verify-m3-05.mjs")]),
-);
-record(
-  "verify-m3-06（崩溃恢复体验：T4 kill -9 ×20 已确认零丢失 + run_retry Mode R/N + 重启状态重建 + 降级恢复引导；E2E 需真实 WebView，见 Windows CI）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m3-06", "verify-m3-06.mjs"), "--skip-e2e"]),
-);
-record(
-  "verify-m3-07（审计最小集：三类注入动作 ↔ 审计条数 1:1 + 应用层无 UPDATE/DELETE 静态审计 + actor/resource/result/ts schema 断言）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m3-07", "verify-m3-07.mjs")]),
-);
-record(
-  "verify-m3-08(?????:?????/32KB ?? + memory.read/append/write ?? + D9 ???/?? deny + ????? + ??? + memory_conflict + workspace_set ???????????;? Bun)",
-  run(node, [path.join(repoRoot, "scripts", "test", "m3-08", "verify-m3-08.mjs")]),
-);
-record(
-  "verify-m3-09(????????:?? 0003 + ref_pick/artifacts_* 4 ?? + ???/??/???? + ??/???? + ????/??/T14)",
-  run(node, [path.join(repoRoot, "scripts", "test", "m3-09", "verify-m3-09.mjs")]),
-);
-record(
-  "verify-m3-11（模型与供应商配置：迁移 0003 providers/播种 + 七命令矩阵/内置约束 + 密钥写入路径/三态/命名空间 + 明文 0 命中 + 供应商页/模型选择器 E2E/T14）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m3-11", "verify-m3-11.mjs")]),
-);
-record(
-  "verify:m3-12（会话等待态写入与等待审批分组：置位/回程守卫 + 事件 from/to + deny/超时/取消/run 失败 + 重启 no-op + 多会话并发 + 分组锚点 + 生产组合路径集成 E2E + 回归；需 Bun）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m3-12", "verify-m3-12.mjs")]),
-);
-record(
-  "verify:m4-01（进程类失败场景演练 11 场景：三段证据归档；需 Bun + 真实 WebView 执行 T12）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m4-01", "verify-m4-01.mjs")]),
-);
-record(
-  "verify:m4-02（存储类失败场景演练 8 场景：三段证据归档；Windows 执行 T12 E2E）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m4-02", "verify-m4-02.mjs")]),
-);
-record(
-  "verify:m4-03（协议与并发类失败场景演练 11 场景：三段证据归档；需 Bun）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m4-03", "verify-m4-03.mjs")]),
-);
-record(
-  "verify:m4-04（验收清单执行：T1–T15 运行器 + 命令面 36/错误码 20 完整性；覆盖率由本清单 coverage gate 承接）",
-  run(node, [
-    path.join(repoRoot, "scripts", "test", "m4-04", "verify-m4-04.mjs"),
-    "--skip-coverage",
-  ]),
-);
-record(
-  "verify:m4-05（打包与发布：注册包/内联回环 E2E/静态；安装产物冒烟见 pnpm verify:m4-05:installer）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m4-05", "verify-m4-05.mjs")]),
-);
-record(
-  "verify:m4-06（文档与安全收尾：文档齐备/30 场景手册/新成员演练/SBOM 归档/36 命令复查清单/脱敏 0 命中）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m4-06", "verify-m4-06.mjs")]),
-);
-record(
-  "verify:m5-02（自动备份：排期时钟注入/运行中一致/仅自动滚动+台账磁盘一致/失败隔离/提醒联动/诊断段；含 release 写延迟基准）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m5-02", "verify-m5-02.mjs")]),
-);
-record(
-  "verify:m5-03（加密备份与恢复演练：AEBK1 格式/密钥扫描/两模式演练/异常路径/A3 降级/七步回滚/诊断脱敏；含 2 轮 drill）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m5-03", "verify-m5-03.mjs")]),
-);
-record(
-  "verify:m5-05（归档导出与会话 JSONL：字段映射/≥1GB 抽样/脱敏/外部路径与空间护栏/kill 中断/性能与内存/UI；含 release 基准）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m5-05", "verify-m5-05.mjs")]),
-);
-record(
-  "verify:m5-04（事件保留与滚动策略：白名单/审计保留/补读边界/归档先行/阈值联动/空间证据/诊断段）",
-  run(node, [path.join(repoRoot, "scripts", "test", "m5-04", "verify-m5-04.mjs")]),
-);
+record("相似度扫描", run(node, [script("ci", "similarity-scan.mjs"), "--root", "."]));
+record("npm 许可证检查", run(node, [script("ci", "check-npm-licenses.mjs")]));
+record("cargo deny check", run(cargo, ["deny", "check"]));
+record("verify-version-sync", run(node, [script("test", "verify-version-sync.mjs")]));
+record("protocol generate/check", pnpmRun(["--filter", "@aether/protocol", "check"]));
+record("verify:error-codes", pnpmRun(["verify:error-codes"]));
+record("verify:m9-01-baseline", pnpmRun(["verify:m9-01-baseline"]));
+record("verify:security（M1-08 → M9-10）", pnpmRun(["verify:security"]));
+record("verify:m9-09（生命周期/数据锁）", pnpmRun(["verify:m9-09"]));
+record("verify:m9-12（Electron/CI/E2E/覆盖率口径）", pnpmRun(["verify:m9-12"]));
+record("verify:m9-14（G8 切换/退役）", pnpmRun(["verify:m9-14"]));
+record("m9-14:failure-drill（G4–G7 失败处理）", pnpmRun(["m9-14:failure-drill"]));
 
 if (!quick) {
-  record("verify-coverage-gate", run(node, [path.join(repoRoot, "scripts", "test", "verify-coverage-gate.mjs")]));
-  record("smoke-desktop", run(node, [path.join(repoRoot, "scripts", "test", "smoke-desktop.mjs")]));
+  record("verify:m9-13（G7 证据门禁）", pnpmRun(["verify:m9-13"]));
+  record("verify-coverage-gate", run(node, [script("test", "verify-coverage-gate.mjs")]));
+  record("smoke:installer", pnpmRun(["smoke:installer"]));
 }
 
 process.exit(summarize("ci-local", checks));

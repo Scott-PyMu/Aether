@@ -3,8 +3,8 @@
  * M9-13 DoD-1/DoD-2：全量回归 + P0/P1 映射复跑（可执行证据）。
  *
  * 运行清单（顺序执行；失败继续并记录，最终非零退出）：
- *  - Rust：`cargo test --workspace --exclude aether-tauri` + `cargo test -p aether-tauri`
- *    + clippy + deny；
+ *  - Rust：`cargo test --workspace` + clippy + deny（G8 后 Tauri 已退役，不再排除）；
+ *  - T4：`aether-app --test m3_06_t4`（原 Tauri 测试宿主已迁移；断言不变）；
  *  - 前端/协议：`pnpm -r test/typecheck/build`、protocol check、error-codes、
  *    M9-01 baseline、M9-12 门禁/E2E；
  *  - P0：T4/T5a/T5b/T6/T10/T11/T12/T13（映射见 `p0-p1-mapping.json`）；
@@ -14,7 +14,7 @@
  * 输出：`scripts/test/.tmp/m9-13/regression/results.json` + 每个命令的 `.log`。
  *
  * 用法：
- *   node scripts/test/m9-13/regression.mjs [--skip-tauri] [--only T4,T5a]
+ *   node scripts/test/m9-13/regression.mjs [--only T4,T5a]
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -29,7 +29,7 @@ const tmpDir = path.join(repoRoot, "dist-out", "tmp");
 mkdirSync(outDir, { recursive: true });
 mkdirSync(tmpDir, { recursive: true });
 const outPath = path.join(outDir, "results.json");
-const bundleDir = path.join(repoRoot, "crates", "aether-tauri", "runtime-bundle");
+const bundleDir = path.join(repoRoot, "dist-out", "m9-12-runtime-bundle");
 const exe = process.platform === "win32" ? ".exe" : "";
 const adapterEnv = {
   AETHER_CLAUDE_ADAPTER: path.join(bundleDir, `aether-claude-adapter${exe}`),
@@ -47,31 +47,13 @@ const only = (() => {
   const index = process.argv.indexOf("--only");
   return index >= 0 ? new Set(process.argv[index + 1].split(",")) : null;
 })();
-const skipTauri = process.argv.includes("--skip-tauri");
-
 const commands = [
   {
     id: "workspace-rust",
-    name: "cargo test --workspace --exclude aether-tauri",
-    command: [
-      "cargo",
-      ["test", "--workspace", "--exclude", "aether-tauri", "-j", "1", "--", "--test-threads=1"],
-    ],
+    name: "cargo test --workspace（G8 后全量；Tauri 已退役）",
+    command: ["cargo", ["test", "--workspace", "-j", "1", "--", "--test-threads=1"]],
     timeout: 45 * 60 * 1000,
   },
-  ...(skipTauri
-    ? []
-    : [
-        {
-          id: "workspace-tauri",
-          name: "cargo test -p aether-tauri（G8 前全量；Tauri 仅开发对照）",
-          command: [
-            "cargo",
-            ["test", "-p", "aether-tauri", "-j", "1", "--", "--test-threads=1"],
-          ],
-          timeout: 60 * 60 * 1000,
-        },
-      ]),
   {
     id: "frontend-test",
     name: "pnpm -r test",
@@ -152,13 +134,13 @@ const commands = [
   },
   {
     id: "T4",
-    name: "T4 kill -9 ×20（M3-06，共享 aether-app 核心）",
+    name: "T4 kill -9 ×20（M3-06；G8 后由 aether-app 承载）",
     command: [
       "cargo",
       [
         "test",
         "-p",
-        "aether-tauri",
+        "aether-app",
         "--test",
         "m3_06_t4",
         "-j",

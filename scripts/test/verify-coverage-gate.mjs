@@ -4,8 +4,7 @@
  * 正向：真实代码在阈值 70 下通过（Rust 与 TS）。
  * 反向：使用专用夹具（必然低于阈值）证明阈值确实阻断。
  *
- * Rust：cargo-llvm-cov --fail-under-lines 70（排除无业务逻辑的壳层 aether-tauri，
- *       壳层由 CI 的构建+冒烟验证；该排除为任务内常量级决策，见自检报告）。
+ * Rust：cargo-llvm-cov --fail-under-lines 70（G8 后全量；Tauri 已退役）。
  *       注意：Windows GNU 工具链未随发行版提供 profiler_builtins，无法使用
  *       -C instrument-coverage；此环境自动跳过 Rust 项（CI 在 ubuntu 执行完整检查）。
  * TS：vitest --coverage 阈值取自 AETHER_COVERAGE_LINES（默认 70）。
@@ -79,14 +78,7 @@ if (rustCoverageUnsupported) {
   checks.push({
     name: "Rust：真实 workspace 覆盖率 >= 70（cargo llvm-cov）",
     expect: 0,
-    exit: run(cargo, [
-      "llvm-cov",
-      "--workspace",
-      "--exclude",
-      "aether-tauri",
-      "--fail-under-lines",
-      "70",
-    ]),
+    exit: run(cargo, ["llvm-cov", "--workspace", "--fail-under-lines", "70"]),
   });
   checks.push({
     name: "Rust：夹具覆盖率 < 70 时必须阻断（非零）",

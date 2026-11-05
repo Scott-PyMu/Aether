@@ -4,7 +4,7 @@
  *
  * 前置（本机验收）：
  *   $env:AETHER_BUNDLE_MOCK="1"
- *   node scripts/ci/build-runtime-bundles.mjs --out crates/aether-tauri/runtime-bundle
+ *   node scripts/ci/build-runtime-bundles.mjs --out dist-out/m9-09-runtime-bundle
  *   cargo build -p aether-daemon          # build.rs 内嵌 mock 程序摘要
  *
  * 断言：UI 首个 health 成功后调用 `session_create(runtime_id="mock")`，
@@ -33,7 +33,7 @@ const daemonPath = path.join(
 );
 const registryDir =
   process.env.AETHER_M9_09_REAL_REGISTRY ??
-  path.join(repoRoot, "crates", "aether-tauri", "runtime-bundle");
+  path.join(repoRoot, "dist-out", "m9-09-runtime-bundle");
 const noSandbox =
   process.env.AETHER_E2E_NO_SANDBOX === "1" ||
   (process.env.AETHER_E2E_NO_SANDBOX !== "0" && process.platform === "win32");

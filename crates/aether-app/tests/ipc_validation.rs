@@ -5,7 +5,7 @@
 //! 2. 不调用后端（即不落库、不透传下游）。
 //!
 //! 迁移口径（ADR-029 D-029-4）：本文件走**应用层命令入口**（`dispatch`），
-//! 不依赖 Tauri；壳层等价性由 `aether-tauri/tests/ipc_validation.rs`（MockRuntime
+//! 不依赖 Tauri；壳层等价性由 Electron E2E（M9-07/M9-08，MockRuntime
 //! 真实注册路径）双跑覆盖（M9-02 DoD-4「迁移或双跑」）。
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 

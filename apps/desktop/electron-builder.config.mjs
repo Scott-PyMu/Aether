@@ -37,7 +37,8 @@ const electronVersion = JSON.parse(
 const stageDir = path.resolve(
   process.env.AETHER_STAGE_DIR ?? path.join(repoRoot, "build", "stage", variant),
 );
-const iconDir = path.join(repoRoot, "crates", "aether-tauri", "icons");
+// M9-14/G8：Tauri 退役；图标资产迁至 Electron 应用目录（不再依赖壳层 crate）。
+const iconDir = path.join(appDir, "assets", "icons");
 const entitlements = path.join(appDir, "electron", "entitlements.mac.plist");
 const requireSigning = process.env.AETHER_REQUIRE_SIGNING === "1";
 const notarize = process.env.AETHER_NOTARIZE === "1";

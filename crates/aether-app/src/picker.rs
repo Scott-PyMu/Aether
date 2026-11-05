@@ -1,12 +1,12 @@
 //! 目录选择器抽象（M1-06 DoD3 迁移主路径的可测试性）。
 //!
-//! 生产实现（`TauriDialogPicker`）由壳层提供并注入本 trait；
+//! 生产实现由壳层（Electron main `dialog`）提供并注入本 trait；
 //! 测试替身 [`FixedDirectoryPicker`] 返回预设路径 / 取消 / 错误，使迁移主路径可被
 //! 集成测试与 E2E 驱动（E2E 经 debug 探针注入固定路径，见 `startup_probe`）。
 //!
 //! 分层说明（ADR-029 D-029-2）：选择器**契约**（trait + 测试替身）在 `aether-app`；
-//! 生产实现（系统对话框）属壳层能力，由 `aether-tauri` 的 `TauriDialogPicker`
-//! 实现本 trait 后注入（M9 后由 Electron main 侧选择器实现）。`aether-core` 仍是
+//! 生产实现（系统对话框）属壳层能力，由 Electron main 的 `dialog`
+//! 实现本 trait 后注入。`aether-core` 仍是
 //! 纯模型、不依赖任何壳（AGENTS §2.1）。
 
 use std::collections::VecDeque;

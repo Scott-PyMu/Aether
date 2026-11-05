@@ -7,9 +7,9 @@
  *   pnpm prepare:m9-09:real-session
  *   pnpm e2e:m9-09:real-session
  *
- * 说明：`crates/aether-tauri/runtime-bundle` 与 `target` 均为本地产物；此脚本只改变
+ * 说明：`dist-out/m9-09-runtime-bundle` 与 `target` 均为本地产物；此脚本只改变
  * 构建产物，不修改源码/协议/命令面。恢复 official-only 构建：
- *   node scripts/ci/build-runtime-bundles.mjs --out crates/aether-tauri/runtime-bundle
+ *   node scripts/ci/build-runtime-bundles.mjs --out dist-out/m9-09-runtime-bundle
  *   cargo build -p aether-daemon
  */
 import { spawnSync } from "node:child_process";
@@ -19,7 +19,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const bundleDir = path.join(repoRoot, "crates", "aether-tauri", "runtime-bundle");
+const bundleDir = path.join(repoRoot, "dist-out", "m9-09-runtime-bundle");
 const builder = path.join(repoRoot, "scripts", "ci", "build-runtime-bundles.mjs");
 
 function run(command, args, env = process.env) {

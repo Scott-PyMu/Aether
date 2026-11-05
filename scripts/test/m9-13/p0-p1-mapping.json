@@ -1,8 +1,8 @@
 {
   "schema": "aether.m9-13.p0-p1-mapping.v1",
   "baseline": {
-    "design": "v1.28",
-    "p2_plan": "v0.6",
+    "design": "v1.30",
+    "p2_plan": "v0.8",
     "adr": "ADR-029 v0.4 / ADR-030",
     "head_baseline": "docs/M9-01-baseline/"
   },
@@ -39,8 +39,8 @@
     {
       "id": "T4",
       "name": "kill -9 数据完整性（20 次）",
-      "mapped_to": "M3-06 T4 集成（共享 aether-app 核心；Tauri 仅测试宿主，G8 删除）",
-      "command": "cargo test -p aether-tauri --test m3_06_t4 -j 1 -- --test-threads=1 --nocapture",
+      "mapped_to": "M3-06 T4 集成（G8 后迁移到 aether-app 测试宿主；断言不变）",
+      "command": "cargo test -p aether-app --test m3_06_t4 -j 1 -- --test-threads=1 --nocapture",
       "evidence": "scripts/test/.tmp/m9-13/regression/results.json#T4",
       "status": "mapped"
     },
@@ -135,7 +135,7 @@
     {
       "id": "T15",
       "name": "覆盖率（>70%）",
-      "mapped_to": "Rust 行覆盖门禁（M9-02～G8 排除 aether-tauri）+ 前端覆盖率不下降；G8 全量对比",
+      "mapped_to": "Rust 行覆盖门禁（G8 后全量；Tauri 已退役）+ 前端覆盖率不下降；G8 全量对比",
       "command": "pnpm coverage:m9-13",
       "evidence": "scripts/test/.tmp/m9-13/coverage/coverage.json",
       "status": "mapped"

@@ -258,7 +258,6 @@ if (regression) {
   const byId = new Map((regression.commands ?? []).map((item) => [item.id, item]));
   const required = [
     "workspace-rust",
-    "workspace-tauri",
     "frontend-test",
     "frontend-typecheck",
     "frontend-build",
@@ -336,15 +335,16 @@ if (coverage) {
     coverage.rust?.incremental !== null && coverage.rust?.incremental !== undefined,
     coverage.rust?.incremental?.status ?? "缺失",
   );
+  // G8/M9-14：Tauri 已退役，删除清单应为 0（历史 128 条已在 M9-13 证据归档）。
   check(
-    "Tauri 删除文件清单已登记",
-    Number(coverage.rust?.tauri_deletion_count) > 0,
+    "Tauri 退役后删除清单为 0",
+    Number(coverage.rust?.tauri_deletion_count) === 0,
     String(coverage.rust?.tauri_deletion_count ?? "缺失"),
   );
   const g8 = coverage.rust?.g8_full;
   check(
-    "G8 全量覆盖率对比（完成或 pending 有原因）",
-    g8?.status === "pending" ? Boolean(g8.reason) : Boolean(g8?.source),
+    "G8 全量覆盖率对比已完成（full.json）",
+    Boolean(g8?.source),
     g8?.status ?? g8?.source ?? "缺失",
   );
 }

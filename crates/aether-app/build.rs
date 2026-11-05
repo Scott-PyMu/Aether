@@ -4,8 +4,8 @@
 //! （清单规范化 sha256 + 每个 program 的 sha256）编译进二进制
 //! （`OUT_DIR/registry_expectation.rs`），作为注册清单逐条校验的信任锚。
 //!
-//! 数据源目录：`AETHER_RUNTIME_BUNDLE_DIR` 覆盖 → 迁移期打包目录
-//! `crates/aether-tauri/runtime-bundle/`（`scripts/ci/build-runtime-bundles.mjs` 生成）。
+//! 数据源目录：`AETHER_RUNTIME_BUNDLE_DIR` 覆盖 → 本地开发目录
+//! `dist-out/runtime-bundle/`（`scripts/ci/build-runtime-bundles.mjs` 生成）。
 //! 清单缺失/不可解析/程序缺失 → `PRESENT=false`（运行期拒绝全部清单条目，fail-closed）。
 
 use std::env;
@@ -30,7 +30,11 @@ fn embed_registry_expectation(manifest_dir: &Path) {
     };
     let bundle_dir = match env::var("AETHER_RUNTIME_BUNDLE_DIR") {
         Ok(dir) if !dir.is_empty() => PathBuf::from(dir),
-        _ => manifest_dir.join("..").join("aether-tauri").join("runtime-bundle"),
+        _ => manifest_dir
+            .join("..")
+            .join("..")
+            .join("dist-out")
+            .join("runtime-bundle"),
     };
     println!("cargo:rerun-if-env-changed=AETHER_RUNTIME_BUNDLE_DIR");
     let manifest_path = bundle_dir.join("runtimes.json");

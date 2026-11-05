@@ -138,7 +138,7 @@ writeFileSync(
       schema: "aether.m9-12.tauri-deletion-list.v1",
       generated_at: new Date().toISOString(),
       platform: process.platform,
-      note: "G8 删除清单（M9-14）；M9-02～G8 覆盖率排除期以本清单核对未迁移遗漏。",
+      note: "G8 删除清单（M9-14）；M9-14 执行后应为 0。M9-02～G8 排除期以本清单核对未迁移遗漏。",
       count: deletions.length,
       entries: deletions,
     },

@@ -159,10 +159,13 @@ if (existsSync(fullReport)) {
   };
   record("G8 全量覆盖率报告存在", true, full.source);
 } else {
+  const tauriRetired = !existsSync(path.join(repoRoot, "crates", "aether-tauri"));
   record(
     "G8 全量覆盖率对比",
-    true,
-    "pending：M9-13 处于 M9-02～G8 排除 aether-tauri 窗口；M9-14/G8 恢复全量后写入 full.json",
+    !tauriRetired,
+    tauriRetired
+      ? "FAIL：Tauri 已退役（G8），必须生成 full.json 全量覆盖率"
+      : "pending：M9-13 处于 M9-02～G8 排除 aether-tauri 窗口；M9-14/G8 恢复全量后写入 full.json",
   );
 }
 
@@ -173,16 +176,21 @@ const evidence = {
   finished_at: new Date().toISOString(),
   platform: { os: process.platform, arch: process.arch, node: process.version },
   gate: {
-    rust_command:
-      "cargo llvm-cov --workspace --exclude aether-tauri --ignore-filename-regex='(\\.cargo/registry|/rustc/|(crates/)?aether-(app|rpc|daemon)/)' --fail-under-lines 70",
-    tauri_excluded_until: "G8（M9-14）",
+    rust_command: existsSync(path.join(repoRoot, "crates", "aether-tauri"))
+      ? "cargo llvm-cov --workspace --exclude aether-tauri --ignore-filename-regex='(\\.cargo/registry|/rustc/|(crates/)?aether-(app|rpc|daemon)/)' --fail-under-lines 70"
+      : "cargo llvm-cov --workspace --fail-under-lines 70（G8 全量；Tauri 已退役）",
+    tauri_excluded_until: existsSync(path.join(repoRoot, "crates", "aether-tauri"))
+      ? "G8（M9-14）"
+      : "已结束（G8/M9-14）",
     frontend_baseline: "docs/M9-12-baseline/frontend-coverage.json",
   },
   frontend: { baseline: baseline.total, actual: frontend },
   rust: {
     incremental,
     crate_lines: crateLines,
-    tauri_deletion_count: incremental?.deletion_count ?? incremental?.tauri_deletion?.count ?? null,
+    tauri_deletion_count: existsSync(path.join(repoRoot, "crates", "aether-tauri"))
+      ? (incremental?.deletion_count ?? incremental?.tauri_deletion?.count ?? null)
+      : 0,
     g8_full: full ?? { status: "pending", reason: "M9-14/G8 恢复全量后执行" },
   },
   checks,

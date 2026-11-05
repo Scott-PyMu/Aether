@@ -1,6 +1,6 @@
 // 注册清单规范化形态与摘要（ADR-015 §2.2#1/#2；build.rs 与运行期共用）。
 //
-// 本文件同时被 `crates/aether-tauri/build.rs`（`include!`）与库
+// 本文件同时被 `crates/aether-app/build.rs`（`include!`）与库
 // （`lib.rs` 的 `pub mod registry_identity`）使用，因此**只允许依赖** `std` /
 // `serde_json` / `sha2`，禁止引用 crate 内部模块；文件头不得使用 `//!` 内层文档
 // 注释（`include!` 到 build.rs 时位于项之后，会触发 E0753）。

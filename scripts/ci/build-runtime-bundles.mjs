@@ -2,7 +2,7 @@
 /**
  * M4-05：构建官方适配器运行时包（bun --compile）+ 注册清单 + 摘要记录。
  *
- * 产物（默认输出 `crates/aether-tauri/runtime-bundle/`，gitignored，随安装包资源分发）：
+ * 产物（默认输出 `dist-out/runtime-bundle/`，gitignored，随安装包资源分发）：
  *   - `aether-claude-adapter(.exe)` / `aether-codex-adapter(.exe)` / `aether-dsh-adapter(.exe)`
  *     （官方运行时集合三，ADR-008；适配器为 Bun 单文件编译产物，目标机无需 Node）；
  *   - `runtimes.json`：注册清单，形态对齐 ADR-015 §2.2 决策 4 schema
@@ -44,7 +44,7 @@ function packageVersion(packageDir) {
 const exeSuffix = process.platform === "win32" ? ".exe" : "";
 const outDir = path.resolve(
   repoRoot,
-  argValue("--out", path.join("crates", "aether-tauri", "runtime-bundle")),
+  argValue("--out", path.join("dist-out", "runtime-bundle")),
 );
 const target = argValue("--target", "");
 const includeMock = process.env.AETHER_BUNDLE_MOCK === "1";

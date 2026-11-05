@@ -33,9 +33,9 @@ import { collectStats } from "./m9-01-stats.mjs";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 export const BASELINE_DIR = "docs/M9-01-baseline";
-const COMMANDS_SRC = "crates/aether-tauri/src/ipc/commands.rs";
-// M9-02（ADR-029 D-029-4）：命令实现（DTO/严格解析/rejects 的来源）已迁至 aether-app；
-// 本文件仍从 tauri 的 `collect_commands!` 取**声明顺序**，实现细节从 handlers 解析。
+// M9-14/G8：命令面唯一来源已迁至 `aether-app`（`COMMANDS`）；Tauri 已退役。
+// M9-02（ADR-029 D-029-4）：命令实现（DTO/严格解析/rejects 的来源）同样在 aether-app。
+const COMMANDS_SRC = "crates/aether-app/src/ipc/dispatch.rs";
 const HANDLERS_SRC = "crates/aether-app/src/ipc/handlers.rs";
 const DTO_SRC = "crates/aether-app/src/ipc/dto.rs";
 const ERROR_SRC = "crates/aether-app/src/ipc/error.rs";
@@ -190,21 +190,18 @@ function stableJson(value) {
   return `${JSON.stringify(value, null, 2)}\n`;
 }
 
-/** 从 `collect_commands![...]` 取命令声明顺序。 */
+/** 从 `aether-app` 的 `COMMANDS` 取冻结命令顺序（63 条）。 */
 function parseCommandNames(source) {
-  const block = source.match(/tauri_specta::collect_commands!\[([\s\S]*?)\n {4}\]/);
-  if (!block) throw new Error(`[m9-01-baseline] ${COMMANDS_SRC}：未找到 collect_commands!`);
-  return block[1]
-    .split(/\r?\n/)
-    .map((line) => line.trim().replace(/,$/, ""))
-    .filter(Boolean);
+  const block = source.match(/pub const COMMANDS: &\[&str\] = &\[([\s\S]*?)\n\];/);
+  if (!block) throw new Error(`[m9-01-baseline] ${COMMANDS_SRC}：未找到 COMMANDS`);
+  return [...block[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]);
 }
 
 /** 提取命令函数签名与函数体（花括号配平；命令体内无裸字符串花括号）。 */
 function parseCommandBody(source, name) {
   const marker = `fn ${name}(`;
   const start = source.indexOf(marker);
-  if (start < 0) throw new Error(`[m9-01-baseline] ${COMMANDS_SRC}：未找到命令 ${name}`);
+  if (start < 0) throw new Error(`[m9-01-baseline] ${HANDLERS_SRC}：未找到命令 ${name}`);
   const bodyStart = source.indexOf("{", start);
   let depth = 0;
   for (let index = bodyStart; index < source.length; index += 1) {

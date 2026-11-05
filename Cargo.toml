@@ -9,8 +9,10 @@ members = [
     "crates/aether-rpc",
     "crates/aether-app",
     "crates/aether-daemon",
-    "crates/aether-tauri",
 ]
+# M9-14 / G8：Tauri 壳已退役（ADR-029）。HEAD 不构建 Tauri；不保留回退包。
+# 旧 `crates/aether-tauri` 源码与测试按 M9-13 删除清单移除，相关断言已迁移到
+# `aether-app`/`aether-daemon`（T4 等）。
 
 [workspace.package]
 # 单一版本来源：所有 crate / package.json / 安装器版本均由该值派生。
@@ -32,7 +34,6 @@ aether-security = { path = "crates/aether-security", version = "0.1.0" }
 aether-rpc = { path = "crates/aether-rpc", version = "0.1.0" }
 aether-app = { path = "crates/aether-app", version = "0.1.0" }
 aether-daemon = { path = "crates/aether-daemon", version = "0.1.0" }
-aether-tauri = { path = "crates/aether-tauri", version = "0.1.0" }
 
 # AGENTS §2.2：核心 crate 禁止 unwrap/expect/panic（测试代码显式豁免，见各 crate 顶部 cfg_attr）。
 [workspace.lints.rust]

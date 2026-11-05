@@ -173,7 +173,8 @@ record(
     .map(([key, value]) => `${key}:${value ? "✓" : "✗"}`)
     .join(" "),
 );
-const gatesMissing = includesAll(`${jobs.gates}\n${jobs.rust}`, [
+const gatesText = `${jobs.gates}\n${jobs.rust}`;
+const gatesMissing = includesAll(gatesText, [
   "pnpm --filter @aether/protocol check",
   "pnpm verify:error-codes",
   "pnpm verify:m9-01-baseline",
@@ -181,12 +182,18 @@ const gatesMissing = includesAll(`${jobs.gates}\n${jobs.rust}`, [
   "pnpm -r --if-present typecheck",
   "pnpm -r --if-present build",
   "pnpm verify:m9-12",
-  "cargo build --workspace --exclude aether-tauri",
-  "cargo test --workspace --exclude aether-tauri",
   "cargo test -p aether-daemon --test m9_12_regressions",
   "cargo clippy --workspace --all-targets -- -D warnings",
   "cargo deny check",
 ]);
+// G8 后 Tauri 已退役：默认构建/测试不再需要 `--exclude aether-tauri`；
+// 兼容迁移窗口内仍带 exclude 的历史文本。
+if (!/cargo build --workspace(?:\s+--exclude aether-tauri)?/.test(gatesText)) {
+  gatesMissing.push("cargo build --workspace");
+}
+if (!/cargo test --workspace(?:\s+--exclude aether-tauri)?/.test(gatesText)) {
+  gatesMissing.push("cargo test --workspace");
+}
 record(
   "Rust build/test/clippy/deny + 前端 test/typecheck/build",
   gatesMissing.length === 0,
@@ -227,10 +234,10 @@ record(
 
 // ===== 4. 覆盖率口径/增量/删除清单 =====
 record(
-  "覆盖率门禁口径：--exclude aether-tauri --fail-under-lines 70（M9-02～G8）",
-  workflow.includes("cargo llvm-cov --workspace --exclude aether-tauri") &&
+  "覆盖率门禁口径：--fail-under-lines 70（G8 后全量；兼容迁移窗口 exclude）",
+  /cargo llvm-cov --workspace(?:\s+--exclude aether-tauri)?/.test(workflow) &&
     workflow.includes("--fail-under-lines 70") &&
-    workflow.includes("cargo llvm-cov report --json --summary-only") &&
+    workflow.includes("cargo llvm-cov report --json") &&
     workflow.includes("coverage-incremental.mjs"),
   "gate + report + incremental",
 );
@@ -259,10 +266,16 @@ if (deletionResult.status !== 0) {
   record("Tauri 删除文件清单生成", false, deletionResult.stderr.slice(-400));
 } else {
   const deletion = JSON.parse(readFileSync(deletionPath, "utf8"));
+  const tauriRetired = !existsSync(path.join(repoRoot, "crates", "aether-tauri"));
   record(
-    "Tauri 删除文件清单（G8 恢复全量时核对）",
-    deletion.count > 0 &&
-      deletion.entries.some((entry) => entry.path.startsWith("crates/aether-tauri/")),
+    tauriRetired
+      ? "Tauri 删除清单已清零（G8 已执行）"
+      : "Tauri 删除文件清单（G8 恢复全量时核对）",
+    tauriRetired
+      ? deletion.count === 0 &&
+          !deletion.entries.some((entry) => entry.path.startsWith("crates/aether-tauri/"))
+      : deletion.count > 0 &&
+          deletion.entries.some((entry) => entry.path.startsWith("crates/aether-tauri/")),
     `${deletion.count} 个文件`,
   );
 }

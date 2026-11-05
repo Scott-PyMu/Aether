@@ -174,7 +174,7 @@ pub struct RegistryLoadReport {
 
 /// 解析清单目录：`AETHER_RUNTIME_REGISTRY_DIR` 覆盖 → 壳层资源目录（`resource_dir/runtime-bundle`）。
 ///
-/// 壳层无关口径（ADR-029 D-029-2）：资源目录由调用方（`aether-tauri` / daemon）解析后
+/// 壳层无关口径（ADR-029 D-029-2）：资源目录由调用方（`aetherd` / Electron 打包布局）解析后
 /// 传入；应用层不感知 Tauri/Electron 的路径 API。
 pub fn resolve_registry_dir(resource_dir: Option<PathBuf>) -> Option<PathBuf> {
     if let Ok(dir) = std::env::var(REGISTRY_DIR_ENV) {
