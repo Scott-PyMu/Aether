@@ -103,3 +103,5 @@ AETHER_M9_13 PASS
   `aether-app`；M6-02 零直通回归迁移到 `m9_06_permission_bridge`；
   `m9-13:regression` 适配共享适配器宿主（ADR-030）。
 - 本补记不改变 G8 的 `conditional_pass` 结论；macOS 公开发布仍为 `macos_release_pending`。
+- 修复后的提交 `7948591` 已推送；CI run `41974489805` 全部 18/18 job success，
+  G7 由 `conditional_pass` 升级为 **PASS**（见 `docs/M9-Gate-G7-报告.md`）。

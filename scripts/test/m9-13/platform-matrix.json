@@ -18,23 +18,23 @@
       "id": "macos",
       "required": "CI",
       "status": "ci-partial",
-      "ci_run": "41950594105",
+      "ci_run": "41974489805",
       "evidence": [
         "docs/M9-Gate-G7-报告.md",
-        "https://github.com/Scott-PyMu/Aether/actions/runs/41950594105"
+        "https://github.com/Scott-PyMu/Aether/actions/runs/41974489805"
       ],
-      "reason": "M9-12 macOS Playwright E2E（13/13）与 DMG mount/copy/launch smoke 在 CI run 41950594105 通过；M9-13 全量回归工作流仅配置 Windows runner，macOS 未运行 M9-13 全量；macOS 签名/公证未就绪（macos_release_pending），按 ADR-030 v0.2 不阻塞 M9/M10。"
+      "reason": "M9-12 macOS Playwright E2E（13/13）与 DMG mount/copy/launch smoke 在 CI run 41974489805 通过；M9-13 全量回归工作流仅配置 Windows runner，macOS 未运行 M9-13 全量；macOS 签名/公证未就绪（macos_release_pending），按 ADR-030 v0.2 不阻塞 M9/M10。"
     },
     {
       "id": "linux",
       "required": "CI 构建 + 冒烟",
       "status": "passed",
-      "ci_run": "41950594105",
+      "ci_run": "41974489805",
       "evidence": [
         "docs/M9-Gate-G7-报告.md",
-        "https://github.com/Scott-PyMu/Aether/actions/runs/41950594105"
+        "https://github.com/Scott-PyMu/Aether/actions/runs/41974489805"
       ],
-      "reason": "CI run 41950594105 的 M9-12 Linux build + xvfb smoke（deb/AppImage）通过；Linux 不纳入签名发布门禁。"
+      "reason": "CI run 41974489805 的 M9-12 Linux build + xvfb smoke（deb/AppImage）通过；Linux 不纳入签名发布门禁。"
     }
   ]
 }
