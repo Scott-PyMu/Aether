@@ -228,10 +228,10 @@ if (!read("crates/aether-app/src/ipc/dto.rs").includes("fn resolve_path")) {
   fail("[DoD-3] artifact_add 未复核选择器路径");
 }
 
-// 渲染层：决议只经 permission_resolve；通知不参与决议。
-const rendererPermission = read("apps/desktop/src/permission.ts");
-if (!rendererPermission.includes('"permission_resolve"')) {
-  fail("[DoD-5] renderer 未使用 permission_resolve");
+// 渲染层：决议只经 permission_resolve（typed client 的 `client.permissionResolve`）；通知不参与决议。
+const rendererPermission = sourceWithoutComments(read("apps/desktop/src/permission.ts"));
+if (!/permission_resolve|client\.permissionResolve/.test(rendererPermission)) {
+  fail("[DoD-5] renderer 未使用 permission_resolve（typed client）");
 }
 if (read("apps/desktop/src/permissionProjection.ts").includes("permission_resolve")) {
   fail("[DoD-5] 权限投影不得自行决议（只做清单校准）");

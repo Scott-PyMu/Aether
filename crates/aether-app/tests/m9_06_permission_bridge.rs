@@ -398,6 +398,20 @@ impl Harness {
             .collect()
     }
 
+    /// 等待审计动作落库（决议/取消与审计写入之间存在异步窗口；断言内容不变）。
+    async fn wait_audit_action(&self, action: &str, timeout: Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if self.audit_actions().await.iter().any(|item| item == action) {
+                return true;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
     async fn event_types(&self, session_id: &SessionId) -> Vec<String> {
         self.pipeline
             .readback(session_id, 0)
@@ -614,10 +628,11 @@ fn permission_loop_deny_is_delivered_to_the_adapter() {
             types.contains(&"permission.resolved".to_owned()),
             "{types:?}"
         );
-        let actions = h.audit_actions().await;
         assert!(
-            actions.contains(&"permission.resolved".to_owned()),
-            "{actions:?}"
+            h.wait_audit_action("permission.resolved", Duration::from_secs(15))
+                .await,
+            "审计缺少 permission.resolved：{:?}",
+            h.audit_actions().await
         );
         let stats = h.wait_permission_stats(Duration::from_secs(15)).await;
         assert!(stats.zero_passthrough, "{}", stats.summary());
@@ -658,10 +673,11 @@ fn permission_loop_timeout_denies_at_three_hundred_seconds() {
         h.wait_run(&run_id, RunStatus::Succeeded, Duration::from_secs(30))
             .await;
         assert!(h.pending().is_empty());
-        let actions = h.audit_actions().await;
         assert!(
-            actions.contains(&"permission.timeout".to_owned()),
-            "{actions:?}"
+            h.wait_audit_action("permission.timeout", Duration::from_secs(15))
+                .await,
+            "审计缺少 permission.timeout：{:?}",
+            h.audit_actions().await
         );
         let stats = h.wait_permission_stats(Duration::from_secs(15)).await;
         assert!(stats.zero_passthrough, "{}", stats.summary());
@@ -701,10 +717,11 @@ fn permission_loop_cancel_and_run_retry_keep_channel_semantics() {
         h.wait_run(&run_id, RunStatus::Cancelled, Duration::from_secs(30))
             .await;
         h.wait_pending_cleared(Duration::from_secs(15)).await;
-        let actions = h.audit_actions().await;
         assert!(
-            actions.contains(&"permission.cancelled".to_owned()),
-            "{actions:?}"
+            h.wait_audit_action("permission.cancelled", Duration::from_secs(15))
+                .await,
+            "审计缺少 permission.cancelled：{:?}",
+            h.audit_actions().await
         );
         let stats = h.wait_permission_stats(Duration::from_secs(15)).await;
         assert!(stats.zero_passthrough, "{}", stats.summary());

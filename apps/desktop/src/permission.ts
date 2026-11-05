@@ -55,7 +55,8 @@ export interface RuntimeControlResult {
 }
 
 /**
- * 权限/运行时命令面（可注入替身；生产 = Tauri 生产实现）。
+ * 权限/运行时命令面（可注入替身；生产 = `@aether/protocol` typed client；
+ * M9-14/G8 后不再有 Tauri 实现）。
  *
  * 缺省/未接线时由调用方处理（面板显示空态或错误；不伪造 pending）。
  */

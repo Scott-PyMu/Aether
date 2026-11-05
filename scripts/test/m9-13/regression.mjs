@@ -31,14 +31,17 @@ mkdirSync(tmpDir, { recursive: true });
 const outPath = path.join(outDir, "results.json");
 const bundleDir = path.join(repoRoot, "dist-out", "m9-12-runtime-bundle");
 const exe = process.platform === "win32" ? ".exe" : "";
+// M9-11/ADR-030：发布形态为共享适配器宿主（单二进制 + `--adapter <id>`）。
+// 测试 harness 识别宿主文件名后自动前置分发参数（兼容旧单适配器产物）。
+const adapterHost = path.join(bundleDir, `aether-adapter-host${exe}`);
 const adapterEnv = {
-  AETHER_CLAUDE_ADAPTER: path.join(bundleDir, `aether-claude-adapter${exe}`),
+  AETHER_CLAUDE_ADAPTER: adapterHost,
   AETHER_REQUIRE_CLAUDE_ADAPTER: "1",
-  AETHER_CODEX_ADAPTER: path.join(bundleDir, `aether-codex-adapter${exe}`),
+  AETHER_CODEX_ADAPTER: adapterHost,
   AETHER_REQUIRE_CODEX_ADAPTER: "1",
-  AETHER_DSH_ADAPTER: path.join(bundleDir, `aether-dsh-adapter${exe}`),
+  AETHER_DSH_ADAPTER: adapterHost,
   AETHER_REQUIRE_DSH_ADAPTER: "1",
-  AETHER_MOCK_ADAPTER: path.join(bundleDir, `aether-mock-adapter${exe}`),
+  AETHER_MOCK_ADAPTER: adapterHost,
   AETHER_REQUIRE_MOCK_ADAPTER: "1",
   AETHER_REQUIRE_REAL_CLAUDE: "1",
 };

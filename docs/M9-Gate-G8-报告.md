@@ -91,3 +91,15 @@ AETHER_M9_13 PASS
 | M10 | **可启动** | 需先完成 M10-00 ADR 批次；macOS 授权不阻塞 |
 
 > **G8 结论**：切换与退役已完成，仓库/依赖树/文档已清零 Tauri；**G8 条件通过**。macOS 签名/公证是**公开发布门禁**，不是 M9/M10 阻塞项；**M10 可启动**（需 M10-00 ADR 批次）。
+
+## 6. 复验补记（2026-11-05）
+
+- `verify:m9-02`、`verify:m9-04`、`verify:m9-06` 的 G8 后漂移已修复并复跑通过：
+  - `verify:m9-02`：改为退役态断言（crate/workspace/lock 清零 + `aether-app` 63 命令矩阵承接）；
+  - `verify:m9-04`：将 ADR-030 阈值修订登记为唯一允许的基线差异，并逐项冻结其余阈值；
+  - `verify:m9-06`：静态检查适配 typed client；权限取消审计断言改为等待落库（断言不变）。
+- 新增门禁报告：`docs/M9-Gate-G1-报告.md` ～ `docs/M9-Gate-G7-报告.md`。
+- 修复 CI run `41950594105` 暴露的 G7 P1 漂移：M5-03 加密备份演练迁移到
+  `aether-app`；M6-02 零直通回归迁移到 `m9_06_permission_bridge`；
+  `m9-13:regression` 适配共享适配器宿主（ADR-030）。
+- 本补记不改变 G8 的 `conditional_pass` 结论；macOS 公开发布仍为 `macos_release_pending`。

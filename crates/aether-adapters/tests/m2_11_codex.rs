@@ -526,21 +526,26 @@ fn codex_manifest(home: &std::path::Path) -> Option<RuntimeManifest> {
     let fake = common::fake_codex_cli();
     let pid_file = home.join("pids.txt");
     let workspace = common::unique_temp_dir("m2-11-codex-t5a-ws");
+    let args = common::with_host_adapter_arg(
+        &adapter,
+        "codex",
+        vec![
+            "--codex-bin".to_owned(),
+            common::node_binary(),
+            "--codex-arg".to_owned(),
+            fake.to_string_lossy().into_owned(),
+            "--workspace".to_owned(),
+            workspace.to_string_lossy().into_owned(),
+            "--sandbox".to_owned(),
+            "read-only".to_owned(),
+            "--codex-home".to_owned(),
+            home.to_string_lossy().into_owned(),
+        ],
+    );
     Some(
         RuntimeManifest::new("codex", "Codex", adapter)
             .official(true)
-            .with_args([
-                "--codex-bin".to_owned(),
-                common::node_binary(),
-                "--codex-arg".to_owned(),
-                fake.to_string_lossy().into_owned(),
-                "--workspace".to_owned(),
-                workspace.to_string_lossy().into_owned(),
-                "--sandbox".to_owned(),
-                "read-only".to_owned(),
-                "--codex-home".to_owned(),
-                home.to_string_lossy().into_owned(),
-            ])
+            .with_args(args)
             .with_env([
                 ("CODEX_HOME".to_owned(), home.to_string_lossy().into_owned()),
                 (

@@ -16,6 +16,31 @@ use aether_adapters::{
 use aether_core::{EventEnvelope, EventType};
 use serde_json::{json, Value};
 
+/// M9-11/ADR-030：发布形态为共享适配器宿主（`aether-adapter-host[.exe]`），
+/// 通过 `--adapter <id>` 分发。测试夹具同时兼容旧的单适配器编译产物：
+/// 仅当文件名匹配宿主时自动前置分发参数。
+fn is_shared_adapter_host(path: &std::path::Path) -> bool {
+    path.file_stem()
+        .and_then(|name| name.to_str())
+        .map(|name| name.to_ascii_lowercase().starts_with("aether-adapter-host"))
+        .unwrap_or(false)
+}
+
+pub fn with_host_adapter_arg(
+    path: &std::path::Path,
+    adapter_id: &str,
+    args: Vec<String>,
+) -> Vec<String> {
+    if !is_shared_adapter_host(path) {
+        return args;
+    }
+    let mut hosted = Vec::with_capacity(args.len() + 2);
+    hosted.push("--adapter".to_owned());
+    hosted.push(adapter_id.to_owned());
+    hosted.extend(args);
+    hosted
+}
+
 /// Mock 适配器路径（未设置且不要求时必须跳过）。
 pub fn mock_binary() -> Option<PathBuf> {
     match std::env::var_os("AETHER_MOCK_ADAPTER") {
@@ -48,7 +73,11 @@ impl MockHarness {
     /// 启动 Mock 进程并建立连接（不握手）。
     pub async fn launch(args: &[&str]) -> Option<Self> {
         let path = mock_binary()?;
-        let owned: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
+        let owned = with_host_adapter_arg(
+            &path,
+            "mock",
+            args.iter().map(|arg| (*arg).to_owned()).collect(),
+        );
         let mut process = AdapterProcess::spawn(&path, owned)
             .await
             .expect("启动 Mock 适配器进程");
@@ -68,7 +97,11 @@ impl MockHarness {
         envs: &[(std::ffi::OsString, std::ffi::OsString)],
     ) -> Option<Self> {
         let path = mock_binary()?;
-        let owned: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
+        let owned = with_host_adapter_arg(
+            &path,
+            "mock",
+            args.iter().map(|arg| (*arg).to_owned()).collect(),
+        );
         let mut process = AdapterProcess::spawn_with_env(&path, owned, envs.iter().cloned())
             .await
             .expect("启动 Mock 适配器进程");
@@ -646,6 +679,7 @@ impl ClaudeHarness {
             "none".to_owned(),
         ];
         args.extend(extra_args.iter().map(|arg| (*arg).to_owned()));
+        let args = with_host_adapter_arg(&path, "claude-code", args);
         let envs: Vec<(OsString, OsString)> = vec![
             (
                 OsString::from("FAKE_CLAUDE_HOME"),
@@ -821,6 +855,7 @@ impl CodexHarness {
             home.to_string_lossy().into_owned(),
         ];
         args.extend(extra_args.iter().map(|arg| (*arg).to_owned()));
+        let args = with_host_adapter_arg(&path, "codex", args);
         let envs: Vec<(OsString, OsString)> = vec![
             (
                 OsString::from("CODEX_HOME"),
@@ -917,6 +952,7 @@ impl DshHarness {
             workspace.to_string_lossy().into_owned(),
         ];
         args.extend(extra_args.iter().map(|arg| (*arg).to_owned()));
+        let args = with_host_adapter_arg(&path, "deepseek-harness", args);
         let envs: Vec<(OsString, OsString)> = vec![(
             OsString::from("FAKE_DSH_PID_FILE"),
             pid_file.as_os_str().to_os_string(),

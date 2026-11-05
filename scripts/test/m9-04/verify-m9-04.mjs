@@ -8,8 +8,8 @@
  *     §4.6/§16.1 分组唯一且计数一致；debug 探针不计入；生成物 diff=0。
  *  2. 参数矩阵：63 条命令各有合法样本；非法样本覆盖未知字段/类型/枚举/长度/ULID/
  *     路径/越界；基线 `rejects`/`semantic_cases` 全部可回放。
- *  3. HEAD 基线对照：除已登记差异（`messages_page`/`audit_query` 预算/cursor 增量）
- *     外 0 差异；增量只允许新增，不允许修改既有期望值。
+ *  3. HEAD 基线对照：除已登记差异（`messages_page`/`audit_query` 预算/cursor 增量、
+ *     ADR-030 冻结阈值修订）外 0 差异；增量只允许新增，不允许修改既有期望值。
  *  4. 错误码：32 枚举 + 9 业务码逐项覆盖；业务码走 `data.business_code`。
  *  5. 代表性 golden：13 条 / 8 组（会话、消息、健康、备份、权限、设置、审计、供应商）。
  *  6. 预算/cursor 契约：64KiB–1.5MiB、至少 1 条、不透明游标、互斥、零推进安全。
@@ -212,7 +212,11 @@ const ALLOWED_COMMAND_DIFFS = new Set([
   "docs/M9-01-baseline/commands/12-messages_page.json",
   "docs/M9-01-baseline/commands/57-audit_query.json",
 ]);
-const ALLOWED_ARTIFACT_DIFFS = new Set(["docs/M9-01-baseline/contract/responses.json"]);
+const ALLOWED_ARTIFACT_DIFFS = new Set([
+  "docs/M9-01-baseline/contract/responses.json",
+  // ADR-030（M9-11）：idle RSS 500→600 MiB、UI ready 5000→8000ms；其余阈值不变。
+  "docs/M9-01-baseline/freeze/thresholds.json",
+]);
 const currentEntries = new Map((baselineManifest.entries ?? []).map((entry) => [entry.path, entry.sha256]));
 const beforeEntries = new Map((before.entries ?? []).map((entry) => [entry.path, entry.sha256]));
 if (beforeEntries.size !== 63) fail(`[DoD-3] before 快照条目 ${beforeEntries.size} ≠ 63`);
@@ -238,6 +242,31 @@ for (const item of before.artifacts ?? []) {
   if (currentArtifacts.get(item.path) !== item.sha256 && !ALLOWED_ARTIFACT_DIFFS.has(item.path)) {
     fail(`[DoD-3] 未登记差异：${item.path}`);
   }
+}
+
+// 已登记差异 `freeze/thresholds.json` 只允许 ADR-030 声明的两项修订，其余阈值冻结。
+const thresholds = readJson("docs/M9-01-baseline/freeze/thresholds.json");
+const thresholdExpectations = {
+  "installer.max_bytes": [thresholds.installer?.max_bytes, 191717376],
+  "installer.absolute_cap_bytes": [thresholds.installer?.absolute_cap_bytes, 471859200],
+  "runtime.idle_rss_max_bytes": [thresholds.runtime?.idle_rss_max_bytes, 629145600],
+  "runtime.ten_sessions_max_bytes": [thresholds.runtime?.ten_sessions_max_bytes, 1258291200],
+  "startup.window_shown_max_ms": [thresholds.startup?.window_shown_max_ms, 1500],
+  "startup.handshake_target_ms": [thresholds.startup?.handshake_target_ms, 2000],
+  "startup.handshake_timeout_ms": [thresholds.startup?.handshake_timeout_ms, 10000],
+  "startup.handshake_retry": [thresholds.startup?.handshake_retry, 1],
+  "startup.ui_ready_max_ms": [thresholds.startup?.ui_ready_max_ms, 8000],
+  "startup.session_create_max_ms": [thresholds.startup?.session_create_max_ms, 2000],
+  "events.control_event_loss_allowed": [thresholds.events?.control_event_loss_allowed, 0],
+  "events.p95_latency_max_ms": [thresholds.events?.p95_latency_max_ms, 150],
+};
+for (const [key, [actual, expected]] of Object.entries(thresholdExpectations)) {
+  if (actual !== expected) {
+    fail(`[DoD-3] 已登记阈值差异 ${key}=${actual}（期望 ${expected}，仅 ADR-030 两项可修订）`);
+  }
+}
+if (!String(thresholds.amended_by ?? "").includes("ADR-030")) {
+  fail("[DoD-3] thresholds.json 缺少 ADR-030 修订登记（amended_by）");
 }
 
 // 已登记差异必须只新增、不修改既有期望值。

@@ -53,19 +53,24 @@ fn claude_manifest(home: &std::path::Path) -> Option<RuntimeManifest> {
     let fake = common::fake_claude_cli();
     let pid_file = home.join("pids.txt");
     let workspace = common::unique_temp_dir("m2-02-t5a-ws");
+    let args = common::with_host_adapter_arg(
+        &adapter,
+        "claude-code",
+        vec![
+            "--claude-bin".to_owned(),
+            common::node_binary(),
+            "--claude-arg".to_owned(),
+            fake.to_string_lossy().into_owned(),
+            "--workspace".to_owned(),
+            workspace.to_string_lossy().into_owned(),
+            "--tools".to_owned(),
+            "none".to_owned(),
+        ],
+    );
     Some(
         RuntimeManifest::new("claude-code", "Claude Code", adapter)
             .official(true)
-            .with_args([
-                "--claude-bin".to_owned(),
-                common::node_binary(),
-                "--claude-arg".to_owned(),
-                fake.to_string_lossy().into_owned(),
-                "--workspace".to_owned(),
-                workspace.to_string_lossy().into_owned(),
-                "--tools".to_owned(),
-                "none".to_owned(),
-            ])
+            .with_args(args)
             .with_env([
                 (
                     "FAKE_CLAUDE_HOME".to_owned(),

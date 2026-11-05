@@ -162,7 +162,7 @@ for (let round = 1; round <= runs; round += 1) {
   mkdirSync(evidenceDir, { recursive: true });
   const exit = run(
     cargo,
-    ["test", "-p", "aether-tauri", "--test", "m5_03_encrypted_backup", "--", "--nocapture"],
+    ["test", "-p", "aether-app", "--test", "m5_03_encrypted_backup", "--", "--nocapture"],
     { cwd: repoRoot, env: { AETHER_M5_03_EVIDENCE_DIR: evidenceDir } },
   );
   record(`演练第 ${round}/${runs} 轮（加密备份 → 清库 → 恢复 → 一致；无外部凭证）`, exit);

@@ -7,7 +7,7 @@
  *  - DoD2：执行抽查并计算误配率（真实系统批量执行 → 归档工件 → 本脚本
  *    **独立复核**：判定 1（规范重演）与判定 2（真实系统）逐行比对的原始结果、
  *    复算误配率、校验归档契约）；
- *  - DoD3：T7 全样本 + M2-10 零直通 + T6 回归复跑通过（m2-03 / m2-10 / m6-02 套件）；
+ *  - DoD3：T7 全样本 + M9-06 回环零直通 + T6 回归复跑通过（m2-03 / m9-06 / m6-02 套件）；
  *  - DoD4：误配案例逐条分析与处置建议工件齐备（`误配案例分析.md` + 分类断言）；
  *  - DoD5：误配率 <5% 门禁（≥5% 或严重误配 → FAIL，触发 P1 门禁回退动作）。
  *
@@ -18,6 +18,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 
@@ -34,6 +35,35 @@ const evidenceDir =
   evidenceArg ??
   path.join(repoRoot, "scripts", "test", ".tmp", "m6-02", `evidence-${stamp}`);
 mkdirSync(evidenceDir, { recursive: true });
+
+// M9-14/G8：M2-10 Tauri 权限回环已随壳退役；零直通/回环语义由
+// `aether-app --test m9_06_permission_bridge` 承接。该套件需要真实 Mock 适配器；
+// 优先使用调用方提供的宿主/旧产物，否则现场编译（与 verify:m9-06 同口径）。
+function resolveBun() {
+  if (process.env.AETHER_BUN) return process.env.AETHER_BUN;
+  const exe = process.platform === "win32" ? "bun.exe" : "bun";
+  const candidate = path.join(os.homedir(), ".bun", "bin", exe);
+  if (existsSync(candidate)) return candidate;
+  return "bun";
+}
+const mockExe = process.platform === "win32" ? ".exe" : "";
+const mockFallback = path.join(repoRoot, "scripts", "test", ".tmp", "m6-02", `aether-mock-adapter${mockExe}`);
+const mockAdapter = process.env.AETHER_MOCK_ADAPTER ?? mockFallback;
+if (!process.env.AETHER_MOCK_ADAPTER) {
+  mkdirSync(path.dirname(mockFallback), { recursive: true });
+  record(
+    "编译 Mock 适配器（M9-06 权限回环；M2-10 退役后的等价宿主）",
+    run(
+      resolveBun(),
+      ["build", "packages/adapter-mock/src/main.ts", "--compile", "--outfile", mockFallback],
+      { cwd: repoRoot },
+    ),
+  );
+}
+const permissionBridgeEnv = {
+  AETHER_MOCK_ADAPTER: mockAdapter,
+  AETHER_REQUIRE_MOCK_ADAPTER: "1",
+};
 
 // ===== 0. 静态：预注册方法与 ADR-019 §2.2 一致 =====
 
@@ -94,10 +124,21 @@ record(
   run(cargo, ["test", "-p", "aether-control", "--test", "m2_03_permission"], { cwd: repoRoot }),
 );
 record(
-  "DoD3：M2-10 回环零直通回归（网关探针：收到=决议=下发）",
-  run(cargo, ["test", "-p", "aether-tauri", "--test", "m2_10_permission_loop"], {
-    cwd: repoRoot,
-  }),
+  "DoD3：M9-06 回环零直通回归（网关探针：收到=决议=下发；M2-10 退役后承接）",
+  run(
+    cargo,
+    [
+      "test",
+      "-p",
+      "aether-app",
+      "--test",
+      "m9_06_permission_bridge",
+      "permission_loop_allow_flows_from_adapter_to_ui_and_back",
+      "--",
+      "--test-threads=1",
+    ],
+    { cwd: repoRoot, env: permissionBridgeEnv },
+  ),
 );
 record(
   "DoD3：规则引擎与档位矩阵单测（aether-security；含 M6-02 缺陷修复回归）",

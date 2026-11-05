@@ -540,23 +540,28 @@ fn dsh_manifest(home: &std::path::Path, version: &str) -> Option<RuntimeManifest
     let fake = common::fake_dsh_server();
     let pid_file = home.join("pids.txt");
     let workspace = common::unique_temp_dir("m2-11-dsh-latch-ws");
+    let args = common::with_host_adapter_arg(
+        &adapter,
+        "deepseek-harness",
+        vec![
+            "--dsh-bin".to_owned(),
+            fake.to_string_lossy().into_owned(),
+            "--dsh-node".to_owned(),
+            common::node_binary(),
+            "--dsh-home".to_owned(),
+            home.to_string_lossy().into_owned(),
+            "--dsh-profile".to_owned(),
+            "acp".to_owned(),
+            "--dsh-version".to_owned(),
+            version.to_owned(),
+            "--workspace".to_owned(),
+            workspace.to_string_lossy().into_owned(),
+        ],
+    );
     Some(
         RuntimeManifest::new("deepseek-harness", "DeepSeek Harness", adapter)
             .official(true)
-            .with_args([
-                "--dsh-bin".to_owned(),
-                fake.to_string_lossy().into_owned(),
-                "--dsh-node".to_owned(),
-                common::node_binary(),
-                "--dsh-home".to_owned(),
-                home.to_string_lossy().into_owned(),
-                "--dsh-profile".to_owned(),
-                "acp".to_owned(),
-                "--dsh-version".to_owned(),
-                version.to_owned(),
-                "--workspace".to_owned(),
-                workspace.to_string_lossy().into_owned(),
-            ])
+            .with_args(args)
             .with_env([(
                 "FAKE_DSH_PID_FILE".to_owned(),
                 pid_file.to_string_lossy().into_owned(),

@@ -17,24 +17,24 @@
     {
       "id": "macos",
       "required": "CI",
-      "status": "ci-unverified",
-      "ci_run": "41602087592",
+      "status": "ci-partial",
+      "ci_run": "41950594105",
       "evidence": [
-        "docs/M9-12-证据.md#7-跨平台ci-未验证项",
-        "docs/M9-13-证据.md#6-跨平台矩阵"
+        "docs/M9-Gate-G7-报告.md",
+        "https://github.com/Scott-PyMu/Aether/actions/runs/41950594105"
       ],
-      "reason": "本机无 macOS；M9-12 CI run 41185306916 / M9-13 CI run 41602087592 的 m9-12-e2e-macos / m9-12-installer-macos 已通过（unsigned 冒烟）；M9-13 CI 运行需在推送后补记 run id。macOS 签名/公证密钥未申请，已登记 docs/M9-13-macOS-密钥登记.md，后续申请后重新验证；未声称 G6 签名/公证通过。"
+      "reason": "M9-12 macOS Playwright E2E（13/13）与 DMG mount/copy/launch smoke 在 CI run 41950594105 通过；M9-13 全量回归工作流仅配置 Windows runner，macOS 未运行 M9-13 全量；macOS 签名/公证未就绪（macos_release_pending），按 ADR-030 v0.2 不阻塞 M9/M10。"
     },
     {
       "id": "linux",
       "required": "CI 构建 + 冒烟",
-      "status": "ci-unverified",
-      "ci_run": "41602087592",
+      "status": "passed",
+      "ci_run": "41950594105",
       "evidence": [
-        "docs/M9-12-证据.md#7-跨平台ci-未验证项",
-        "docs/M9-13-证据.md#6-跨平台矩阵"
+        "docs/M9-Gate-G7-报告.md",
+        "https://github.com/Scott-PyMu/Aether/actions/runs/41950594105"
       ],
-      "reason": "本机无 Linux；M9-12 CI run 41185306916 / M9-13 CI run 41602087592 的 m9-12-linux-build-smoke 已通过（deb/AppImage + xvfb）；M9-13 CI 运行需在推送后补记 run id。Linux 不纳入签名发布门禁。"
+      "reason": "CI run 41950594105 的 M9-12 Linux build + xvfb smoke（deb/AppImage）通过；Linux 不纳入签名发布门禁。"
     }
   ]
 }
