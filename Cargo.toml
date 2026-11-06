@@ -19,7 +19,7 @@ members = [
 # 一致性由 `pnpm version:check`（scripts/ci/version.mjs）在 CI 强制。
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.85"
 authors = ["Aether Contributors"]
 license = "Apache-2.0"
 homepage = "https://github.com/Scott-PyMu/Aether"

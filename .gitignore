@@ -19,6 +19,7 @@ Thumbs.db
 
 # 本地验证临时目录
 scripts/test/.tmp/
+scripts/test/**/.tmp/
 
 # 本地测试凭证文件（M1-11/M2-02/M2-11；严禁入库，AGENTS §2.9）
 claud_test_env.txt

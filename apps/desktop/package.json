@@ -15,7 +15,9 @@
   },
   "dependencies": {
     "@aether/protocol": "workspace:*",
+    "@napi-rs/image": "1.16.0",
     "@tanstack/react-query": "5.103.2",
+    "omggif": "1.0.10",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "zustand": "5.0.15"

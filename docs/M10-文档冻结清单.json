@@ -1,0 +1,82 @@
+{
+  "schema": "aether.m10.doc-freeze.v1",
+  "task": "M10-00",
+  "frozen_at": "2026-11-05",
+  "design_version": "v1.32",
+  "p2_plan_version": "v0.10",
+  "uiux_version": "v0.19",
+  "artifacts": [
+    {
+      "path": "设计文档.md",
+      "sha256": "9854d0b56aeb5775205adb56c5dc4f153f95496a0a0f2198e8e04878e06644d0"
+    },
+    {
+      "path": "AGENTS.md",
+      "sha256": "dac1d836b0c94a54367cf8c7f7c825b4c745370f4b6c5782f4392d4dd4895e91"
+    },
+    {
+      "path": "README.md",
+      "sha256": "afe83042a0635bfbea70b0ec9f47da5ab06f51c726c62e34385e8a145e12312e"
+    },
+    {
+      "path": "docs/P2-架构迁移-实施计划与验收标准.md",
+      "sha256": "7ddf9bf03932f9cd2dbe16193d1b86396918d23a91e9db2436076151ba69319c"
+    },
+    {
+      "path": "docs/UI-UX-设计规格.md",
+      "sha256": "d59deed33ec79a109c7674bb18fd563709f7202a7a0aa21acd6420a4d94c1dc2"
+    },
+    {
+      "path": "docs/adr/ADR-031-m10-orchestration-dsl-state-machine.md",
+      "sha256": "71879128a270765c44436f4aa82eb66479b04fed38440bc99a5c5b4332b4eb15"
+    },
+    {
+      "path": "docs/adr/ADR-032-m10-subagent-spawn-isolation-injection.md",
+      "sha256": "5a539a0df6919e3f450f45326af94ed9a531909ac3bb20da962463b9eca86a08"
+    },
+    {
+      "path": "docs/adr/ADR-033-m10-aetherd-http-ws-cli.md",
+      "sha256": "0d44c65abaf2dd16dbb0958fecc74dc18c02f675daaa67b78960f2642669f3b9"
+    },
+    {
+      "path": "docs/adr/ADR-034-m10-import-export-format-atomicity.md",
+      "sha256": "168a07fecae93289295689377cb0e7aa4406590cec665c18757a5680eedb8841"
+    },
+    {
+      "path": "docs/adr/ADR-035-m10-multimodal-attachments.md",
+      "sha256": "7bd4a861e57ac1217dc823309c33f6b590b7d234dbeefefaa9e8a84b40b543df"
+    },
+    {
+      "path": "docs/adr/ADR-036-m10-i18n-theme.md",
+      "sha256": "a5d60deb4721c97e6f6b79c1a18c2484ce849fe7fa62d9f03cdae24de1fc947d"
+    },
+    {
+      "path": "docs/adr/ADR-037-m10-scheduler-priority-retry-routing.md",
+      "sha256": "60ca975bf614f348e73cceeaf23d6ef2da81406ed95e7c8f5da3abc36e891cd4"
+    },
+    {
+      "path": "docs/adr/ADR-038-m10-event-sharding-preplan.md",
+      "sha256": "8d6899807e0fef62dc0a612c8eb1f740efc5cbe4d37b9a1705ea480507ab4289"
+    },
+    {
+      "path": "docs/M10-00-登记表.json",
+      "sha256": "d45a3a0679d38ccb00471d96d8f2aba722a6eb73802ef9d2dbd9f66df4fa829d"
+    },
+    {
+      "path": "docs/M10-00-ADR批次评审.md",
+      "sha256": "9b7d586065fb3e664fa9998a32b484347aa2cd96528ce33285ea5fadd9da3032"
+    },
+    {
+      "path": "docs/M10-00-证据.md",
+      "sha256": "6b7c7f24fb9bdb51bd46ff280fc5baf8f0b4479641bebb745dbef6a00bf47c51"
+    },
+    {
+      "path": "docs/M10-方案决策记录与修订建议.md",
+      "sha256": "e755842b3da357e44dba808636ca33f0538b2a11d24e1296b4eb6cb02e44f987"
+    },
+    {
+      "path": "docs/M10-实现方案-评审稿.md",
+      "sha256": "dfbd8d7d917154527a3e5d2096fc23c5510fc5f5c9f92dafeeacb5510155fe3e"
+    }
+  ]
+}

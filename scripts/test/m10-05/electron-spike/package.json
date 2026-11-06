@@ -1,0 +1,12 @@
+{
+  "name": "aether-m10-05-electron-spike",
+  "version": "0.0.0",
+  "private": true,
+  "author": "Aether",
+  "main": "main.cjs",
+  "description": "Q3 decode spike: UtilityProcess + N-API + asarUnpack",
+  "dependencies": {
+    "@napi-rs/image": "1.16.0",
+    "omggif": "1.0.10"
+  }
+}

@@ -1,0 +1,728 @@
+{
+  "schema_version": 1,
+  "task": "M10-00",
+  "recorded_at": "2026-11-05",
+  "amended_at": "2026-11-06",
+  "amendment": "ADR-032 v1.2 子 Agent 交付模式（message_append/origin_fork/system_replace；隔离优先/缓存 best-effort）；命令/事件/业务码/设置键/迁移计数不变",
+  "frozen": true,
+  "frozen_at": "2026-11-05",
+  "revision": "M10-方案决策记录 v0.5（2026-11-05）+ ADR-032 v1.2（2026-11-06）",
+  "baseline": {
+    "design_version": "v1.33",
+    "p2_plan_version": "v0.11",
+    "uiux_version": "v0.19",
+    "command_count": 63,
+    "daemon_commands": 59,
+    "shell_commands": 4,
+    "ipc_error_codes": 32,
+    "business_codes": 9,
+    "settings_keys": 9,
+    "migrations": ["0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009"],
+    "event_envelope_fields": 9,
+    "uiux_anchor_groups": 22,
+    "rust_version": "1.85"
+  },
+  "target": {
+    "command_count": 87,
+    "new_commands": 24,
+    "business_codes": 35,
+    "settings_keys": 11,
+    "uiux_anchor_groups": 29,
+    "migration_planning_slots": "0010+",
+    "implemented_command_count_is_unchanged_until_task_landing": true
+  },
+  "adrs": [
+    {
+      "id": "ADR-031",
+      "file": "docs/adr/ADR-031-m10-orchestration-dsl-state-machine.md",
+      "topic": "编排 DSL / 状态机 / 节点类型 / 失败与重试语义",
+      "owner_task": "M10-01",
+      "status": "accepted"
+    },
+    {
+      "id": "ADR-032",
+      "file": "docs/adr/ADR-032-m10-subagent-spawn-isolation-injection.md",
+      "topic": "子 Agent 派生 / 隔离 / 结果回注 / 权限继承",
+      "owner_task": "M10-02",
+      "version": "v1.1",
+      "status": "accepted"
+    },
+    {
+      "id": "ADR-033",
+      "file": "docs/adr/ADR-033-m10-aetherd-http-ws-cli.md",
+      "topic": "aetherd HTTP/WS/CLI API / 鉴权 / 端口发现 / 版本化",
+      "owner_task": "M10-03",
+      "version": "v1.1",
+      "status": "accepted"
+    },
+    {
+      "id": "ADR-034",
+      "file": "docs/adr/ADR-034-m10-import-export-format-atomicity.md",
+      "topic": "导入/导出格式 / 版本 / ID 重映射 / 冲突 / 原子性",
+      "owner_task": "M10-04",
+      "status": "accepted"
+    },
+    {
+      "id": "ADR-035",
+      "file": "docs/adr/ADR-035-m10-multimodal-attachments.md",
+      "topic": "多模态附件类型 / 限额 / 存储 / 保留 / 适配器能力",
+      "owner_task": "M10-05",
+      "version": "v1.1",
+      "status": "accepted"
+    },
+    {
+      "id": "ADR-036",
+      "file": "docs/adr/ADR-036-m10-i18n-theme.md",
+      "topic": "i18n / 主题范围 / UI-UX 锚点",
+      "owner_task": "M10-06",
+      "status": "accepted"
+    },
+    {
+      "id": "ADR-037",
+      "file": "docs/adr/ADR-037-m10-scheduler-priority-retry-routing.md",
+      "topic": "调度器完整优先级 / 重试 / 路由策略",
+      "owner_task": "M10-07",
+      "status": "accepted"
+    },
+    {
+      "id": "ADR-038",
+      "file": "docs/adr/ADR-038-m10-event-sharding-preplan.md",
+      "topic": "事件分库预案方法与判定标准（M5-06 R16）",
+      "owner_task": "M10-08",
+      "status": "accepted"
+    }
+  ],
+  "commands": [
+    {
+      "name": "workflow_create",
+      "task": "M10-01",
+      "adr": "ADR-031",
+      "group": "workflow",
+      "params": "{ name, description?, definition, is_template? }",
+      "returns": "WorkflowSummary",
+      "timeout_ms": 30000,
+      "errors": ["workflow_invalid_definition", "too_large", "invalid_value"],
+      "implemented": false
+    },
+    {
+      "name": "workflow_list",
+      "task": "M10-01",
+      "adr": "ADR-031",
+      "group": "workflow",
+      "params": "{ limit?, offset?, include_templates? }",
+      "returns": "{ items: WorkflowSummary[], total }",
+      "timeout_ms": 10000,
+      "errors": ["out_of_range", "invalid_type"],
+      "implemented": false
+    },
+    {
+      "name": "workflow_get",
+      "task": "M10-01",
+      "adr": "ADR-031",
+      "group": "workflow",
+      "params": "{ workflow_id }",
+      "returns": "WorkflowDetail",
+      "timeout_ms": 10000,
+      "errors": ["workflow_not_found"],
+      "implemented": false
+    },
+    {
+      "name": "workflow_update",
+      "task": "M10-01",
+      "adr": "ADR-031",
+      "group": "workflow",
+      "params": "{ workflow_id, expected_version, name?, description?, definition?, is_template? }",
+      "returns": "WorkflowDetail",
+      "timeout_ms": 30000,
+      "errors": ["workflow_not_found", "workflow_invalid_definition", "workflow_version_conflict", "workflow_run_active"],
+      "implemented": false
+    },
+    {
+      "name": "workflow_delete",
+      "task": "M10-01",
+      "adr": "ADR-031",
+      "group": "workflow",
+      "params": "{ workflow_id, force? }",
+      "returns": "{ deleted: true }",
+      "timeout_ms": 15000,
+      "errors": ["workflow_not_found", "workflow_run_active"],
+      "implemented": false
+    },
+    {
+      "name": "workflow_import",
+      "task": "M10-01",
+      "adr": "ADR-031",
+      "group": "workflow",
+      "params": "{ source_path, name_override? }",
+      "returns": "WorkflowDetail",
+      "timeout_ms": 30000,
+      "errors": ["path_rejected", "workflow_invalid_definition", "too_large"],
+      "implemented": false
+    },
+    {
+      "name": "workflow_run",
+      "task": "M10-01",
+      "adr": "ADR-031",
+      "group": "workflow",
+      "params": "{ workflow_id, session_id, input?, priority? }",
+      "returns": "{ workflow_run_id, status }",
+      "timeout_ms": 30000,
+      "errors": ["workflow_not_found", "session_not_found", "workflow_invalid_definition", "workflow_run_active", "out_of_range"],
+      "implemented": false
+    },
+    {
+      "name": "workflow_run_get",
+      "task": "M10-01",
+      "adr": "ADR-031",
+      "group": "workflow",
+      "params": "{ workflow_run_id, include_nodes? }",
+      "returns": "WorkflowRunDetail",
+      "timeout_ms": 10000,
+      "errors": ["workflow_run_not_found"],
+      "implemented": false
+    },
+    {
+      "name": "workflow_run_list",
+      "task": "M10-01",
+      "adr": "ADR-031",
+      "group": "workflow",
+      "params": "{ workflow_id?, session_id?, status?, limit?, offset? }",
+      "returns": "{ items: WorkflowRunSummary[], total }",
+      "timeout_ms": 10000,
+      "errors": ["invalid_enum", "out_of_range"],
+      "implemented": false
+    },
+    {
+      "name": "workflow_run_cancel",
+      "task": "M10-01",
+      "adr": "ADR-031",
+      "group": "workflow",
+      "params": "{ workflow_run_id, reason? }",
+      "returns": "{ status }",
+      "timeout_ms": 15000,
+      "errors": ["workflow_run_not_found", "workflow_run_not_active", "workflow_cancel_timeout"],
+      "implemented": false
+    },
+    {
+      "name": "workflow_node_retry",
+      "task": "M10-01",
+      "adr": "ADR-031",
+      "group": "workflow",
+      "params": "{ workflow_run_id, node_id, reset_downstream? }",
+      "returns": "{ node_run_id, attempt }",
+      "timeout_ms": 30000,
+      "errors": ["workflow_run_not_found", "workflow_node_not_found", "workflow_node_not_retryable", "workflow_run_active"],
+      "implemented": false
+    },
+    {
+      "name": "subagent_spawn",
+      "task": "M10-02",
+      "adr": "ADR-032",
+      "group": "subagent",
+      "params": "{ parent_session_id, role, purpose, mode?, template?, context_refs?, runtime_id?, provider_id?, model?, permission_mode?, timeout_ms? }",
+      "returns": "{ child_session_id, status, depth, mode }",
+      "timeout_ms": 30000,
+      "errors": ["session_not_found", "subagent_limit_exceeded", "subagent_context_rejected", "invalid_value", "provider_not_found", "no_candidate_runtime"],
+      "implemented": false
+    },
+    {
+      "name": "subagent_list",
+      "task": "M10-02",
+      "adr": "ADR-032",
+      "group": "subagent",
+      "params": "{ parent_session_id, include_completed? }",
+      "returns": "{ items: SubagentNode[] }",
+      "timeout_ms": 10000,
+      "errors": ["session_not_found"],
+      "implemented": false
+    },
+    {
+      "name": "subagent_cancel",
+      "task": "M10-02",
+      "adr": "ADR-032",
+      "group": "subagent",
+      "params": "{ child_session_id, reason? }",
+      "returns": "{ status }",
+      "timeout_ms": 15000,
+      "errors": ["subagent_not_found", "subagent_resolution_conflict"],
+      "implemented": false
+    },
+    {
+      "name": "subagent_resolve",
+      "task": "M10-02",
+      "adr": "ADR-032",
+      "group": "subagent",
+      "params": "{ child_session_id, decision, note? }",
+      "returns": "{ decision, injected, injection_id?, context_version, mode, new_child_session_id? }",
+      "timeout_ms": 30000,
+      "errors": ["subagent_not_found", "subagent_result_not_ready", "subagent_resolution_conflict", "subagent_limit_exceeded"],
+      "implemented": false
+    },
+    {
+      "name": "subagent_result_get",
+      "task": "M10-02",
+      "adr": "ADR-032",
+      "group": "subagent",
+      "params": "{ parent_session_id, child_session_id, offset?, limit_bytes? }",
+      "returns": "{ child_session_id, result_chunk, offset, next_offset?, total_bytes, truncated }",
+      "timeout_ms": 10000,
+      "errors": ["subagent_not_found", "subagent_result_not_ready", "invalid_value"],
+      "implemented": false
+    },
+    {
+      "name": "session_import",
+      "task": "M10-04",
+      "adr": "ADR-034",
+      "group": "import",
+      "params": "{ source_path, mode?, dry_run? }",
+      "returns": "{ job_id, status }",
+      "timeout_ms": 30000,
+      "errors": ["path_rejected", "import_invalid_format", "import_too_large"],
+      "implemented": false
+    },
+    {
+      "name": "archive_import",
+      "task": "M10-04",
+      "adr": "ADR-034",
+      "group": "import",
+      "params": "{ source_path, mode?, dry_run? }",
+      "returns": "{ job_id, status }",
+      "timeout_ms": 30000,
+      "errors": ["path_rejected", "import_invalid_format", "import_too_large"],
+      "implemented": false
+    },
+    {
+      "name": "import_status",
+      "task": "M10-04",
+      "adr": "ADR-034",
+      "group": "import",
+      "params": "{ job_id, include_warnings? }",
+      "returns": "ImportJobStatus",
+      "timeout_ms": 10000,
+      "errors": ["import_job_not_found"],
+      "implemented": false
+    },
+    {
+      "name": "import_cancel",
+      "task": "M10-04",
+      "adr": "ADR-034",
+      "group": "import",
+      "params": "{ job_id }",
+      "returns": "{ status }",
+      "timeout_ms": 15000,
+      "errors": ["import_job_not_found", "import_job_not_active"],
+      "implemented": false
+    },
+    {
+      "name": "attachment_add",
+      "task": "M10-05",
+      "adr": "ADR-035",
+      "group": "attachment",
+      "params": "{ session_id, source_path, kind? }",
+      "returns": "AttachmentSummary",
+      "timeout_ms": 30000,
+      "errors": ["path_rejected", "attachment_type_unsupported", "attachment_too_large", "attachment_limit_exceeded", "attachment_storage_failed", "session_not_found"],
+      "implemented": false
+    },
+    {
+      "name": "attachment_list",
+      "task": "M10-05",
+      "adr": "ADR-035",
+      "group": "attachment",
+      "params": "{ session_id }",
+      "returns": "{ items: AttachmentSummary[] }",
+      "timeout_ms": 10000,
+      "errors": ["session_not_found"],
+      "implemented": false
+    },
+    {
+      "name": "attachment_remove",
+      "task": "M10-05",
+      "adr": "ADR-035",
+      "group": "attachment",
+      "params": "{ attachment_id }",
+      "returns": "{ removed }",
+      "timeout_ms": 10000,
+      "errors": [],
+      "implemented": false
+    },
+    {
+      "name": "queue_list",
+      "task": "M10-07",
+      "adr": "ADR-037",
+      "group": "scheduler",
+      "params": "{ session_id?, limit?, offset? }",
+      "returns": "{ items: QueueEntry[], total, gate }",
+      "timeout_ms": 10000,
+      "errors": ["session_not_found", "out_of_range"],
+      "implemented": false
+    }
+  ],
+  "existing_command_increments": [
+    {
+      "name": "session_list",
+      "task": "M10-01/M10-02",
+      "change": "optional include_children (default false); default excludes sessions with parent_session_id",
+      "adr": "ADR-031/ADR-032"
+    },
+    {
+      "name": "session_send",
+      "task": "M10-02/M10-05/M10-07",
+      "change": "optional attachments (<=8 attachment ids), optional priority (-100..100), optional timeout_ms (1s..24h, default 30min), optional subagent_context {version, block, mode?} (mode=message_append|origin_fork|system_replace); ack applied_context_version + applied_context_mode",
+      "adr": "ADR-032/ADR-035/ADR-037"
+    },
+    {
+      "name": "session_delete",
+      "task": "M10-02",
+      "change": "refuse when child sessions exist: invalid_value + business_code=session_has_children; no cascade/parent pointer change/session.closed",
+      "adr": "ADR-032"
+    },
+    {
+      "name": "session_search",
+      "task": "M10-02",
+      "change": "subagent hit returns parent_session_id; UI opens parent tree and selects child; no direct child detail without parent",
+      "adr": "ADR-032"
+    },
+    {
+      "name": "health",
+      "task": "M10-07",
+      "change": "concurrency_gate adds queued_by_priority / starvation_guard counters; api state when HTTP listener disabled",
+      "adr": "ADR-033/ADR-037"
+    },
+    {
+      "name": "providers_list",
+      "task": "M10-05",
+      "change": "provider model summary adds optional capabilities (e.g. vision) when the 0010+ column exists",
+      "adr": "ADR-035"
+    }
+  ],
+  "events": [
+    {
+      "type": "workflow.started",
+      "task": "M10-01",
+      "reserved_row": "workflow.*",
+      "payload": ["workflow_run_id", "workflow_id", "session_id", "priority", "node_count"]
+    },
+    {
+      "type": "workflow.node_started",
+      "task": "M10-01",
+      "reserved_row": "workflow.*",
+      "payload": ["workflow_run_id", "workflow_id", "node_id", "node_type", "attempt", "node_session_id?"]
+    },
+    {
+      "type": "workflow.node_completed",
+      "task": "M10-01",
+      "reserved_row": "workflow.*",
+      "payload": ["workflow_run_id", "workflow_id", "node_id", "attempt", "status", "duration_ms", "result_ref?"]
+    },
+    {
+      "type": "workflow.node_failed",
+      "task": "M10-01",
+      "reserved_row": "workflow.*",
+      "payload": ["workflow_run_id", "workflow_id", "node_id", "attempt", "status", "error", "retryable"]
+    },
+    {
+      "type": "workflow.node_cancelled",
+      "task": "M10-01",
+      "reserved_row": "workflow.*",
+      "payload": ["workflow_run_id", "workflow_id", "node_id", "attempt", "reason"]
+    },
+    {
+      "type": "workflow.node_skipped",
+      "task": "M10-01",
+      "reserved_row": "workflow.*",
+      "payload": ["workflow_run_id", "workflow_id", "node_id", "reason"]
+    },
+    {
+      "type": "workflow.completed",
+      "task": "M10-01",
+      "reserved_row": "workflow.*",
+      "payload": ["workflow_run_id", "workflow_id", "status", "node_count", "duration_ms"]
+    },
+    {
+      "type": "workflow.failed",
+      "task": "M10-01",
+      "reserved_row": "workflow.*",
+      "payload": ["workflow_run_id", "workflow_id", "status", "failed_node_id?", "error", "retryable"]
+    },
+    {
+      "type": "workflow.cancelled",
+      "task": "M10-01",
+      "reserved_row": "workflow.*",
+      "payload": ["workflow_run_id", "workflow_id", "reason", "remaining_nodes"]
+    },
+    {
+      "type": "subagent.spawned",
+      "task": "M10-02",
+      "reserved_row": "subagent.spawned/completed",
+      "payload": ["child_session_id", "parent_session_id", "role", "mode", "depth", "context_refs_count", "batch_id"]
+    },
+    {
+      "type": "subagent.completed",
+      "task": "M10-02",
+      "reserved_row": "subagent.spawned/completed",
+      "payload": ["child_session_id", "parent_session_id", "status", "verdict", "result_ref", "batch_id", "injected"]
+    }
+  ],
+  "settings": [
+    {
+      "key": "ui.locale",
+      "task": "M10-06",
+      "type": "string",
+      "values": ["system", "zh-CN", "en-US"],
+      "default": "system",
+      "max_bytes": 32,
+      "adr": "ADR-036"
+    },
+    {
+      "key": "ui.theme",
+      "task": "M10-06",
+      "type": "string",
+      "values": ["system", "light", "dark"],
+      "default": "system",
+      "max_bytes": 32,
+      "adr": "ADR-036"
+    }
+  ],
+  "business_codes": [
+    {"code": "workflow_invalid_definition", "task": "M10-01", "adr": "ADR-031", "ipc": "invalid_value"},
+    {"code": "workflow_not_found", "task": "M10-01", "adr": "ADR-031", "ipc": "invalid_value"},
+    {"code": "workflow_version_conflict", "task": "M10-01", "adr": "ADR-031", "ipc": "invalid_value"},
+    {"code": "workflow_run_not_found", "task": "M10-01", "adr": "ADR-031", "ipc": "invalid_value"},
+    {"code": "workflow_run_active", "task": "M10-01", "adr": "ADR-031", "ipc": "invalid_value"},
+    {"code": "workflow_run_not_active", "task": "M10-01", "adr": "ADR-031", "ipc": "invalid_value"},
+    {"code": "workflow_node_not_found", "task": "M10-01", "adr": "ADR-031", "ipc": "invalid_value"},
+    {"code": "workflow_node_not_retryable", "task": "M10-01", "adr": "ADR-031", "ipc": "invalid_value"},
+    {"code": "workflow_cancel_timeout", "task": "M10-01", "adr": "ADR-031", "ipc": "internal"},
+    {"code": "subagent_not_found", "task": "M10-02", "adr": "ADR-032", "ipc": "invalid_value"},
+    {"code": "subagent_limit_exceeded", "task": "M10-02", "adr": "ADR-032", "ipc": "out_of_range"},
+    {"code": "subagent_context_rejected", "task": "M10-02", "adr": "ADR-032", "ipc": "invalid_value"},
+    {"code": "subagent_result_not_ready", "task": "M10-02", "adr": "ADR-032", "ipc": "invalid_value"},
+    {"code": "subagent_resolution_conflict", "task": "M10-02", "adr": "ADR-032", "ipc": "invalid_value"},
+    {"code": "session_has_children", "task": "M10-02", "adr": "ADR-032", "ipc": "invalid_value"},
+    {"code": "import_invalid_format", "task": "M10-04", "adr": "ADR-034", "ipc": "invalid_format"},
+    {"code": "import_checksum_mismatch", "task": "M10-04", "adr": "ADR-034", "ipc": "invalid_value"},
+    {"code": "import_conflict", "task": "M10-04", "adr": "ADR-034", "ipc": "invalid_value"},
+    {"code": "import_too_large", "task": "M10-04", "adr": "ADR-034", "ipc": "too_large"},
+    {"code": "import_cancelled", "task": "M10-04", "adr": "ADR-034", "ipc": "invalid_value"},
+    {"code": "import_job_not_found", "task": "M10-04", "adr": "ADR-034", "ipc": "invalid_value"},
+    {"code": "import_job_not_active", "task": "M10-04", "adr": "ADR-034", "ipc": "invalid_value"},
+    {"code": "attachment_type_unsupported", "task": "M10-05", "adr": "ADR-035", "ipc": "invalid_value"},
+    {"code": "attachment_too_large", "task": "M10-05", "adr": "ADR-035", "ipc": "too_large"},
+    {"code": "attachment_limit_exceeded", "task": "M10-05", "adr": "ADR-035", "ipc": "out_of_range"},
+    {"code": "attachment_storage_failed", "task": "M10-05", "adr": "ADR-035", "ipc": "internal"}
+  ],
+  "warnings": [
+    {"code": "multimodal_model_unverified", "task": "M10-05", "adr": "ADR-035"},
+    {"code": "subagent_result_truncated", "task": "M10-02", "adr": "ADR-032"}
+  ],
+  "migrations": [
+    {"target": "workflows.deleted_at", "type": "column", "task": "M10-01", "adr": "ADR-031", "note": "soft delete; workflow_runs history retained"},
+    {"target": "workflow_runs.session_id", "type": "column", "task": "M10-01", "adr": "ADR-031", "note": "anchor session for events/FK"},
+    {"target": "workflow_runs.definition_version", "type": "column", "task": "M10-01", "adr": "ADR-031", "note": "definition snapshot version"},
+    {"target": "workflow_runs.definition_hash", "type": "column", "task": "M10-01", "adr": "ADR-031", "note": "definition snapshot hash"},
+    {"target": "workflow_runs.error", "type": "column", "task": "M10-01", "adr": "ADR-031", "note": "terminal error summary"},
+    {"target": "workflow_runs.cancel_requested_at", "type": "column", "task": "M10-01", "adr": "ADR-031", "note": "cancel acknowledgement"},
+    {"target": "node_runs UNIQUE(workflow_run_id, node_id, attempt)", "type": "constraint", "task": "M10-01", "adr": "ADR-031", "note": "idempotent node execution"},
+    {"target": "node_runs(workflow_run_id, status)", "type": "index", "task": "M10-01", "adr": "ADR-031", "note": "run view query"},
+    {"target": "runs.priority", "type": "column", "task": "M10-07", "adr": "ADR-037", "note": "scheduler ordering"},
+    {"target": "runs.queued_at", "type": "column", "task": "M10-07", "adr": "ADR-037", "note": "fairness/aging"},
+    {"target": "runs.retry_count", "type": "column", "task": "M10-07", "adr": "ADR-037", "note": "automatic retry state"},
+    {"target": "runs.max_attempts", "type": "column", "task": "M10-07", "adr": "ADR-037", "note": "retry policy snapshot"},
+    {"target": "runs.wait_reason", "type": "column", "task": "M10-07", "adr": "ADR-037", "note": "queue UI reason"},
+    {"target": "runs(status, priority DESC, queued_at ASC)", "type": "index", "task": "M10-07", "adr": "ADR-037", "note": "queue scan"},
+    {"target": "tasks(workflow_run_id, node_id)", "type": "index", "task": "M10-01", "adr": "ADR-031", "note": "workflow task lookup"},
+    {"target": "tasks(session_id, status)", "type": "index", "task": "M10-01", "adr": "ADR-031", "note": "task queue lookup"},
+    {"target": "sessions(parent_session_id, status)", "type": "index", "task": "M10-02", "adr": "ADR-032", "note": "subagent tree query"},
+    {"target": "subagent_results", "type": "table", "task": "M10-02", "adr": "ADR-032", "note": "full result canonical JSON <=64KiB; summary <=512 bytes UTF-8 + summary_truncated; no parent index"},
+    {"target": "subagent_injections", "type": "table", "task": "M10-02", "adr": "ADR-032", "note": "compact envelope <=8KiB; batch/state/context_version; mode (message_append|origin_fork|system_replace) + supersedes_id; index (parent_session_id,state,created_at)"},
+    {"target": "provider_models.capabilities", "type": "column", "task": "M10-05", "adr": "ADR-035", "note": "model capability (vision) JSON array"},
+    {"target": "attachments", "type": "table", "task": "M10-05", "adr": "ADR-035", "note": "content-addressed attachment metadata; content on disk"},
+    {"target": "attachments(session_id, created_at)", "type": "index", "task": "M10-05", "adr": "ADR-035", "note": "session attachment listing"}
+  ],
+  "uiux_anchors": [
+    {
+      "group": "subagent-tree",
+      "task": "M10-02",
+      "adr": "ADR-032",
+      "testids": ["subagent-tree", "subagent-node"],
+      "data_attrs": ["data-parent-session-id", "data-session-id", "data-depth", "data-status", "data-verdict"]
+    },
+    {
+      "group": "subagent-result",
+      "task": "M10-02",
+      "adr": "ADR-032",
+      "testids": ["subagent-result", "subagent-result-action"],
+      "data_attrs": ["data-child-session-id", "data-decision", "data-resolution", "data-injection-state"]
+    },
+    {
+      "group": "workflow-list",
+      "task": "M10-01",
+      "adr": "ADR-031",
+      "testids": ["workflow-list", "workflow-item"],
+      "data_attrs": ["data-workflow-id", "data-is-template"]
+    },
+    {
+      "group": "workflow-editor",
+      "task": "M10-01",
+      "adr": "ADR-031",
+      "testids": ["workflow-editor", "workflow-editor-validate", "workflow-import"],
+      "data_attrs": ["data-valid", "data-error-code"]
+    },
+    {
+      "group": "workflow-run-view",
+      "task": "M10-01",
+      "adr": "ADR-031",
+      "testids": ["workflow-run-view", "workflow-node-status", "workflow-run-cancel", "workflow-node-retry"],
+      "data_attrs": ["data-run-id", "data-status", "data-node-id", "data-attempt"]
+    },
+    {
+      "group": "attachment",
+      "task": "M10-05",
+      "adr": "ADR-035",
+      "testids": ["attachment-picker", "attachment-item", "attachment-preview"],
+      "data_attrs": ["data-attachment-id", "data-kind", "data-state", "data-error-code"]
+    },
+    {
+      "group": "appearance",
+      "task": "M10-06",
+      "adr": "ADR-036",
+      "testids": ["locale-select", "theme-select"],
+      "data_attrs": ["data-locale", "data-theme"]
+    }
+  ],
+  "limits": {
+    "workflow": {
+      "definition_max_bytes": 262144,
+      "max_nodes": 64,
+      "max_depth": 32,
+      "max_fanout": 16,
+      "max_node_executions_per_run": 256,
+      "max_attempts": 5,
+      "node_timeout_ms_min": 1000,
+      "node_timeout_ms_max": 86400000,
+      "run_timeout_ms_max": 604800000,
+      "result_max_bytes": 65536
+    },
+    "subagent": {
+      "max_depth": 2,
+      "max_fanout_per_parent": 4,
+      "max_concurrent_global": 8,
+      "max_context_refs": 32,
+      "context_text_max_bytes": 32768,
+      "result_max_bytes": 65536,
+      "result_summary_max_bytes": 512,
+      "injection_payload_max_bytes": 8192,
+      "context_max_bytes": 16384,
+      "context_verbatim_batches": 8,
+      "folded_summary_max_bytes": 2048,
+      "result_page_bytes": 16384,
+      "result_pages_max": 4,
+      "timeout_ms_default": 1800000,
+      "timeout_ms_max": 7200000
+    },
+    "http": {
+      "bind_default": "127.0.0.1",
+      "port_default": 0,
+      "body_max_bytes": 2097152,
+      "max_connections": 64,
+      "rate_limit_per_sec": 100,
+      "auth_message_timeout_ms": 5000,
+      "ws_backpressure_queue": 4096
+    },
+    "import": {
+      "file_max_bytes": 21474836480,
+      "line_max_bytes": 2097152,
+      "buffer_bytes": 1048576,
+      "batch_rows": 1000,
+      "transaction_target_ms": 500,
+      "cleanup_stale_hours": 24
+    },
+    "attachment": {
+      "max_bytes": 10485760,
+      "max_per_message": 8,
+      "max_per_session": 200,
+      "max_dimension": 8192,
+      "max_pixels": 25000000,
+      "mime_allowlist": ["image/png", "image/jpeg", "image/webp", "image/gif"],
+      "thumbnail_max_dimension": 512,
+      "orphan_cleanup_hours": 24
+    },
+    "scheduler": {
+      "priority_min": -100,
+      "priority_max": 100,
+      "wait_boost_per_10s": 1,
+      "wait_boost_cap": 60,
+      "starvation_guard_ms": 300000,
+      "max_queued_per_session": 2,
+      "max_queued_global": 64,
+      "retry_backoff_ms": [1000, 2000, 4000, 8000, 16000, 30000, 60000]
+    },
+    "sharding": {
+      "dataset_target_bytes": 5368709120,
+      "write_p95_threshold_ms": 50,
+      "readback_p95_threshold_ms": 150,
+      "quick_check_threshold_ms": 30000,
+      "backup_threshold_ms": 600000,
+      "restore_threshold_ms": 900000
+    }
+  },
+  "risks": [
+    {
+      "id": "R-M10-01",
+      "risk": "编排爆炸半径（深 DAG/大 fan-out/长运行）",
+      "owner": "M10-01",
+      "mitigation": "nodes<=64/depth<=32/fanout<=16/executions<=256；默认 fail-fast；节点/运行超时；取消级联",
+      "trigger": "任一上限被触发或 10 并发出现失控"
+    },
+    {
+      "id": "R-M10-02",
+      "risk": "子 Agent 上下文污染/升权/越权读取",
+      "owner": "M10-02",
+      "mitigation": "显式上下文/引用；不继承父消息全文/工具状态；权限只降不升；默认 message_append（父 system prompt 不变）/后台 origin_fork（不读 live history）/system_replace 仅可选；注入体<=8KiB/上下文<=16KiB/结果<=64KiB；version/supersedes/fold；父可拒绝；parent_session_id 授权；有子会话拒绝删除",
+      "trigger": "隔离矩阵/父授权任一失败或出现子会话读父私有状态"
+    },
+    {
+      "id": "R-M10-03",
+      "risk": "HTTP/WS 鉴权与攻击面",
+      "owner": "M10-03",
+      "mitigation": "默认 loopback+随机端口+token；`--stdio` 默认关闭 HTTP；`--http-only` 失败致命；CORS 拒绝；body<=2MiB；速率/连接上限；token 不入 URL/日志；远程绑定需 ADR",
+      "trigger": "无 token 请求成功或 token 泄漏"
+    },
+    {
+      "id": "R-M10-04",
+      "risk": "导入不可信数据",
+      "owner": "M10-04",
+      "mitigation": "schema/version/checksum；staging DB + 原子切换；不执行内容；路径/密钥扫描；大小/行上限",
+      "trigger": "损坏/恶意样本导致既有数据变化或执行副作用"
+    },
+    {
+      "id": "R-M10-05",
+      "risk": "附件增长/解码炸弹/解码库供应链",
+      "owner": "M10-05",
+      "mitigation": "内容寻址外置；10MiB/8/200/25MP/8192 限额；MIME 魔数；`@napi-rs/image`+`omggif`（MIT）；UtilityProcess 受限进程；保留清理；DB 只存元数据",
+      "trigger": "会话附件超限或清理失败"
+    },
+    {
+      "id": "R-M10-06",
+      "risk": "i18n 范围蔓延/缺失文案",
+      "owner": "M10-06",
+      "mitigation": "zh-CN/en-US 两语言；key 100% CI；缺失回退 key；不改后端契约；RTL 不做",
+      "trigger": "key 覆盖<100% 或组件硬编码文案"
+    },
+    {
+      "id": "R-M10-07",
+      "risk": "调度饥饿/优先级反转",
+      "owner": "M10-07",
+      "mitigation": "等待时长加权上限；公平性断言；10 并发；队列上限；审计 starvation_guard",
+      "trigger": "长队列出现无限等待或超卖"
+    },
+    {
+      "id": "R-M10-08",
+      "risk": "事件分库判定失真",
+      "owner": "M10-08",
+      "mitigation": "固定数据集/脚本/机器信息；写 P95/补读/quick_check/备份恢复全指标；判定表；不实施分库",
+      "trigger": "指标越线仍宣称单库可承载"
+    }
+  ]
+}

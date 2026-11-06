@@ -238,13 +238,13 @@ for (const icon of ["icon.ico", "icon.icns", "icon.png"]) {
 
 // ===== 6. 文档/发布说明/G8 报告 =====
 const requiredDocs = {
-  "README.md": ["已退役", "aether-tauri", "pnpm dev:desktop", "pnpm package:desktop", "M10 可启动"],
+  "README.md": ["已退役", "aether-tauri", "pnpm dev:desktop", "pnpm package:desktop", "M10-00 已执行"],
   "docs/P2-架构迁移-实施计划与验收标准.md": [
-    "v0.8",
+    "v0.10",
     "M9-14",
     "docs/M9-14-证据.md",
     "ADR-030 v0.2",
-    "M10 可启动",
+    "M10-00 已执行",
   ],
   "docs/M9-14-证据.md": ["DoD-1", "DoD-2", "DoD-3", "DoD-4", "DoD-5"],
   "docs/M9-14-发布说明.md": ["旧内测包", "手工卸载", "数据目录", "Keychain"],
@@ -260,8 +260,8 @@ const requiredDocs = {
 // AGENTS.md / 设计文档.md 在本仓库为本地受控文档（.gitignore 排除，不入 CI checkout）；
 // 本机存在时强制校验，CI 缺失时显式 NOTE（不静默跳过）。
 const localDocs = {
-  "AGENTS.md": ["已退役", "v1.30", "v0.8", "M10 可启动"],
-  "设计文档.md": ["v1.30", "已退役", "不阻塞 M9/M10"],
+  "AGENTS.md": ["已退役", "v1.32", "v0.10", "M10-00 已执行"],
+  "设计文档.md": ["v1.32", "已退役", "不阻塞 M9/M10"],
 };
 for (const [rel, tokens] of Object.entries(requiredDocs)) {
   if (!exists(rel)) {

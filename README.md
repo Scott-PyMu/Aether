@@ -2,8 +2,8 @@
 
 本地优先、可扩展的统一多 Agent 编排桌面平台（Electron 壳 + Rust `aetherd` 核心 + TypeScript 适配器 + React UI；ADR-029）。
 
-- 基线：《设计文档》**v1.30**（ADR-001–015、017–030；ADR-029 **v0.4** = Electron + aetherd；ADR-030 **v0.2** = 打包基线/无证书发布 + macOS 人工授权不阻塞 M9/M10）、《需求文档》v0.18、《实施计划与验收标准》v1.24、`docs/P2-架构迁移-实施计划与验收标准.md` **v0.8**（含 M10 详细 DoD/G9–G13）、`docs/UI-UX-设计规格.md` v0.17（S-01 不可达/S-12/S-13）。
-- 状态：**P2-M9 G8 条件通过（conditional_pass）**；Electron 为默认构建/发布壳，`crates/aether-tauri` 已退役，**无 Tauri 回退包**；**M10 可启动**（需 M10-00 ADR 批次）；macOS **公开发布**签名/公证走人工授权（`docs/M9-14-macOS-签名授权方案.md`），**不阻塞 M9/M10**。
+- 基线：《设计文档》**v1.33**（ADR-001–015、017–038；ADR-029 **v0.4** = Electron + aetherd；ADR-030 **v0.2** = 打包基线/无证书发布 + macOS 人工授权不阻塞 M9/M10；ADR-031–038 + ADR-032 v1.2/ADR-033/035 v1.1 = M10 决策记录 v0.5 + 子 Agent 交付模式：编排/子 Agent/HTTP-WS-CLI/导入导出/多模态/i18n-主题/调度器/事件分库预案）、《需求文档》v0.18、《实施计划与验收标准》v1.24、`docs/P2-架构迁移-实施计划与验收标准.md` **v0.11**（含 M10 详细 DoD/G9–G13；M10-00/决策记录 v0.5 + ADR-032 v1.2 已执行，命令 63→87 登记、业务码 9→35、设置键 9→11）、《UI-UX-设计规格》v0.19（S-01 不可达/S-12/S-13/P2 锚点，锚点 29/testid 18）。
+- 状态：**P2-M9 G8 条件通过（conditional_pass）**；Electron 为默认构建/发布壳，`crates/aether-tauri` 已退役，**无 Tauri 回退包**；**M10-00 已执行；M10 文档 v1.0 已冻结（2026-11-05），ADR-032 v1.2 子 Agent 交付模式已批准（2026-11-06），M10-01～M10-08 解锁**（ADR-031–ADR-038 + ADR-032 v1.2/ADR-033/035 v1.1；命令 63→87 登记）；macOS **公开发布**签名/公证走人工授权（`docs/M9-14-macOS-签名授权方案.md`），**不阻塞 M9/M10**。
 - **旧内测包手工卸载**：曾安装 Tauri 内测构建的机器没有 MSI 升级链/回退包；请先手工卸载旧包，再安装 Electron 构建。卸载不会删除数据目录；但**不得双开**同一数据目录（daemon 的 `.aetherd.lock` OS 独占锁会以 `data_dir_locked` 拒绝第二个核心）。详见 `docs/M9-11-旧包手工卸载说明.md` 与 `docs/M9-14-发布说明.md`。
 - 发布说明：`docs/M9-14-发布说明.md`（数据目录 / Keychain 提示、unsigned 记录、安装/卸载）；G8 签核：`docs/M9-Gate-G8-报告.md`。
 
@@ -29,7 +29,7 @@ crates/aether-daemon    aetherd 二进制 / stdio 传输 / 生命周期（ADR-02
 
 ## 本地开发
 
-要求：Rust 1.98+、Node 20+、pnpm 10.34.5、Bun 1.4.2（适配器单文件编译）、Electron 45（精确 patch）。
+要求：Rust 1.98+（开发推荐；workspace MSRV 1.85）、Node 20+、pnpm 10.34.5、Bun 1.4.2（适配器单文件编译）、Electron 45（精确 patch）。
 
 ```powershell
 pnpm install --frozen-lockfile
