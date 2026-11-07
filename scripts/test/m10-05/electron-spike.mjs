@@ -81,7 +81,7 @@ writeFileSync(
   `module.exports = {
   appId: "dev.aether.m10-05.spike",
   productName: "AetherDecodeSpike",
-  copyright: "Copyright (c) 2026 Aether (Q3 spike only)",
+  copyright: "Copyright (c) 2026 Aether Contributors (Q3 spike only)",
   directories: { app: ${JSON.stringify(appDir)}, output: ${JSON.stringify(outDir)} },
   asar: true,
   compression: "store",
