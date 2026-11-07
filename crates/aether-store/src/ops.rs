@@ -1466,8 +1466,7 @@ pub(crate) fn apply_command(
             // 参数化 `IN` 分批（语句变量数有界）；`rowid` 为删除精确定位（调用方已归档）。
             let mut affected = 0usize;
             for chunk in rowids.chunks(DELETE_EVENTS_CHUNK) {
-                let placeholders = std::iter::repeat("?")
-                    .take(chunk.len())
+                let placeholders = std::iter::repeat_n("?", chunk.len())
                     .collect::<Vec<_>>()
                     .join(", ");
                 let sql = format!("DELETE FROM events WHERE rowid IN ({placeholders})");

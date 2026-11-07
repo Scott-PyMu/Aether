@@ -1064,7 +1064,7 @@ impl Actor {
         let needs_init = self
             .sessions
             .get(session_id)
-            .map_or(true, |state| state.sequencer.is_none());
+            .is_none_or(|state| state.sequencer.is_none());
         if needs_init {
             // D4：sequencer 崩溃恢复 / 首次使用——seq = 库中 max(seq)+1。
             let max_seq = self.source.max_seq(session_id).await?;

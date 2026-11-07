@@ -110,7 +110,7 @@ impl FakeJournal {
 
     /// 重复同一行为 `count` 次（脚本快捷方式）。
     pub fn script_repeat(&self, behavior: Behavior, count: usize) {
-        self.script(std::iter::repeat(behavior).take(count));
+        self.script(std::iter::repeat_n(behavior, count));
     }
 
     /// 已落盘事件（顺序即事务提交顺序）。
@@ -262,7 +262,7 @@ impl EventSource for FakeSource {
             let mut page: Vec<EventEnvelope> = events
                 .iter()
                 .filter(|event| event.session_id.as_str() == session)
-                .filter(|event| after_seq.map_or(true, |after| event.seq > after))
+                .filter(|event| after_seq.is_none_or(|after| event.seq > after))
                 .cloned()
                 .collect();
             page.sort_by_key(|event| event.seq);
