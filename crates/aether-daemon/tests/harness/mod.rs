@@ -110,8 +110,19 @@ pub struct Daemon {
 impl Daemon {
     /// 以给定 env 启动（`extra_env` 覆盖同名变量）。
     pub fn spawn_with_env(env: &[(String, String)], extra_env: &[(&str, &str)]) -> Self {
+        Self::spawn_with_args(env, extra_env, &["--stdio"])
+    }
+
+    /// 以给定 env + 参数启动（M10-03：`--stdio --http` / `--http-only`）。
+    pub fn spawn_with_args(
+        env: &[(String, String)],
+        extra_env: &[(&str, &str)],
+        args: &[&str],
+    ) -> Self {
         let mut command = Command::new(env!("CARGO_BIN_EXE_aetherd"));
-        command.arg("--stdio");
+        for arg in args {
+            command.arg(arg);
+        }
         for (key, value) in env {
             command.env(key, value);
         }
@@ -320,6 +331,12 @@ impl Daemon {
                 Err(error) => panic!("wait 失败：{error}"),
             }
         }
+    }
+
+    /// 强杀进程（`--http-only` 无 stdin `shutdown` 路径的测试收口）。
+    pub fn kill(mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 
     /// stdout 原始行（断言「只允许 JSONL」）。

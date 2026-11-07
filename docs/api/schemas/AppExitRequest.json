@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "confirm": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "confirm"
+  ]
+}

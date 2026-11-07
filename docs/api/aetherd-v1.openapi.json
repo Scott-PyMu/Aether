@@ -1,0 +1,4827 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Aether daemon HTTP/WS API",
+    "version": "1.0.0",
+    "description": "M10-03/ADR-033 v1.1：loopback + bearer token；POST /v1/rpc 的 params 与 stdio 完全一致（内层 DTO）。stdio 仍是 UI 专用通道，HTTP/WS/CLI 为并行 API。"
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:{port}",
+      "variables": {
+        "port": {
+          "default": "0",
+          "description": "发现文件中的随机端口（或 AETHERD_HTTP_PORT）"
+        }
+      }
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/v1/rpc": {
+      "post": {
+        "summary": "JSON-RPC 2.0 单请求（不支持 batch）",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RpcRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "JSON-RPC 响应（业务错误也在 200 body）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RpcResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "畸形 JSON / 非法请求"
+          },
+          "401": {
+            "description": "缺少或错误 token"
+          },
+          "413": {
+            "description": "body > 2MiB"
+          },
+          "429": {
+            "description": "速率/并发限制"
+          },
+          "503": {
+            "description": "daemon 未就绪（core_not_ready）"
+          }
+        }
+      }
+    },
+    "/v1/rpc/cancel": {
+      "post": {
+        "summary": "取消在途请求（未知 id → 204；不改变已落库状态）",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "request_id"
+                ],
+                "properties": {
+                  "request_id": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "已登记取消/未知 id"
+          }
+        }
+      }
+    },
+    "/v1/meta": {
+      "get": {
+        "summary": "已实现命令元数据（只列 daemon 命令；不含内部路径/密钥）",
+        "responses": {
+          "200": {
+            "description": "protocol/version/commands/timeout_ms/capabilities"
+          }
+        }
+      }
+    },
+    "/v1/health": {
+      "get": {
+        "summary": "health 命令 + health.api 状态",
+        "responses": {
+          "200": {
+            "description": "HealthReport"
+          },
+          "503": {
+            "description": "core_not_ready"
+          }
+        }
+      }
+    },
+    "/v1/events": {
+      "get": {
+        "summary": "原生 WebSocket 事件流（首帧 auth + subscribe）",
+        "description": "首帧 5s 内 {\"type\":\"auth\",\"token\":\"<token>\"}；随后 {\"type\":\"subscribe\",\"session_id?\":\"<ULID>\",\"last_seq?\":N}。服务端发送 {\"type\":\"event\",\"envelope\":{...9 字段...}}；慢消费者 close 1013。",
+        "responses": {
+          "101": {
+            "description": "Switching Protocols"
+          },
+          "401": {
+            "description": "鉴权失败"
+          }
+        }
+      }
+    },
+    "/v1/admin/rotate-token": {
+      "post": {
+        "summary": "轮换 token（需当前 token；旧 token 立即失效；新 token 同步发现文件）",
+        "responses": {
+          "200": {
+            "description": "{token}"
+          },
+          "401": {
+            "description": "鉴权失败"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
+    "schemas": {
+      "AetherErrorData": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/AetherErrorData_Serialize"
+          },
+          {
+            "$ref": "#/components/schemas/AetherErrorData_Deserialize"
+          }
+        ]
+      },
+      "AetherErrorData_Deserialize": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "aether_code": {
+            "type": "string"
+          },
+          "business_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "details": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "aether_code",
+          "business_code",
+          "details"
+        ]
+      },
+      "AetherErrorData_Serialize": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "aether_code": {
+            "type": "string"
+          },
+          "business_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "details": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "aether_code"
+        ]
+      },
+      "AetherEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "v": {
+            "type": "number"
+          },
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "session_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "runtime_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "seq": {
+            "type": "number"
+          },
+          "ts": {
+            "type": "number"
+          },
+          "type": {
+            "type": "string"
+          },
+          "payload": {}
+        },
+        "required": [
+          "v",
+          "id",
+          "session_id",
+          "run_id",
+          "runtime_id",
+          "seq",
+          "ts",
+          "type",
+          "payload"
+        ]
+      },
+      "AppExitRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "confirm"
+        ]
+      },
+      "AppRestartRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "confirm"
+        ]
+      },
+      "ArchiveExportRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "target_dir": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "maxProperties": 0
+      },
+      "ArtifactAddRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "path"
+        ]
+      },
+      "ArtifactRemoveRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "artifact_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          }
+        },
+        "required": [
+          "session_id",
+          "artifact_id"
+        ]
+      },
+      "ArtifactsListRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          }
+        },
+        "required": [
+          "session_id"
+        ]
+      },
+      "AuditExportRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "target_dir": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "actor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "resource": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "from_ts": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "to_ts": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "maxProperties": 0
+      },
+      "AuditQueryRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "actor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "resource": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "from_ts": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "to_ts": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "minimum": 1,
+            "maximum": 500
+          },
+          "offset": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "minimum": 0
+          },
+          "max_bytes": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "minimum": 65536,
+            "maximum": 1572864
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "maxProperties": 0
+      },
+      "BackupCreateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "target_dir": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "passphrase": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "maxProperties": 0
+      },
+      "BackupListRequest": {
+        "type": "object",
+        "maxProperties": 0,
+        "additionalProperties": false
+      },
+      "BackupRestoreRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/BackupSource"
+          },
+          "passphrase": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "source"
+        ]
+      },
+      "BackupSource": {
+        "anyOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "internal"
+            ],
+            "properties": {
+              "internal": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "external"
+            ],
+            "properties": {
+              "external": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "path"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "ExportDiagnosticsRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "target_dir": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "target_dir"
+        ]
+      },
+      "HealthRequest": {
+        "type": "object",
+        "maxProperties": 0,
+        "additionalProperties": false
+      },
+      "IpcError": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/IpcError_Serialize"
+          },
+          {
+            "$ref": "#/components/schemas/IpcError_Deserialize"
+          }
+        ]
+      },
+      "IpcErrorCode": {
+        "type": "string",
+        "enum": [
+          "invalid_json",
+          "unknown_field",
+          "missing_field",
+          "invalid_type",
+          "invalid_value",
+          "invalid_enum",
+          "too_large",
+          "out_of_range",
+          "invalid_format",
+          "path_rejected",
+          "startup_blocked",
+          "migration_failed",
+          "internal",
+          "core_not_ready",
+          "not_implemented",
+          "readback_gap_too_large",
+          "artifact_path_rejected",
+          "builtin_provider_undeletable",
+          "provider_not_found",
+          "provider_model_not_found",
+          "rule_not_found",
+          "runtime_busy",
+          "no_candidate_runtime",
+          "pause_unsupported",
+          "provider_unreachable",
+          "provider_auth_failed",
+          "provider_error",
+          "preset_not_found",
+          "builtin_preset_undeletable",
+          "workspace_not_found",
+          "workspace_in_use",
+          "session_not_found"
+        ]
+      },
+      "IpcError_Deserialize": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/IpcErrorCode"
+          },
+          "message": {
+            "type": "string"
+          },
+          "field": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "field"
+        ]
+      },
+      "IpcError_Serialize": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/IpcErrorCode"
+          },
+          "message": {
+            "type": "string"
+          },
+          "field": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ]
+      },
+      "MessagesPageRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "last_seq": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "minimum": 0
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "minimum": 1,
+            "maximum": 500
+          },
+          "max_bytes": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "minimum": 65536,
+            "maximum": 1572864
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "session_id"
+        ]
+      },
+      "PermissionDecision": {
+        "type": "string",
+        "enum": [
+          "once",
+          "session",
+          "always",
+          "deny"
+        ]
+      },
+      "PermissionResolveRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "decision": {
+            "$ref": "#/components/schemas/PermissionDecision"
+          }
+        },
+        "required": [
+          "request_id",
+          "decision"
+        ]
+      },
+      "PermissionsPendingRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          }
+        },
+        "maxProperties": 0
+      },
+      "PresetAddRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "system_prompt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "system_prompt"
+        ]
+      },
+      "PresetDeleteRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "preset_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          }
+        },
+        "required": [
+          "preset_id"
+        ]
+      },
+      "PresetUpdateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "preset_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 128
+          },
+          "system_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "preset_id"
+        ]
+      },
+      "PresetsListRequest": {
+        "type": "object",
+        "maxProperties": 0,
+        "additionalProperties": false
+      },
+      "ProviderCreateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "type": {
+            "$ref": "#/components/schemas/ProviderType"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 2048
+          },
+          "endpoints": {
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {},
+                "maxProperties": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 8192
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "type",
+          "enabled"
+        ]
+      },
+      "ProviderDeleteRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "ProviderModelAddRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "provider_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "model_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "display_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider_id",
+          "model_id",
+          "display_name"
+        ]
+      },
+      "ProviderModelToggleRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "provider_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "model_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "provider_id",
+          "model_id",
+          "enabled"
+        ]
+      },
+      "ProviderModelsFetchRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "provider_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          }
+        },
+        "required": [
+          "provider_id"
+        ]
+      },
+      "ProviderTestRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "provider_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          }
+        },
+        "required": [
+          "provider_id"
+        ]
+      },
+      "ProviderToggleRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "enabled"
+        ]
+      },
+      "ProviderType": {
+        "type": "string",
+        "enum": [
+          "anthropic",
+          "openai",
+          "deepseek",
+          "google",
+          "custom"
+        ]
+      },
+      "ProviderUpdateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 2048
+          },
+          "endpoints": {
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {},
+                "maxProperties": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 8192
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "enabled"
+        ]
+      },
+      "ProvidersListRequest": {
+        "type": "object",
+        "maxProperties": 0,
+        "additionalProperties": false
+      },
+      "RefPickKind": {
+        "type": "string",
+        "enum": [
+          "file",
+          "directory"
+        ]
+      },
+      "RefPickRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/RefPickKind"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "ReferenceEntry": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "kind"
+        ]
+      },
+      "RuleAddRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "resource": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "target_kind": {
+            "type": "string"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "decision": {
+            "type": "string"
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "minimum": -100,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "name",
+          "resource",
+          "action",
+          "target_kind",
+          "decision"
+        ]
+      },
+      "RuleDeleteRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "rule_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          }
+        },
+        "required": [
+          "rule_id"
+        ]
+      },
+      "RuleToggleRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "rule_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "rule_id",
+          "enabled"
+        ]
+      },
+      "RuleUpdateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "rule_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 128
+          },
+          "resource": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "target_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "decision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "minimum": -100,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "rule_id"
+        ]
+      },
+      "RulesListRequest": {
+        "type": "object",
+        "maxProperties": 0,
+        "additionalProperties": false
+      },
+      "RunRetryRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          }
+        },
+        "required": [
+          "run_id"
+        ]
+      },
+      "RuntimeDisableRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "runtime_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "confirm_terminate": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "runtime_id"
+        ]
+      },
+      "RuntimeEnableRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "runtime_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          }
+        },
+        "required": [
+          "runtime_id"
+        ]
+      },
+      "RuntimeRetryRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "runtime_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          }
+        },
+        "required": [
+          "runtime_id"
+        ]
+      },
+      "SessionCreateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "runtime_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "provider_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "thinking_depth": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "minimum": 0,
+            "maximum": 4
+          },
+          "permission_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "preset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          }
+        },
+        "required": [
+          "title"
+        ]
+      },
+      "SessionDeleteRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          }
+        },
+        "required": [
+          "session_id"
+        ]
+      },
+      "SessionExportRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "target_dir": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "session_id"
+        ]
+      },
+      "SessionIdRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          }
+        },
+        "required": [
+          "session_id"
+        ]
+      },
+      "SessionListRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "runtime_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "minimum": 1,
+            "maximum": 500
+          }
+        },
+        "maxProperties": 0
+      },
+      "SessionPermissionModeSetRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "permission_mode": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "permission_mode"
+        ]
+      },
+      "SessionRenameRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "required": [
+          "session_id",
+          "title"
+        ]
+      },
+      "SessionSearchRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "minimum": 1,
+            "maximum": 500
+          },
+          "offset": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "minimum": 0
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "SessionSendRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 1048576
+          },
+          "client_msg_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "thinking_depth": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "minimum": 0,
+            "maximum": 4
+          },
+          "references": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReferenceEntry"
+            }
+          },
+          "provider_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "session_id",
+          "text",
+          "client_msg_id"
+        ]
+      },
+      "SessionStatus": {
+        "type": "string",
+        "enum": [
+          "creating",
+          "idle",
+          "running",
+          "paused",
+          "waiting_permission",
+          "completed",
+          "failed",
+          "cancelled"
+        ]
+      },
+      "SessionSummary": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/SessionSummary_Serialize"
+          },
+          {
+            "$ref": "#/components/schemas/SessionSummary_Deserialize"
+          }
+        ]
+      },
+      "SessionSummary_Deserialize": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "runtime_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "parent_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "status": {
+            "$ref": "#/components/schemas/SessionStatus"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "provider_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "provider_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "provider_state": {
+            "type": "string"
+          },
+          "model_state": {
+            "type": "string"
+          },
+          "thinking_depth": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "minimum": 0,
+            "maximum": 4
+          },
+          "permission_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "preset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "preset_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "system_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "config": {},
+          "token_usage": {},
+          "created_at": {
+            "type": "number"
+          },
+          "updated_at": {
+            "type": "number"
+          },
+          "closed_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "workspace_root": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "warnings": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/SessionWarning"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "runtime_id",
+          "workspace_id",
+          "parent_session_id",
+          "title",
+          "status",
+          "model",
+          "provider_id",
+          "provider_name",
+          "provider_state",
+          "model_state",
+          "thinking_depth",
+          "permission_mode",
+          "preset_id",
+          "preset_name",
+          "system_prompt",
+          "config",
+          "token_usage",
+          "created_at",
+          "updated_at",
+          "closed_at",
+          "workspace_root",
+          "warnings"
+        ]
+      },
+      "SessionSummary_Serialize": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "runtime_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "parent_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "status": {
+            "$ref": "#/components/schemas/SessionStatus"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "provider_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "provider_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "provider_state": {
+            "type": "string"
+          },
+          "model_state": {
+            "type": "string"
+          },
+          "thinking_depth": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "minimum": 0,
+            "maximum": 4
+          },
+          "permission_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "preset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "preset_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "system_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "config": {},
+          "token_usage": {},
+          "created_at": {
+            "type": "number"
+          },
+          "updated_at": {
+            "type": "number"
+          },
+          "closed_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "workspace_root": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "warnings": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/SessionWarning"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "runtime_id",
+          "workspace_id",
+          "parent_session_id",
+          "title",
+          "status",
+          "model",
+          "provider_state",
+          "model_state",
+          "system_prompt",
+          "config",
+          "token_usage",
+          "created_at",
+          "updated_at",
+          "closed_at"
+        ]
+      },
+      "SessionWarning": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "field": {
+            "type": "string"
+          },
+          "runtime_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "field",
+          "runtime_id",
+          "message"
+        ]
+      },
+      "SessionWorkspaceAssignRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "workspace_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          }
+        },
+        "required": [
+          "session_id",
+          "workspace_id"
+        ]
+      },
+      "SettingsGetRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key"
+        ]
+      },
+      "SettingsSetRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "value": {}
+        },
+        "required": [
+          "key",
+          "value"
+        ]
+      },
+      "StartupGetRequest": {
+        "type": "object",
+        "maxProperties": 0,
+        "additionalProperties": false
+      },
+      "StartupMigrateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "target_dir": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "target_dir"
+        ]
+      },
+      "StartupPickTargetRequest": {
+        "type": "object",
+        "maxProperties": 0,
+        "additionalProperties": false
+      },
+      "WorkspaceCreateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "root_path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "root_path"
+        ]
+      },
+      "WorkspaceDeleteRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "workspace_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          }
+        },
+        "required": [
+          "workspace_id"
+        ]
+      },
+      "WorkspaceSetRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "workspace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "root_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "maxProperties": 0
+      },
+      "WorkspaceUpdateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "workspace_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "workspace_id",
+          "name"
+        ]
+      },
+      "WorkspacesListRequest": {
+        "type": "object",
+        "maxProperties": 0,
+        "additionalProperties": false
+      },
+      "RpcRequest": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "runtimes_list"
+              },
+              "params": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "object",
+                    "maxProperties": 0,
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "session_list"
+              },
+              "params": {
+                "$ref": "#/components/schemas/SessionListRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "session_create"
+              },
+              "params": {
+                "$ref": "#/components/schemas/SessionCreateRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "session_search"
+              },
+              "params": {
+                "$ref": "#/components/schemas/SessionSearchRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "session_rename"
+              },
+              "params": {
+                "$ref": "#/components/schemas/SessionRenameRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "session_delete"
+              },
+              "params": {
+                "$ref": "#/components/schemas/SessionDeleteRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "session_send"
+              },
+              "params": {
+                "$ref": "#/components/schemas/SessionSendRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "session_interrupt"
+              },
+              "params": {
+                "$ref": "#/components/schemas/SessionIdRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "session_pause"
+              },
+              "params": {
+                "$ref": "#/components/schemas/SessionIdRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "session_resume"
+              },
+              "params": {
+                "$ref": "#/components/schemas/SessionIdRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "session_dispose"
+              },
+              "params": {
+                "$ref": "#/components/schemas/SessionIdRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "messages_page"
+              },
+              "params": {
+                "$ref": "#/components/schemas/MessagesPageRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "permissions_pending"
+              },
+              "params": {
+                "$ref": "#/components/schemas/PermissionsPendingRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "permission_resolve"
+              },
+              "params": {
+                "$ref": "#/components/schemas/PermissionResolveRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "session_permission_mode_set"
+              },
+              "params": {
+                "$ref": "#/components/schemas/SessionPermissionModeSetRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "rules_list"
+              },
+              "params": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "object",
+                    "maxProperties": 0,
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "rule_add"
+              },
+              "params": {
+                "$ref": "#/components/schemas/RuleAddRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "rule_update"
+              },
+              "params": {
+                "$ref": "#/components/schemas/RuleUpdateRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "rule_delete"
+              },
+              "params": {
+                "$ref": "#/components/schemas/RuleDeleteRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "rule_toggle"
+              },
+              "params": {
+                "$ref": "#/components/schemas/RuleToggleRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "settings_get"
+              },
+              "params": {
+                "$ref": "#/components/schemas/SettingsGetRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "settings_set"
+              },
+              "params": {
+                "$ref": "#/components/schemas/SettingsSetRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "backup_create"
+              },
+              "params": {
+                "$ref": "#/components/schemas/BackupCreateRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "backup_list"
+              },
+              "params": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "object",
+                    "maxProperties": 0,
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "backup_restore"
+              },
+              "params": {
+                "$ref": "#/components/schemas/BackupRestoreRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "run_retry"
+              },
+              "params": {
+                "$ref": "#/components/schemas/RunRetryRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "runtime_retry"
+              },
+              "params": {
+                "$ref": "#/components/schemas/RuntimeRetryRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "runtime_enable"
+              },
+              "params": {
+                "$ref": "#/components/schemas/RuntimeEnableRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "runtime_disable"
+              },
+              "params": {
+                "$ref": "#/components/schemas/RuntimeDisableRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "workspace_set"
+              },
+              "params": {
+                "$ref": "#/components/schemas/WorkspaceSetRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "workspaces_list"
+              },
+              "params": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "object",
+                    "maxProperties": 0,
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "workspace_create"
+              },
+              "params": {
+                "$ref": "#/components/schemas/WorkspaceCreateRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "workspace_update"
+              },
+              "params": {
+                "$ref": "#/components/schemas/WorkspaceUpdateRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "workspace_delete"
+              },
+              "params": {
+                "$ref": "#/components/schemas/WorkspaceDeleteRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "session_workspace_assign"
+              },
+              "params": {
+                "$ref": "#/components/schemas/SessionWorkspaceAssignRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "artifacts_list"
+              },
+              "params": {
+                "$ref": "#/components/schemas/ArtifactsListRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "artifact_add"
+              },
+              "params": {
+                "$ref": "#/components/schemas/ArtifactAddRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "artifact_remove"
+              },
+              "params": {
+                "$ref": "#/components/schemas/ArtifactRemoveRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "providers_list"
+              },
+              "params": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "object",
+                    "maxProperties": 0,
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "provider_create"
+              },
+              "params": {
+                "$ref": "#/components/schemas/ProviderCreateRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "provider_update"
+              },
+              "params": {
+                "$ref": "#/components/schemas/ProviderUpdateRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "provider_delete"
+              },
+              "params": {
+                "$ref": "#/components/schemas/ProviderDeleteRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "provider_toggle"
+              },
+              "params": {
+                "$ref": "#/components/schemas/ProviderToggleRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "provider_model_add"
+              },
+              "params": {
+                "$ref": "#/components/schemas/ProviderModelAddRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "provider_model_toggle"
+              },
+              "params": {
+                "$ref": "#/components/schemas/ProviderModelToggleRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "provider_test"
+              },
+              "params": {
+                "$ref": "#/components/schemas/ProviderTestRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "provider_models_fetch"
+              },
+              "params": {
+                "$ref": "#/components/schemas/ProviderModelsFetchRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "presets_list"
+              },
+              "params": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "object",
+                    "maxProperties": 0,
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "preset_add"
+              },
+              "params": {
+                "$ref": "#/components/schemas/PresetAddRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "preset_update"
+              },
+              "params": {
+                "$ref": "#/components/schemas/PresetUpdateRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "preset_delete"
+              },
+              "params": {
+                "$ref": "#/components/schemas/PresetDeleteRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "export_diagnostics"
+              },
+              "params": {
+                "$ref": "#/components/schemas/ExportDiagnosticsRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "session_export"
+              },
+              "params": {
+                "$ref": "#/components/schemas/SessionExportRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "archive_export"
+              },
+              "params": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "object",
+                    "maxProperties": 0,
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "audit_query"
+              },
+              "params": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "object",
+                    "maxProperties": 0,
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "audit_export"
+              },
+              "params": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "object",
+                    "maxProperties": 0,
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "health"
+              },
+              "params": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "object",
+                    "maxProperties": 0,
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "startup_get"
+              },
+              "params": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "object",
+                    "maxProperties": 0,
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "startup_migrate"
+              },
+              "params": {
+                "$ref": "#/components/schemas/StartupMigrateRequest"
+              }
+            }
+          }
+        ]
+      },
+      "RpcResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "jsonrpc",
+          "id"
+        ],
+        "properties": {
+          "jsonrpc": {
+            "const": "2.0"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "result": {},
+          "error": {
+            "$ref": "#/components/schemas/RpcError"
+          }
+        }
+      },
+      "RpcError": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          },
+          "data": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "aether_code": {
+                "type": "string",
+                "enum": [
+                  "invalid_json",
+                  "unknown_field",
+                  "missing_field",
+                  "invalid_type",
+                  "invalid_value",
+                  "invalid_enum",
+                  "too_large",
+                  "out_of_range",
+                  "invalid_format",
+                  "path_rejected",
+                  "startup_blocked",
+                  "migration_failed",
+                  "internal",
+                  "core_not_ready",
+                  "not_implemented",
+                  "readback_gap_too_large",
+                  "artifact_path_rejected",
+                  "builtin_provider_undeletable",
+                  "provider_not_found",
+                  "provider_model_not_found",
+                  "rule_not_found",
+                  "runtime_busy",
+                  "no_candidate_runtime",
+                  "pause_unsupported",
+                  "provider_unreachable",
+                  "provider_auth_failed",
+                  "provider_error",
+                  "preset_not_found",
+                  "builtin_preset_undeletable",
+                  "workspace_not_found",
+                  "workspace_in_use",
+                  "session_not_found"
+                ]
+              },
+              "business_code": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "session_busy",
+                      "session_paused",
+                      "storage_backpressure",
+                      "memory_conflict",
+                      "permission_not_pending",
+                      "data_dir_locked",
+                      "sync_dir_blocked",
+                      "db_open_failed",
+                      "schema_checksum_mismatch"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "reason": {
+                "type": "string"
+              },
+              "details": {}
+            }
+          }
+        }
+      }
+    }
+  },
+  "x-aether-command-catalog": [
+    {
+      "name": "runtimes_list",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "none",
+      "params_dto": null,
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "session_list",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "SessionListRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "session_create",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "SessionCreateRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "session_search",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "SessionSearchRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "session_rename",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "SessionRenameRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "session_delete",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "SessionDeleteRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "session_send",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "SessionSendRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "session_interrupt",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "SessionIdRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "session_pause",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "SessionIdRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "session_resume",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "SessionIdRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "session_dispose",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "SessionIdRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "messages_page",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "MessagesPageRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "permissions_pending",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "PermissionsPendingRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "permission_resolve",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "PermissionResolveRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "session_permission_mode_set",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "SessionPermissionModeSetRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "rules_list",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "no_params",
+      "params_dto": "RulesListRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "rule_add",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "RuleAddRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "rule_update",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "RuleUpdateRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "rule_delete",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "RuleDeleteRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "rule_toggle",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "RuleToggleRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "settings_get",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "SettingsGetRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "settings_set",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "SettingsSetRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "backup_create",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "BackupCreateRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "backup_list",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "no_params",
+      "params_dto": "BackupListRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "backup_restore",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "BackupRestoreRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "run_retry",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "RunRetryRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "runtime_retry",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "RuntimeRetryRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "runtime_enable",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "RuntimeEnableRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "runtime_disable",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "RuntimeDisableRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "workspace_set",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "WorkspaceSetRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "workspaces_list",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "no_params",
+      "params_dto": "WorkspacesListRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "workspace_create",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "WorkspaceCreateRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "workspace_update",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "WorkspaceUpdateRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "workspace_delete",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "WorkspaceDeleteRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "session_workspace_assign",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "SessionWorkspaceAssignRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "artifacts_list",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "ArtifactsListRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "artifact_add",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "ArtifactAddRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "artifact_remove",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "ArtifactRemoveRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "providers_list",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "no_params",
+      "params_dto": "ProvidersListRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "provider_create",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "ProviderCreateRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "provider_update",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "ProviderUpdateRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "provider_delete",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "ProviderDeleteRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "provider_toggle",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "ProviderToggleRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "provider_model_add",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "ProviderModelAddRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "provider_model_toggle",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "ProviderModelToggleRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "provider_test",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "ProviderTestRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "provider_models_fetch",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "ProviderModelsFetchRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "presets_list",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "no_params",
+      "params_dto": "PresetsListRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "preset_add",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "PresetAddRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "preset_update",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "PresetUpdateRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "preset_delete",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "PresetDeleteRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "export_diagnostics",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "ExportDiagnosticsRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "session_export",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "SessionExportRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "archive_export",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "no_params",
+      "params_dto": "ArchiveExportRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "audit_query",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "no_params",
+      "params_dto": "AuditQueryRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "audit_export",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "no_params",
+      "params_dto": "AuditExportRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "health",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "no_params",
+      "params_dto": "HealthRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "startup_get",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "no_params",
+      "params_dto": "StartupGetRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "startup_migrate",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "StartupMigrateRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    }
+  ]
+}

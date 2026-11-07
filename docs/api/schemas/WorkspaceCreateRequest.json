@@ -1,0 +1,17 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "root_path": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "name",
+    "root_path"
+  ]
+}

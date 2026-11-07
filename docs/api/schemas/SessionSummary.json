@@ -1,0 +1,10 @@
+{
+  "anyOf": [
+    {
+      "$ref": "#/components/schemas/SessionSummary_Serialize"
+    },
+    {
+      "$ref": "#/components/schemas/SessionSummary_Deserialize"
+    }
+  ]
+}

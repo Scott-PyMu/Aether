@@ -1,0 +1,10 @@
+{
+  "anyOf": [
+    {
+      "$ref": "#/components/schemas/IpcError_Serialize"
+    },
+    {
+      "$ref": "#/components/schemas/IpcError_Deserialize"
+    }
+  ]
+}

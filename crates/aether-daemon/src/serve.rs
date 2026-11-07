@@ -37,6 +37,7 @@ use tokio::task::JoinHandle;
 use tracing_subscriber::layer::{Layer, SubscriberExt};
 use tracing_subscriber::util::SubscriberInitExt;
 
+use crate::api::{self, ApiConfig, ApiHandle, ApiShared, HttpMode};
 use crate::bootstrap::{Bootstrap, BootstrapError, EXIT_INTERNAL};
 
 /// 关闭时等待后台预热让出存储的最长时间（预热未完成即进入关闭序列时）。
@@ -87,17 +88,31 @@ fn apply_test_shutdown_stall() {
 #[derive(Clone)]
 pub struct Transport {
     out: Arc<Mutex<BufWriter<std::io::Stdout>>>,
+    /// `--http-only` 不使用 stdio：所有通知丢弃（stdout 保持干净）。
+    discard: bool,
 }
 
 impl Transport {
     pub fn new() -> Self {
         Self {
             out: Arc::new(Mutex::new(BufWriter::new(std::io::stdout()))),
+            discard: false,
+        }
+    }
+
+    /// 无 stdio 的传输（`--http-only`）。
+    pub fn null() -> Self {
+        Self {
+            out: Arc::new(Mutex::new(BufWriter::new(std::io::stdout()))),
+            discard: true,
         }
     }
 
     /// 写一帧（单行 + flush）。
     pub fn send(&self, value: &Value) -> std::io::Result<()> {
+        if self.discard {
+            return Ok(());
+        }
         let mut out = match self.out.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
@@ -187,6 +202,8 @@ pub struct DaemonServer {
     runtime: Handle,
     log_sink: Option<Arc<LogSink>>,
     transport: Transport,
+    /// HTTP/WS API 共享状态（`health.api`；未开启 = disabled）。
+    api: Arc<ApiShared>,
     warm: Option<JoinHandle<()>>,
     /// 事件桥句柄（预热完成、管线可用后注入；关闭时先停桥再停管线）。
     event_bridge: Arc<Mutex<Option<DeliveryHandle>>>,
@@ -202,6 +219,7 @@ impl DaemonServer {
         runtime: Handle,
         log_sink: Option<Arc<LogSink>>,
         transport: Transport,
+        api: Arc<ApiShared>,
         start_phase: DaemonPhase,
     ) -> Self {
         Self {
@@ -214,6 +232,7 @@ impl DaemonServer {
             runtime,
             log_sink,
             transport,
+            api,
             warm: None,
             event_bridge: Arc::new(Mutex::new(None)),
             permission_notice: Arc::new(Mutex::new(None)),
@@ -371,6 +390,7 @@ impl DaemonServer {
         let handle = self.runtime.clone();
         let bridge_slot = Arc::clone(&self.event_bridge);
         let notice_slot = Arc::clone(&self.permission_notice);
+        let api = Arc::clone(&self.api);
         let resource_dir = resource_dir_from_exe();
         self.warm = Some(self.runtime.spawn(async move {
             let blocker = handle.clone();
@@ -409,6 +429,8 @@ impl DaemonServer {
             let mut bridge = None;
             let mut notice = None;
             if let Some(pipeline) = pipeline {
+                // M10-03：WS 事件流复用同一落盘后广播（先日志后广播不变）。
+                api.install_pipeline(Arc::new(pipeline.clone()));
                 let mut event_bridge = EventBridge::new(
                     pipeline.clone(),
                     Arc::new(TransportEventSink {
@@ -577,7 +599,7 @@ impl Server for DaemonServer {
         if !COMMANDS.contains(&method) {
             return Err(RpcFailure::method_not_found(method));
         }
-        self.state.dispatch(method, params).map_err(map_ipc_error)
+        api::dispatch_command(&self.state, &self.api, method, params).map_err(map_ipc_error)
     }
 }
 
@@ -725,7 +747,7 @@ fn init_logging(log_path: &Path) -> Option<Arc<LogSink>> {
 }
 
 /// `--stdio` 服务主循环（返回进程退出码）。
-pub fn run_stdio(bootstrap: Bootstrap) -> u8 {
+pub fn run_stdio(bootstrap: Bootstrap, http: HttpMode) -> u8 {
     let log_sink = init_logging(&bootstrap.log_path);
     tracing::info!(
         version = version(),
@@ -749,16 +771,43 @@ pub fn run_stdio(bootstrap: Bootstrap) -> u8 {
         }
     };
 
+    let config = match ApiConfig::from_env(http, false, bootstrap.data_dir.clone()) {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("[aetherd] HTTP 配置错误：{error}");
+            return crate::bootstrap::EXIT_USAGE;
+        }
+    };
+    let api_shared = match prepare_api(&config) {
+        Ok(shared) => shared,
+        Err(error) => {
+            eprintln!("[aetherd] HTTP 初始化失败：{error}");
+            return EXIT_INTERNAL;
+        }
+    };
+
     let state = IpcState::with_startup_deferred(Vec::new(), Arc::clone(&bootstrap.gate));
     let transport = Transport::new();
     let mut server = DaemonServer::new(
-        state,
+        state.clone(),
         bootstrap.data_dir.to_string_lossy().into_owned(),
         runtime.handle().clone(),
         log_sink,
         transport.clone(),
+        Arc::clone(&api_shared),
         DaemonPhase::Starting,
     );
+
+    let api_handle = match start_api(&runtime, &config, state, Arc::clone(&api_shared)) {
+        Ok(handle) => handle,
+        Err(error) => {
+            eprintln!(
+                "[aetherd] HTTP listener 失败（AETHERD_HTTP_REQUIRED=1；退出码 {}）：{error}",
+                api::EXIT_HTTP_LISTENER_FAILED
+            );
+            return api::EXIT_HTTP_LISTENER_FAILED;
+        }
+    };
 
     let mut connection = Connection::new();
     let stdin = std::io::stdin();
@@ -798,6 +847,13 @@ pub fn run_stdio(bootstrap: Bootstrap) -> u8 {
     }
 
     let shutdown_started = Instant::now();
+    // M10-03：先停 HTTP/WS（停止接受 ≤1s + 在途 ≤3s），再停事件桥/管线。
+    if let Some(handle) = api_handle {
+        let budget = DAEMON_SHUTDOWN_BUDGET
+            .saturating_sub(shutdown_started.elapsed())
+            .min(Duration::from_secs(4));
+        handle.shutdown(runtime.handle(), budget);
+    }
     server.begin_shutdown(DAEMON_SHUTDOWN_BUDGET);
     let remaining = DAEMON_SHUTDOWN_BUDGET.saturating_sub(shutdown_started.elapsed());
     server.shutdown_backend(remaining);
@@ -817,6 +873,166 @@ pub fn run_stdio(bootstrap: Bootstrap) -> u8 {
     );
     drop(bootstrap);
     crate::bootstrap::EXIT_OK
+}
+
+/// `--http-only`：headless HTTP/WS（无 stdio；`initialize` 自动接受并预热）。
+pub fn run_http_only(bootstrap: Bootstrap) -> u8 {
+    let log_sink = init_logging(&bootstrap.log_path);
+    tracing::info!(
+        version = version(),
+        core = core_version(),
+        data_dir = %bootstrap.data_dir.display(),
+        "aetherd 启动（http-only；预检通过）"
+    );
+
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_name("aetherd-http")
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            tracing::error!(error = %error, "tokio 运行时创建失败");
+            return EXIT_INTERNAL;
+        }
+    };
+    let config = match ApiConfig::from_env(HttpMode::Enabled, true, bootstrap.data_dir.clone()) {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("[aetherd] HTTP 配置错误：{error}");
+            return crate::bootstrap::EXIT_USAGE;
+        }
+    };
+    let api_shared = match prepare_api(&config) {
+        Ok(shared) => shared,
+        Err(error) => {
+            eprintln!("[aetherd] HTTP 初始化失败：{error}");
+            return EXIT_INTERNAL;
+        }
+    };
+    let state = IpcState::with_startup_deferred(Vec::new(), Arc::clone(&bootstrap.gate));
+    let transport = Transport::null();
+    let mut server = DaemonServer::new(
+        state.clone(),
+        bootstrap.data_dir.to_string_lossy().into_owned(),
+        runtime.handle().clone(),
+        log_sink,
+        transport,
+        Arc::clone(&api_shared),
+        DaemonPhase::Starting,
+    );
+    let api_handle = match start_api_strict(&runtime, &config, state, Arc::clone(&api_shared)) {
+        Ok(handle) => handle,
+        Err(error) => {
+            eprintln!(
+                "[aetherd] HTTP listener 失败（退出码 {}）：{error}",
+                api::EXIT_HTTP_LISTENER_FAILED
+            );
+            return api::EXIT_HTTP_LISTENER_FAILED;
+        }
+    };
+
+    // headless 无 initialize 客户端：自动接受并预热（initialize 响应不适用）。
+    server.initialize_accepted();
+    runtime.block_on(wait_for_shutdown_signal());
+    tracing::info!("收到关闭信号：进入 http-only 关闭序列");
+
+    let shutdown_started = Instant::now();
+    api_handle.shutdown(
+        runtime.handle(),
+        DAEMON_SHUTDOWN_BUDGET.min(Duration::from_secs(4)),
+    );
+    server.begin_shutdown(DAEMON_SHUTDOWN_BUDGET);
+    let remaining = DAEMON_SHUTDOWN_BUDGET.saturating_sub(shutdown_started.elapsed());
+    server.shutdown_backend(remaining);
+    let remaining = DAEMON_SHUTDOWN_BUDGET.saturating_sub(shutdown_started.elapsed());
+    runtime.shutdown_timeout(RUNTIME_SHUTDOWN_BUDGET.min(remaining));
+    tracing::info!(
+        shutdown_ms = u64::try_from(shutdown_started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        "aetherd 退出（http-only）"
+    );
+    drop(bootstrap);
+    crate::bootstrap::EXIT_OK
+}
+
+/// 构造 API 共享状态（禁用/启用；token 生成失败按配置决定致命性）。
+fn prepare_api(config: &ApiConfig) -> Result<Arc<ApiShared>, String> {
+    if !config.enabled {
+        return Ok(ApiShared::disabled());
+    }
+    ApiShared::prepared(config.cors_origin.clone())
+}
+
+/// 启动 HTTP；非必需模式下失败只记录 `health.api.state=error`，stdio 继续；
+/// `AETHERD_HTTP_REQUIRED=1` 时返回 `Err`（调用方退出码 25）。
+fn start_api(
+    runtime: &tokio::runtime::Runtime,
+    config: &ApiConfig,
+    state: IpcState,
+    shared: Arc<ApiShared>,
+) -> Result<Option<ApiHandle>, String> {
+    if !config.enabled {
+        return Ok(None);
+    }
+    match api::start(runtime, config, state, Arc::clone(&shared)) {
+        Ok(handle) => Ok(Some(handle)),
+        Err(error) => {
+            if config.required {
+                return Err(error);
+            }
+            tracing::error!(error = %error, "HTTP/WS API 启动失败（stdio 继续；health.api=error）");
+            shared.set_state(api::ApiState::Error { last_error: error });
+            Ok(None)
+        }
+    }
+}
+
+/// 启动 HTTP（必需模式；失败由调用方转退出码 25）。
+fn start_api_strict(
+    runtime: &tokio::runtime::Runtime,
+    config: &ApiConfig,
+    state: IpcState,
+    shared: Arc<ApiShared>,
+) -> Result<ApiHandle, String> {
+    api::start(runtime, config, state, shared)
+}
+
+/// 等待 `--http-only` 的终止信号（Windows 覆盖 CTRL-C/BREAK/CLOSE/注销/关机）。
+async fn wait_for_shutdown_signal() {
+    #[cfg(windows)]
+    {
+        use tokio::signal::windows;
+        let signals = (
+            windows::ctrl_c(),
+            windows::ctrl_break(),
+            windows::ctrl_close(),
+            windows::ctrl_logoff(),
+            windows::ctrl_shutdown(),
+        );
+        let (
+            Ok(mut ctrl_c),
+            Ok(mut ctrl_break),
+            Ok(mut ctrl_close),
+            Ok(mut ctrl_logoff),
+            Ok(mut ctrl_shutdown),
+        ) = signals
+        else {
+            tracing::warn!("Windows 控制台信号注册失败：回退 ctrl_c");
+            let _ = tokio::signal::ctrl_c().await;
+            return;
+        };
+        tokio::select! {
+            _ = ctrl_c.recv() => tracing::info!("CTRL_C"),
+            _ = ctrl_break.recv() => tracing::info!("CTRL_BREAK"),
+            _ = ctrl_close.recv() => tracing::info!("CTRL_CLOSE"),
+            _ = ctrl_logoff.recv() => tracing::info!("CTRL_LOGOFF"),
+            _ = ctrl_shutdown.recv() => tracing::info!("CTRL_SHUTDOWN"),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }
 
 /// 预 `initialize` 致命失败：写唯一首帧 `id:null` error 后返回退出码。
@@ -848,12 +1064,18 @@ mod tests {
     #[test]
     fn shutdown_budget_is_frozen_at_8_2s() {
         assert_eq!(DAEMON_SHUTDOWN_BUDGET, Duration::from_millis(8_200));
-        assert!(DAEMON_SHUTDOWN_BUDGET < Duration::from_secs(10), "必须小于 T11 10s");
+        assert!(
+            DAEMON_SHUTDOWN_BUDGET < Duration::from_secs(10),
+            "必须小于 T11 10s"
+        );
     }
 
     #[test]
     fn join_with_budget_returns_value_within_budget() {
-        assert_eq!(join_with_budget(Duration::from_millis(500), || 7_u8), Some(7));
+        assert_eq!(
+            join_with_budget(Duration::from_millis(500), || 7_u8),
+            Some(7)
+        );
     }
 
     #[test]

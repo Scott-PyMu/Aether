@@ -1,0 +1,17 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "system_prompt": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "name",
+    "system_prompt"
+  ]
+}

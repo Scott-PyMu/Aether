@@ -1,0 +1,17 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "request_id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "decision": {
+      "$ref": "#/components/schemas/PermissionDecision"
+    }
+  },
+  "required": [
+    "request_id",
+    "decision"
+  ]
+}

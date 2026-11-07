@@ -1,0 +1,53 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "v": {
+      "type": "number"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "session_id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "run_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "runtime_id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "seq": {
+      "type": "number"
+    },
+    "ts": {
+      "type": "number"
+    },
+    "type": {
+      "type": "string"
+    },
+    "payload": {}
+  },
+  "required": [
+    "v",
+    "id",
+    "session_id",
+    "run_id",
+    "runtime_id",
+    "seq",
+    "ts",
+    "type",
+    "payload"
+  ]
+}

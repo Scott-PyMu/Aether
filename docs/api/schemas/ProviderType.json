@@ -1,0 +1,10 @@
+{
+  "type": "string",
+  "enum": [
+    "anthropic",
+    "openai",
+    "deepseek",
+    "google",
+    "custom"
+  ]
+}

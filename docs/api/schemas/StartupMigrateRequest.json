@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "target_dir": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "target_dir"
+  ]
+}

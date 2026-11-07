@@ -24,11 +24,27 @@ aether-app.workspace = true
 aether-core.workspace = true
 aether-rpc.workspace = true
 aether-store.workspace = true
+# M10-03（ADR-033 v1.1）：本地 HTTP/WS API + CLI。
+# 精确版本锁定；axum/tokio-tungstenite/ureq/getrandom 均为 MIT/Apache-2.0（deny.toml 允许）。
+axum = { version = "=0.8.9", features = ["ws"] }
+futures-util = "0.3"
+getrandom = "=0.3.4"
+hex = "0.4"
 # 数据目录 OS 独占锁（P2-8：handle-based，崩溃由 OS 自动释放；纯 Rust，无 unsafe）。
 # 许可 MIT OR Apache-2.0（deny.toml 允许清单内），见 docs/M9-03-证据.md §供应链。
 fs4 = { version = "1.1", default-features = false, features = ["sync"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "sync"] }
+tokio = { version = "1", features = [
+    "rt",
+    "rt-multi-thread",
+    "time",
+    "sync",
+    "net",
+    "signal",
+    "macros",
+    "io-util",
+] }
+tokio-tungstenite = "=0.29.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = [
     "fmt",
@@ -36,6 +52,7 @@ tracing-subscriber = { version = "0.3", default-features = false, features = [
     "registry",
     "ansi",
 ] }
+ureq = { version = "=3.4.2", default-features = false }
 
 [dev-dependencies]
 aether-store = { workspace = true }

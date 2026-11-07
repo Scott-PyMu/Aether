@@ -1,0 +1,10 @@
+{
+  "anyOf": [
+    {
+      "$ref": "#/components/schemas/AetherErrorData_Serialize"
+    },
+    {
+      "$ref": "#/components/schemas/AetherErrorData_Deserialize"
+    }
+  ]
+}

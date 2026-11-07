@@ -1,0 +1,13 @@
+{
+  "type": "string",
+  "enum": [
+    "creating",
+    "idle",
+    "running",
+    "paused",
+    "waiting_permission",
+    "completed",
+    "failed",
+    "cancelled"
+  ]
+}
