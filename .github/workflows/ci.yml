@@ -517,6 +517,55 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+  m10-03-api-cli:
+    name: M10-03 HTTP/WS/CLI (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      CARGO_BUILD_JOBS: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install workspace deps
+        run: pnpm install --frozen-lockfile
+      - name: Install Linux keyring deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+      - name: Build daemon + run M10-03 API/WS/CLI tests
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo build -p aether-daemon 2>&1 | tee m10-03-api.log
+          cargo test -p aether-daemon --test m10_03_api -j 1 -- --test-threads=1 2>&1 | tee -a m10-03-api.log
+      - name: External Node consumer (fetch + WebSocket)
+        shell: bash
+        run: node scripts/test/m10-03/external-client.mjs 2>&1 | tee -a m10-03-api.log
+      - name: Verify OpenAPI/schema + M10-03 evidence
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm verify:api-schema 2>&1 | tee -a m10-03-api.log
+          pnpm verify:m10-03 2>&1 | tee -a m10-03-api.log
+      - name: Upload M10-03 log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: m10-03-api-${{ matrix.os }}
+          path: m10-03-api.log
+          if-no-files-found: warn
+          retention-days: 30
+
   m9-12-e2e-windows:
     name: M9-12 Playwright Electron E2E (Windows)
     runs-on: windows-2022
