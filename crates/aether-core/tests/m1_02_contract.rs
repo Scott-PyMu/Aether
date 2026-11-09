@@ -20,8 +20,8 @@ use aether_core::{
     SessionClosedPayload, SessionCreatedPayload, SessionId, SessionStatus,
     SessionStatusChangedPayload, SessionSummary, SessionUpdatedPayload, SubagentCompletedPayload,
     SubagentSpawnedPayload, TokenUsage, ToolCallCompletedPayload, ToolCallFailedPayload,
-    ToolCallId, ToolCallStartedPayload, UsagePayload, WorkflowEventPayload, WorkflowRunId,
-    Workspace, WorkspaceId, ENVELOPE_FIELDS, EVENT_ENVELOPE_VERSION,
+    ToolCallId, ToolCallStartedPayload, UsagePayload, WorkflowRunId, Workspace, WorkspaceId,
+    ENVELOPE_FIELDS, EVENT_ENVELOPE_VERSION,
 };
 use serde_json::{json, Value};
 
@@ -368,8 +368,96 @@ fn valid_payload_samples() -> Vec<(EventType, Value)> {
             json!({"child_session_id": "sess-child", "verdict": "ok"}),
         ),
         (
-            EventType::Workflow,
-            json!({"workflow_run_id": "wfrun-1", "node_id": null, "status": "running"}),
+            EventType::WorkflowStarted,
+            json!({
+                "workflow_run_id": "wfrun-1",
+                "workflow_id": "wf-1",
+                "session_id": "sess-1",
+                "priority": 0,
+                "node_count": 3
+            }),
+        ),
+        (
+            EventType::WorkflowNodeStarted,
+            json!({
+                "workflow_run_id": "wfrun-1",
+                "workflow_id": "wf-1",
+                "node_id": "start",
+                "node_type": "task",
+                "attempt": 1
+            }),
+        ),
+        (
+            EventType::WorkflowNodeCompleted,
+            json!({
+                "workflow_run_id": "wfrun-1",
+                "workflow_id": "wf-1",
+                "node_id": "start",
+                "attempt": 1,
+                "status": "succeeded",
+                "duration_ms": 4
+            }),
+        ),
+        (
+            EventType::WorkflowNodeFailed,
+            json!({
+                "workflow_run_id": "wfrun-1",
+                "workflow_id": "wf-1",
+                "node_id": "review",
+                "attempt": 1,
+                "status": "failed",
+                "error": error_info(),
+                "retryable": false
+            }),
+        ),
+        (
+            EventType::WorkflowNodeCancelled,
+            json!({
+                "workflow_run_id": "wfrun-1",
+                "workflow_id": "wf-1",
+                "node_id": "review",
+                "attempt": 1,
+                "reason": "cancelled"
+            }),
+        ),
+        (
+            EventType::WorkflowNodeSkipped,
+            json!({
+                "workflow_run_id": "wfrun-1",
+                "workflow_id": "wf-1",
+                "node_id": "summary",
+                "reason": "condition_false"
+            }),
+        ),
+        (
+            EventType::WorkflowCompleted,
+            json!({
+                "workflow_run_id": "wfrun-1",
+                "workflow_id": "wf-1",
+                "status": "succeeded",
+                "node_count": 3,
+                "duration_ms": 12
+            }),
+        ),
+        (
+            EventType::WorkflowFailed,
+            json!({
+                "workflow_run_id": "wfrun-1",
+                "workflow_id": "wf-1",
+                "status": "failed",
+                "failed_node_id": "review",
+                "error": error_info(),
+                "retryable": false
+            }),
+        ),
+        (
+            EventType::WorkflowCancelled,
+            json!({
+                "workflow_run_id": "wfrun-1",
+                "workflow_id": "wf-1",
+                "reason": "user",
+                "remaining_nodes": 2
+            }),
         ),
     ]
 }
@@ -493,12 +581,20 @@ fn appendix_b_type_list_is_exact() {
         "message.reasoning_delta",
         "subagent.spawned",
         "subagent.completed",
-        "workflow.*",
+        "workflow.started",
+        "workflow.node_started",
+        "workflow.node_completed",
+        "workflow.node_failed",
+        "workflow.node_cancelled",
+        "workflow.node_skipped",
+        "workflow.completed",
+        "workflow.failed",
+        "workflow.cancelled",
     ];
 
     assert_eq!(EventType::MVP.len(), 19, "MVP 集类型数应为 19");
-    assert_eq!(EventType::RESERVED.len(), 4, "预留类型数应为 4");
-    assert_eq!(EventType::ALL.len(), 23, "类型总数应为 23");
+    assert_eq!(EventType::RESERVED.len(), 12, "预留类型数应为 12");
+    assert_eq!(EventType::ALL.len(), 31, "类型总数应为 31");
 
     let mvp: BTreeSet<&str> = EventType::MVP.iter().map(|t| t.as_str()).collect();
     let reserved: BTreeSet<&str> = EventType::RESERVED.iter().map(|t| t.as_str()).collect();
@@ -507,7 +603,7 @@ fn appendix_b_type_list_is_exact() {
     assert!(mvp.is_disjoint(&reserved), "MVP 与预留集合必须不相交");
 
     let all: BTreeSet<&str> = EventType::ALL.iter().map(|t| t.as_str()).collect();
-    assert_eq!(all.len(), 23, "类型字符串必须唯一");
+    assert_eq!(all.len(), 31, "类型字符串必须唯一");
     assert_eq!(
         all,
         mvp.union(&reserved).copied().collect(),
@@ -569,11 +665,91 @@ fn reserved_types_have_placeholder_definitions() {
                     verdict: "ok".to_string(),
                 })
             }
-            EventType::Workflow => EventPayload::Workflow(WorkflowEventPayload {
-                workflow_run_id: WorkflowRunId::new("wfrun-1").unwrap(),
-                node_id: None,
-                status: "running".to_string(),
-            }),
+            EventType::WorkflowStarted => {
+                EventPayload::WorkflowStarted(aether_core::WorkflowStartedPayload {
+                    workflow_run_id: WorkflowRunId::new("wfrun-1").unwrap(),
+                    workflow_id: "wf-1".to_string(),
+                    session_id: SessionId::new("sess-1").unwrap(),
+                    priority: 0,
+                    node_count: 1,
+                })
+            }
+            EventType::WorkflowNodeStarted => {
+                EventPayload::WorkflowNodeStarted(aether_core::WorkflowNodeStartedPayload {
+                    workflow_run_id: WorkflowRunId::new("wfrun-1").unwrap(),
+                    workflow_id: "wf-1".to_string(),
+                    node_id: "start".to_string(),
+                    node_type: "task".to_string(),
+                    attempt: 1,
+                    node_session_id: None,
+                })
+            }
+            EventType::WorkflowNodeCompleted => {
+                EventPayload::WorkflowNodeCompleted(aether_core::WorkflowNodeCompletedPayload {
+                    workflow_run_id: WorkflowRunId::new("wfrun-1").unwrap(),
+                    workflow_id: "wf-1".to_string(),
+                    node_id: "start".to_string(),
+                    attempt: 1,
+                    status: "succeeded".to_string(),
+                    duration_ms: 1,
+                    result_ref: None,
+                })
+            }
+            EventType::WorkflowNodeFailed => {
+                EventPayload::WorkflowNodeFailed(aether_core::WorkflowNodeFailedPayload {
+                    workflow_run_id: WorkflowRunId::new("wfrun-1").unwrap(),
+                    workflow_id: "wf-1".to_string(),
+                    node_id: "start".to_string(),
+                    attempt: 1,
+                    status: "failed".to_string(),
+                    error: error_info(),
+                    retryable: false,
+                })
+            }
+            EventType::WorkflowNodeCancelled => {
+                EventPayload::WorkflowNodeCancelled(aether_core::WorkflowNodeCancelledPayload {
+                    workflow_run_id: WorkflowRunId::new("wfrun-1").unwrap(),
+                    workflow_id: "wf-1".to_string(),
+                    node_id: "start".to_string(),
+                    attempt: 1,
+                    reason: "cancelled".to_string(),
+                })
+            }
+            EventType::WorkflowNodeSkipped => {
+                EventPayload::WorkflowNodeSkipped(aether_core::WorkflowNodeSkippedPayload {
+                    workflow_run_id: WorkflowRunId::new("wfrun-1").unwrap(),
+                    workflow_id: "wf-1".to_string(),
+                    node_id: "start".to_string(),
+                    reason: "condition_false".to_string(),
+                })
+            }
+            EventType::WorkflowCompleted => {
+                EventPayload::WorkflowCompleted(aether_core::WorkflowCompletedPayload {
+                    workflow_run_id: WorkflowRunId::new("wfrun-1").unwrap(),
+                    workflow_id: "wf-1".to_string(),
+                    status: "succeeded".to_string(),
+                    node_count: 1,
+                    duration_ms: 1,
+                })
+            }
+            EventType::WorkflowFailed => {
+                EventPayload::WorkflowFailed(aether_core::WorkflowFailedPayload {
+                    workflow_run_id: WorkflowRunId::new("wfrun-1").unwrap(),
+                    workflow_id: "wf-1".to_string(),
+                    status: "failed".to_string(),
+                    failed_node_id: Some("start".to_string()),
+                    error: error_info(),
+                    retryable: false,
+                })
+            }
+            EventType::WorkflowCancelled => {
+                EventPayload::WorkflowCancelled(aether_core::WorkflowCancelledPayload {
+                    workflow_run_id: WorkflowRunId::new("wfrun-1").unwrap(),
+                    workflow_id: "wf-1".to_string(),
+                    reason: "user".to_string(),
+                    remaining_nodes: 0,
+                })
+            }
             other => panic!("{other} 不是预留类型"),
         };
         let envelope = sample_envelope(payload);
@@ -581,11 +757,11 @@ fn reserved_types_have_placeholder_definitions() {
         assert_eq!(EventEnvelope::from_json_str(&text).unwrap(), envelope);
     }
 
-    let workflow: EventType = "workflow.*".parse().unwrap();
-    assert_eq!(workflow, EventType::Workflow);
+    let started: EventType = "workflow.started".parse().unwrap();
+    assert_eq!(started, EventType::WorkflowStarted);
     assert!(
-        "workflow.started".parse::<EventType>().is_err(),
-        "P2 前 workflow.* 为占位，不接受具体子类型"
+        "workflow.*".parse::<EventType>().is_err(),
+        "占位符不得再作为事件类型（ADR-031 精确子类型）"
     );
 }
 

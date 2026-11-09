@@ -161,8 +161,48 @@ fn envelope_samples() -> Vec<(EventType, &'static str, Option<&'static str>)> {
             Some("run-1"),
         ),
         (
-            Workflow,
-            r#"{"workflow_run_id":"wfrun-1","node_id":null,"status":"running"}"#,
+            WorkflowStarted,
+            r#"{"workflow_run_id":"wfrun-1","workflow_id":"wf-1","session_id":"sess-1","priority":0,"node_count":1}"#,
+            Some("run-1"),
+        ),
+        (
+            WorkflowNodeStarted,
+            r#"{"workflow_run_id":"wfrun-1","workflow_id":"wf-1","node_id":"start","node_type":"task","attempt":1}"#,
+            Some("run-1"),
+        ),
+        (
+            WorkflowNodeCompleted,
+            r#"{"workflow_run_id":"wfrun-1","workflow_id":"wf-1","node_id":"start","attempt":1,"status":"succeeded","duration_ms":1}"#,
+            Some("run-1"),
+        ),
+        (
+            WorkflowNodeFailed,
+            r#"{"workflow_run_id":"wfrun-1","workflow_id":"wf-1","node_id":"start","attempt":1,"status":"failed","error":{"code":"E1","message":"boom","recoverable":false},"retryable":false}"#,
+            Some("run-1"),
+        ),
+        (
+            WorkflowNodeCancelled,
+            r#"{"workflow_run_id":"wfrun-1","workflow_id":"wf-1","node_id":"start","attempt":1,"reason":"user"}"#,
+            Some("run-1"),
+        ),
+        (
+            WorkflowNodeSkipped,
+            r#"{"workflow_run_id":"wfrun-1","workflow_id":"wf-1","node_id":"start","reason":"condition_false"}"#,
+            Some("run-1"),
+        ),
+        (
+            WorkflowCompleted,
+            r#"{"workflow_run_id":"wfrun-1","workflow_id":"wf-1","status":"succeeded","node_count":1,"duration_ms":1}"#,
+            Some("run-1"),
+        ),
+        (
+            WorkflowFailed,
+            r#"{"workflow_run_id":"wfrun-1","workflow_id":"wf-1","status":"failed","failed_node_id":"start","error":{"code":"E1","message":"boom","recoverable":false},"retryable":false}"#,
+            Some("run-1"),
+        ),
+        (
+            WorkflowCancelled,
+            r#"{"workflow_run_id":"wfrun-1","workflow_id":"wf-1","reason":"user","remaining_nodes":1}"#,
             Some("run-1"),
         ),
     ]

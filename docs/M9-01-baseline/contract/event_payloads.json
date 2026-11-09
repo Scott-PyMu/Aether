@@ -545,10 +545,10 @@
       ]
     },
     {
-      "type": "workflow.*",
-      "variant": "Workflow",
+      "type": "workflow.started",
+      "variant": "WorkflowStarted",
       "mvp": false,
-      "payload": "WorkflowEventPayload",
+      "payload": "WorkflowStartedPayload",
       "fields": [
         {
           "name": "workflow_run_id",
@@ -557,16 +557,366 @@
           "optional_when": []
         },
         {
+          "name": "workflow_id",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "session_id",
+          "type": "SessionId",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "priority",
+          "type": "i64",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "node_count",
+          "type": "u32",
+          "optional": false,
+          "optional_when": []
+        }
+      ]
+    },
+    {
+      "type": "workflow.node_started",
+      "variant": "WorkflowNodeStarted",
+      "mvp": false,
+      "payload": "WorkflowNodeStartedPayload",
+      "fields": [
+        {
+          "name": "workflow_run_id",
+          "type": "crate::ids::WorkflowRunId",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "workflow_id",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        },
+        {
           "name": "node_id",
-          "type": "Option<String>",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "node_type",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "attempt",
+          "type": "u32",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "node_session_id",
+          "type": "Option<SessionId>",
           "optional": true,
           "optional_when": [
-            "type_option"
+            "type_option",
+            "skip_serializing_if",
+            "serde_default"
           ]
+        }
+      ]
+    },
+    {
+      "type": "workflow.node_completed",
+      "variant": "WorkflowNodeCompleted",
+      "mvp": false,
+      "payload": "WorkflowNodeCompletedPayload",
+      "fields": [
+        {
+          "name": "workflow_run_id",
+          "type": "crate::ids::WorkflowRunId",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "workflow_id",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "node_id",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "attempt",
+          "type": "u32",
+          "optional": false,
+          "optional_when": []
         },
         {
           "name": "status",
           "type": "String",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "duration_ms",
+          "type": "u64",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "result_ref",
+          "type": "Option<String>",
+          "optional": true,
+          "optional_when": [
+            "type_option",
+            "skip_serializing_if",
+            "serde_default"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "workflow.node_failed",
+      "variant": "WorkflowNodeFailed",
+      "mvp": false,
+      "payload": "WorkflowNodeFailedPayload",
+      "fields": [
+        {
+          "name": "workflow_run_id",
+          "type": "crate::ids::WorkflowRunId",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "workflow_id",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "node_id",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "attempt",
+          "type": "u32",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "status",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "error",
+          "type": "ErrorInfo",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "retryable",
+          "type": "bool",
+          "optional": false,
+          "optional_when": []
+        }
+      ]
+    },
+    {
+      "type": "workflow.node_cancelled",
+      "variant": "WorkflowNodeCancelled",
+      "mvp": false,
+      "payload": "WorkflowNodeCancelledPayload",
+      "fields": [
+        {
+          "name": "workflow_run_id",
+          "type": "crate::ids::WorkflowRunId",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "workflow_id",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "node_id",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "attempt",
+          "type": "u32",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "reason",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        }
+      ]
+    },
+    {
+      "type": "workflow.node_skipped",
+      "variant": "WorkflowNodeSkipped",
+      "mvp": false,
+      "payload": "WorkflowNodeSkippedPayload",
+      "fields": [
+        {
+          "name": "workflow_run_id",
+          "type": "crate::ids::WorkflowRunId",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "workflow_id",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "node_id",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "reason",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        }
+      ]
+    },
+    {
+      "type": "workflow.completed",
+      "variant": "WorkflowCompleted",
+      "mvp": false,
+      "payload": "WorkflowCompletedPayload",
+      "fields": [
+        {
+          "name": "workflow_run_id",
+          "type": "crate::ids::WorkflowRunId",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "workflow_id",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "status",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "node_count",
+          "type": "u32",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "duration_ms",
+          "type": "u64",
+          "optional": false,
+          "optional_when": []
+        }
+      ]
+    },
+    {
+      "type": "workflow.failed",
+      "variant": "WorkflowFailed",
+      "mvp": false,
+      "payload": "WorkflowFailedPayload",
+      "fields": [
+        {
+          "name": "workflow_run_id",
+          "type": "crate::ids::WorkflowRunId",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "workflow_id",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "status",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "failed_node_id",
+          "type": "Option<String>",
+          "optional": true,
+          "optional_when": [
+            "type_option",
+            "skip_serializing_if",
+            "serde_default"
+          ]
+        },
+        {
+          "name": "error",
+          "type": "ErrorInfo",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "retryable",
+          "type": "bool",
+          "optional": false,
+          "optional_when": []
+        }
+      ]
+    },
+    {
+      "type": "workflow.cancelled",
+      "variant": "WorkflowCancelled",
+      "mvp": false,
+      "payload": "WorkflowCancelledPayload",
+      "fields": [
+        {
+          "name": "workflow_run_id",
+          "type": "crate::ids::WorkflowRunId",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "workflow_id",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "reason",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "remaining_nodes",
+          "type": "u32",
           "optional": false,
           "optional_when": []
         }
@@ -574,7 +924,7 @@
     }
   ],
   "counts": {
-    "types": 23,
+    "types": 31,
     "mvp": 19
   }
 }

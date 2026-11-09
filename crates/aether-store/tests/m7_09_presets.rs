@@ -98,10 +98,12 @@ async fn migration_0007_creates_presets_seeds_builtins_and_adds_session_column()
             .collect();
         migrate_with(&mut connection, &before).unwrap();
         let applied = migrate_with(&mut connection, EMBEDDED_MIGRATIONS).unwrap();
+        let expected: Vec<i64> =
+            (7..=i64::try_from(EMBEDDED_MIGRATIONS.len()).unwrap()).collect();
         assert_eq!(
             applied.iter().map(|item| item.version).collect::<Vec<_>>(),
-            vec![7, 8, 9],
-            "增量应用 0007（本任务）、0008（M7-07 FTS5）与 0009（ADR-028 端点）"
+            expected,
+            "增量应用 0007 起的全部已发布迁移（含 M10-01 的 0010）"
         );
 
         // presets 表列清单（ADR-026 §2.2-1）。
@@ -197,7 +199,10 @@ async fn migration_0007_creates_presets_seeds_builtins_and_adds_session_column()
     {
         let mut connection = Connection::open(&fresh).unwrap();
         let applied = migrate(&mut connection).unwrap();
-        assert_eq!(applied.last().map(|item| item.version), Some(9));
+        assert_eq!(
+            applied.last().map(|item| item.version),
+            Some(i64::try_from(EMBEDDED_MIGRATIONS.len()).unwrap())
+        );
         let count: i64 = connection
             .query_row("SELECT COUNT(*) FROM presets", [], |row| row.get(0))
             .unwrap();

@@ -19,7 +19,9 @@ use aether_core::{
     Session, SessionId, SessionStatus, TokenUsage, THINKING_DEPTH_DEFAULT,
 };
 use aether_store::migration::applied_migrations;
-use aether_store::{migrate, ReadPool, Store, StoreCommand, StoreRuntime, WriteQueueConfig};
+use aether_store::{
+    migrate, ReadPool, Store, StoreCommand, StoreRuntime, WriteQueueConfig, EMBEDDED_MIGRATIONS,
+};
 use tokio::runtime::Handle;
 
 const SESSION: &str = "01J0000000000000000000000S";
@@ -55,10 +57,11 @@ fn dod1_migration_0003_columns_idempotent_and_historical_null() {
     // M7-01 合入 0006 runtimes.enabled、M7-09 合入 0007 presets、M7-07 合入 0008 FTS5、
     // ADR-028 合入 0009 provider endpoints）。
     let applied = applied_migrations(connection).unwrap();
+    let expected_versions: Vec<i64> = (1..=i64::try_from(EMBEDDED_MIGRATIONS.len()).unwrap()).collect();
     assert_eq!(
         applied.iter().map(|item| item.version).collect::<Vec<_>>(),
-        vec![1, 2, 3, 4, 5, 6, 7, 8, 9],
-        "必须应用 0001–0009"
+        expected_versions,
+        "必须应用全部已发布迁移（含 M10-01 的 0010）"
     );
 
     // sessions.thinking_depth：INTEGER NOT NULL DEFAULT 2（ADR-010 附录 A）。

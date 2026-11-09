@@ -176,6 +176,30 @@ fn appendix_c_explicit_indexes_exist_with_expected_columns() {
             &["runtime_id", "status"],
             false,
         ),
+        (
+            "idx_node_runs_attempt",
+            "node_runs",
+            &["workflow_run_id", "node_id", "attempt"],
+            true,
+        ),
+        (
+            "idx_node_runs_run_status",
+            "node_runs",
+            &["workflow_run_id", "status"],
+            false,
+        ),
+        (
+            "idx_tasks_workflow_node",
+            "tasks",
+            &["workflow_run_id", "node_id"],
+            false,
+        ),
+        (
+            "idx_tasks_session_status",
+            "tasks",
+            &["session_id", "status"],
+            false,
+        ),
     ];
 
     let mut expected_names: Vec<String> = expected
@@ -362,6 +386,13 @@ fn appendix_c_foreign_keys_exist() {
             "workflows",
             "id",
             "NO ACTION",
+        ),
+        (
+            "workflow_runs",
+            "session_id",
+            "sessions",
+            "id",
+            "CASCADE",
         ),
     ];
 

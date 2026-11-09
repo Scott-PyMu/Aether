@@ -25,6 +25,7 @@ pub mod ops;
 pub mod pragma;
 pub mod preflight;
 pub mod store;
+pub mod workflow;
 pub mod write_queue;
 
 pub use archive::{
@@ -72,6 +73,9 @@ pub use ops::{
 pub use pragma::PragmaSnapshot;
 pub use preflight::{preflight, PreflightReport};
 pub use store::{quick_check, ExportReport, IntegrityReport, Store, StoreMode, TableExport};
+pub use workflow::{
+    NodeRunRecord, TaskRecord, WorkflowCommand, WorkflowRecord, WorkflowRunRecord,
+};
 pub use write_queue::{
     BatchTrigger, CommitReceipt, QueueMetrics, QueuePressureLevel, QueuePressurePhase, ReadPool,
     ReadPoolCloseReport, ShutdownConfig, ShutdownReport, ShutdownStep, ShutdownStepRecord,

@@ -191,15 +191,15 @@ const expectedCounts = {
   daemon,
   shell,
   ipc_error_codes: 32,
-  business_codes: 9,
+  business_codes: 18,
   event_envelope_fields: 9,
   settings_keys: 9,
-  migrations: 9,
+  migrations: 10,
 };
 for (const [key, value] of Object.entries(expectedCounts)) {
   if (counts[key] !== value) fail(`counts.${key} 必须是 ${value}，实际 ${counts[key]}`);
 }
-if (daemon !== 59) fail(`daemon 路由必须是 59，实际 ${daemon}`);
+if (daemon !== 70) fail(`daemon 路由必须是 70，实际 ${daemon}`);
 if (shell !== 4) fail(`shell 路由必须是 4，实际 ${shell}`);
 
 // ---- 辅助产物 ----
@@ -291,8 +291,8 @@ if (!eventPayloads) {
   fail("contract/event_payloads.json 缺失或不可解析");
 } else {
   const payloadTypes = Array.isArray(eventPayloads.types) ? eventPayloads.types : [];
-  if (payloadTypes.length !== 23) {
-    fail(`event_payloads.types 必须是 23（附录 B 全集），实际 ${payloadTypes.length}`);
+  if (payloadTypes.length !== 31) {
+    fail(`event_payloads.types 必须是 31（附录 B 全集；M10-01 启用 workflow.* 9 子类型），实际 ${payloadTypes.length}`);
   }
   const mvp = payloadTypes.filter((type) => type.mvp).length;
   if (mvp !== 19) fail(`event_payloads MVP 标记必须是 19 项，实际 ${mvp}`);
@@ -327,16 +327,15 @@ if (!stats) {
 } else {
   const rules = [
     ["commands.total", stats.commands?.total, EXPECTED_COMMANDS],
-    ["commands.daemon", stats.commands?.daemon, 59],
+    ["commands.daemon", stats.commands?.daemon, 70],
     ["commands.shell", stats.commands?.shell, 4],
-    ["commands.reachable", stats.commands?.reachable, 61],
+    ["commands.reachable", stats.commands?.reachable, 72],
     ["protocol.dod_reference_bindings_lines", stats.protocol?.dod_reference_bindings_lines, 1003],
   ];
   for (const [path, actualValue, expected] of rules) {
     if (actualValue !== expected) fail(`stats.${path} 必须是 ${expected}，实际 ${actualValue}`);
   }
   for (const path of [
-    "frontend.invoke_call_sites",
     "frontend.test_files",
     "protocol.bindings_lines",
     "core.lines",
@@ -344,6 +343,11 @@ if (!stats) {
   ]) {
     const value = path.split(".").reduce((node, key) => node?.[key], stats);
     if (!Number.isInteger(value) || value <= 0) fail(`stats.${path} 必须是正整数，实际 ${value}`);
+  }
+  // M9-14/G8 起 Tauri 退役、前端改用 typed client；裸 `invoke(` 调用点归零是预期结果。
+  for (const path of ["frontend.invoke_call_sites", "frontend.invoke_files"]) {
+    const value = path.split(".").reduce((node, key) => node?.[key], stats);
+    if (!Number.isInteger(value) || value < 0) fail(`stats.${path} 必须是非负整数，实际 ${value}`);
   }
   if (stats.protocol?.matches_dod_reference !== (stats.protocol?.bindings_lines === 1003)) {
     fail("stats.protocol.matches_dod_reference 与 bindings_lines 不一致");

@@ -201,6 +201,7 @@ export interface SessionWorkbenchProps {
   onOpenSettings?: () => void;
   onOpenBackup?: () => void;
   onOpenAudit?: () => void;
+  onOpenWorkflows?: () => void;
   onOpenAbout?: () => void;
   appVersion?: string;
   protocolVersion?: { major: number; minor: number };
@@ -258,6 +259,7 @@ export function SessionWorkbench({
   onOpenSettings,
   onOpenBackup,
   onOpenAudit,
+  onOpenWorkflows,
   onOpenAbout,
   appVersion,
   protocolVersion,
@@ -1833,6 +1835,18 @@ export function SessionWorkbench({
                   }}
                 >
                   ☷ &nbsp;审计
+                </button>
+              ) : null}
+              {onOpenWorkflows ? (
+                <button
+                  type="button"
+                  data-testid="workflow-open"
+                  onClick={() => {
+                    setUserMenuOpen(false);
+                    onOpenWorkflows();
+                  }}
+                >
+                  ⌘ &nbsp;工作流
                 </button>
               ) : null}
               {onOpenAbout ? (

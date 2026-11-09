@@ -1,34 +1,34 @@
 {
   "schema": "aether.m9-01-baseline.v1",
   "version": 1,
-  "recorded_at": "2026-10-26T18:07:50+08:00",
-  "head_commit": "4558d06f4222fd469ac4246d9068382e30dcc2f1",
+  "recorded_at": "2026-11-09T12:37:04+08:00",
+  "head_commit": "811c963f40be8aecd07405979641bd30b60cb5c4",
   "platform": {
     "os": "win32",
     "arch": "x64",
     "node": "v24.14.1"
   },
   "source_of_truth": {
-    "commands": "crates/aether-tauri/src/ipc/commands.rs",
-    "dto": "crates/aether-tauri/src/ipc/dto.rs",
-    "errors": "crates/aether-tauri/src/ipc/error.rs",
+    "commands": "crates/aether-app/src/ipc/dispatch.rs",
+    "dto": "crates/aether-app/src/ipc/dto.rs",
+    "errors": "crates/aether-app/src/ipc/error.rs",
     "events": "crates/aether-core/src/event.rs",
     "migrations": "migrations"
   },
   "counts": {
-    "commands": 63,
-    "reachable": 61,
+    "commands": 74,
+    "reachable": 72,
     "reserved": 2,
-    "daemon": 59,
+    "daemon": 70,
     "shell": 4,
     "ipc_error_codes": 32,
-    "business_codes": 9,
+    "business_codes": 18,
     "event_envelope_fields": 9,
-    "event_types": 23,
+    "event_types": 31,
     "settings_keys": 9,
-    "migrations": 9,
+    "migrations": 10,
     "response_types": 29,
-    "event_payload_types": 23
+    "event_payload_types": 31
   },
   "commands": [
     "runtimes_list",
@@ -93,7 +93,18 @@
     "startup_get",
     "startup_pick_target",
     "startup_migrate",
-    "app_exit"
+    "app_exit",
+    "workflow_create",
+    "workflow_list",
+    "workflow_get",
+    "workflow_update",
+    "workflow_delete",
+    "workflow_import",
+    "workflow_run",
+    "workflow_run_get",
+    "workflow_run_list",
+    "workflow_run_cancel",
+    "workflow_node_retry"
   ],
   "entries": [
     {
@@ -410,28 +421,83 @@
       "path": "docs/M9-01-baseline/commands/63-app_exit.json",
       "command": "app_exit",
       "sha256": "9adc81f3a429ca42d792f32ab99c7faf1809a5ccadca9be6b943e35c41116a06"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/64-workflow_create.json",
+      "command": "workflow_create",
+      "sha256": "38479579bbef5f06fa7d7d505f00c3c5f551d6cf10d31e3cca038847ef4a13b5"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/65-workflow_list.json",
+      "command": "workflow_list",
+      "sha256": "f0879c2de40a12ef058239f2ff9c699e96f21388aa07ea5a854da2adcc081102"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/66-workflow_get.json",
+      "command": "workflow_get",
+      "sha256": "badda67e4c7cca8937240b03c05fc9dda473d0a96ce13cd6f71c6680f24116e1"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/67-workflow_update.json",
+      "command": "workflow_update",
+      "sha256": "834893d2d8635646d4edfeefffa6bd3ea7b1a5585e6cf60fa3a21201f55aaccb"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/68-workflow_delete.json",
+      "command": "workflow_delete",
+      "sha256": "901ed2b6877e2cd98367d16c0662a3299a3000c981b19ecb80c9589220428b95"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/69-workflow_import.json",
+      "command": "workflow_import",
+      "sha256": "ae6a804a2345f6b2762b3fd7cd103a44a3ff017a2db3cbee02adb77d434044b8"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/70-workflow_run.json",
+      "command": "workflow_run",
+      "sha256": "8c4c7060198c40be635973d842f943278a62347b23ac24bdefc7a0e56f44b695"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/71-workflow_run_get.json",
+      "command": "workflow_run_get",
+      "sha256": "e0f685262f6378a096f52f2c5e7755e8af942498d53bd4e23df80770b18f2ab8"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/72-workflow_run_list.json",
+      "command": "workflow_run_list",
+      "sha256": "f5b6411e04eabb5cff012cb954db7c89523b41d928f6efe7929d621bc6a689bf"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/73-workflow_run_cancel.json",
+      "command": "workflow_run_cancel",
+      "sha256": "6d29f4221af6d8b2cf4e86efb620c4a722b5e3c2a89ecd2497d1b55033857f96"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/74-workflow_node_retry.json",
+      "command": "workflow_node_retry",
+      "sha256": "c60cd6281378fba1fc0288658bb7b2548c854328d1df3dcaf1ebfb58a6d5643b"
     }
   ],
   "artifacts": [
     {
       "path": "docs/M9-01-baseline/contract/error_codes.json",
-      "sha256": "7bfe65d48fd3bae5bc2dc1ffe7b4536dfa7da8976ba54b2f8ee31a82e7afcce7"
+      "sha256": "5912004f267bcc885cf53b87c6fba4faa550ac30e1e1ddb380ce426c550d46c5"
     },
     {
       "path": "docs/M9-01-baseline/contract/events.json",
-      "sha256": "4500849eea37136188bafd2aa3d4b5e2c531a641965fc22e6e96ed7fb877ea5c"
+      "sha256": "d2af0536c43fd42ff2ff0755def54d23746cfff696819fb722216dad28d08e04"
     },
     {
       "path": "docs/M9-01-baseline/contract/settings.json",
-      "sha256": "5ae9b9def841f6c74e3a553147175eeae16f7d6c50c94e83c08a46651d9ffd1d"
+      "sha256": "83c6f1da2616c23ea17fc8708ade09439aa8bb88c390722534b7dfa5a030120c"
     },
     {
       "path": "docs/M9-01-baseline/contract/migrations.json",
-      "sha256": "885e09a599262a560e7eb57b3d37a6bdae03a8782b3c835491a9f4213819aa65"
+      "sha256": "fb1cabab11626be75572fcf22d060635272da745e741de5313505634409e4ebf"
     },
     {
       "path": "docs/M9-01-baseline/contract/diagnostics.json",
-      "sha256": "b3c64630bcbee5ad6bddab9b14c28ccc7fdba19a27149b189b0f2661a19f3deb"
+      "sha256": "b8b86a1c84a097aef7bc0dfacecab0ba8e8b44b3d0a1558fbf2eb6b141c67a39"
     },
     {
       "path": "docs/M9-01-baseline/contract/lifecycle.json",
@@ -439,15 +505,15 @@
     },
     {
       "path": "docs/M9-01-baseline/contract/responses.json",
-      "sha256": "90968acfa0c88714dabd295a3415ad317005859148043b0e55f0aba04d067a84"
+      "sha256": "64557ab9840fb2b10836384df5a4dc31889502e8f282ae300c7f2e9fd40c87e5"
     },
     {
       "path": "docs/M9-01-baseline/contract/event_payloads.json",
-      "sha256": "26cc1502dce7a788e76cbf5ce720b2307da55e04ecc7bcdc4c3336a7190fda0c"
+      "sha256": "46329ae6a26a27b8d8c9923913011c864c67a9a17c34f6eb79164e3547926c78"
     },
     {
       "path": "docs/M9-01-baseline/contract/stats.json",
-      "sha256": "0f11462c44068fc43a17833bb7632c857c682f380493a68fade226bd46bf78f2"
+      "sha256": "016dabede7d44a0d10abb8c45b7e2037f9e053ecadb35d912de8a78de4e6f2a8"
     },
     {
       "path": "docs/M9-01-baseline/contract/risks.json",
@@ -470,11 +536,9 @@
       "purpose": "硬阈值冻结"
     }
   ],
-  "contract_digest": "813fae0404119c384c9abe3a1b5fc704ab31a892660b4eb989270146d6fcf134",
+  "contract_digest": "4cc6e0eac8a998c4530ba21176187ab6ffa439c0ba6eecc84bee341eb39158b8",
   "frozen": {
     "rule": "M9-04/M9-13 只新增，不改期望值；命令/错误码/事件/设置/迁移变更必须先走 ADR。",
     "recorded_before": "M9-02（抽取 aether-app 之前）"
-  },
-  "amended_at": "2026-10-30T13:56:30+08:00",
-  "amendment": "ADR-030"
+  }
 }

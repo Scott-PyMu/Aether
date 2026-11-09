@@ -1,6 +1,6 @@
 {
   "schema": "aether.m9-01.diagnostics-baseline.v1",
-  "source": "crates/aether-tauri/src/diagnostics_control.rs",
+  "source": "crates/aether-app/src/diagnostics_control.rs",
   "command": "export_diagnostics",
   "response_keys": [
     "path",

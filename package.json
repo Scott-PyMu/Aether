@@ -124,6 +124,7 @@
     "verify:m9-13": "node scripts/test/m9-13/verify-m9-13.mjs",
     "verify:m9-14": "node scripts/test/m9-14/verify-m9-14.mjs",
     "verify:m10-00": "node scripts/test/m10-00/verify-m10-00.mjs",
+    "verify:m10-01": "node scripts/test/m10-01/verify-m10-01.mjs",
     "generate:api-schema": "node scripts/ci/api-schema.mjs generate",
     "verify:api-schema": "node scripts/ci/api-schema.mjs check",
     "verify:m10-03": "node scripts/test/m10-03/verify-m10-03.mjs",

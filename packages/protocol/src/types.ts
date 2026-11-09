@@ -792,6 +792,73 @@ export type StartupMigrateRequest = {
 /**  `startup_pick_target`（ADR-006）：无参数命令；缺省载荷等价空对象，任何成员都会被严格模式拒绝。 */
 export type StartupPickTargetRequest = Record<string, never>;
 
+export type WorkflowCreateRequest = {
+	name: string,
+	description?: string | null,
+	definition: unknown,
+	is_template?: boolean | null,
+};
+
+export type WorkflowDeleteRequest = {
+	workflow_id: string,
+	force?: boolean | null,
+};
+
+export type WorkflowIdRequest = {
+	workflow_id: string,
+};
+
+export type WorkflowImportRequest = {
+	source_path: string,
+	name_override?: string | null,
+};
+
+export type WorkflowListRequest = {
+	limit?: number | null,
+	offset?: number | null,
+	include_templates?: boolean | null,
+};
+
+export type WorkflowNodeRetryRequest = {
+	workflow_run_id: string,
+	node_id: string,
+	reset_downstream?: boolean | null,
+};
+
+export type WorkflowRunCancelRequest = {
+	workflow_run_id: string,
+	reason?: string | null,
+};
+
+export type WorkflowRunGetRequest = {
+	workflow_run_id: string,
+	include_nodes?: boolean | null,
+};
+
+export type WorkflowRunListRequest = {
+	workflow_id?: string | null,
+	session_id?: string | null,
+	status?: string | null,
+	limit?: number | null,
+	offset?: number | null,
+};
+
+export type WorkflowRunRequest = {
+	workflow_id: string,
+	session_id: string,
+	input?: unknown | null,
+	priority?: number | null,
+};
+
+export type WorkflowUpdateRequest = {
+	workflow_id: string,
+	expected_version: number,
+	name?: string | null,
+	description?: string | null,
+	definition?: unknown | null,
+	is_template?: boolean | null,
+};
+
 /**
  *  `workspace_create`（M7-08/ADR-026 §2.1-1）：`root_path` canonicalize + 存在目录 +
  *  同步盘拒绝（A4 口径，复用 `workspace_set` 校验链）；同根路径已存在 → `invalid_value`。

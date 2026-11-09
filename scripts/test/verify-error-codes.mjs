@@ -82,8 +82,11 @@ function expectedBusinessCodes() {
   for (const arm of implBlock[1].matchAll(/Self::(\w+)\s*=>\s*"([a-z0-9_]+)"/g)) {
     mapping.set(arm[1], arm[2]);
   }
-  if (declared !== 9) {
-    fail(`${BUSINESS_SOURCE} 的 BusinessCode::ALL 长度 ${declared} ≠ 9（ADR-018 A-7）`);
+  if (declared !== 18) {
+    fail(
+      `${BUSINESS_SOURCE} 的 BusinessCode::ALL 长度 ${declared} ≠ 18` +
+        "（ADR-018 A-7 的 9 项 + M10-01/ADR-031 的 9 项）",
+    );
   }
   if (order.length !== declared) {
     fail(`${BUSINESS_SOURCE} 的 ALL 声明项数 ${order.length} ≠ ${declared}`);

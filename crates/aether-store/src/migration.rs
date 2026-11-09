@@ -77,6 +77,12 @@ pub const EMBEDDED_MIGRATIONS: &[MigrationFile] = &[
         name: "0009_provider_endpoints.sql",
         bytes: include_bytes!("../../../migrations/0009_provider_endpoints.sql"),
     },
+    // ADR-031/M10-01：编排软删除/运行锚点/定义快照/attempt 幂等/运行视图索引。
+    MigrationFile {
+        version: 10,
+        name: "0010_workflow_orchestration.sql",
+        bytes: include_bytes!("../../../migrations/0010_workflow_orchestration.sql"),
+    },
 ];
 
 /// 迁移文件 sha256（小写十六进制）。

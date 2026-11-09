@@ -34,11 +34,29 @@ pub enum BusinessCode {
     DbOpenFailed,
     /// 已应用迁移 checksum 与内嵌文件不符（**M9-03**；ADR-029 §3.5/R11，致命 22）。
     SchemaChecksumMismatch,
+    /// 工作流定义非法（**M10-01**/ADR-031 D-031-1；`invalid_value` + details）。
+    WorkflowInvalidDefinition,
+    /// 工作流不存在（M10-01/ADR-031）。
+    WorkflowNotFound,
+    /// 工作流定义版本冲突（M10-01/ADR-031 D-031-5）。
+    WorkflowVersionConflict,
+    /// 工作流运行不存在（M10-01/ADR-031）。
+    WorkflowRunNotFound,
+    /// 工作流仍有活动运行（M10-01/ADR-031）。
+    WorkflowRunActive,
+    /// 工作流运行不在活动状态（M10-01/ADR-031）。
+    WorkflowRunNotActive,
+    /// 工作流节点运行不存在（M10-01/ADR-031）。
+    WorkflowNodeNotFound,
+    /// 工作流节点不可重试（M10-01/ADR-031）。
+    WorkflowNodeNotRetryable,
+    /// 取消超时（M10-01/ADR-031 D-031-4；`internal`）。
+    WorkflowCancelTimeout,
 }
 
 impl BusinessCode {
     /// 全部业务码（顺序 = `error_codes.json` 的 `business` 顺序 = ADR-018 A-7 登记顺序）。
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 18] = [
         Self::SessionBusy,
         Self::SessionPaused,
         Self::StorageBackpressure,
@@ -48,6 +66,15 @@ impl BusinessCode {
         Self::SyncDirBlocked,
         Self::DbOpenFailed,
         Self::SchemaChecksumMismatch,
+        Self::WorkflowInvalidDefinition,
+        Self::WorkflowNotFound,
+        Self::WorkflowVersionConflict,
+        Self::WorkflowRunNotFound,
+        Self::WorkflowRunActive,
+        Self::WorkflowRunNotActive,
+        Self::WorkflowNodeNotFound,
+        Self::WorkflowNodeNotRetryable,
+        Self::WorkflowCancelTimeout,
     ];
 
     /// 线上取值（snake_case；`data.business_code` 唯一来源）。
@@ -62,6 +89,15 @@ impl BusinessCode {
             Self::SyncDirBlocked => "sync_dir_blocked",
             Self::DbOpenFailed => "db_open_failed",
             Self::SchemaChecksumMismatch => "schema_checksum_mismatch",
+            Self::WorkflowInvalidDefinition => "workflow_invalid_definition",
+            Self::WorkflowNotFound => "workflow_not_found",
+            Self::WorkflowVersionConflict => "workflow_version_conflict",
+            Self::WorkflowRunNotFound => "workflow_run_not_found",
+            Self::WorkflowRunActive => "workflow_run_active",
+            Self::WorkflowRunNotActive => "workflow_run_not_active",
+            Self::WorkflowNodeNotFound => "workflow_node_not_found",
+            Self::WorkflowNodeNotRetryable => "workflow_node_not_retryable",
+            Self::WorkflowCancelTimeout => "workflow_cancel_timeout",
         }
     }
 
@@ -76,12 +112,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn business_codes_are_frozen_at_nine_unique_snake_case_values() {
-        assert_eq!(BusinessCode::ALL.len(), 9, "ADR-018 A-7 业务码 9 项");
+    fn business_codes_are_frozen_unique_snake_case_values() {
+        // ADR-018 A-7 的 9 项 + M10-01/ADR-031 的 9 项编排业务码。
+        assert_eq!(BusinessCode::ALL.len(), 18, "业务码 18 项");
         let mut values: Vec<&str> = BusinessCode::ALL.iter().map(|code| code.as_str()).collect();
         values.sort_unstable();
         values.dedup();
-        assert_eq!(values.len(), 9, "业务码取值必须唯一");
+        assert_eq!(values.len(), 18, "业务码取值必须唯一");
         for code in BusinessCode::ALL {
             let text = code.as_str();
             assert!(

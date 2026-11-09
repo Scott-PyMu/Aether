@@ -480,7 +480,10 @@ pub fn build_backend(
     // 壳层需要管线句柄接线事件桥（`AppShutdown::new` 会取走管线所有权）；
     // 升级审计同样需要单写队列（后段 `write_slot` 会被装饰器消费，先克隆）。
     let pipeline_for_bridge = pipeline.clone();
+    let pipeline_for_workflow = pipeline.clone();
     let write_for_bridge = write_slot.clone();
+    let reads_for_workflow = reads.clone();
+    let write_for_workflow = write_slot.clone();
     let orchestrator = if supervisor.is_some() || pipeline.is_some() || storage_slot.is_some() {
         let orchestrator = shutdown::AppShutdown::new(
             pipeline,
@@ -627,8 +630,44 @@ pub fn build_backend(
         Ok(None) => tracing::info!("无工作区绑定（workspace_set 前权限基准为数据目录）"),
         Err(error) => tracing::warn!(error = %error, "工作区绑定恢复失败（继续启动）"),
     }
+    // M10-01/ADR-031：编排命令面装饰器（最外层）+ 启动 reconcile。
+    let session_backend = std::sync::Arc::new(session_backend);
+    let backend: std::sync::Arc<dyn ipc::IpcBackend> =
+        match (reads_for_workflow, write_for_workflow) {
+            (Some(reads), Some(write)) => {
+                let agent = std::sync::Arc::new(
+                    workflow::SessionAgentExecutor::new(std::sync::Arc::clone(&session_backend)),
+                );
+                let engine = std::sync::Arc::new(workflow::WorkflowEngine::new(
+                    reads.clone(),
+                    write.clone(),
+                    pipeline_for_workflow,
+                    std::sync::Arc::new(aether_control::SystemClock),
+                    agent,
+                ));
+                match handle.block_on(engine.reconcile()) {
+                    Ok((runs, nodes)) => tracing::info!(
+                        runs,
+                        nodes,
+                        "工作流启动 reconcile 完成（running → interrupted，不自动重放）"
+                    ),
+                    Err(error) => {
+                        tracing::warn!(error = %error, "工作流启动 reconcile 失败（继续启动）")
+                    }
+                }
+                std::sync::Arc::new(workflow::WorkflowControlBackend::new(
+                    session_backend,
+                    engine,
+                    reads,
+                    write,
+                    std::sync::Arc::new(aether_control::SystemClock),
+                    handle.clone(),
+                ))
+            }
+            _ => session_backend,
+        };
     BackendBundle {
-        backend: std::sync::Arc::new(session_backend),
+        backend,
         shutdown: orchestrator,
         pipeline: pipeline_for_bridge,
         write: write_for_bridge,

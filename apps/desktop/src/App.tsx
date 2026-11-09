@@ -10,9 +10,17 @@ import { HealthMonitor } from "./HealthMonitor";
 import { SessionWorkbench } from "./SessionWorkbench";
 import { SettingsPage } from "./SettingsPage";
 import { fetchStartup, type StartupSnapshot } from "./startup";
+import { WorkflowsPage } from "./WorkflowsPage";
 
-/** 单窗口覆盖层视图（M3-04/M3-05；UI-UX §1.1：不使用 URL 路由）。 */
-type AppView = "workbench" | "backup" | "diagnostics" | "settings" | "about" | "audit";
+/** 单窗口覆盖层视图（M3-04/M3-05；M10-01 工作流；UI-UX §1.1：不使用 URL 路由）。 */
+type AppView =
+  | "workbench"
+  | "backup"
+  | "diagnostics"
+  | "settings"
+  | "about"
+  | "audit"
+  | "workflows";
 
 /**
  * 主界面（M9-08；ADR-029 §7）。
@@ -64,6 +72,7 @@ export function App() {
           onOpenSettings={() => setView("settings")}
           onOpenBackup={() => setView("backup")}
           onOpenAudit={() => setView("audit")}
+          onOpenWorkflows={() => setView("workflows")}
           onOpenAbout={() => setView("about")}
           appVersion={APP_VERSION}
           protocolVersion={PROTOCOL_VERSION}
@@ -83,6 +92,9 @@ export function App() {
         ) : null}
         {view === "audit" ? (
           <AuditPage onBack={() => setView("workbench")} />
+        ) : null}
+        {view === "workflows" ? (
+          <WorkflowsPage onBack={() => setView("workbench")} />
         ) : null}
         {view === "settings" ? (
           <SettingsPage

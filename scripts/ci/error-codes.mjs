@@ -44,6 +44,16 @@ const BUSINESS_CODES = [
   { code: "sync_dir_blocked", owner: "M5-01", first_adr: "ADR-018" },
   { code: "db_open_failed", owner: "M9-03", first_adr: "ADR-029" },
   { code: "schema_checksum_mismatch", owner: "M9-03", first_adr: "ADR-029" },
+  // M10-01/ADR-031 编排业务码（9 项）。
+  { code: "workflow_invalid_definition", owner: "M10-01", first_adr: "ADR-031" },
+  { code: "workflow_not_found", owner: "M10-01", first_adr: "ADR-031" },
+  { code: "workflow_version_conflict", owner: "M10-01", first_adr: "ADR-031" },
+  { code: "workflow_run_not_found", owner: "M10-01", first_adr: "ADR-031" },
+  { code: "workflow_run_active", owner: "M10-01", first_adr: "ADR-031" },
+  { code: "workflow_run_not_active", owner: "M10-01", first_adr: "ADR-031" },
+  { code: "workflow_node_not_found", owner: "M10-01", first_adr: "ADR-031" },
+  { code: "workflow_node_not_retryable", owner: "M10-01", first_adr: "ADR-031" },
+  { code: "workflow_cancel_timeout", owner: "M10-01", first_adr: "ADR-031" },
 ];
 
 const MODE = process.argv.slice(2).find((arg) => !arg.startsWith("--")) ?? "check";

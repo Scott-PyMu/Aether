@@ -75,10 +75,12 @@ fn p0_database_upgrades_to_p1_without_data_loss_and_backup_is_rollback_candidate
     // 当前程序打开 → 增量迁移到 0008。
     let store = Store::open(&db).expect("P1 迁移");
     let applied = store.applied_migrations().unwrap();
+    let expected: Vec<i64> =
+        (1..=i64::try_from(EMBEDDED_MIGRATIONS.len()).unwrap()).collect();
     assert_eq!(
         applied.iter().map(|row| row.version).collect::<Vec<_>>(),
-        vec![1, 2, 3, 4, 5, 6, 7, 8, 9],
-        "P0 → P1 必须增量应用 0004–0009"
+        expected,
+        "P0 → P1 必须增量应用全部已发布迁移（含 M10-01 的 0010）"
     );
     let connection = store.connection();
 
@@ -150,10 +152,13 @@ fn p0_database_upgrades_to_p1_without_data_loss_and_backup_is_rollback_candidate
         .unwrap();
     assert_eq!(quick, "ok");
 
-    // 幂等：再次打开不重复迁移（记录仍为 9 条，无新增）。
+    // 幂等：再次打开不重复迁移（记录数 = 内嵌迁移数，无新增）。
     drop(store);
     let reopened = Store::open(&db).expect("再次打开");
-    assert_eq!(reopened.applied_migrations().unwrap().len(), 9);
+    assert_eq!(
+        reopened.applied_migrations().unwrap().len(),
+        aether_store::EMBEDDED_MIGRATIONS.len()
+    );
 
     // P0 备份可作为回退候选：schema=3、数据完整、quick_check ok。
     let backup_conn = Connection::open(&backup).unwrap();

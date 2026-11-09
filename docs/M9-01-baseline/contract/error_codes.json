@@ -249,6 +249,60 @@
       "owner": "M9-03",
       "first_adr": "ADR-029",
       "kind": "business"
+    },
+    {
+      "code": "workflow_invalid_definition",
+      "owner": "M10-01",
+      "first_adr": "ADR-031",
+      "kind": "business"
+    },
+    {
+      "code": "workflow_not_found",
+      "owner": "M10-01",
+      "first_adr": "ADR-031",
+      "kind": "business"
+    },
+    {
+      "code": "workflow_version_conflict",
+      "owner": "M10-01",
+      "first_adr": "ADR-031",
+      "kind": "business"
+    },
+    {
+      "code": "workflow_run_not_found",
+      "owner": "M10-01",
+      "first_adr": "ADR-031",
+      "kind": "business"
+    },
+    {
+      "code": "workflow_run_active",
+      "owner": "M10-01",
+      "first_adr": "ADR-031",
+      "kind": "business"
+    },
+    {
+      "code": "workflow_run_not_active",
+      "owner": "M10-01",
+      "first_adr": "ADR-031",
+      "kind": "business"
+    },
+    {
+      "code": "workflow_node_not_found",
+      "owner": "M10-01",
+      "first_adr": "ADR-031",
+      "kind": "business"
+    },
+    {
+      "code": "workflow_node_not_retryable",
+      "owner": "M10-01",
+      "first_adr": "ADR-031",
+      "kind": "business"
+    },
+    {
+      "code": "workflow_cancel_timeout",
+      "owner": "M10-01",
+      "first_adr": "ADR-031",
+      "kind": "business"
     }
   ]
 }

@@ -103,8 +103,40 @@
       "wire": "subagent.completed"
     },
     {
-      "variant": "Workflow",
-      "wire": "workflow.*"
+      "variant": "WorkflowStarted",
+      "wire": "workflow.started"
+    },
+    {
+      "variant": "WorkflowNodeStarted",
+      "wire": "workflow.node_started"
+    },
+    {
+      "variant": "WorkflowNodeCompleted",
+      "wire": "workflow.node_completed"
+    },
+    {
+      "variant": "WorkflowNodeFailed",
+      "wire": "workflow.node_failed"
+    },
+    {
+      "variant": "WorkflowNodeCancelled",
+      "wire": "workflow.node_cancelled"
+    },
+    {
+      "variant": "WorkflowNodeSkipped",
+      "wire": "workflow.node_skipped"
+    },
+    {
+      "variant": "WorkflowCompleted",
+      "wire": "workflow.completed"
+    },
+    {
+      "variant": "WorkflowFailed",
+      "wire": "workflow.failed"
+    },
+    {
+      "variant": "WorkflowCancelled",
+      "wire": "workflow.cancelled"
     }
   ],
   "mvp_types": [

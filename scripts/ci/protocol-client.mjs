@@ -43,16 +43,16 @@ function unique(values) {
 
 function assertManifest(manifest) {
   const counts = manifest.counts ?? {};
-  if (counts.total !== 63 || counts.daemon !== 59 || counts.shell !== 4) {
+  if (counts.total !== 74 || counts.daemon !== 70 || counts.shell !== 4) {
     throw new Error(
-      `[protocol-client] 路由计数 ${counts.daemon}/${counts.shell}/${counts.total} ≠ 59/4/63`,
+      `[protocol-client] 路由计数 ${counts.daemon}/${counts.shell}/${counts.total} ≠ 70/4/74`,
     );
   }
-  if (counts.ui !== 61 || counts.reserved !== 2) {
-    throw new Error(`[protocol-client] UI 暴露 ${counts.ui} / 保留 ${counts.reserved} ≠ 61/2`);
+  if (counts.ui !== 72 || counts.reserved !== 2) {
+    throw new Error(`[protocol-client] UI 暴露 ${counts.ui} / 保留 ${counts.reserved} ≠ 72/2`);
   }
-  if (!Array.isArray(manifest.commands) || manifest.commands.length !== 63) {
-    throw new Error("[protocol-client] command-manifest.commands 必须恰好 63 条");
+  if (!Array.isArray(manifest.commands) || manifest.commands.length !== 74) {
+    throw new Error("[protocol-client] command-manifest.commands 必须恰好 74 条");
   }
 }
 
@@ -71,8 +71,8 @@ export function buildProtocolClient() {
   if (!Array.isArray(errors.ipc) || errors.ipc.length !== 32) {
     throw new Error("[protocol-client] error_codes.json 的 ipc 必须恰好 32 项");
   }
-  if (!Array.isArray(errors.business) || errors.business.length !== 9) {
-    throw new Error("[protocol-client] error_codes.json 的 business 必须恰好 9 项");
+  if (!Array.isArray(errors.business) || errors.business.length !== 18) {
+    throw new Error("[protocol-client] error_codes.json 的 business 必须恰好 18 项（M10-01 增量）");
   }
 
   const commands = manifest.commands;
@@ -125,7 +125,7 @@ export const AETHER_EVENT_CHANNEL = "aether:event" as const;
 /** Electron preload RPC 通道名（ADR-029 §5.1）。 */
 export const AETHER_RPC_CHANNEL = "aether:rpc" as const;
 
-/** 63 条命令（顺序 = command-manifest；59 daemon + 4 shell）。 */
+/** 74 条命令（顺序 = command-manifest；70 daemon + 4 shell）。 */
 export const COMMANDS = [
 ${commandNames.map((name) => `  ${JSON.stringify(name)},`).join("\n")}
 ] as const;
@@ -361,7 +361,7 @@ export function describeAetherError(error: unknown): string {
   return normalized?.message ?? String(error);
 }
 
-/** 63 方法 typed client + 底层 \`rpc\` / \`onEvent\`。 */
+/** 74 方法 typed client + 底层 \`rpc\` / \`onEvent\`。 */
 export interface AetherClient {
   /** 底层 JSON-RPC 调用（method 仍受 63 命令联合类型约束）。 */
   rpc<T = unknown>(method: AetherCommand, params?: unknown): Promise<T>;
@@ -452,7 +452,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const targetPath = path.join(root, TARGET);
   if (MODE === "generate") {
     writeFileSync(targetPath, rendered, "utf8");
-    console.log(`[protocol-client] 生成完成：${TARGET}（63 方法；59/4；32+9 错误码）`);
+    console.log(`[protocol-client] 生成完成：${TARGET}（74 方法；70/4；32+18 错误码）`);
     process.exit(0);
   }
   let current;
@@ -466,5 +466,5 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     console.error(`[protocol-client] 阻断：${TARGET} 与重新生成结果不一致（diff=0 要求）。`);
     process.exit(1);
   }
-  console.log("[protocol-client] 通过：63 方法 / 59+4 / 32+9 / diff=0");
+  console.log("[protocol-client] 通过：74 方法 / 70+4 / 32+18 / diff=0");
 }

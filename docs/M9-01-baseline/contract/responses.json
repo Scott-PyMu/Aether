@@ -1,10 +1,10 @@
 {
   "schema": "aether.m9-01.responses-baseline.v1",
   "source": [
-    "crates/aether-tauri/src/ipc/dto.rs",
-    "crates/aether-tauri/src/ipc/error.rs",
-    "crates/aether-tauri/src/session_backend.rs",
-    "crates/aether-tauri/src/core_health.rs",
+    "crates/aether-app/src/ipc/dto.rs",
+    "crates/aether-app/src/ipc/error.rs",
+    "crates/aether-app/src/session_backend.rs",
+    "crates/aether-app/src/core_health.rs",
     "crates/aether-core/src/domain.rs"
   ],
   "command_envelope": {
@@ -12,7 +12,7 @@
     "typed": false,
     "note": "63 条命令统一返回 JsonPayload（自由 JSON）；HEAD 没有按命令的响应 DTO，故 commands[].response.type 恒为 null，响应契约按『序列化类型清单』冻结。"
   },
-  "dto_note": "ipc/dto.rs 只有 59 个 *Request 请求 DTO、1 个非请求结构体（ReferenceEntry）与若干序列化枚举；响应结构体分布在 error/session_backend/core_health/core::domain。",
+  "dto_note": "ipc/dto.rs 只有 70 个 *Request 请求 DTO、1 个非请求结构体（ReferenceEntry）与若干序列化枚举；响应结构体分布在 error/session_backend/core_health/core::domain。",
   "commands": [
     {
       "command": "runtimes_list",
@@ -454,6 +454,83 @@
         "kind": "json",
         "type": null
       }
+    },
+    {
+      "command": "workflow_create",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "workflow_list",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "workflow_get",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "workflow_update",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "workflow_delete",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "workflow_import",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "workflow_run",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "workflow_run_get",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "workflow_run_list",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "workflow_run_cancel",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "workflow_node_retry",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
     }
   ],
   "types": [
@@ -702,7 +779,7 @@
       ]
     },
     {
-      "id": "crates/aether-tauri/src/ipc/error.rs::IpcError",
+      "id": "crates/aether-app/src/ipc/error.rs::IpcError",
       "name": "IpcError",
       "kind": "struct",
       "source": "crates/aether-tauri/src/ipc/error.rs",
@@ -731,7 +808,7 @@
       ]
     },
     {
-      "id": "crates/aether-tauri/src/session_backend.rs::MessagesPageResponse",
+      "id": "crates/aether-app/src/session_backend.rs::MessagesPageResponse",
       "name": "MessagesPageResponse",
       "kind": "struct",
       "source": "crates/aether-tauri/src/session_backend.rs",
@@ -798,7 +875,7 @@
       ]
     },
     {
-      "id": "crates/aether-tauri/src/session_backend.rs::SessionWarning",
+      "id": "crates/aether-app/src/session_backend.rs::SessionWarning",
       "name": "SessionWarning",
       "kind": "struct",
       "source": "crates/aether-tauri/src/session_backend.rs",
@@ -830,7 +907,7 @@
       ]
     },
     {
-      "id": "crates/aether-tauri/src/session_backend.rs::SessionSummary",
+      "id": "crates/aether-app/src/session_backend.rs::SessionSummary",
       "name": "SessionSummary",
       "kind": "struct",
       "source": "crates/aether-tauri/src/session_backend.rs",
@@ -1010,7 +1087,7 @@
       ]
     },
     {
-      "id": "crates/aether-tauri/src/core_health.rs::RuntimeSummary",
+      "id": "crates/aether-app/src/core_health.rs::RuntimeSummary",
       "name": "RuntimeSummary",
       "kind": "struct",
       "source": "crates/aether-tauri/src/core_health.rs",
@@ -1039,7 +1116,7 @@
       ]
     },
     {
-      "id": "crates/aether-tauri/src/core_health.rs::HealthReport",
+      "id": "crates/aether-app/src/core_health.rs::HealthReport",
       "name": "HealthReport",
       "kind": "struct",
       "source": "crates/aether-tauri/src/core_health.rs",
@@ -1853,7 +1930,7 @@
     }
   ],
   "counts": {
-    "commands": 63,
+    "commands": 74,
     "types": 29
   }
 }

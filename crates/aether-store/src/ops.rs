@@ -282,6 +282,13 @@ pub enum StoreCommand {
         config: serde_json::Value,
         updated_at: i64,
     },
+    /// 设置子会话父指针（M10-01/ADR-031 编排 agent 节点；`sessions.parent_session_id`）。
+    /// 只允许在创建后写入一次（`parent_session_id IS NULL` 时生效），防改写父子关系。
+    UpdateSessionParent {
+        session_id: SessionId,
+        parent_session_id: SessionId,
+        updated_at: i64,
+    },
     /// 更新会话级供应商/模型选择（ADR-028 v0.9 旧会话补选：适配器准备成功后才持久化；
     /// `config` 由调用方与既有配置合并后整体写入）。
     UpdateSessionSelection {
@@ -482,6 +489,11 @@ pub enum StoreCommand {
         /// 待删事件行 `rowid` 列表（空列表为 no-op）。
         rowids: Vec<i64>,
     },
+    /// M10-01/ADR-031：编排定义/运行/节点/任务写命令（单事务由
+    /// [`crate::workflow::apply_command`] 执行）。
+    Workflow {
+        command: crate::workflow::WorkflowCommand,
+    },
 }
 
 /// 写命令结果。
@@ -527,6 +539,14 @@ pub enum StoreOutcome {
         permissions: u64,
         events_retained: u64,
     },
+    /// [`WorkflowCommand::UpdateWorkflow`] 结果：`expected_version` 不匹配（不覆盖）。
+    WorkflowVersionConflict,
+    /// [`WorkflowCommand::DeleteWorkflow`] 结果：仍有活动运行，**未删除**。
+    WorkflowRunActive { runs: u64 },
+    /// [`WorkflowCommand::InsertNodeRun`] 结果：attempt 幂等（`inserted=false` = 既有行）。
+    WorkflowNodeRun { id: String, inserted: bool },
+    /// [`WorkflowCommand::ReconcileRunning`] 结果：收口的运行/节点计数。
+    WorkflowReconciled { runs: u64, nodes: u64 },
 }
 
 /// 执行一条写命令（单事务；由单写任务调用）。
@@ -663,6 +683,26 @@ pub(crate) fn apply_command(
                 .execute(
                     "UPDATE sessions SET config = ?2, updated_at = ?3 WHERE id = ?1",
                     params![session_id.as_str(), config, updated_at],
+                )
+                .map_err(txn_failed)?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::Applied { affected })
+        }
+        StoreCommand::UpdateSessionParent {
+            session_id,
+            parent_session_id,
+            updated_at,
+        } => {
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            let affected = transaction
+                .execute(
+                    "UPDATE sessions SET parent_session_id = ?2, updated_at = ?3 \
+                     WHERE id = ?1 AND parent_session_id IS NULL",
+                    params![
+                        session_id.as_str(),
+                        parent_session_id.as_str(),
+                        updated_at
+                    ],
                 )
                 .map_err(txn_failed)?;
             transaction.commit().map_err(txn_failed)?;
@@ -1483,6 +1523,9 @@ pub(crate) fn apply_command(
             transaction.commit().map_err(txn_failed)?;
             Ok(StoreOutcome::Applied { affected })
         }
+        StoreCommand::Workflow { command } => {
+            crate::workflow::apply_command(connection, command)
+        }
     }
 }
 
@@ -1584,7 +1627,7 @@ fn serialization_failed(field: &str, error: &serde_json::Error) -> StoreError {
 }
 
 /// 写事务内 SQLite 错误（保留扩展码，供上层持久化降级/去重分类）。
-fn txn_failed(error: rusqlite::Error) -> StoreError {
+pub(crate) fn txn_failed(error: rusqlite::Error) -> StoreError {
     match &error {
         rusqlite::Error::SqliteFailure(failure, message) => StoreError::WriteTransactionFailed {
             code: Some(failure.extended_code),

@@ -93,10 +93,12 @@ async fn migration_0006_adds_runtime_enabled_with_default_and_is_idempotent() {
             )
             .unwrap();
         let applied = migrate_with(&mut connection, EMBEDDED_MIGRATIONS).unwrap();
+        let expected: Vec<i64> =
+            (6..=i64::try_from(EMBEDDED_MIGRATIONS.len()).unwrap()).collect();
         assert_eq!(
             applied.iter().map(|item| item.version).collect::<Vec<_>>(),
-            vec![6, 7, 8, 9],
-            "增量应用 0006（本任务）、0007（M7-09 presets）、0008（M7-07 FTS5）与 0009（ADR-028 端点）"
+            expected,
+            "增量应用 0006 起的全部已发布迁移（含 M10-01 的 0010）"
         );
         // 列断言：NOT NULL DEFAULT 1。
         let (notnull, default, kind): (i64, Option<String>, String) = connection
@@ -129,8 +131,8 @@ async fn migration_0006_adds_runtime_enabled_with_default_and_is_idempotent() {
         let applied = migrate(&mut connection).unwrap();
         assert_eq!(
             applied.last().map(|item| item.version),
-            Some(9),
-            "新库应用到最新（0009）"
+            Some(i64::try_from(EMBEDDED_MIGRATIONS.len()).unwrap()),
+            "新库应用到最新（含 M10-01 的 0010）"
         );
     }
 }

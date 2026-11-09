@@ -57,6 +57,17 @@ import type {
   StartupGetRequest,
   StartupMigrateRequest,
   StartupPickTargetRequest,
+  WorkflowCreateRequest,
+  WorkflowDeleteRequest,
+  WorkflowIdRequest,
+  WorkflowImportRequest,
+  WorkflowListRequest,
+  WorkflowNodeRetryRequest,
+  WorkflowRunCancelRequest,
+  WorkflowRunGetRequest,
+  WorkflowRunListRequest,
+  WorkflowRunRequest,
+  WorkflowUpdateRequest,
   WorkspaceCreateRequest,
   WorkspaceDeleteRequest,
   WorkspaceSetRequest,
@@ -69,7 +80,7 @@ export const AETHER_EVENT_CHANNEL = "aether:event" as const;
 /** Electron preload RPC 通道名（ADR-029 §5.1）。 */
 export const AETHER_RPC_CHANNEL = "aether:rpc" as const;
 
-/** 63 条命令（顺序 = command-manifest；59 daemon + 4 shell）。 */
+/** 74 条命令（顺序 = command-manifest；70 daemon + 4 shell）。 */
 export const COMMANDS = [
   "runtimes_list",
   "session_list",
@@ -134,6 +145,17 @@ export const COMMANDS = [
   "startup_pick_target",
   "startup_migrate",
   "app_exit",
+  "workflow_create",
+  "workflow_list",
+  "workflow_get",
+  "workflow_update",
+  "workflow_delete",
+  "workflow_import",
+  "workflow_run",
+  "workflow_run_get",
+  "workflow_run_list",
+  "workflow_run_cancel",
+  "workflow_node_retry",
 ] as const;
 export type AetherCommand = (typeof COMMANDS)[number];
 
@@ -198,6 +220,17 @@ export const DAEMON_COMMANDS = [
   "health",
   "startup_get",
   "startup_migrate",
+  "workflow_create",
+  "workflow_list",
+  "workflow_get",
+  "workflow_update",
+  "workflow_delete",
+  "workflow_import",
+  "workflow_run",
+  "workflow_run_get",
+  "workflow_run_list",
+  "workflow_run_cancel",
+  "workflow_node_retry",
 ] as const;
 export type AetherDaemonCommand = (typeof DAEMON_COMMANDS)[number];
 
@@ -262,7 +295,16 @@ export type AetherBusinessCode =
   | "data_dir_locked"
   | "sync_dir_blocked"
   | "db_open_failed"
-  | "schema_checksum_mismatch";
+  | "schema_checksum_mismatch"
+  | "workflow_invalid_definition"
+  | "workflow_not_found"
+  | "workflow_version_conflict"
+  | "workflow_run_not_found"
+  | "workflow_run_active"
+  | "workflow_run_not_active"
+  | "workflow_node_not_found"
+  | "workflow_node_not_retryable"
+  | "workflow_cancel_timeout";
 
 /** 事件回调（9 字段信封；EventStore 直接 ingest）。 */
 export type AetherEventHandler = (event: AetherEvent) => void;
@@ -468,7 +510,7 @@ export function describeAetherError(error: unknown): string {
   return normalized?.message ?? String(error);
 }
 
-/** 63 方法 typed client + 底层 `rpc` / `onEvent`。 */
+/** 74 方法 typed client + 底层 `rpc` / `onEvent`。 */
 export interface AetherClient {
   /** 底层 JSON-RPC 调用（method 仍受 63 命令联合类型约束）。 */
   rpc<T = unknown>(method: AetherCommand, params?: unknown): Promise<T>;
@@ -665,6 +707,39 @@ export interface AetherClient {
 
   /** `app_exit`（严格参数）。 */
   appExit<T = unknown>(params: AppExitRequest): Promise<T>;
+
+  /** `workflow_create`（严格参数）。 */
+  workflowCreate<T = unknown>(params: WorkflowCreateRequest): Promise<T>;
+
+  /** `workflow_list`（严格参数）。 */
+  workflowList<T = unknown>(params: WorkflowListRequest): Promise<T>;
+
+  /** `workflow_get`（严格参数）。 */
+  workflowGet<T = unknown>(params: WorkflowIdRequest): Promise<T>;
+
+  /** `workflow_update`（严格参数）。 */
+  workflowUpdate<T = unknown>(params: WorkflowUpdateRequest): Promise<T>;
+
+  /** `workflow_delete`（严格参数）。 */
+  workflowDelete<T = unknown>(params: WorkflowDeleteRequest): Promise<T>;
+
+  /** `workflow_import`（严格参数）。 */
+  workflowImport<T = unknown>(params: WorkflowImportRequest): Promise<T>;
+
+  /** `workflow_run`（严格参数）。 */
+  workflowRun<T = unknown>(params: WorkflowRunRequest): Promise<T>;
+
+  /** `workflow_run_get`（严格参数）。 */
+  workflowRunGet<T = unknown>(params: WorkflowRunGetRequest): Promise<T>;
+
+  /** `workflow_run_list`（严格参数）。 */
+  workflowRunList<T = unknown>(params: WorkflowRunListRequest): Promise<T>;
+
+  /** `workflow_run_cancel`（严格参数）。 */
+  workflowRunCancel<T = unknown>(params: WorkflowRunCancelRequest): Promise<T>;
+
+  /** `workflow_node_retry`（严格参数）。 */
+  workflowNodeRetry<T = unknown>(params: WorkflowNodeRetryRequest): Promise<T>;
 }
 
 const COMMAND_SET: ReadonlySet<string> = new Set(COMMANDS);
@@ -904,6 +979,39 @@ export function createAetherClient(provider: AetherBridgeProvider): AetherClient
     },
     async appExit<T = unknown>(params?: AppExitRequest): Promise<T> {
       return call<T>("app_exit", params);
+    },
+    async workflowCreate<T = unknown>(params?: WorkflowCreateRequest): Promise<T> {
+      return call<T>("workflow_create", params);
+    },
+    async workflowList<T = unknown>(params?: WorkflowListRequest): Promise<T> {
+      return call<T>("workflow_list", params);
+    },
+    async workflowGet<T = unknown>(params?: WorkflowIdRequest): Promise<T> {
+      return call<T>("workflow_get", params);
+    },
+    async workflowUpdate<T = unknown>(params?: WorkflowUpdateRequest): Promise<T> {
+      return call<T>("workflow_update", params);
+    },
+    async workflowDelete<T = unknown>(params?: WorkflowDeleteRequest): Promise<T> {
+      return call<T>("workflow_delete", params);
+    },
+    async workflowImport<T = unknown>(params?: WorkflowImportRequest): Promise<T> {
+      return call<T>("workflow_import", params);
+    },
+    async workflowRun<T = unknown>(params?: WorkflowRunRequest): Promise<T> {
+      return call<T>("workflow_run", params);
+    },
+    async workflowRunGet<T = unknown>(params?: WorkflowRunGetRequest): Promise<T> {
+      return call<T>("workflow_run_get", params);
+    },
+    async workflowRunList<T = unknown>(params?: WorkflowRunListRequest): Promise<T> {
+      return call<T>("workflow_run_list", params);
+    },
+    async workflowRunCancel<T = unknown>(params?: WorkflowRunCancelRequest): Promise<T> {
+      return call<T>("workflow_run_cancel", params);
+    },
+    async workflowNodeRetry<T = unknown>(params?: WorkflowNodeRetryRequest): Promise<T> {
+      return call<T>("workflow_node_retry", params);
     },
   };
 }

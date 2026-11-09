@@ -470,6 +470,16 @@ impl SessionBackend {
         }
     }
 
+    /// 只读连接池句柄（M10-01 编排 agent 节点轮询 run/消息；`None` = 未接线）。
+    pub fn read_pool(&self) -> Option<ReadPool> {
+        self.reads.clone()
+    }
+
+    /// 单写队列句柄（M10-01 agent 节点写 `sessions.parent_session_id`；`None` = 未接线）。
+    pub fn write_queue(&self) -> Option<WriteQueue> {
+        self.write.clone()
+    }
+
     /// 注入数据目录（M7-08：合成组「默认（数据目录）」的根路径展示；`None` = 不展示）。
     #[must_use]
     pub fn with_data_dir(mut self, data_dir: impl Into<std::path::PathBuf>) -> Self {

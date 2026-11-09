@@ -30,8 +30,10 @@ pub use event::{
     RunStartedPayload, RuntimeStatusChangedPayload, SessionClosedPayload, SessionCreatedPayload,
     SessionStatusChangedPayload, SessionSummary, SessionUpdatedPayload, SubagentCompletedPayload,
     SubagentSpawnedPayload, ToolCallCompletedPayload, ToolCallFailedPayload,
-    ToolCallStartedPayload, UsagePayload, WorkflowEventPayload, ENVELOPE_FIELDS,
-    EVENT_ENVELOPE_VERSION,
+    ToolCallStartedPayload, UsagePayload, WorkflowCancelledPayload, WorkflowCompletedPayload,
+    WorkflowFailedPayload, WorkflowNodeCancelledPayload, WorkflowNodeCompletedPayload,
+    WorkflowNodeFailedPayload, WorkflowNodeSkippedPayload, WorkflowNodeStartedPayload,
+    WorkflowStartedPayload, ENVELOPE_FIELDS, EVENT_ENVELOPE_VERSION,
 };
 pub use ids::{
     EventId, MessageId, PermissionRequestId, PresetId, RunId, RuntimeId, SessionId, ToolCallId,

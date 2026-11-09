@@ -42,7 +42,8 @@ const ERROR_SRC = "crates/aether-app/src/ipc/error.rs";
 const EVENT_SRC = "crates/aether-core/src/event.rs";
 const MIGRATIONS_DIR = "migrations";
 
-export const EXPECTED_COMMANDS = 63;
+// M10-01/ADR-031：命令面增量登记 11 条（workflow_*），基线随实现任务重录为 74/70/4。
+export const EXPECTED_COMMANDS = 74;
 const RESERVED_COMMANDS = ["startup_get", "startup_migrate"];
 const SHELL_COMMANDS = ["app_exit", "app_restart", "ref_pick", "startup_pick_target"];
 
@@ -155,6 +156,30 @@ const PAGING_SEMANTIC_CASES = {
       params: { session_id: ULID, limit: 501 },
       expect: { result: "rejected", code: "out_of_range", field: "limit" },
     },
+    {
+      id: "max_bytes_below_min",
+      stage: "semantic_validation",
+      params: { session_id: ULID, max_bytes: 65535 },
+      expect: { result: "rejected", code: "out_of_range", field: "max_bytes" },
+    },
+    {
+      id: "max_bytes_above_max",
+      stage: "semantic_validation",
+      params: { session_id: ULID, max_bytes: 1572865 },
+      expect: { result: "rejected", code: "out_of_range", field: "max_bytes" },
+    },
+    {
+      id: "cursor_and_last_seq_mutually_exclusive",
+      stage: "semantic_validation",
+      params: { session_id: ULID, last_seq: 1, next_cursor: "opaque" },
+      expect: { result: "rejected", code: "invalid_value", field: "next_cursor" },
+    },
+    {
+      id: "cursor_tampered",
+      stage: "semantic_validation",
+      params: { session_id: ULID, next_cursor: "not*base64url" },
+      expect: { result: "rejected", code: "invalid_value", field: "next_cursor" },
+    },
   ],
   audit_query: [
     {
@@ -174,6 +199,30 @@ const PAGING_SEMANTIC_CASES = {
       stage: "semantic_validation",
       params: { from_ts: 10, to_ts: 5 },
       expect: { result: "rejected", code: "invalid_value" },
+    },
+    {
+      id: "max_bytes_below_min",
+      stage: "semantic_validation",
+      params: { max_bytes: 65535 },
+      expect: { result: "rejected", code: "out_of_range", field: "max_bytes" },
+    },
+    {
+      id: "max_bytes_above_max",
+      stage: "semantic_validation",
+      params: { max_bytes: 1572865 },
+      expect: { result: "rejected", code: "out_of_range", field: "max_bytes" },
+    },
+    {
+      id: "cursor_and_offset_mutually_exclusive",
+      stage: "semantic_validation",
+      params: { offset: 10, next_cursor: "opaque" },
+      expect: { result: "rejected", code: "invalid_value", field: "next_cursor" },
+    },
+    {
+      id: "cursor_tampered",
+      stage: "semantic_validation",
+      params: { next_cursor: "not*base64url" },
+      expect: { result: "rejected", code: "invalid_value", field: "next_cursor" },
     },
   ],
 };
@@ -731,7 +780,7 @@ function record() {
   const contract = collectContract();
   if (contract.commands.length !== EXPECTED_COMMANDS) {
     throw new Error(
-      `[m9-01-baseline] 命令数 ${contract.commands.length} ≠ ${EXPECTED_COMMANDS}（63 = 59 daemon + 4 shell）`,
+      `[m9-01-baseline] 命令数 ${contract.commands.length} ≠ ${EXPECTED_COMMANDS}（74 = 70 daemon + 4 shell）`,
     );
   }
   const shell = contract.commands.filter((command) => command.route === "shell").length;
@@ -740,7 +789,7 @@ function record() {
     throw new Error(`[m9-01-baseline] 壳本地命令数 ${shell} ≠ ${SHELL_COMMANDS.length}`);
   }
   if (reachable !== EXPECTED_COMMANDS - RESERVED_COMMANDS.length) {
-    throw new Error(`[m9-01-baseline] 可达命令数 ${reachable} ≠ 61`);
+    throw new Error(`[m9-01-baseline] 可达命令数 ${reachable} ≠ 72`);
   }
 
   const entries = [];

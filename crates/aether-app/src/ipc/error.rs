@@ -181,6 +181,9 @@ pub struct IpcError {
     pub field: Option<String>,
     #[serde(skip)]
     business: Option<BusinessCode>,
+    /// `error.data.details`（结构化附加数据；ADR-031 定义校验 details 等）。
+    #[serde(skip)]
+    details: Option<serde_json::Value>,
 }
 
 impl IpcError {
@@ -190,6 +193,7 @@ impl IpcError {
             message: message.into(),
             field: None,
             business: None,
+            details: None,
         }
     }
 
@@ -203,6 +207,7 @@ impl IpcError {
             message: message.into(),
             field: Some(field.into()),
             business: None,
+            details: None,
         }
     }
 
@@ -216,6 +221,18 @@ impl IpcError {
     /// 业务码（JSON-RPC 映射读取；`None` = 不输出该字段）。
     pub fn business_code(&self) -> Option<BusinessCode> {
         self.business
+    }
+
+    /// 附加结构化 `error.data.details`（如工作流定义校验的 `details[]`）。
+    #[must_use]
+    pub fn with_details(mut self, details: serde_json::Value) -> Self {
+        self.details = Some(details);
+        self
+    }
+
+    /// 结构化附加数据（JSON-RPC 映射读取；`None` = 不输出该字段）。
+    pub fn details(&self) -> Option<&serde_json::Value> {
+        self.details.as_ref()
     }
 
     pub fn invalid_json(message: impl Into<String>) -> Self {

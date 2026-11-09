@@ -2246,11 +2246,13 @@ fn commands_manifest_matches_frozen_baseline() {
         "startup_migrate",
         "app_exit",
     ];
-    assert_eq!(COMMANDS.len(), 63, "命令面冻结为 63 条（59 daemon + 4 shell）");
+    // M9 的 63 条顺序/语义不变；M10-01 追加 11 条编排命令 → 74（70 daemon + 4 shell）。
+    assert_eq!(COMMANDS.len(), 74, "命令面 74 条（70 daemon + 4 shell）");
+    assert_eq!(COMMANDS[63], "workflow_create", "M10 增量从第 64 条开始");
     assert_eq!(
-        COMMANDS,
+        &COMMANDS[..63],
         BASELINE,
-        "命令清单与 M9-01 HEAD 基线不一致（增删改须走 ADR 并更新基线）"
+        "M9 前 63 条与 M9-01 HEAD 基线不一致（增删改须走 ADR 并更新基线）"
     );
     let mut sorted = COMMANDS.to_vec();
     sorted.sort_unstable();

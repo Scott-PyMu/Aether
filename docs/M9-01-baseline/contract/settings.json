@@ -1,6 +1,6 @@
 {
   "schema": "aether.m9-01.settings-baseline.v1",
-  "source": "crates/aether-tauri/src/ipc/dto.rs",
+  "source": "crates/aether-app/src/ipc/dto.rs",
   "keys": [
     "backup.reminder",
     "backup.auto.enabled",

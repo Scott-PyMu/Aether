@@ -218,7 +218,7 @@ fn m9_04_baseline_reject_matrix_covers_all_63_commands() {
         .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
         .collect();
     files.sort();
-    assert_eq!(files.len(), 63, "基线条目必须 63 条");
+    assert_eq!(files.len(), 74, "基线条目必须 74 条（M9 63 + M10-01 11）");
     let mut seen = Vec::new();
     let mut rejects = 0usize;
     let mut semantic = 0usize;
@@ -255,7 +255,8 @@ fn m9_04_baseline_reject_matrix_covers_all_63_commands() {
             semantic += 1;
         }
     }
-    assert_eq!(seen.len(), 63);
+    assert_eq!(seen.len(), 74);
+    // M10-01 起 COMMANDS 为 74（M9 的 63 条顺序不变）；基线覆盖全部 74 条。
     for command in COMMANDS {
         assert!(
             seen.iter().any(|name| name == command),
@@ -272,7 +273,7 @@ fn m9_04_valid_request_matrix_covers_all_63_commands() {
     let matrix = read_json(&fixtures_dir().join("command-matrix.json"));
     assert_eq!(matrix["schema"], json!("aether.m9-04.command-matrix.v1"));
     let entries = matrix["commands"].as_array().expect("commands");
-    assert_eq!(entries.len(), 63, "合法矩阵必须 63 条");
+    assert_eq!(entries.len(), 63, "M9 合法矩阵必须 63 条");
     let mut seen = Vec::new();
     for entry in entries {
         let command = entry["command"].as_str().expect("command");
@@ -295,7 +296,7 @@ fn m9_04_valid_request_matrix_covers_all_63_commands() {
         }
     }
     assert_eq!(seen.len(), 63);
-    for command in COMMANDS {
+    for command in &COMMANDS[..63] {
         assert!(
             seen.iter().any(|name| name == command),
             "矩阵缺少 {command}"
@@ -317,9 +318,13 @@ fn m9_04_error_code_matrix_is_32_plus_9_and_all_reachable() {
     let ipc = matrix["ipc"].as_array().expect("ipc");
     let business = matrix["business"].as_array().expect("business");
     assert_eq!(ipc.len(), 32, "32 枚举逐项");
-    assert_eq!(business.len(), 9, "9 业务码逐项");
+    assert_eq!(business.len(), 9, "M9 业务码矩阵 9 项（M10 增量另行登记）");
     assert_eq!(IpcErrorCode::ALL.len(), 32);
-    assert_eq!(BusinessCode::ALL.len(), 9);
+    assert_eq!(
+        BusinessCode::ALL.len(),
+        18,
+        "业务码 18 项（M9 的 9 + M10-01/ADR-031 的 9）"
+    );
 
     let mut seen_ipc = Vec::new();
     for entry in ipc {

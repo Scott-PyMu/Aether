@@ -276,8 +276,10 @@ check("数据契约 workflow_runs.workflow_id", migration.includes("workflow_id 
 check("数据契约 node_runs.attempt", migration.includes("attempt         INTEGER NOT NULL DEFAULT 1"));
 check("数据契约 messages.content_parts", migration.includes("content_parts     TEXT"));
 
-// ---------- 7. 冻结面未被修改 ----------
-const frozen = [
+// ---------- 7. 冻结面：M9 保持 + M10 登记增量 ----------
+// 决策记录 v0.5：Cargo.toml/Cargo.lock/deny.toml/pnpm-lock.yaml 在 M10-03/05
+// 依赖落地时由 verify:m10-03/05 校验“精确版本 + 许可证”，不再由 M10-00 冻结。
+const frozenMigrations = [
   "migrations/0001_init.sql",
   "migrations/0002_unique_keys.sql",
   "migrations/0003_p0_ui_extensions.sql",
@@ -287,15 +289,79 @@ const frozen = [
   "migrations/0007_presets.sql",
   "migrations/0008_session_search_fts.sql",
   "migrations/0009_provider_endpoints.sql",
-  "packages/protocol/src/types.ts",
-  "packages/protocol/src/client.ts",
-  "packages/protocol/src/command-manifest.json",
-  "packages/protocol/src/error_codes.json",
 ];
-// 决策记录 v0.5：Cargo.toml/Cargo.lock/deny.toml/pnpm-lock.yaml 在 M10-03/05
-// 依赖落地时由 verify:m10-03/05 校验“精确版本 + 许可证”，不再由 M10-00 冻结。
-const changed = gitChanged(frozen);
-check("冻结面（迁移/生成物）未被修改", changed === "", changed);
+const changedMigrations = gitChanged(frozenMigrations);
+check("0001–0009 迁移未被修改", changedMigrations === "", changedMigrations);
+
+// 生成物在 M10 实现任务中**按登记增量演进**；本段校验：
+// - M9 的 63 条命令顺序/名称不变；
+// - 新增命令必须已在 M10-00 登记表；
+// - 生成物与生成器一致（command-manifest / error_codes）；
+// - types/client 覆盖当前全部命令。
+function runNodeCheck(label, script, mode) {
+  try {
+    execFileSync(process.execPath, [script, mode], {
+      cwd: root,
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf8",
+      env: process.env,
+    });
+    check(label, true);
+  } catch (error) {
+    const stderr = String(error.stderr ?? "").trim().split(/\r?\n/).slice(0, 3).join(" ");
+    check(label, false, stderr || String(error.message));
+  }
+}
+
+runNodeCheck("command-manifest 生成物与生成器一致", "scripts/ci/command-manifest.mjs", "check");
+runNodeCheck("error_codes 生成物与生成器一致", "scripts/ci/error-codes.mjs", "check");
+
+const generatedManifest = JSON.parse(read("packages/protocol/src/command-manifest.json"));
+const generatedCommands = (generatedManifest.commands ?? []).map((entry) => entry.name);
+const dispatchSource = read("crates/aether-app/src/ipc/dispatch.rs");
+const dispatchBlock = dispatchSource.match(/pub const COMMANDS: &\[&str\] = &\[([\s\S]*?)\n\];/);
+if (!dispatchBlock) {
+  check("解析 aether-app COMMANDS", false);
+} else {
+  const sourceCommands = [...dispatchBlock[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+  check(
+    "命令生成物顺序与 COMMANDS 一致",
+    JSON.stringify(generatedCommands) === JSON.stringify(sourceCommands),
+    `${generatedCommands.length} vs ${sourceCommands.length}`,
+  );
+}
+
+const m9Manifest = JSON.parse(read("docs/M9-01-baseline/manifest.json"));
+const m9BaselineCommands = (m9Manifest.commands ?? []).slice(0, 63);
+check(
+  "M9 前 63 条命令顺序/名称不变",
+  JSON.stringify(generatedCommands.slice(0, 63)) === JSON.stringify(m9BaselineCommands),
+  `实际 ${generatedCommands.length} 条`,
+);
+const registeredCommands = new Set((registry?.commands ?? []).map((entry) => entry.name));
+for (const command of generatedCommands.slice(63)) {
+  check(`增量命令 ${command} 已在 M10-00 登记`, registeredCommands.has(command));
+}
+
+const typesSource = read("packages/protocol/src/types.ts");
+for (const entry of generatedManifest.commands ?? []) {
+  const dto = entry.params?.dto;
+  if (typeof dto === "string") {
+    check(`types.ts 覆盖 ${dto}`, typesSource.includes(`export type ${dto} =`));
+  }
+}
+
+const clientSource = read("packages/protocol/src/client.ts");
+const clientMethods = [...clientSource.matchAll(/async [a-zA-Z0-9]+<T = unknown>/g)].length;
+check(
+  "client.ts 命名方法数 = 命令数",
+  clientMethods === generatedCommands.length,
+  `${clientMethods} ≠ ${generatedCommands.length}`,
+);
+for (const entry of generatedManifest.commands ?? []) {
+  const method = entry.name.replace(/_([a-z0-9])/g, (_, char) => char.toUpperCase());
+  check(`client.ts 覆盖 ${method}`, clientSource.includes(`async ${method}<T = unknown>`));
+}
 
 // ---------- 8. 证据/评审 ----------
 mustExist("docs/M10-00-证据.md");

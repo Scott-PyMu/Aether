@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 
 use serde::Deserialize;
+use serde_json::Value;
 
 use super::cursor;
 use super::error::{IpcError, IpcErrorCode};
@@ -1975,6 +1976,373 @@ impl CommandRequest for SessionWorkspaceAssignRequest {
             return Err(IpcError::invalid_format(
                 "workspace_id",
                 "必须是 26 位 ULID",
+            ));
+        }
+        Ok(())
+    }
+}
+
+// ===== M10-01/ADR-031：编排命令面（11 条） =====
+
+/// 工作流定义序列化上限（ADR-031 D-031-1：256 KiB）。
+pub const WORKFLOW_DEFINITION_MAX_BYTES: usize = 262_144;
+/// 工作流名称上限（字符）。
+pub const WORKFLOW_NAME_MAX_CHARS: usize = 128;
+/// 工作流描述上限（字符）。
+pub const WORKFLOW_DESCRIPTION_MAX_CHARS: usize = 1_024;
+/// 工作流运行输入上限（字节；节点结果上限 64 KiB）。
+pub const WORKFLOW_INPUT_MAX_BYTES: usize = 65_536;
+/// 工作流列表分页上限。
+pub const WORKFLOW_LIST_MAX_LIMIT: u32 = 200;
+/// 工作流运行列表分页上限。
+pub const WORKFLOW_RUN_LIST_MAX_LIMIT: u32 = 200;
+
+fn validate_workflow_name(name: &str) -> Result<(), IpcError> {
+    validate::ensure_not_empty(name, "name")?;
+    ensure_max_chars(name, "name", WORKFLOW_NAME_MAX_CHARS)?;
+    reject_control_chars(name, "name", false)
+}
+
+fn validate_workflow_description(description: Option<&str>) -> Result<(), IpcError> {
+    if let Some(description) = description {
+        ensure_max_chars(
+            description,
+            "description",
+            WORKFLOW_DESCRIPTION_MAX_CHARS,
+        )?;
+        reject_control_chars(description, "description", true)?;
+    }
+    Ok(())
+}
+
+fn validate_workflow_definition(definition: &Value) -> Result<(), IpcError> {
+    let bytes = serde_json::to_vec(definition)
+        .map_err(|error| IpcError::invalid_value(format!("definition 无法序列化：{error}")))?;
+    if bytes.len() > WORKFLOW_DEFINITION_MAX_BYTES {
+        return Err(IpcError::too_large(
+            "definition",
+            format!(
+                "工作流定义 {} 字节超过上限 {WORKFLOW_DEFINITION_MAX_BYTES}",
+                bytes.len()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_workflow_page(limit: Option<u32>, max: u32) -> Result<(), IpcError> {
+    if let Some(limit) = limit {
+        if limit == 0 || limit > max {
+            return Err(IpcError::out_of_range(
+                "limit",
+                format!("必须在 1..={max} 之间"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowCreateRequest {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[specta(type = crate::json_payload::JsonPayload)]
+    pub definition: Value,
+    #[serde(default)]
+    pub is_template: Option<bool>,
+}
+
+impl CommandRequest for WorkflowCreateRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        validate_workflow_name(&self.name)?;
+        validate_workflow_description(self.description.as_deref())?;
+        validate_workflow_definition(&self.definition)
+    }
+}
+
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowListRequest {
+    #[serde(default)]
+    pub limit: Option<u32>,
+    #[serde(default)]
+    pub offset: Option<u64>,
+    #[serde(default)]
+    pub include_templates: Option<bool>,
+}
+
+impl CommandRequest for WorkflowListRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        validate_workflow_page(self.limit, WORKFLOW_LIST_MAX_LIMIT)
+    }
+}
+
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowIdRequest {
+    pub workflow_id: String,
+}
+
+impl CommandRequest for WorkflowIdRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.workflow_id) {
+            return Err(IpcError::invalid_format(
+                "workflow_id",
+                "必须是 26 位 ULID",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowUpdateRequest {
+    pub workflow_id: String,
+    pub expected_version: i64,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    #[specta(type = Option<crate::json_payload::JsonPayload>)]
+    pub definition: Option<Value>,
+    #[serde(default)]
+    pub is_template: Option<bool>,
+}
+
+impl CommandRequest for WorkflowUpdateRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.workflow_id) {
+            return Err(IpcError::invalid_format(
+                "workflow_id",
+                "必须是 26 位 ULID",
+            ));
+        }
+        if self.expected_version < 1 {
+            return Err(IpcError::out_of_range(
+                "expected_version",
+                "必须 >= 1",
+            ));
+        }
+        if let Some(name) = &self.name {
+            validate_workflow_name(name)?;
+        }
+        validate_workflow_description(self.description.as_deref())?;
+        if let Some(definition) = &self.definition {
+            validate_workflow_definition(definition)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowDeleteRequest {
+    pub workflow_id: String,
+    #[serde(default)]
+    pub force: Option<bool>,
+}
+
+impl CommandRequest for WorkflowDeleteRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.workflow_id) {
+            return Err(IpcError::invalid_format(
+                "workflow_id",
+                "必须是 26 位 ULID",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowImportRequest {
+    pub source_path: String,
+    #[serde(default)]
+    pub name_override: Option<String>,
+}
+
+impl CommandRequest for WorkflowImportRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if self.source_path.is_empty() {
+            return Err(IpcError::invalid_value("source_path 不能为空"));
+        }
+        ensure_max_chars(&self.source_path, "source_path", MAX_PATH_CHARS)?;
+        if let Some(name) = &self.name_override {
+            validate_workflow_name(name)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowRunRequest {
+    pub workflow_id: String,
+    pub session_id: String,
+    #[serde(default)]
+    #[specta(type = Option<crate::json_payload::JsonPayload>)]
+    pub input: Option<Value>,
+    #[serde(default)]
+    pub priority: Option<i64>,
+}
+
+impl CommandRequest for WorkflowRunRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.workflow_id) {
+            return Err(IpcError::invalid_format(
+                "workflow_id",
+                "必须是 26 位 ULID",
+            ));
+        }
+        if !is_ulid(&self.session_id) {
+            return Err(IpcError::invalid_format("session_id", "必须是 26 位 ULID"));
+        }
+        if let Some(input) = &self.input {
+            let bytes = serde_json::to_vec(input)
+                .map_err(|error| IpcError::invalid_value(format!("input 无法序列化：{error}")))?;
+            if bytes.len() > WORKFLOW_INPUT_MAX_BYTES {
+                return Err(IpcError::too_large(
+                    "input",
+                    format!("input 超过上限 {WORKFLOW_INPUT_MAX_BYTES} 字节"),
+                ));
+            }
+        }
+        if let Some(priority) = self.priority {
+            if !(-100..=100).contains(&priority) {
+                return Err(IpcError::out_of_range("priority", "必须在 -100..=100 之间"));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowRunGetRequest {
+    pub workflow_run_id: String,
+    #[serde(default)]
+    pub include_nodes: Option<bool>,
+}
+
+impl CommandRequest for WorkflowRunGetRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.workflow_run_id) {
+            return Err(IpcError::invalid_format(
+                "workflow_run_id",
+                "必须是 26 位 ULID",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// 工作流运行状态（ADR-031 D-031-3；终态 + 活动态）。
+pub const WORKFLOW_RUN_STATUSES: [&str; 6] = [
+    "queued",
+    "running",
+    "succeeded",
+    "failed",
+    "cancelled",
+    "interrupted",
+];
+
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowRunListRequest {
+    #[serde(default)]
+    pub workflow_id: Option<String>,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub limit: Option<u32>,
+    #[serde(default)]
+    pub offset: Option<u64>,
+}
+
+impl CommandRequest for WorkflowRunListRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if let Some(workflow_id) = &self.workflow_id {
+            if !is_ulid(workflow_id) {
+                return Err(IpcError::invalid_format(
+                    "workflow_id",
+                    "必须是 26 位 ULID",
+                ));
+            }
+        }
+        if let Some(session_id) = &self.session_id {
+            if !is_ulid(session_id) {
+                return Err(IpcError::invalid_format(
+                    "session_id",
+                    "必须是 26 位 ULID",
+                ));
+            }
+        }
+        if let Some(status) = &self.status {
+            if !WORKFLOW_RUN_STATUSES.contains(&status.as_str()) {
+                return Err(IpcError::invalid_enum(
+                    "status",
+                    format!(
+                        "运行状态非法（{status}）；允许值：{}",
+                        WORKFLOW_RUN_STATUSES.join(" / ")
+                    ),
+                ));
+            }
+        }
+        validate_workflow_page(self.limit, WORKFLOW_RUN_LIST_MAX_LIMIT)
+    }
+}
+
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowRunCancelRequest {
+    pub workflow_run_id: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+impl CommandRequest for WorkflowRunCancelRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.workflow_run_id) {
+            return Err(IpcError::invalid_format(
+                "workflow_run_id",
+                "必须是 26 位 ULID",
+            ));
+        }
+        if let Some(reason) = &self.reason {
+            ensure_max_chars(reason, "reason", 1_024)?;
+            reject_control_chars(reason, "reason", true)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowNodeRetryRequest {
+    pub workflow_run_id: String,
+    pub node_id: String,
+    #[serde(default)]
+    pub reset_downstream: Option<bool>,
+}
+
+impl CommandRequest for WorkflowNodeRetryRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.workflow_run_id) {
+            return Err(IpcError::invalid_format(
+                "workflow_run_id",
+                "必须是 26 位 ULID",
+            ));
+        }
+        if self.node_id.is_empty() || self.node_id.len() > 64 {
+            return Err(IpcError::invalid_value(
+                "node_id 必须为 1..=64 字符",
             ));
         }
         Ok(())

@@ -84,9 +84,25 @@ pub enum EventType {
     SubagentSpawned,
     #[serde(rename = "subagent.completed")]
     SubagentCompleted,
-    /// 附录 B 预留 `workflow.*` 的占位类型（P2 启用，届时按附录 B 升级定义，不静默扩展）。
-    #[serde(rename = "workflow.*")]
-    Workflow,
+    /// ADR-031 D-031-5：`workflow.*` 精确子类型（附录 B 预留行于 M10-01 启用）。
+    #[serde(rename = "workflow.started")]
+    WorkflowStarted,
+    #[serde(rename = "workflow.node_started")]
+    WorkflowNodeStarted,
+    #[serde(rename = "workflow.node_completed")]
+    WorkflowNodeCompleted,
+    #[serde(rename = "workflow.node_failed")]
+    WorkflowNodeFailed,
+    #[serde(rename = "workflow.node_cancelled")]
+    WorkflowNodeCancelled,
+    #[serde(rename = "workflow.node_skipped")]
+    WorkflowNodeSkipped,
+    #[serde(rename = "workflow.completed")]
+    WorkflowCompleted,
+    #[serde(rename = "workflow.failed")]
+    WorkflowFailed,
+    #[serde(rename = "workflow.cancelled")]
+    WorkflowCancelled,
 }
 
 impl EventType {
@@ -113,16 +129,24 @@ impl EventType {
         Self::Error,
     ];
 
-    /// 附录 B「预留」类型（reasoning_delta / subagent.* / workflow.*）占位定义。
-    pub const RESERVED: [Self; 4] = [
+    /// 附录 B「预留」类型（reasoning_delta / subagent.* / workflow.* 精确子类型）。
+    pub const RESERVED: [Self; 12] = [
         Self::MessageReasoningDelta,
         Self::SubagentSpawned,
         Self::SubagentCompleted,
-        Self::Workflow,
+        Self::WorkflowStarted,
+        Self::WorkflowNodeStarted,
+        Self::WorkflowNodeCompleted,
+        Self::WorkflowNodeFailed,
+        Self::WorkflowNodeCancelled,
+        Self::WorkflowNodeSkipped,
+        Self::WorkflowCompleted,
+        Self::WorkflowFailed,
+        Self::WorkflowCancelled,
     ];
 
     /// 全部类型（MVP + 预留）。
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 31] = [
         Self::SessionCreated,
         Self::SessionUpdated,
         Self::SessionStatusChanged,
@@ -145,7 +169,15 @@ impl EventType {
         Self::MessageReasoningDelta,
         Self::SubagentSpawned,
         Self::SubagentCompleted,
-        Self::Workflow,
+        Self::WorkflowStarted,
+        Self::WorkflowNodeStarted,
+        Self::WorkflowNodeCompleted,
+        Self::WorkflowNodeFailed,
+        Self::WorkflowNodeCancelled,
+        Self::WorkflowNodeSkipped,
+        Self::WorkflowCompleted,
+        Self::WorkflowFailed,
+        Self::WorkflowCancelled,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -172,7 +204,15 @@ impl EventType {
             Self::MessageReasoningDelta => "message.reasoning_delta",
             Self::SubagentSpawned => "subagent.spawned",
             Self::SubagentCompleted => "subagent.completed",
-            Self::Workflow => "workflow.*",
+            Self::WorkflowStarted => "workflow.started",
+            Self::WorkflowNodeStarted => "workflow.node_started",
+            Self::WorkflowNodeCompleted => "workflow.node_completed",
+            Self::WorkflowNodeFailed => "workflow.node_failed",
+            Self::WorkflowNodeCancelled => "workflow.node_cancelled",
+            Self::WorkflowNodeSkipped => "workflow.node_skipped",
+            Self::WorkflowCompleted => "workflow.completed",
+            Self::WorkflowFailed => "workflow.failed",
+            Self::WorkflowCancelled => "workflow.cancelled",
         }
     }
 
@@ -186,7 +226,15 @@ impl EventType {
             Self::MessageReasoningDelta
                 | Self::SubagentSpawned
                 | Self::SubagentCompleted
-                | Self::Workflow
+                | Self::WorkflowStarted
+                | Self::WorkflowNodeStarted
+                | Self::WorkflowNodeCompleted
+                | Self::WorkflowNodeFailed
+                | Self::WorkflowNodeCancelled
+                | Self::WorkflowNodeSkipped
+                | Self::WorkflowCompleted
+                | Self::WorkflowFailed
+                | Self::WorkflowCancelled
         )
     }
 }
@@ -433,13 +481,110 @@ pub struct SubagentCompletedPayload {
     pub verdict: String,
 }
 
-/// `workflow.*` payload（附录 B 预留 P2：workflowRunId、nodeId、status）。
+/// `workflow.started` payload（ADR-031 D-031-5）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct WorkflowEventPayload {
+pub struct WorkflowStartedPayload {
     pub workflow_run_id: crate::ids::WorkflowRunId,
-    pub node_id: Option<String>,
+    pub workflow_id: String,
+    pub session_id: SessionId,
+    pub priority: i64,
+    pub node_count: u32,
+}
+
+/// `workflow.node_started` payload。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowNodeStartedPayload {
+    pub workflow_run_id: crate::ids::WorkflowRunId,
+    pub workflow_id: String,
+    pub node_id: String,
+    pub node_type: String,
+    pub attempt: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_session_id: Option<SessionId>,
+}
+
+/// `workflow.node_completed` payload。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowNodeCompletedPayload {
+    pub workflow_run_id: crate::ids::WorkflowRunId,
+    pub workflow_id: String,
+    pub node_id: String,
+    pub attempt: u32,
     pub status: String,
+    pub duration_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_ref: Option<String>,
+}
+
+/// `workflow.node_failed` payload。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowNodeFailedPayload {
+    pub workflow_run_id: crate::ids::WorkflowRunId,
+    pub workflow_id: String,
+    pub node_id: String,
+    pub attempt: u32,
+    pub status: String,
+    pub error: ErrorInfo,
+    pub retryable: bool,
+}
+
+/// `workflow.node_cancelled` payload。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowNodeCancelledPayload {
+    pub workflow_run_id: crate::ids::WorkflowRunId,
+    pub workflow_id: String,
+    pub node_id: String,
+    pub attempt: u32,
+    pub reason: String,
+}
+
+/// `workflow.node_skipped` payload。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowNodeSkippedPayload {
+    pub workflow_run_id: crate::ids::WorkflowRunId,
+    pub workflow_id: String,
+    pub node_id: String,
+    pub reason: String,
+}
+
+/// `workflow.completed` payload。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowCompletedPayload {
+    pub workflow_run_id: crate::ids::WorkflowRunId,
+    pub workflow_id: String,
+    pub status: String,
+    pub node_count: u32,
+    pub duration_ms: u64,
+}
+
+/// `workflow.failed` payload。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowFailedPayload {
+    pub workflow_run_id: crate::ids::WorkflowRunId,
+    pub workflow_id: String,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed_node_id: Option<String>,
+    pub error: ErrorInfo,
+    pub retryable: bool,
+}
+
+/// `workflow.cancelled` payload。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowCancelledPayload {
+    pub workflow_run_id: crate::ids::WorkflowRunId,
+    pub workflow_id: String,
+    pub reason: String,
+    pub remaining_nodes: u32,
 }
 
 /// 事件 payload（与 [`EventType`] 一一对应；序列化为 payload 本体对象）。
@@ -467,7 +612,15 @@ pub enum EventPayload {
     MessageReasoningDelta(MessageReasoningDeltaPayload),
     SubagentSpawned(SubagentSpawnedPayload),
     SubagentCompleted(SubagentCompletedPayload),
-    Workflow(WorkflowEventPayload),
+    WorkflowStarted(WorkflowStartedPayload),
+    WorkflowNodeStarted(WorkflowNodeStartedPayload),
+    WorkflowNodeCompleted(WorkflowNodeCompletedPayload),
+    WorkflowNodeFailed(WorkflowNodeFailedPayload),
+    WorkflowNodeCancelled(WorkflowNodeCancelledPayload),
+    WorkflowNodeSkipped(WorkflowNodeSkippedPayload),
+    WorkflowCompleted(WorkflowCompletedPayload),
+    WorkflowFailed(WorkflowFailedPayload),
+    WorkflowCancelled(WorkflowCancelledPayload),
 }
 
 impl EventPayload {
@@ -495,7 +648,15 @@ impl EventPayload {
             Self::MessageReasoningDelta(_) => EventType::MessageReasoningDelta,
             Self::SubagentSpawned(_) => EventType::SubagentSpawned,
             Self::SubagentCompleted(_) => EventType::SubagentCompleted,
-            Self::Workflow(_) => EventType::Workflow,
+            Self::WorkflowStarted(_) => EventType::WorkflowStarted,
+            Self::WorkflowNodeStarted(_) => EventType::WorkflowNodeStarted,
+            Self::WorkflowNodeCompleted(_) => EventType::WorkflowNodeCompleted,
+            Self::WorkflowNodeFailed(_) => EventType::WorkflowNodeFailed,
+            Self::WorkflowNodeCancelled(_) => EventType::WorkflowNodeCancelled,
+            Self::WorkflowNodeSkipped(_) => EventType::WorkflowNodeSkipped,
+            Self::WorkflowCompleted(_) => EventType::WorkflowCompleted,
+            Self::WorkflowFailed(_) => EventType::WorkflowFailed,
+            Self::WorkflowCancelled(_) => EventType::WorkflowCancelled,
         }
     }
 
@@ -559,7 +720,33 @@ impl EventPayload {
             EventType::SubagentCompleted => {
                 Self::SubagentCompleted(decode::<SubagentCompletedPayload>(name, value)?)
             }
-            EventType::Workflow => Self::Workflow(decode::<WorkflowEventPayload>(name, value)?),
+            EventType::WorkflowStarted => {
+                Self::WorkflowStarted(decode::<WorkflowStartedPayload>(name, value)?)
+            }
+            EventType::WorkflowNodeStarted => {
+                Self::WorkflowNodeStarted(decode::<WorkflowNodeStartedPayload>(name, value)?)
+            }
+            EventType::WorkflowNodeCompleted => {
+                Self::WorkflowNodeCompleted(decode::<WorkflowNodeCompletedPayload>(name, value)?)
+            }
+            EventType::WorkflowNodeFailed => {
+                Self::WorkflowNodeFailed(decode::<WorkflowNodeFailedPayload>(name, value)?)
+            }
+            EventType::WorkflowNodeCancelled => {
+                Self::WorkflowNodeCancelled(decode::<WorkflowNodeCancelledPayload>(name, value)?)
+            }
+            EventType::WorkflowNodeSkipped => {
+                Self::WorkflowNodeSkipped(decode::<WorkflowNodeSkippedPayload>(name, value)?)
+            }
+            EventType::WorkflowCompleted => {
+                Self::WorkflowCompleted(decode::<WorkflowCompletedPayload>(name, value)?)
+            }
+            EventType::WorkflowFailed => {
+                Self::WorkflowFailed(decode::<WorkflowFailedPayload>(name, value)?)
+            }
+            EventType::WorkflowCancelled => {
+                Self::WorkflowCancelled(decode::<WorkflowCancelledPayload>(name, value)?)
+            }
         };
         Ok(parsed)
     }
@@ -606,7 +793,15 @@ impl Serialize for EventPayload {
             Self::MessageReasoningDelta(payload) => payload.serialize(serializer),
             Self::SubagentSpawned(payload) => payload.serialize(serializer),
             Self::SubagentCompleted(payload) => payload.serialize(serializer),
-            Self::Workflow(payload) => payload.serialize(serializer),
+            Self::WorkflowStarted(payload) => payload.serialize(serializer),
+            Self::WorkflowNodeStarted(payload) => payload.serialize(serializer),
+            Self::WorkflowNodeCompleted(payload) => payload.serialize(serializer),
+            Self::WorkflowNodeFailed(payload) => payload.serialize(serializer),
+            Self::WorkflowNodeCancelled(payload) => payload.serialize(serializer),
+            Self::WorkflowNodeSkipped(payload) => payload.serialize(serializer),
+            Self::WorkflowCompleted(payload) => payload.serialize(serializer),
+            Self::WorkflowFailed(payload) => payload.serialize(serializer),
+            Self::WorkflowCancelled(payload) => payload.serialize(serializer),
         }
     }
 }

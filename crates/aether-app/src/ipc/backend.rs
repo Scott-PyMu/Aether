@@ -23,6 +23,9 @@ use super::dto::{
     SessionDeleteRequest, SessionRenameRequest, SessionSearchRequest,
     SessionWorkspaceAssignRequest, SettingsGetRequest, SettingsSetRequest, WorkspaceCreateRequest,
     WorkspaceDeleteRequest, WorkspaceSetRequest, WorkspaceUpdateRequest, WorkspacesListRequest,
+    WorkflowCreateRequest, WorkflowDeleteRequest, WorkflowIdRequest, WorkflowImportRequest,
+    WorkflowListRequest, WorkflowNodeRetryRequest, WorkflowRunCancelRequest, WorkflowRunGetRequest,
+    WorkflowRunListRequest, WorkflowRunRequest, WorkflowUpdateRequest,
 };
 use super::error::IpcError;
 use super::path::ArtifactPath;
@@ -391,6 +394,58 @@ pub trait IpcBackend: Send + Sync + 'static {
     /// ADR-021 附录 A-3）。
     fn export_metrics_status(&self) -> Result<Option<Value>, IpcError> {
         Ok(None)
+    }
+
+    // ===== M10-01/ADR-031：编排命令面（11 条） =====
+
+    fn workflow_create(&self, _request: &WorkflowCreateRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("workflow_create"))
+    }
+
+    fn workflow_list(&self, _request: &WorkflowListRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("workflow_list"))
+    }
+
+    fn workflow_get(&self, _request: &WorkflowIdRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("workflow_get"))
+    }
+
+    fn workflow_update(&self, _request: &WorkflowUpdateRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("workflow_update"))
+    }
+
+    fn workflow_delete(&self, _request: &WorkflowDeleteRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("workflow_delete"))
+    }
+
+    fn workflow_import(&self, _request: &WorkflowImportRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("workflow_import"))
+    }
+
+    fn workflow_run(&self, _request: &WorkflowRunRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("workflow_run"))
+    }
+
+    fn workflow_run_get(&self, _request: &WorkflowRunGetRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("workflow_run_get"))
+    }
+
+    fn workflow_run_list(&self, _request: &WorkflowRunListRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("workflow_run_list"))
+    }
+
+    fn workflow_run_cancel(
+        &self,
+        _request: &WorkflowRunCancelRequest,
+    ) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("workflow_run_cancel"))
+    }
+
+    fn workflow_node_retry(
+        &self,
+        _request: &WorkflowNodeRetryRequest,
+    ) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("workflow_node_retry"))
     }
 }
 

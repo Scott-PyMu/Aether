@@ -37,6 +37,21 @@ const manifest = {
   schema: "aether.m10.doc-freeze.v1",
   task: "M10-00",
   frozen_at: "2026-11-05",
+  amended_at: "2026-11-09",
+  amendments: [
+    {
+      task: "M10-01",
+      adr: "ADR-031",
+      field: "设计文档.md",
+      reason: "D-031-6 要求 0010 落库时同批合入附录 C 终态；仅更新附录 C，不改冻结决策",
+    },
+    {
+      task: "M10-01",
+      adr: "ADR-031",
+      field: "docs/P2-架构迁移-实施计划与验收标准.md",
+      reason: "M10-01 执行状态（任务进度可更新；结构不变）",
+    },
+  ],
   design_version: "v1.32",
   p2_plan_version: "v0.10",
   uiux_version: "v0.19",

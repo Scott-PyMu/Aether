@@ -5300,3 +5300,117 @@ select.form-input {
     flex-wrap: wrap;
   }
 }
+
+/* ===== M10-01 工作流编排（S-14；无画布） ===== */
+.workflow-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(1200px, 96vw);
+  max-height: 92vh;
+  overflow: auto;
+  padding: 20px;
+  border-radius: 12px;
+  background: #11151c;
+  color: #e6e9ef;
+  border: 1px solid #2a3342;
+}
+
+.workflow-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.workflow-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.8fr) minmax(360px, 1.6fr) minmax(280px, 1fr);
+  gap: 16px;
+}
+
+.workflow-list ul {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.workflow-list button[data-testid="workflow-item"] {
+  width: 100%;
+  text-align: left;
+}
+
+.workflow-editor-panel,
+.workflow-run-view {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.workflow-editor-panel label,
+.workflow-run-actions label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.workflow-editor {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  background: #0b0e13;
+  color: #dfe6f1;
+  border: 1px solid #2a3342;
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.workflow-actions,
+.workflow-run-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.workflow-node-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.workflow-node-list li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  border: 1px solid #2a3342;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.workflow-node-list li[data-status="failed"],
+.workflow-node-list li[data-status="timeout"],
+.workflow-node-list li[data-status="cancelled"] {
+  border-color: #a33;
+}
+
+.workflow-node-error,
+.workflow-error {
+  color: #ff9b9b;
+  font-size: 12px;
+}
+
+@media (max-width: 1000px) {
+  .workflow-layout {
+    grid-template-columns: 1fr;
+  }
+}

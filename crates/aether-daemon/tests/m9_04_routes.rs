@@ -25,7 +25,7 @@ fn daemon_commands() -> Vec<&'static str> {
 }
 
 #[test]
-fn all_63_commands_are_routed_at_the_rpc_layer() {
+fn all_commands_are_routed_at_the_rpc_layer() {
     let _serial = harness::serial_guard();
     let dirs = TestDirs::new();
     let mut daemon = Daemon::spawn(&dirs);
@@ -34,7 +34,7 @@ fn all_63_commands_are_routed_at_the_rpc_layer() {
     assert_eq!(health["result"]["storage_state"], json!("normal"));
 
     let daemon_commands = daemon_commands();
-    assert_eq!(daemon_commands.len(), 59, "daemon 路由必须 59 条");
+    assert_eq!(daemon_commands.len(), 70, "daemon 路由必须 70 条（M9 59 + M10-01 11）");
     let mut id = 100;
     for method in &daemon_commands {
         let response = daemon.request(id, method, json!({ "__m9_04_unknown_member": true }));

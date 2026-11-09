@@ -6,10 +6,10 @@
     "groups": "docs/adr/ADR-029-electron-shell-rust-daemon.md §4.6/§16.1"
   },
   "counts": {
-    "total": 63,
-    "daemon": 59,
+    "total": 74,
+    "daemon": 70,
     "shell": 4,
-    "ui": 61,
+    "ui": 72,
     "reserved": 2,
     "groups": 18
   },
@@ -85,6 +85,10 @@
     {
       "group": "startup",
       "count": 2
+    },
+    {
+      "group": "workflow",
+      "count": 11
     }
   ],
   "commands": [
@@ -779,6 +783,127 @@
       "params": {
         "style": "strict",
         "dto": "AppExitRequest"
+      }
+    },
+    {
+      "index": 64,
+      "name": "workflow_create",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "workflow",
+      "params": {
+        "style": "strict",
+        "dto": "WorkflowCreateRequest"
+      }
+    },
+    {
+      "index": 65,
+      "name": "workflow_list",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "workflow",
+      "params": {
+        "style": "strict",
+        "dto": "WorkflowListRequest"
+      }
+    },
+    {
+      "index": 66,
+      "name": "workflow_get",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "workflow",
+      "params": {
+        "style": "strict",
+        "dto": "WorkflowIdRequest"
+      }
+    },
+    {
+      "index": 67,
+      "name": "workflow_update",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "workflow",
+      "params": {
+        "style": "strict",
+        "dto": "WorkflowUpdateRequest"
+      }
+    },
+    {
+      "index": 68,
+      "name": "workflow_delete",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "workflow",
+      "params": {
+        "style": "strict",
+        "dto": "WorkflowDeleteRequest"
+      }
+    },
+    {
+      "index": 69,
+      "name": "workflow_import",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "workflow",
+      "params": {
+        "style": "strict",
+        "dto": "WorkflowImportRequest"
+      }
+    },
+    {
+      "index": 70,
+      "name": "workflow_run",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "workflow",
+      "params": {
+        "style": "strict",
+        "dto": "WorkflowRunRequest"
+      }
+    },
+    {
+      "index": 71,
+      "name": "workflow_run_get",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "workflow",
+      "params": {
+        "style": "strict",
+        "dto": "WorkflowRunGetRequest"
+      }
+    },
+    {
+      "index": 72,
+      "name": "workflow_run_list",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "workflow",
+      "params": {
+        "style": "strict",
+        "dto": "WorkflowRunListRequest"
+      }
+    },
+    {
+      "index": 73,
+      "name": "workflow_run_cancel",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "workflow",
+      "params": {
+        "style": "strict",
+        "dto": "WorkflowRunCancelRequest"
+      }
+    },
+    {
+      "index": 74,
+      "name": "workflow_node_retry",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "workflow",
+      "params": {
+        "style": "strict",
+        "dto": "WorkflowNodeRetryRequest"
       }
     }
   ]

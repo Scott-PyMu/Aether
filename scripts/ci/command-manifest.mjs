@@ -26,11 +26,25 @@ const DISPATCH_SRC = "crates/aether-app/src/ipc/dispatch.rs";
 const HANDLERS_SRC = "crates/aether-app/src/ipc/handlers.rs";
 const ADR_SRC = "docs/adr/ADR-029-electron-shell-rust-daemon.md";
 const TARGET = "packages/protocol/src/command-manifest.json";
-const EXPECTED_TOTAL = 63;
-const EXPECTED_DAEMON = 59;
+const EXPECTED_TOTAL = 74;
+const EXPECTED_DAEMON = 70;
 const EXPECTED_SHELL = 4;
-const EXPECTED_UI = 61;
+const EXPECTED_UI = 72;
 export const RESERVED_COMMANDS = ["startup_get", "startup_migrate"];
+/** M10-01/ADR-031 新增命令（ADR-029 §16.1 只冻结 M9 的 63 条；本表登记增量分组）。 */
+export const M10_WORKFLOW_COMMANDS = [
+  "workflow_create",
+  "workflow_list",
+  "workflow_get",
+  "workflow_update",
+  "workflow_delete",
+  "workflow_import",
+  "workflow_run",
+  "workflow_run_get",
+  "workflow_run_list",
+  "workflow_run_cancel",
+  "workflow_node_retry",
+];
 
 const MODE = process.argv.slice(2).find((arg) => !arg.startsWith("--")) ?? "check";
 if (MODE !== "generate" && MODE !== "check") {
@@ -136,14 +150,23 @@ export function buildCommandManifest() {
       groupOf.set(method, group.group);
     }
   }
+  for (const command of M10_WORKFLOW_COMMANDS) {
+    if (!commands.includes(command)) {
+      throw new Error(`[command-manifest] M10 命令 ${command} 不在 COMMANDS 清单内`);
+    }
+    if (groupOf.has(command)) {
+      throw new Error(`[command-manifest] M10 命令 ${command} 与 ADR §16.1 分组重复`);
+    }
+    groupOf.set(command, "workflow");
+  }
   for (const command of commands) {
     if (!groupOf.has(command)) {
-      throw new Error(`[command-manifest] 命令 ${command} 未在 ADR §16.1 分组表中登记`);
+      throw new Error(`[command-manifest] 命令 ${command} 未在分组表中登记`);
     }
   }
   for (const method of groupOf.keys()) {
     if (!commands.includes(method)) {
-      throw new Error(`[command-manifest] ADR §16.1 的 ${method} 不在 COMMANDS 清单内`);
+      throw new Error(`[command-manifest] 分组的 ${method} 不在 COMMANDS 清单内`);
     }
   }
 
@@ -164,10 +187,10 @@ export function buildCommandManifest() {
   const shellCount = entries.filter((entry) => entry.route === "shell").length;
   const ui = entries.filter((entry) => entry.exposure === "ui").length;
   if (daemon !== EXPECTED_DAEMON || shellCount !== EXPECTED_SHELL) {
-    throw new Error(`[command-manifest] 路由计数 ${daemon}/${shellCount} ≠ 59/4`);
+    throw new Error(`[command-manifest] 路由计数 ${daemon}/${shellCount} ≠ 70/4`);
   }
   if (ui !== EXPECTED_UI) {
-    throw new Error(`[command-manifest] UI 暴露 ${ui} ≠ 61`);
+    throw new Error(`[command-manifest] UI 暴露 ${ui} ≠ 72`);
   }
 
   return {
@@ -185,7 +208,10 @@ export function buildCommandManifest() {
       reserved: RESERVED_COMMANDS.length,
       groups: adrGroups.length,
     },
-    groups: adrGroups.map((group) => ({ group: group.group, count: group.count })),
+    groups: [
+      ...adrGroups.map((group) => ({ group: group.group, count: group.count })),
+      { group: "workflow", count: M10_WORKFLOW_COMMANDS.length },
+    ],
     commands: entries,
   };
 }
@@ -200,7 +226,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const targetPath = path.join(root, TARGET);
   if (MODE === "generate") {
     writeFileSync(targetPath, rendered, "utf8");
-    console.log(`[command-manifest] 生成完成：${TARGET}（63/59/4；UI 61）`);
+    console.log(`[command-manifest] 生成完成：${TARGET}（74/70/4；UI 72）`);
     process.exit(0);
   }
   let current;
@@ -214,5 +240,5 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     console.error(`[command-manifest] 阻断：${TARGET} 与重新生成结果不一致（diff=0 要求）。`);
     process.exit(1);
   }
-  console.log("[command-manifest] 通过：63/59/4；UI 61；分组与 ADR §16.1 一致；diff=0");
+  console.log("[command-manifest] 通过：74/70/4；UI 72；M9 分组与 ADR §16.1 一致；diff=0");
 }

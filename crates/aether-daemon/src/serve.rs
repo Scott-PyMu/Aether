@@ -616,6 +616,9 @@ pub fn map_ipc_error(error: IpcError) -> RpcFailure {
     if let Some(business) = error.business_code() {
         failure = failure.with_business(business.as_str());
     }
+    if let Some(details) = error.details() {
+        failure = failure.with_details(details.clone());
+    }
     failure
 }
 
@@ -1163,7 +1166,7 @@ mod tests {
     #[test]
     fn all_9_business_codes_are_carried_in_error_data() {
         use aether_app::ipc::BusinessCode;
-        assert_eq!(BusinessCode::ALL.len(), 9);
+        assert_eq!(BusinessCode::ALL.len(), 18);
         for business in BusinessCode::ALL {
             let failure =
                 map_ipc_error(IpcError::invalid_value("injected").with_business_code(business));

@@ -66,6 +66,22 @@ struct AdapterEventDraft {
     payload: Value,
 }
 
+/// 核心编排引擎启用的 `workflow.*` 精确子类型（ADR-031 D-031-5）。
+fn is_workflow_event(event_type: EventType) -> bool {
+    matches!(
+        event_type,
+        EventType::WorkflowStarted
+            | EventType::WorkflowNodeStarted
+            | EventType::WorkflowNodeCompleted
+            | EventType::WorkflowNodeFailed
+            | EventType::WorkflowNodeCancelled
+            | EventType::WorkflowNodeSkipped
+            | EventType::WorkflowCompleted
+            | EventType::WorkflowFailed
+            | EventType::WorkflowCancelled
+    )
+}
+
 /// 事件归一化器。
 pub struct Normalizer;
 
@@ -91,7 +107,9 @@ impl Normalizer {
                 .map_err(|_| NormalizeError::UnknownEventType {
                     event_type: draft.event_type.clone(),
                 })?;
-        if event_type.is_reserved() {
+        // ADR-031：`workflow.*` 精确子类型由核心编排引擎产出，不再按预留类型拒绝；
+        // 其余预留类型（reasoning_delta / subagent.*）仍待各自任务启用。
+        if event_type.is_reserved() && !is_workflow_event(event_type) {
             return Err(NormalizeError::ReservedEventType {
                 event_type: draft.event_type,
             });
@@ -184,6 +202,29 @@ mod tests {
         ))
         .expect_err("预留类型 P0 未启用");
         assert_eq!(error.code(), "reserved_event_type");
+    }
+
+    #[test]
+    fn workflow_events_are_enabled_and_validated() {
+        let pending = Normalizer::normalize(&raw(
+            "workflow.started",
+            json!({
+                "workflow_run_id": "wfrun-1",
+                "workflow_id": "wf-1",
+                "session_id": "01J0000000000000000000000S",
+                "priority": 0,
+                "node_count": 2
+            }),
+        ))
+        .expect("workflow.* 为 M10-01 启用的核心事件");
+        assert_eq!(pending.payload.event_type(), EventType::WorkflowStarted);
+
+        let error = Normalizer::normalize(&raw(
+            "workflow.started",
+            json!({"workflow_run_id": "wfrun-1"}),
+        ))
+        .expect_err("payload 缺字段必须拒绝");
+        assert_eq!(error.code(), "invalid_event_payload");
     }
 
     #[test]

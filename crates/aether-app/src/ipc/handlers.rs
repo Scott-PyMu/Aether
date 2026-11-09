@@ -24,6 +24,9 @@ use super::dto::{
     StartupGetRequest,
     StartupMigrateRequest, StartupPickTargetRequest, WorkspaceCreateRequest,
     WorkspaceDeleteRequest, WorkspaceSetRequest, WorkspaceUpdateRequest, WorkspacesListRequest,
+    WorkflowCreateRequest, WorkflowDeleteRequest, WorkflowIdRequest, WorkflowImportRequest,
+    WorkflowListRequest, WorkflowNodeRetryRequest, WorkflowRunCancelRequest, WorkflowRunGetRequest,
+    WorkflowRunListRequest, WorkflowRunRequest, WorkflowUpdateRequest,
 };
 use super::error::{IpcError, IpcErrorCode};
 use super::validate::{parse_no_params, parse_strict};
@@ -847,5 +850,122 @@ pub(crate) fn app_exit(
     })?;
     shell.exit(0);
     Ok(JsonPayload(serde_json::json!({ "exiting": true })))
+}
+
+// ===== M10-01/ADR-031：编排命令面（严格解析 → 后端） =====
+
+pub(crate) fn workflow_create(
+    state: &IpcState,
+    payload: Value,
+) -> Result<JsonPayload, IpcError> {
+    let request: WorkflowCreateRequest = parse_strict(payload)?;
+    state
+        .backend_ready()?
+        .workflow_create(&request)
+        .map(JsonPayload)
+}
+
+pub(crate) fn workflow_list(
+    state: &IpcState,
+    payload: Value,
+) -> Result<JsonPayload, IpcError> {
+    let request: WorkflowListRequest = parse_strict(payload)?;
+    state
+        .backend_ready()?
+        .workflow_list(&request)
+        .map(JsonPayload)
+}
+
+pub(crate) fn workflow_get(state: &IpcState, payload: Value) -> Result<JsonPayload, IpcError> {
+    let request: WorkflowIdRequest = parse_strict(payload)?;
+    state
+        .backend_ready()?
+        .workflow_get(&request)
+        .map(JsonPayload)
+}
+
+pub(crate) fn workflow_update(
+    state: &IpcState,
+    payload: Value,
+) -> Result<JsonPayload, IpcError> {
+    let request: WorkflowUpdateRequest = parse_strict(payload)?;
+    state
+        .backend_ready()?
+        .workflow_update(&request)
+        .map(JsonPayload)
+}
+
+pub(crate) fn workflow_delete(
+    state: &IpcState,
+    payload: Value,
+) -> Result<JsonPayload, IpcError> {
+    let request: WorkflowDeleteRequest = parse_strict(payload)?;
+    state
+        .backend_ready()?
+        .workflow_delete(&request)
+        .map(JsonPayload)
+}
+
+pub(crate) fn workflow_import(
+    state: &IpcState,
+    payload: Value,
+) -> Result<JsonPayload, IpcError> {
+    let request: WorkflowImportRequest = parse_strict(payload)?;
+    state
+        .backend_ready()?
+        .workflow_import(&request)
+        .map(JsonPayload)
+}
+
+pub(crate) fn workflow_run(state: &IpcState, payload: Value) -> Result<JsonPayload, IpcError> {
+    let request: WorkflowRunRequest = parse_strict(payload)?;
+    state
+        .backend_ready()?
+        .workflow_run(&request)
+        .map(JsonPayload)
+}
+
+pub(crate) fn workflow_run_get(
+    state: &IpcState,
+    payload: Value,
+) -> Result<JsonPayload, IpcError> {
+    let request: WorkflowRunGetRequest = parse_strict(payload)?;
+    state
+        .backend_ready()?
+        .workflow_run_get(&request)
+        .map(JsonPayload)
+}
+
+pub(crate) fn workflow_run_list(
+    state: &IpcState,
+    payload: Value,
+) -> Result<JsonPayload, IpcError> {
+    let request: WorkflowRunListRequest = parse_strict(payload)?;
+    state
+        .backend_ready()?
+        .workflow_run_list(&request)
+        .map(JsonPayload)
+}
+
+pub(crate) fn workflow_run_cancel(
+    state: &IpcState,
+    payload: Value,
+) -> Result<JsonPayload, IpcError> {
+    let request: WorkflowRunCancelRequest = parse_strict(payload)?;
+    state
+        .backend_ready()?
+        .workflow_run_cancel(&request)
+        .map(JsonPayload)
+}
+
+pub(crate) fn workflow_node_retry(
+    state: &IpcState,
+    payload: Value,
+) -> Result<JsonPayload, IpcError> {
+    let request: WorkflowNodeRetryRequest = parse_strict(payload)?;
+    state
+        .backend_ready()?
+        .workflow_node_retry(&request)
+        .map(JsonPayload)
 }
 

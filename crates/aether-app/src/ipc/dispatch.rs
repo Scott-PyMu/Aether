@@ -87,6 +87,18 @@ pub const COMMANDS: &[&str] = &[
     "startup_pick_target",
     "startup_migrate",
     "app_exit",
+    // M10-01/ADR-031：编排命令面 +11（M9 的 63 条顺序/语义不变）。
+    "workflow_create",
+    "workflow_list",
+    "workflow_get",
+    "workflow_update",
+    "workflow_delete",
+    "workflow_import",
+    "workflow_run",
+    "workflow_run_get",
+    "workflow_run_list",
+    "workflow_run_cancel",
+    "workflow_node_retry",
 ];
 
 /// 命令路由：`method` + 内层 `params` → 结果 JSON。
@@ -158,6 +170,17 @@ pub fn dispatch(state: &IpcState, method: &str, params: Value) -> Result<Value, 
         "startup_pick_target" => handlers::startup_pick_target(state, params),
         "startup_migrate" => handlers::startup_migrate(state, params),
         "app_exit" => handlers::app_exit(state, params),
+        "workflow_create" => handlers::workflow_create(state, params),
+        "workflow_list" => handlers::workflow_list(state, params),
+        "workflow_get" => handlers::workflow_get(state, params),
+        "workflow_update" => handlers::workflow_update(state, params),
+        "workflow_delete" => handlers::workflow_delete(state, params),
+        "workflow_import" => handlers::workflow_import(state, params),
+        "workflow_run" => handlers::workflow_run(state, params),
+        "workflow_run_get" => handlers::workflow_run_get(state, params),
+        "workflow_run_list" => handlers::workflow_run_list(state, params),
+        "workflow_run_cancel" => handlers::workflow_run_cancel(state, params),
+        "workflow_node_retry" => handlers::workflow_node_retry(state, params),
         other => return Err(unknown_method(other)),
     }?;
     Ok(payload.into_value())
@@ -198,9 +221,9 @@ mod tests {
     #[test]
     fn shell_and_daemon_routes_partition_the_frozen_command_surface() {
         assert_eq!(SHELL_COMMANDS.len(), 4, "壳本地命令 4 条");
-        assert_eq!(COMMANDS.len(), 63, "命令面 63 条");
+        assert_eq!(COMMANDS.len(), 74, "命令面 74 条（M9 63 + M10-01 11）");
         let daemon = daemon_commands();
-        assert_eq!(daemon.len(), 59, "daemon 路由 59 条");
+        assert_eq!(daemon.len(), 70, "daemon 路由 70 条");
         for method in SHELL_COMMANDS {
             assert!(COMMANDS.contains(method), "壳命令 {method} 必须在 63 内");
             assert!(is_shell_local(method));
