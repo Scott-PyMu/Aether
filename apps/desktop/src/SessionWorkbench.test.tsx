@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { EventStore } from "./eventStore";
 import { publishHealthState, resetHealthBusForTests } from "./healthBus";
 import { SessionWorkbench } from "./SessionWorkbench";
+import { subagentIpc } from "./subagents";
 import type {
   MessagesPageResult,
   PermissionMode,
@@ -412,5 +413,56 @@ describe("SessionWorkbench（M3-02）", () => {
     });
     await waitFor(() => expect(listSessions).toHaveBeenCalledTimes(2));
     expect(messagesPage.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("M10-02:点击子会话节点将其加入父树并打开标签", async () => {
+    const CHILD_SESSION = "01J8ZQ5R0N7W9Y8X6V4T2S0K1B";
+    const parent = sessionSummary("idle");
+    const child = sessionSummary("completed", {
+      id: CHILD_SESSION,
+      parent_session_id: SESSION,
+      title: "子会话",
+    });
+    const listSessions = vi.fn(
+      async (query?: { include_children?: boolean }) =>
+        query?.include_children ? [parent, child] : [parent],
+    );
+    const ipc = fakeIpc({ listSessions });
+    vi.spyOn(subagentIpc, "list").mockResolvedValue({
+      items: [
+        {
+          child_session_id: CHILD_SESSION,
+          parent_session_id: SESSION,
+          title: "子 Agent 节点",
+          role: "review",
+          mode: "review",
+          depth: 1,
+          status: "completed",
+          verdict: "approve",
+          result_summary: "通过",
+          summary_truncated: false,
+          result_ref: `subagent:${CHILD_SESSION}`,
+          injection_state: "injected",
+          delivery_mode: "message_append",
+          has_more_details: false,
+          created_at: 1,
+        },
+      ],
+    });
+
+    render(<SessionWorkbench store={newStore()} ipc={ipc} />);
+    fireEvent.click(await screen.findByTestId("session-item"));
+    await screen.findByTestId("subagent-node");
+    fireEvent.click(screen.getByText("子 Agent 节点"));
+
+    await waitFor(() =>
+      expect(listSessions).toHaveBeenCalledWith({
+        include_children: true,
+        limit: 500,
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getAllByTestId("session-item").length).toBeGreaterThan(1),
+    );
   });
 });

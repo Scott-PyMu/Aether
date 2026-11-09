@@ -52,6 +52,16 @@
           "type": "null"
         }
       ]
+    },
+    "subagent_context": {
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/SubagentContextInput"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": [

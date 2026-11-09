@@ -240,7 +240,7 @@ for (const icon of ["icon.ico", "icon.icns", "icon.png"]) {
 const requiredDocs = {
   "README.md": ["已退役", "aether-tauri", "pnpm dev:desktop", "pnpm package:desktop", "M10-00 已执行"],
   "docs/P2-架构迁移-实施计划与验收标准.md": [
-    "v0.10",
+    "v0.11",
     "M9-14",
     "docs/M9-14-证据.md",
     "ADR-030 v0.2",
@@ -260,8 +260,8 @@ const requiredDocs = {
 // AGENTS.md / 设计文档.md 在本仓库为本地受控文档（.gitignore 排除，不入 CI checkout）；
 // 本机存在时强制校验，CI 缺失时显式 NOTE（不静默跳过）。
 const localDocs = {
-  "AGENTS.md": ["已退役", "v1.32", "v0.10", "M10-00 已执行"],
-  "设计文档.md": ["v1.32", "已退役", "不阻塞 M9/M10"],
+  "AGENTS.md": ["已退役", "v1.33", "v0.11", "M10-00/决策记录"],
+  "设计文档.md": ["v1.33", "已退役", "不阻塞 M9/M10"],
 };
 for (const [rel, tokens] of Object.entries(requiredDocs)) {
   if (!exists(rel)) {
@@ -324,26 +324,30 @@ const shell = Array.isArray(commands)
 const ui = Array.isArray(commands)
   ? commands.filter((item) => item.exposure === "ui").length
   : commands.ui;
-check("命令合同 63", total === 63, String(total));
-check("daemon 59 / shell 4", daemon === 59 && shell === 4, `${daemon}/${shell}`);
-check("UI 暴露 61", ui === 61, String(ui));
+check(
+  "命令合同 ≥ M9 基线 63/59/4/UI 61",
+  total >= 63 && daemon >= 59 && shell === 4 && ui >= 61,
+  `${total}/${daemon}/${shell}/${ui}`,
+);
+check("daemon 59 / shell 4", daemon >= 59 && shell === 4, `${daemon}/${shell}`);
 const migrations = readdirSync(path.join(repoRoot, "migrations"))
   .filter((name) => /^\d{4}_.*\.sql$/.test(name))
   .sort();
+const frozenMigrations = [
+  "0001_init.sql",
+  "0002_unique_keys.sql",
+  "0003_p0_ui_extensions.sql",
+  "0004_permission_mode_and_rules.sql",
+  "0005_audit_indexes.sql",
+  "0006_runtime_enabled.sql",
+  "0007_presets.sql",
+  "0008_session_search_fts.sql",
+  "0009_provider_endpoints.sql",
+];
 check(
-  "迁移 0001–0009 未新增/未改名",
-  JSON.stringify(migrations) ===
-    JSON.stringify([
-      "0001_init.sql",
-      "0002_unique_keys.sql",
-      "0003_p0_ui_extensions.sql",
-      "0004_permission_mode_and_rules.sql",
-      "0005_audit_indexes.sql",
-      "0006_runtime_enabled.sql",
-      "0007_presets.sql",
-      "0008_session_search_fts.sql",
-      "0009_provider_endpoints.sql",
-    ]),
+  "迁移 0001–0009 未改名，仅允许 0010+ 追加",
+  frozenMigrations.every((name, index) => migrations[index] === name) &&
+    migrations.slice(frozenMigrations.length).every((name) => name > "0009"),
   migrations.join(","),
 );
 

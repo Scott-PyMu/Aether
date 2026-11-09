@@ -66,7 +66,22 @@
                 "data_dir_locked",
                 "sync_dir_blocked",
                 "db_open_failed",
-                "schema_checksum_mismatch"
+                "schema_checksum_mismatch",
+                "workflow_invalid_definition",
+                "workflow_not_found",
+                "workflow_version_conflict",
+                "workflow_run_not_found",
+                "workflow_run_active",
+                "workflow_run_not_active",
+                "workflow_node_not_found",
+                "workflow_node_not_retryable",
+                "workflow_cancel_timeout",
+                "subagent_not_found",
+                "subagent_limit_exceeded",
+                "subagent_context_rejected",
+                "subagent_result_not_ready",
+                "subagent_resolution_conflict",
+                "session_has_children"
               ]
             },
             {

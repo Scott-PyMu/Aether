@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { EventStore } from "./eventStore";
 import { SubagentPanel } from "./SubagentPanel";
@@ -7,6 +7,8 @@ import type { SubagentIpc, SubagentNode } from "./subagents";
 
 const PARENT = "01JPARENT0000000000000000";
 const CHILD = "01JCHILD00000000000000000";
+
+afterEach(cleanup);
 
 function node(overrides: Partial<SubagentNode> = {}): SubagentNode {
   return {
@@ -131,5 +133,99 @@ describe("M10-02 子会话树 / 结果卡（UI-03）", () => {
       .getAllByTestId("subagent-result-action")
       .find((action) => action.getAttribute("data-action") === "accept");
     expect((accept as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("空态可派生审查并刷新列表", async () => {
+    const ipc = fakeIpc([]);
+    const store = new EventStore();
+    render(<SubagentPanel parentSessionId={PARENT} store={store} ipc={ipc} />);
+
+    expect(await screen.findByText("暂无子 Agent")).toBeTruthy();
+    fireEvent.click(screen.getByText("派生审查"));
+    await waitFor(() =>
+      expect(ipc.spawn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          parent_session_id: PARENT,
+          role: "review",
+          template: "adversarial_review",
+        }),
+      ),
+    );
+  });
+
+  it("运行中可取消/重跑、分页加载详情并打开子会话", async () => {
+    const ipc = fakeIpc([
+      node({
+        status: "running",
+        result_summary: null,
+        summary_truncated: true,
+        has_more_details: true,
+      }),
+    ]);
+    vi.mocked(ipc.resultGet).mockImplementation(async (_parent, _child, offset = 0) =>
+      offset === 0
+        ? {
+            child_session_id: CHILD,
+            result_chunk: "part1",
+            offset: 0,
+            next_offset: 6,
+            total_bytes: 10,
+            truncated: false,
+          }
+        : {
+            child_session_id: CHILD,
+            result_chunk: "part2",
+            offset: 6,
+            next_offset: null,
+            total_bytes: 10,
+            truncated: false,
+          },
+    );
+    const onOpenChild = vi.fn();
+    const store = new EventStore();
+    render(
+      <SubagentPanel
+        parentSessionId={PARENT}
+        store={store}
+        ipc={ipc}
+        onOpenChild={onOpenChild}
+      />,
+    );
+
+    await screen.findByTestId("subagent-node");
+    fireEvent.click(
+      screen
+        .getAllByTestId("subagent-result-action")
+        .find((action) => action.getAttribute("data-action") === "rerun") as HTMLElement,
+    );
+    await waitFor(() => expect(ipc.resolve).toHaveBeenCalledWith(CHILD, "rerun"));
+
+    fireEvent.click(
+      screen
+        .getAllByTestId("subagent-result-action")
+        .find((action) => action.getAttribute("data-action") === "cancel") as HTMLElement,
+    );
+    await waitFor(() => expect(ipc.cancel).toHaveBeenCalledWith(CHILD, "user"));
+
+    fireEvent.click(
+      screen
+        .getAllByTestId("subagent-result-action")
+        .find((action) => action.getAttribute("data-action") === "details") as HTMLElement,
+    );
+    expect((await screen.findByText("part1part2")).textContent).toBe("part1part2");
+    expect(ipc.resultGet).toHaveBeenNthCalledWith(1, PARENT, CHILD, 0);
+    expect(ipc.resultGet).toHaveBeenNthCalledWith(2, PARENT, CHILD, 6);
+
+    fireEvent.click(screen.getByText("子 Agent · review · 审查"));
+    expect(onOpenChild).toHaveBeenCalledWith(CHILD);
+  });
+
+  it("列表失败显示可读错误", async () => {
+    const ipc = fakeIpc([]);
+    vi.mocked(ipc.list).mockRejectedValueOnce(new Error("list failed"));
+    const store = new EventStore();
+    render(<SubagentPanel parentSessionId={PARENT} store={store} ipc={ipc} />);
+
+    expect((await screen.findByRole("alert")).textContent).toContain("list failed");
   });
 });

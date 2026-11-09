@@ -170,6 +170,9 @@
           "type": "null"
         }
       ]
+    },
+    "has_children": {
+      "type": "boolean"
     }
   },
   "required": [

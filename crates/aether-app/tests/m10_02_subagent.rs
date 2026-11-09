@@ -600,6 +600,34 @@ impl Harness {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
+
+    /// 结果落库与注入状态更新存在短暂窗口；按最终注入态收敛，避免 Linux CI 时序抖动。
+    async fn wait_injection_state(
+        &self,
+        parent: &SessionId,
+        child: &str,
+        expected: &str,
+    ) -> Value {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let list = self.list(parent).await;
+            if let Some(node) = list["items"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|node| node["child_session_id"] == child)
+            {
+                if node["injection_state"] == expected {
+                    return node.clone();
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "等待注入状态 {expected} 超时: {list}"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
 }
 
 fn spawn_request(
@@ -641,7 +669,10 @@ async fn spawn_isolates_child_and_auto_injects_compact_envelope() {
         .expect("child")
         .to_owned();
     assert_eq!(spawned["depth"], 1);
-    let node = h.wait_result(&parent, &child).await;
+    let _ = h.wait_result(&parent, &child).await;
+    let node = h
+        .wait_injection_state(&parent, &child, "injected")
+        .await;
     assert_eq!(node["verdict"], "approve");
     assert_eq!(node["injection_state"], "injected");
 

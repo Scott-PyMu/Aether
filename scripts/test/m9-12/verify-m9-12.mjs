@@ -135,19 +135,19 @@ const manifest = json("packages/protocol/src/command-manifest.json");
 const names = (manifest.commands ?? []).map((entry) => entry.name);
 const hookNames = names.filter((name) => /^(test\.|e2e_)/.test(name));
 record(
-  "command-manifest 63/59/4/UI 61",
-  manifest.counts?.total === 63 &&
-    manifest.counts?.daemon === 59 &&
+  "command-manifest ≥ M9 基线 63/59/4/UI 61",
+  (manifest.counts?.total ?? 0) >= 63 &&
+    (manifest.counts?.daemon ?? 0) >= 59 &&
     manifest.counts?.shell === 4 &&
-    manifest.counts?.ui === 61 &&
-    names.length === 63 &&
-    new Set(names).size === 63,
+    (manifest.counts?.ui ?? 0) >= 61 &&
+    names.length === manifest.counts?.total &&
+    new Set(names).size === names.length,
   JSON.stringify(manifest.counts),
 );
 record(
   "test-hooks 不进入 manifest（无 test.*/e2e_*）",
   hookNames.length === 0 && !names.includes("dialog.pick"),
-  hookNames.join(",") || "0 命中；dialog.pick 不在 63",
+  hookNames.join(",") || "0 命中；dialog.pick 不在命令面",
 );
 
 // ===== 3. CI 矩阵/步骤 =====

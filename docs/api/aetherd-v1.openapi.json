@@ -1636,6 +1636,16 @@
             ],
             "minimum": 1,
             "maximum": 500
+          },
+          "include_children": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "maxProperties": 0
@@ -1761,6 +1771,16 @@
             "anyOf": [
               {
                 "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "subagent_context": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SubagentContextInput"
               },
               {
                 "type": "null"
@@ -1969,6 +1989,9 @@
                 "type": "null"
               }
             ]
+          },
+          "has_children": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -2169,6 +2192,9 @@
                 "type": "null"
               }
             ]
+          },
+          "has_children": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -2186,7 +2212,8 @@
           "token_usage",
           "created_at",
           "updated_at",
-          "closed_at"
+          "closed_at",
+          "has_children"
         ]
       },
       "SessionWarning": {
@@ -2279,6 +2306,639 @@
         "type": "object",
         "maxProperties": 0,
         "additionalProperties": false
+      },
+      "SubagentCancelRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "child_session_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "child_session_id"
+        ]
+      },
+      "SubagentContextInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "type": "number"
+          },
+          "block": {
+            "type": "string"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "version",
+          "block"
+        ]
+      },
+      "SubagentContextRef": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 1048576
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "SubagentListRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "parent_session_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "include_completed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "parent_session_id"
+        ]
+      },
+      "SubagentResolveRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "child_session_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "decision": {
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "child_session_id",
+          "decision"
+        ]
+      },
+      "SubagentResultGetRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "parent_session_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "child_session_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "offset": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "minimum": 0
+          },
+          "limit_bytes": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "parent_session_id",
+          "child_session_id"
+        ]
+      },
+      "SubagentSpawnRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "parent_session_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "role": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "template": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "context_refs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SubagentContextRef"
+            }
+          },
+          "runtime_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "provider_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "permission_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "timeout_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "parent_session_id",
+          "role",
+          "purpose"
+        ]
+      },
+      "WorkflowCreateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "definition": {},
+          "is_template": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "definition"
+        ]
+      },
+      "WorkflowDeleteRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "workflow_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "force": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "workflow_id"
+        ]
+      },
+      "WorkflowIdRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "workflow_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          }
+        },
+        "required": [
+          "workflow_id"
+        ]
+      },
+      "WorkflowImportRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "source_path": {
+            "type": "string"
+          },
+          "name_override": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "source_path"
+        ]
+      },
+      "WorkflowListRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "minimum": 1,
+            "maximum": 500
+          },
+          "offset": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "minimum": 0
+          },
+          "include_templates": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "maxProperties": 0
+      },
+      "WorkflowNodeRetryRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "workflow_run_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "node_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "reset_downstream": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "workflow_run_id",
+          "node_id"
+        ]
+      },
+      "WorkflowRunCancelRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "workflow_run_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "workflow_run_id"
+        ]
+      },
+      "WorkflowRunGetRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "workflow_run_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "include_nodes": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "workflow_run_id"
+        ]
+      },
+      "WorkflowRunListRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "workflow_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "minimum": 1,
+            "maximum": 500
+          },
+          "offset": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "minimum": 0
+          }
+        },
+        "maxProperties": 0
+      },
+      "WorkflowRunRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "workflow_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "session_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "input": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "minimum": -100,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "workflow_id",
+          "session_id"
+        ]
+      },
+      "WorkflowUpdateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "workflow_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "expected_version": {
+            "type": "number"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 128
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "definition": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "is_template": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "workflow_id",
+          "expected_version"
+        ]
       },
       "WorkspaceCreateRequest": {
         "type": "object",
@@ -4231,6 +4891,486 @@
                 "$ref": "#/components/schemas/StartupMigrateRequest"
               }
             }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "workflow_create"
+              },
+              "params": {
+                "$ref": "#/components/schemas/WorkflowCreateRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "workflow_list"
+              },
+              "params": {
+                "$ref": "#/components/schemas/WorkflowListRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "workflow_get"
+              },
+              "params": {
+                "$ref": "#/components/schemas/WorkflowIdRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "workflow_update"
+              },
+              "params": {
+                "$ref": "#/components/schemas/WorkflowUpdateRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "workflow_delete"
+              },
+              "params": {
+                "$ref": "#/components/schemas/WorkflowDeleteRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "workflow_import"
+              },
+              "params": {
+                "$ref": "#/components/schemas/WorkflowImportRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "workflow_run"
+              },
+              "params": {
+                "$ref": "#/components/schemas/WorkflowRunRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "workflow_run_get"
+              },
+              "params": {
+                "$ref": "#/components/schemas/WorkflowRunGetRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "workflow_run_list"
+              },
+              "params": {
+                "$ref": "#/components/schemas/WorkflowRunListRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "workflow_run_cancel"
+              },
+              "params": {
+                "$ref": "#/components/schemas/WorkflowRunCancelRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "workflow_node_retry"
+              },
+              "params": {
+                "$ref": "#/components/schemas/WorkflowNodeRetryRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "subagent_spawn"
+              },
+              "params": {
+                "$ref": "#/components/schemas/SubagentSpawnRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "subagent_list"
+              },
+              "params": {
+                "$ref": "#/components/schemas/SubagentListRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "subagent_cancel"
+              },
+              "params": {
+                "$ref": "#/components/schemas/SubagentCancelRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "subagent_resolve"
+              },
+              "params": {
+                "$ref": "#/components/schemas/SubagentResolveRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "subagent_result_get"
+              },
+              "params": {
+                "$ref": "#/components/schemas/SubagentResultGetRequest"
+              }
+            }
           }
         ]
       },
@@ -4332,7 +5472,22 @@
                       "data_dir_locked",
                       "sync_dir_blocked",
                       "db_open_failed",
-                      "schema_checksum_mismatch"
+                      "schema_checksum_mismatch",
+                      "workflow_invalid_definition",
+                      "workflow_not_found",
+                      "workflow_version_conflict",
+                      "workflow_run_not_found",
+                      "workflow_run_active",
+                      "workflow_run_not_active",
+                      "workflow_node_not_found",
+                      "workflow_node_not_retryable",
+                      "workflow_cancel_timeout",
+                      "subagent_not_found",
+                      "subagent_limit_exceeded",
+                      "subagent_context_rejected",
+                      "subagent_result_not_ready",
+                      "subagent_resolution_conflict",
+                      "session_has_children"
                     ]
                   },
                   {
@@ -4821,6 +5976,134 @@
       "route": "daemon",
       "params_style": "strict",
       "params_dto": "StartupMigrateRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "workflow_create",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "WorkflowCreateRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "workflow_list",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "WorkflowListRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "workflow_get",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "WorkflowIdRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "workflow_update",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "WorkflowUpdateRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "workflow_delete",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "WorkflowDeleteRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "workflow_import",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "WorkflowImportRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "workflow_run",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "WorkflowRunRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "workflow_run_get",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "WorkflowRunGetRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "workflow_run_list",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "WorkflowRunListRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "workflow_run_cancel",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "WorkflowRunCancelRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "workflow_node_retry",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "WorkflowNodeRetryRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "subagent_spawn",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "SubagentSpawnRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "subagent_list",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "SubagentListRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "subagent_cancel",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "SubagentCancelRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "subagent_resolve",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "SubagentResolveRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "subagent_result_get",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "SubagentResultGetRequest",
       "request_schema": "#/components/schemas/RpcRequest"
     }
   ]

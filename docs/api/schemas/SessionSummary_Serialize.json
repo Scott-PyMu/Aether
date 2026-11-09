@@ -170,6 +170,9 @@
           "type": "null"
         }
       ]
+    },
+    "has_children": {
+      "type": "boolean"
     }
   },
   "required": [
@@ -187,6 +190,7 @@
     "token_usage",
     "created_at",
     "updated_at",
-    "closed_at"
+    "closed_at",
+    "has_children"
   ]
 }

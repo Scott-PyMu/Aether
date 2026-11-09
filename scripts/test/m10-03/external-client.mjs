@@ -144,8 +144,8 @@ async function main() {
   const meta = await fetch(`${base}/v1/meta`, {
     headers: { Authorization: `Bearer ${token}` },
   }).then((response) => response.json());
-  if ((meta.commands ?? []).length !== 59) {
-    throw new Error(`/v1/meta 命令数 ${meta.commands?.length} ≠ 59`);
+  if ((meta.commands ?? []).length < 59) {
+    throw new Error(`/v1/meta 命令数 ${meta.commands?.length} < M9 基线 59`);
   }
   if (meta.protocol !== "1.0") throw new Error(`protocol=${meta.protocol} ≠ 1.0`);
 
