@@ -465,20 +465,33 @@ pub struct LogPayload {
     pub message: String,
 }
 
-/// `subagent.spawned` payload（附录 B 预留 P2：childSessionId、mode）。
+/// `subagent.spawned` payload（ADR-032 D-032-5：`session_id` = 父会话）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SubagentSpawnedPayload {
     pub child_session_id: SessionId,
+    pub parent_session_id: SessionId,
+    pub role: String,
     pub mode: String,
+    pub depth: u32,
+    pub context_refs_count: u32,
 }
 
-/// `subagent.completed` payload（附录 B 预留 P2：childSessionId、verdict）。
+/// `subagent.completed` payload（ADR-032 D-032-5：`injected` 为完成时快照，必填）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SubagentCompletedPayload {
     pub child_session_id: SessionId,
-    pub verdict: String,
+    pub parent_session_id: SessionId,
+    /// `succeeded|failed|cancelled|rejected`。
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_ref: Option<String>,
+    pub batch_id: String,
+    /// 完成时是否已注入（后台在 callback 追加前可为 false）。
+    pub injected: bool,
 }
 
 /// `workflow.started` payload（ADR-031 D-031-5）。

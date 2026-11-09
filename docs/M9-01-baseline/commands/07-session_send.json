@@ -17,7 +17,8 @@
       "thinking_depth",
       "references",
       "provider_id",
-      "model"
+      "model",
+      "subagent_context"
     ],
     "field_types": {
       "session_id": "String",
@@ -26,7 +27,8 @@
       "thinking_depth": "Option<i64>",
       "references": "Vec<ReferenceEntry>",
       "provider_id": "Option<String>",
-      "model": "Option<String>"
+      "model": "Option<String>",
+      "subagent_context": "Option<SubagentContextInput>"
     }
   },
   "accepted_shape": {

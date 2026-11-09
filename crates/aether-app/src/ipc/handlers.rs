@@ -27,6 +27,8 @@ use super::dto::{
     WorkflowCreateRequest, WorkflowDeleteRequest, WorkflowIdRequest, WorkflowImportRequest,
     WorkflowListRequest, WorkflowNodeRetryRequest, WorkflowRunCancelRequest, WorkflowRunGetRequest,
     WorkflowRunListRequest, WorkflowRunRequest, WorkflowUpdateRequest,
+    SubagentCancelRequest, SubagentListRequest, SubagentResolveRequest, SubagentResultGetRequest,
+    SubagentSpawnRequest,
 };
 use super::error::{IpcError, IpcErrorCode};
 use super::validate::{parse_no_params, parse_strict};
@@ -966,6 +968,61 @@ pub(crate) fn workflow_node_retry(
     state
         .backend_ready()?
         .workflow_node_retry(&request)
+        .map(JsonPayload)
+}
+
+pub(crate) fn subagent_spawn(
+    state: &IpcState,
+    payload: Value,
+) -> Result<JsonPayload, IpcError> {
+    let request: SubagentSpawnRequest = parse_strict(payload)?;
+    state
+        .backend_ready()?
+        .subagent_spawn(&request)
+        .map(JsonPayload)
+}
+
+pub(crate) fn subagent_list(
+    state: &IpcState,
+    payload: Value,
+) -> Result<JsonPayload, IpcError> {
+    let request: SubagentListRequest = parse_strict(payload)?;
+    state
+        .backend_ready()?
+        .subagent_list(&request)
+        .map(JsonPayload)
+}
+
+pub(crate) fn subagent_cancel(
+    state: &IpcState,
+    payload: Value,
+) -> Result<JsonPayload, IpcError> {
+    let request: SubagentCancelRequest = parse_strict(payload)?;
+    state
+        .backend_ready()?
+        .subagent_cancel(&request)
+        .map(JsonPayload)
+}
+
+pub(crate) fn subagent_resolve(
+    state: &IpcState,
+    payload: Value,
+) -> Result<JsonPayload, IpcError> {
+    let request: SubagentResolveRequest = parse_strict(payload)?;
+    state
+        .backend_ready()?
+        .subagent_resolve(&request)
+        .map(JsonPayload)
+}
+
+pub(crate) fn subagent_result_get(
+    state: &IpcState,
+    payload: Value,
+) -> Result<JsonPayload, IpcError> {
+    let request: SubagentResultGetRequest = parse_strict(payload)?;
+    state
+        .backend_ready()?
+        .subagent_result_get(&request)
         .map(JsonPayload)
 }
 

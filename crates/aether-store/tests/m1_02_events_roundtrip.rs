@@ -152,12 +152,12 @@ fn envelope_samples() -> Vec<(EventType, &'static str, Option<&'static str>)> {
         ),
         (
             SubagentSpawned,
-            r#"{"child_session_id":"sess-child","mode":"explore"}"#,
+            r#"{"child_session_id":"sess-child","parent_session_id":"sess-parent","role":"explore","mode":"explore","depth":1,"context_refs_count":0}"#,
             Some("run-1"),
         ),
         (
             SubagentCompleted,
-            r#"{"child_session_id":"sess-child","verdict":"ok"}"#,
+            r#"{"child_session_id":"sess-child","parent_session_id":"sess-parent","status":"succeeded","verdict":"ok","result_ref":"subagent:sess-child","batch_id":"batch-1","injected":false}"#,
             Some("run-1"),
         ),
         (

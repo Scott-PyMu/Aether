@@ -57,6 +57,7 @@ import {
   type ProvidersIpc,
 } from "./providers";
 import { RuntimePanel } from "./RuntimePanel";
+import { SubagentPanel } from "./SubagentPanel";
 import {
   normalizePermissionMode,
   PAUSED_STATUS_HINT,
@@ -753,6 +754,28 @@ export function SessionWorkbench({
       applyLayout(closeTab(layout, sessionId));
     },
     [applyLayout, layout],
+  );
+
+  /** M10-02/ADR-032：点击子会话节点 → 进入父树下的子会话（仅父会话入口）。 */
+  const onOpenSubagentChild = useCallback(
+    async (childSessionId: string) => {
+      try {
+        const list = await ipc.listSessions({ include_children: true, limit: 500 });
+        const child = list.find((session) => session.id === childSessionId);
+        if (!child) {
+          return;
+        }
+        setSessions((previous) =>
+          previous.some((session) => session.id === child.id)
+            ? previous
+            : [...previous, child],
+        );
+        applyLayout(openTab(layout, child.id));
+      } catch (failure) {
+        reportError(failure);
+      }
+    },
+    [applyLayout, ipc, layout, reportError],
   );
 
   /** M7-04：分屏开关（打开 = 第二个已打开标签进入右窗格；关闭 = 回单窗格）。 */
@@ -1624,6 +1647,13 @@ export function SessionWorkbench({
                             type="button"
                             data-testid="session-delete"
                             data-session-id={session.id}
+                            data-has-children={String(session.has_children ?? false)}
+                            disabled={session.has_children === true}
+                            title={
+                              session.has_children
+                                ? "请先删除子会话"
+                                : undefined
+                            }
                             onClick={() => {
                               setRenamingSessionId(null);
                               setDeletingSessionId(session.id);
@@ -2072,13 +2102,20 @@ export function SessionWorkbench({
           ) : null}
 
           {activeSessionId ? (
-            <HistoryOverflowNotice
-              store={store}
-              sessionId={activeSessionId}
-              onReload={() => {
-                void loadMessages(activeSessionId);
-              }}
-            />
+            <>
+              <HistoryOverflowNotice
+                store={store}
+                sessionId={activeSessionId}
+                onReload={() => {
+                  void loadMessages(activeSessionId);
+                }}
+              />
+              <SubagentPanel
+                parentSessionId={activeSessionId}
+                store={store}
+                onOpenChild={(childId) => void onOpenSubagentChild(childId)}
+              />
+            </>
           ) : null}
 
           <div className="msgs message-stream" data-testid="message-stream">

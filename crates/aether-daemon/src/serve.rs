@@ -1162,11 +1162,11 @@ mod tests {
         }
     }
 
-    /// M9-04 DoD-2：9 业务码逐项经 `error.data.business_code` 承载（不占 32 枚举）。
+    /// M9-04 DoD-2：业务码逐项经 `error.data.business_code` 承载（不占 32 枚举）。
     #[test]
     fn all_9_business_codes_are_carried_in_error_data() {
         use aether_app::ipc::BusinessCode;
-        assert_eq!(BusinessCode::ALL.len(), 18);
+        assert_eq!(BusinessCode::ALL.len(), 24);
         for business in BusinessCode::ALL {
             let failure =
                 map_ipc_error(IpcError::invalid_value("injected").with_business_code(business));

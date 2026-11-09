@@ -6,10 +6,10 @@
     "groups": "docs/adr/ADR-029-electron-shell-rust-daemon.md §4.6/§16.1"
   },
   "counts": {
-    "total": 74,
-    "daemon": 70,
+    "total": 79,
+    "daemon": 75,
     "shell": 4,
-    "ui": 72,
+    "ui": 77,
     "reserved": 2,
     "groups": 18
   },
@@ -89,6 +89,10 @@
     {
       "group": "workflow",
       "count": 11
+    },
+    {
+      "group": "subagent",
+      "count": 5
     }
   ],
   "commands": [
@@ -904,6 +908,61 @@
       "params": {
         "style": "strict",
         "dto": "WorkflowNodeRetryRequest"
+      }
+    },
+    {
+      "index": 75,
+      "name": "subagent_spawn",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "subagent",
+      "params": {
+        "style": "strict",
+        "dto": "SubagentSpawnRequest"
+      }
+    },
+    {
+      "index": 76,
+      "name": "subagent_list",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "subagent",
+      "params": {
+        "style": "strict",
+        "dto": "SubagentListRequest"
+      }
+    },
+    {
+      "index": 77,
+      "name": "subagent_cancel",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "subagent",
+      "params": {
+        "style": "strict",
+        "dto": "SubagentCancelRequest"
+      }
+    },
+    {
+      "index": 78,
+      "name": "subagent_resolve",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "subagent",
+      "params": {
+        "style": "strict",
+        "dto": "SubagentResolveRequest"
+      }
+    },
+    {
+      "index": 79,
+      "name": "subagent_result_get",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "subagent",
+      "params": {
+        "style": "strict",
+        "dto": "SubagentResultGetRequest"
       }
     }
   ]

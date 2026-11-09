@@ -20,6 +20,8 @@ import {
   composePromptWithReferences,
   isUlid,
   parseReferences,
+  parseSubagentContext,
+  SUBAGENT_SPAWN_TOOL,
   stripBrokerEnv,
   ulid,
   type AdapterRuntimeInfo,
@@ -79,6 +81,9 @@ export const RUNTIME_CAPABILITIES: readonly string[] = [
   "pause_resume",
   // ADR-028 v0.9：会话级多供应商（per-session CODEX_HOME + 按 run 取凭据）。
   "multi_provider",
+  // M10-02/ADR-032：子 Agent 派生与版本化结果交付（默认 message_append）。
+  "subagent",
+  "subagent_context",
 ];
 
 /**
@@ -128,11 +133,17 @@ export function toolDefinitions(observed?: ReadonlySet<string>): ToolDefinition[
   const catalog = new Map(CODEX_TOOL_CATALOG.map((tool) => [tool.name, tool]));
   const names =
     observed && observed.size > 0 ? [...observed] : CODEX_TOOL_CATALOG.map((tool) => tool.name);
-  return names.map((name) => ({
+  const definitions = names.map((name) => ({
     name,
     description: catalog.get(name)?.description ?? "Codex 工具",
     input_schema: { type: "object" },
   }));
+  definitions.push({
+    name: SUBAGENT_SPAWN_TOOL.name,
+    description: SUBAGENT_SPAWN_TOOL.description,
+    input_schema: { type: "object" },
+  });
+  return definitions;
 }
 
 interface CodexRunState {
@@ -422,6 +433,7 @@ export class CodexAdapter {
       run_id?: unknown;
       thinking_depth?: unknown;
       references?: unknown;
+      subagent_context?: unknown;
     };
     const sessionId = typeof input.session_id === "string" ? input.session_id : "";
     const session = this.sessions.get(sessionId);
@@ -438,6 +450,23 @@ export class CodexAdapter {
     const existing = session.clientMsgIds.get(clientMsgId);
     if (existing !== undefined) {
       return { accepted: true, run_id: existing, duplicate: true };
+    }
+    let subagentContext;
+    try {
+      subagentContext = parseSubagentContext(input.subagent_context);
+    } catch (error) {
+      throw new RpcError(
+        ERROR_CODES.INVALID_PARAMS,
+        error instanceof Error ? error.message : String(error),
+        { aether_code: "invalid_value", business_code: "subagent_context_rejected" },
+      );
+    }
+    if (subagentContext && subagentContext.mode !== "message_append") {
+      throw new RpcError(
+        ERROR_CODES.INVALID_PARAMS,
+        `Codex 适配器仅支持 message_append（请求 ${subagentContext.mode}）`,
+        { aether_code: "invalid_value", business_code: "subagent_context_rejected" },
+      );
     }
     const runId =
       typeof input.run_id === "string" && isUlid(input.run_id) ? input.run_id : ulid();
@@ -461,6 +490,9 @@ export class CodexAdapter {
     const reasoning = reasoningForThinkingDepth(thinkingDepth);
     // M7-06/ADR-024 A-3：统一映射 = 消息前缀引用块（核心不读内容；引用 ≠ 预授权）。
     let prompt = composePromptWithReferences(input.text, parseReferences(input.references));
+    if (subagentContext) {
+      prompt = `${subagentContext.block}\n\n${prompt}`;
+    }
     // M7-09/ADR-026：合成系统提示词经 `-c developer_instructions=…` 下发；
     // 编码后超出平台命令行长度上限时回退为显式前缀块（内容完整、可见、可审计）。
     let developerInstructions: string | undefined;
@@ -535,7 +567,16 @@ export class CodexAdapter {
     });
     run.cli.start();
     void this.awaitRun(session, run);
-    return { accepted: true, run_id: runId };
+    return {
+      accepted: true,
+      run_id: runId,
+      ...(subagentContext
+        ? {
+            applied_context_version: subagentContext.version,
+            applied_context_mode: subagentContext.mode,
+          }
+        : {}),
+    };
   }
 
   private onInterrupt(params: unknown): Record<string, unknown> {

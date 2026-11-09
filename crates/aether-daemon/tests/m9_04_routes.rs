@@ -34,7 +34,7 @@ fn all_commands_are_routed_at_the_rpc_layer() {
     assert_eq!(health["result"]["storage_state"], json!("normal"));
 
     let daemon_commands = daemon_commands();
-    assert_eq!(daemon_commands.len(), 70, "daemon 路由必须 70 条（M9 59 + M10-01 11）");
+    assert_eq!(daemon_commands.len(), 75, "daemon 路由必须 75 条（M9 59 + M10-01 11 + M10-02 5）");
     let mut id = 100;
     for method in &daemon_commands {
         let response = daemon.request(id, method, json!({ "__m9_04_unknown_member": true }));

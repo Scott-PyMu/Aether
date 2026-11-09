@@ -477,6 +477,7 @@ fn session_create_persists_model_and_send_interrupt_dispose_are_wired() {
             runtime_id: Some("mock".to_owned()),
             status: None,
             limit: None,
+            include_children: None,
         })
         .expect("session_list");
     let list = list.as_array().expect("列表数组");
@@ -493,6 +494,7 @@ fn session_create_persists_model_and_send_interrupt_dispose_are_wired() {
             references: Vec::new(),
             provider_id: None,
             model: None,
+            subagent_context: None,
         })
         .expect("session_send");
     let run_id = ack["run_id"].as_str().expect("run_id").to_owned();

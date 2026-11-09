@@ -802,6 +802,7 @@ impl AdapterRunExecutor {
                 &request.text,
                 send_override,
                 &request.references,
+                request.subagent_context.as_ref(),
             )
             .await
             .map_err(request_error_info)?;

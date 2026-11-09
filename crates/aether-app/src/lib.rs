@@ -53,6 +53,7 @@ pub mod session_backend;
 pub mod shell_host;
 pub mod shutdown;
 pub mod startup;
+pub mod subagent;
 pub mod workflow;
 
 pub use ipc::{BusinessCode, IpcBackend, IpcError, IpcErrorCode, IpcState, COMMANDS, SHELL_COMMANDS};

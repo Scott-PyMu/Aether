@@ -24,6 +24,8 @@ import {
   composePromptWithReferences,
   isUlid,
   parseReferences,
+  parseSubagentContext,
+  SUBAGENT_SPAWN_TOOL,
   ulid,
   type AdapterRuntimeInfo,
   type BrokerCredential,
@@ -71,6 +73,9 @@ export const RUNTIME_CAPABILITIES: readonly string[] = [
   "pause_resume",
   // ADR-028：按会话 provider 向核心凭据 broker 取数（同一适配器并发多供应商）。
   "multi_provider",
+  // M10-02/ADR-032：子 Agent 派生与版本化结果交付（默认 message_append）。
+  "subagent",
+  "subagent_context",
 ];
 
 /** CLI stdout 无法解析的行：连续达到该阈值 → 该 run 判不健康（口径同 D6 连续无效帧 20 次）。 */
@@ -108,11 +113,17 @@ export function toolDefinitions(observed?: readonly string[]): ToolDefinition[] 
   const catalog = new Map(CLAUDE_TOOL_CATALOG.map((tool) => [tool.name, tool]));
   const names =
     observed && observed.length > 0 ? [...observed] : CLAUDE_TOOL_CATALOG.map((tool) => tool.name);
-  return names.map((name) => ({
+  const definitions = names.map((name) => ({
     name,
     description: catalog.get(name)?.description ?? "Claude Code 工具",
     input_schema: { type: "object" },
   }));
+  definitions.push({
+    name: SUBAGENT_SPAWN_TOOL.name,
+    description: SUBAGENT_SPAWN_TOOL.description,
+    input_schema: { type: "object" },
+  });
+  return definitions;
 }
 
 /** UUID v4 形状校验（Claude `--session-id` 要求）。 */
@@ -361,6 +372,7 @@ export class ClaudeCodeAdapter {
       run_id?: unknown;
       thinking_depth?: unknown;
       references?: unknown;
+      subagent_context?: unknown;
     };
     const sessionId = typeof input.session_id === "string" ? input.session_id : "";
     const session = this.sessions.get(sessionId);
@@ -377,6 +389,23 @@ export class ClaudeCodeAdapter {
     const existing = session.clientMsgIds.get(clientMsgId);
     if (existing !== undefined) {
       return { accepted: true, run_id: existing, duplicate: true };
+    }
+    let subagentContext;
+    try {
+      subagentContext = parseSubagentContext(input.subagent_context);
+    } catch (error) {
+      throw new RpcError(
+        ERROR_CODES.INVALID_PARAMS,
+        error instanceof Error ? error.message : String(error),
+        { aether_code: "invalid_value", business_code: "subagent_context_rejected" },
+      );
+    }
+    if (subagentContext && subagentContext.mode !== "message_append") {
+      throw new RpcError(
+        ERROR_CODES.INVALID_PARAMS,
+        `Claude Code 适配器仅支持 message_append（请求 ${subagentContext.mode}）`,
+        { aether_code: "invalid_value", business_code: "subagent_context_rejected" },
+      );
     }
     const runId =
       typeof input.run_id === "string" && isUlid(input.run_id) ? input.run_id : ulid();
@@ -399,6 +428,9 @@ export class ClaudeCodeAdapter {
     const thinkingBudget = thinkingBudgetForDepth(thinkingDepth);
     // M7-06/ADR-024 A-3：统一映射 = 消息前缀引用块（核心不读内容；引用 ≠ 预授权）。
     const prompt = composePromptWithReferences(input.text, parseReferences(input.references));
+    const deliveredPrompt = subagentContext
+      ? `${subagentContext.block}\n\n${prompt}`
+      : prompt;
     // ADR-028：会话选中 provider 时，从核心 broker 取当前 run 的凭据；
     // 只覆盖本次 CLI 子进程 env，不缓存。broker 未配置时显式失败，避免静默
     // 回退到可能属于其他供应商的单供应商 env。
@@ -441,7 +473,7 @@ export class ClaudeCodeAdapter {
       spec: {
         nativeId: session.nativeId,
         resume: session.resumed || session.nativeCreated,
-        prompt,
+        prompt: deliveredPrompt,
         timeoutMs: this.runTimeoutMs,
         ...(thinkingBudget !== undefined ? { thinkingBudget } : {}),
         // M7-09/ADR-026：合成系统提示词经 CLI 原生 `--append-system-prompt-file` 生效
@@ -465,7 +497,16 @@ export class ClaudeCodeAdapter {
     });
     run.cli.start();
     void this.awaitRun(session, run);
-    return { accepted: true, run_id: runId };
+    return {
+      accepted: true,
+      run_id: runId,
+      ...(subagentContext
+        ? {
+            applied_context_version: subagentContext.version,
+            applied_context_mode: subagentContext.mode,
+          }
+        : {}),
+    };
   }
 
   /**

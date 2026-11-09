@@ -188,6 +188,9 @@ pub struct SessionListRequest {
     pub status: Option<SessionStatus>,
     #[serde(default)]
     pub limit: Option<u32>,
+    /// M10-02/ADR-032：包含子会话（默认 `false`，避免子会话污染主列表）。
+    #[serde(default)]
+    pub include_children: Option<bool>,
 }
 
 impl CommandRequest for SessionListRequest {
@@ -322,6 +325,19 @@ pub struct SessionSendRequest {
     /// 已选且有效再传 → `invalid_value`）。
     #[serde(default)]
     pub model: Option<String>,
+    /// M10-02/ADR-032：子 Agent 结果回注上下文（版本化、可 ack；≤16KiB）。
+    #[serde(default)]
+    pub subagent_context: Option<SubagentContextInput>,
+}
+
+/// `session.send.subagent_context` 请求体（D6；ADR-032 v1.2）。
+#[derive(Debug, Clone, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct SubagentContextInput {
+    pub version: i64,
+    pub block: String,
+    #[serde(default)]
+    pub mode: Option<String>,
 }
 
 /// 引用条目（D6 `session.send.references` 载荷形态；ADR-024 附录 A-3）。
@@ -342,12 +358,51 @@ impl SessionSendRequest {
         thinking_depth_value(self.thinking_depth)
     }
 
+    /// M10-02/ADR-032：解析 `subagent_context`（版本 >0、块 ≤16KiB、mode 枚举）。
+    pub fn subagent_context_value(
+        &self,
+    ) -> Result<Option<aether_core::SubagentContext>, IpcError> {
+        let Some(input) = &self.subagent_context else {
+            return Ok(None);
+        };
+        if input.version < 1 {
+            return Err(IpcError::out_of_range(
+                "subagent_context.version",
+                "必须 >= 1（父会话单调版本）",
+            ));
+        }
+        if input.block.len() > aether_core::SUBAGENT_CONTEXT_MAX_BYTES {
+            return Err(IpcError::too_large(
+                "subagent_context.block",
+                format!(
+                    "注入块上限 {} 字节（ADR-032）",
+                    aether_core::SUBAGENT_CONTEXT_MAX_BYTES
+                ),
+            ));
+        }
+        let mode = match input.mode.as_deref() {
+            None => aether_core::SubagentDeliveryMode::MessageAppend,
+            Some(code) => aether_core::SubagentDeliveryMode::from_code(code).ok_or_else(|| {
+                IpcError::invalid_enum(
+                    "subagent_context.mode",
+                    "允许值：message_append / origin_fork / system_replace",
+                )
+            })?,
+        };
+        let version = u64::try_from(input.version)
+            .map_err(|_| IpcError::out_of_range("subagent_context.version", "必须为非负整数"))?;
+        Ok(Some(aether_core::SubagentContext {
+            version,
+            block: input.block.clone(),
+            mode,
+        }))
+    }
+
     /// 解析引用条目为内核形态（canonicalize 后再取一次；与 `validate` 同口径）。
     ///
     /// 返回的顺序与请求一致；`kind` 使用请求声明的值（探测到的文件/目录形态仅作
     /// 可访问性校验，不覆盖用户声明语义）。
-    pub fn resolved_references(&self) -> Result<Vec<aether_core::MessageReference>, IpcError> {
-        let mut resolved = Vec::with_capacity(self.references.len());
+    pub fn resolved_references(&self) -> Result<Vec<aether_core::MessageReference>, IpcError> {        let mut resolved = Vec::with_capacity(self.references.len());
         for entry in &self.references {
             let artifact = path::validate_artifact_path(&entry.path)?;
             let kind = aether_core::ReferenceKind::from_code(&entry.kind).ok_or_else(|| {
@@ -409,6 +464,7 @@ impl CommandRequest for SessionSendRequest {
             // 路径 canonicalize + 可访问性校验（失败 `artifact_path_rejected`）。
             path::validate_artifact_path(&entry.path)?;
         }
+        self.subagent_context_value()?;
         Ok(())
     }
 }
@@ -2344,6 +2400,283 @@ impl CommandRequest for WorkflowNodeRetryRequest {
             return Err(IpcError::invalid_value(
                 "node_id 必须为 1..=64 字符",
             ));
+        }
+        Ok(())
+    }
+}
+
+// ===== M10-02/ADR-032：子 Agent 命令面（5 条） =====
+
+/// 子 Agent 角色/模式（`role` 与 `mode` 同一枚举；缺省 `mode=role`）。
+pub const SUBAGENT_ROLES: [&str; 3] = ["explore", "review", "custom"];
+/// 子 Agent 模板（ADR-032 附录 C）。
+pub const SUBAGENT_TEMPLATES: [&str; 3] = ["parallel_explore", "adversarial_review", "custom"];
+
+/// `subagent_spawn`：父会话派生子 Agent（ADR-032 D-032-2）。
+#[derive(Debug, Clone, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct SubagentSpawnRequest {
+    pub parent_session_id: String,
+    pub role: String,
+    pub purpose: String,
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub template: Option<String>,
+    #[serde(default)]
+    pub context_refs: Vec<SubagentContextRef>,
+    #[serde(default)]
+    pub runtime_id: Option<String>,
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub permission_mode: Option<String>,
+    #[serde(default)]
+    pub timeout_ms: Option<i64>,
+}
+
+/// 显式上下文引用（ADR-032 D-032-3：子会话只接收显式上下文）。
+#[derive(Debug, Clone, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct SubagentContextRef {
+    /// `text|file|directory`。
+    pub kind: String,
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub text: Option<String>,
+}
+
+impl SubagentSpawnRequest {
+    /// 请求的权限模式（已校验）；`None` = 继承父档位。
+    pub fn permission_mode_value(&self) -> Result<Option<aether_core::PermissionMode>, IpcError> {
+        permission_mode_value(self.permission_mode.as_deref())
+    }
+
+    /// 有效 mode（缺省 = role）。
+    pub fn mode_value(&self) -> &str {
+        self.mode.as_deref().unwrap_or(&self.role)
+    }
+}
+
+impl CommandRequest for SubagentSpawnRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.parent_session_id) {
+            return Err(IpcError::invalid_format(
+                "parent_session_id",
+                "必须是 26 位 ULID",
+            ));
+        }
+        if !SUBAGENT_ROLES.contains(&self.role.as_str()) {
+            return Err(IpcError::invalid_enum(
+                "role",
+                "允许值：explore / review / custom",
+            ));
+        }
+        if let Some(mode) = &self.mode {
+            if !SUBAGENT_ROLES.contains(&mode.as_str()) {
+                return Err(IpcError::invalid_enum(
+                    "mode",
+                    "允许值：explore / review / custom",
+                ));
+            }
+        }
+        if let Some(template) = &self.template {
+            if !SUBAGENT_TEMPLATES.contains(&template.as_str()) {
+                return Err(IpcError::invalid_enum(
+                    "template",
+                    "允许值：parallel_explore / adversarial_review / custom",
+                ));
+            }
+        }
+        validate::ensure_not_empty(&self.purpose, "purpose")?;
+        ensure_max_chars(&self.purpose, "purpose", 2_048)?;
+        reject_control_chars(&self.purpose, "purpose", true)?;
+        if self.context_refs.len() > aether_core::SUBAGENT_CONTEXT_REFS_MAX {
+            return Err(IpcError::too_large(
+                "context_refs",
+                format!(
+                    "上下文引用上限 {} 条",
+                    aether_core::SUBAGENT_CONTEXT_REFS_MAX
+                ),
+            ));
+        }
+        let mut total_text = 0usize;
+        for entry in &self.context_refs {
+            match entry.kind.as_str() {
+                "text" => {
+                    let Some(text) = &entry.text else {
+                        return Err(IpcError::invalid_value(
+                            "context_refs[].text：kind=text 时必填",
+                        ));
+                    };
+                    if text.is_empty() {
+                        return Err(IpcError::invalid_value("context_refs[].text 不能为空"));
+                    }
+                    total_text = total_text.saturating_add(text.len());
+                }
+                "file" | "directory" => {
+                    let path = entry.path.as_deref().ok_or_else(|| {
+                        IpcError::invalid_value("context_refs[].path：file/directory 时必填")
+                    })?;
+                    if path.is_empty() {
+                        return Err(IpcError::invalid_value("context_refs[].path 不能为空"));
+                    }
+                    path::validate_artifact_path(path)?;
+                }
+                other => {
+                    return Err(IpcError::invalid_enum(
+                        "context_refs[].kind",
+                        format!("引用类型非法（{other}）；允许值：text / file / directory"),
+                    ))
+                }
+            }
+        }
+        if total_text > aether_core::SUBAGENT_CONTEXT_TEXT_MAX_BYTES {
+            return Err(IpcError::too_large(
+                "context_refs[].text",
+                format!(
+                    "上下文文本合计上限 {} 字节",
+                    aether_core::SUBAGENT_CONTEXT_TEXT_MAX_BYTES
+                ),
+            ));
+        }
+        if let Some(runtime_id) = &self.runtime_id {
+            validate::validate_identifier(runtime_id, "runtime_id")?;
+        }
+        if let Some(provider_id) = &self.provider_id {
+            if !is_ulid(provider_id) {
+                return Err(IpcError::invalid_format("provider_id", "必须是 26 位 ULID"));
+            }
+        }
+        if let Some(model) = &self.model {
+            validate::validate_model(model, "model")?;
+        }
+        self.permission_mode_value()?;
+        if let Some(timeout_ms) = self.timeout_ms {
+            if !(1..=aether_core::SUBAGENT_TIMEOUT_MAX_MS).contains(&timeout_ms) {
+                return Err(IpcError::out_of_range(
+                    "timeout_ms",
+                    format!(
+                        "必须在 1..={} 毫秒（上限 2h）",
+                        aether_core::SUBAGENT_TIMEOUT_MAX_MS
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// `subagent_list`：父会话子 Agent 树（唯一树入口）。
+#[derive(Debug, Clone, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct SubagentListRequest {
+    pub parent_session_id: String,
+    #[serde(default)]
+    pub include_completed: Option<bool>,
+}
+
+impl CommandRequest for SubagentListRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.parent_session_id) {
+            return Err(IpcError::invalid_format(
+                "parent_session_id",
+                "必须是 26 位 ULID",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// `subagent_cancel`：取消子 Agent（父取消树级联入口；ADR-032 D-032-3）。
+#[derive(Debug, Clone, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct SubagentCancelRequest {
+    pub child_session_id: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+impl CommandRequest for SubagentCancelRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.child_session_id) {
+            return Err(IpcError::invalid_format(
+                "child_session_id",
+                "必须是 26 位 ULID",
+            ));
+        }
+        if let Some(reason) = &self.reason {
+            ensure_max_chars(reason, "reason", 512)?;
+            reject_control_chars(reason, "reason", true)?;
+        }
+        Ok(())
+    }
+}
+
+/// `subagent_resolve`：父处置（`accept|reject|rerun`；ADR-032 D-032-4）。
+#[derive(Debug, Clone, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct SubagentResolveRequest {
+    pub child_session_id: String,
+    pub decision: String,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+impl CommandRequest for SubagentResolveRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.child_session_id) {
+            return Err(IpcError::invalid_format(
+                "child_session_id",
+                "必须是 26 位 ULID",
+            ));
+        }
+        if !["accept", "reject", "rerun"].contains(&self.decision.as_str()) {
+            return Err(IpcError::invalid_enum(
+                "decision",
+                "允许值：accept / reject / rerun",
+            ));
+        }
+        if let Some(note) = &self.note {
+            ensure_max_chars(note, "note", 2_048)?;
+            reject_control_chars(note, "note", true)?;
+        }
+        Ok(())
+    }
+}
+
+/// `subagent_result_get`：父会话按需拉取完整结果（UTF-8 字节分页）。
+#[derive(Debug, Clone, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct SubagentResultGetRequest {
+    pub parent_session_id: String,
+    pub child_session_id: String,
+    #[serde(default)]
+    pub offset: Option<u64>,
+    #[serde(default)]
+    pub limit_bytes: Option<u32>,
+}
+
+impl CommandRequest for SubagentResultGetRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        for (field, value) in [
+            ("parent_session_id", &self.parent_session_id),
+            ("child_session_id", &self.child_session_id),
+        ] {
+            if !is_ulid(value) {
+                return Err(IpcError::invalid_format(field, "必须是 26 位 ULID"));
+            }
+        }
+        if let Some(limit_bytes) = self.limit_bytes {
+            if !(1..=16_384).contains(&limit_bytes) {
+                return Err(IpcError::out_of_range(
+                    "limit_bytes",
+                    "必须在 1..=16384 字节（ADR-032：16KiB/页）",
+                ));
+            }
         }
         Ok(())
     }

@@ -82,6 +82,14 @@ fn is_workflow_event(event_type: EventType) -> bool {
     )
 }
 
+/// 核心子 Agent 控制层启用的 `subagent.*` 精确子类型（ADR-032 D-032-5）。
+fn is_subagent_event(event_type: EventType) -> bool {
+    matches!(
+        event_type,
+        EventType::SubagentSpawned | EventType::SubagentCompleted
+    )
+}
+
 /// 事件归一化器。
 pub struct Normalizer;
 
@@ -107,9 +115,9 @@ impl Normalizer {
                 .map_err(|_| NormalizeError::UnknownEventType {
                     event_type: draft.event_type.clone(),
                 })?;
-        // ADR-031：`workflow.*` 精确子类型由核心编排引擎产出，不再按预留类型拒绝；
-        // 其余预留类型（reasoning_delta / subagent.*）仍待各自任务启用。
-        if event_type.is_reserved() && !is_workflow_event(event_type) {
+        // ADR-031：`workflow.*` 精确子类型由核心编排引擎产出；
+        // ADR-032：`subagent.*` 精确子类型由子 Agent 控制层产出。
+        if event_type.is_reserved() && !is_workflow_event(event_type) && !is_subagent_event(event_type) {
             return Err(NormalizeError::ReservedEventType {
                 event_type: draft.event_type,
             });

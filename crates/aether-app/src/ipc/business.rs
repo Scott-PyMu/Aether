@@ -52,11 +52,23 @@ pub enum BusinessCode {
     WorkflowNodeNotRetryable,
     /// 取消超时（M10-01/ADR-031 D-031-4；`internal`）。
     WorkflowCancelTimeout,
+    /// 子 Agent 不存在（M10-02/ADR-032；`invalid_value`）。
+    SubagentNotFound,
+    /// 派生超限（深度/fan-out/并发/累计/context_refs；M10-02/ADR-032 D-032-2）。
+    SubagentLimitExceeded,
+    /// 子 Agent 上下文/权限/能力拒绝（M10-02/ADR-032 D-032-3）。
+    SubagentContextRejected,
+    /// 子 Agent 结果尚未就绪（M10-02/ADR-032 D-032-4）。
+    SubagentResultNotReady,
+    /// 子 Agent 处置冲突（终态重复 resolve/竞态；M10-02/ADR-032）。
+    SubagentResolutionConflict,
+    /// 父会话仍有子会话，拒绝删除（M10-02/ADR-032 D-032-5；`invalid_value`）。
+    SessionHasChildren,
 }
 
 impl BusinessCode {
     /// 全部业务码（顺序 = `error_codes.json` 的 `business` 顺序 = ADR-018 A-7 登记顺序）。
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 24] = [
         Self::SessionBusy,
         Self::SessionPaused,
         Self::StorageBackpressure,
@@ -75,6 +87,12 @@ impl BusinessCode {
         Self::WorkflowNodeNotFound,
         Self::WorkflowNodeNotRetryable,
         Self::WorkflowCancelTimeout,
+        Self::SubagentNotFound,
+        Self::SubagentLimitExceeded,
+        Self::SubagentContextRejected,
+        Self::SubagentResultNotReady,
+        Self::SubagentResolutionConflict,
+        Self::SessionHasChildren,
     ];
 
     /// 线上取值（snake_case；`data.business_code` 唯一来源）。
@@ -98,6 +116,12 @@ impl BusinessCode {
             Self::WorkflowNodeNotFound => "workflow_node_not_found",
             Self::WorkflowNodeNotRetryable => "workflow_node_not_retryable",
             Self::WorkflowCancelTimeout => "workflow_cancel_timeout",
+            Self::SubagentNotFound => "subagent_not_found",
+            Self::SubagentLimitExceeded => "subagent_limit_exceeded",
+            Self::SubagentContextRejected => "subagent_context_rejected",
+            Self::SubagentResultNotReady => "subagent_result_not_ready",
+            Self::SubagentResolutionConflict => "subagent_resolution_conflict",
+            Self::SessionHasChildren => "session_has_children",
         }
     }
 
@@ -113,12 +137,12 @@ mod tests {
 
     #[test]
     fn business_codes_are_frozen_unique_snake_case_values() {
-        // ADR-018 A-7 的 9 项 + M10-01/ADR-031 的 9 项编排业务码。
-        assert_eq!(BusinessCode::ALL.len(), 18, "业务码 18 项");
+        // ADR-018 A-7 的 9 项 + M10-01/ADR-031 的 9 项编排业务码 + M10-02/ADR-032 的 6 项。
+        assert_eq!(BusinessCode::ALL.len(), 24, "业务码 24 项");
         let mut values: Vec<&str> = BusinessCode::ALL.iter().map(|code| code.as_str()).collect();
         values.sort_unstable();
         values.dedup();
-        assert_eq!(values.len(), 18, "业务码取值必须唯一");
+        assert_eq!(values.len(), 24, "业务码取值必须唯一");
         for code in BusinessCode::ALL {
             let text = code.as_str();
             assert!(

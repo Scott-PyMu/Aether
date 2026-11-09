@@ -42,8 +42,9 @@ const ERROR_SRC = "crates/aether-app/src/ipc/error.rs";
 const EVENT_SRC = "crates/aether-core/src/event.rs";
 const MIGRATIONS_DIR = "migrations";
 
-// M10-01/ADR-031：命令面增量登记 11 条（workflow_*），基线随实现任务重录为 74/70/4。
-export const EXPECTED_COMMANDS = 74;
+// M10-01/ADR-031：命令面增量登记 11 条（workflow_*）；M10-02 子 Agent +5；
+// 基线随实现任务重录为 79/75/4。
+export const EXPECTED_COMMANDS = 79;
 const RESERVED_COMMANDS = ["startup_get", "startup_migrate"];
 const SHELL_COMMANDS = ["app_exit", "app_restart", "ref_pick", "startup_pick_target"];
 
@@ -780,7 +781,7 @@ function record() {
   const contract = collectContract();
   if (contract.commands.length !== EXPECTED_COMMANDS) {
     throw new Error(
-      `[m9-01-baseline] 命令数 ${contract.commands.length} ≠ ${EXPECTED_COMMANDS}（74 = 70 daemon + 4 shell）`,
+      `[m9-01-baseline] 命令数 ${contract.commands.length} ≠ ${EXPECTED_COMMANDS}（79 = 75 daemon + 4 shell）`,
     );
   }
   const shell = contract.commands.filter((command) => command.route === "shell").length;

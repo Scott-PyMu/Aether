@@ -89,6 +89,10 @@ pub struct SendAck {
     pub run_id: String,
     /// 是否幂等命中（相同 `client_msg_id`）。
     pub duplicate: bool,
+    /// M10-02/ADR-032：适配器回显的已应用上下文版本（未声明 = `None`）。
+    pub applied_context_version: Option<u64>,
+    /// M10-02/ADR-032：适配器回显的已应用交付模式。
+    pub applied_context_mode: Option<String>,
 }
 
 /// 工具定义（`tools.list` 条目）。
@@ -358,12 +362,14 @@ impl AdapterSessionClient {
         text: &str,
         thinking_depth: Option<u8>,
     ) -> Result<SendAck, SessionClientError> {
-        self.send_with_references(session_id, client_msg_id, text, thinking_depth, &[])
+        self.send_with_references(session_id, client_msg_id, text, thinking_depth, &[], None)
             .await
     }
 
     /// `session.send` + 可选 `references`（M7-06/ADR-024：文件引用上下文注入；
     /// `[{ path, kind }]`，≤32 条由命令层校验；空集 = 不带字段）。
+    ///
+    /// M10-02/ADR-032：`subagent_context` 为版本化结果回注载荷（仅内部交付路径）。
     pub async fn send_with_references(
         &self,
         session_id: &str,
@@ -371,6 +377,7 @@ impl AdapterSessionClient {
         text: &str,
         thinking_depth: Option<u8>,
         references: &[aether_core::MessageReference],
+        subagent_context: Option<&aether_core::SubagentContext>,
     ) -> Result<SendAck, SessionClientError> {
         let mut params = json!({
             "session_id": session_id,
@@ -385,6 +392,11 @@ impl AdapterSessionClient {
                 SessionClientError::Protocol(format!("references 序列化失败：{error}"))
             })?;
         }
+        if let Some(context) = subagent_context {
+            params["subagent_context"] = serde_json::to_value(context).map_err(|error| {
+                SessionClientError::Protocol(format!("subagent_context 序列化失败：{error}"))
+            })?;
+        }
         let response = self
             .connection
             .request(Method::SessionSend, params)
@@ -396,6 +408,10 @@ impl AdapterSessionClient {
         Ok(SendAck {
             run_id,
             duplicate: response["duplicate"].as_bool().unwrap_or(false),
+            applied_context_version: response["applied_context_version"].as_u64(),
+            applied_context_mode: response["applied_context_mode"]
+                .as_str()
+                .map(str::to_owned),
         })
     }
 

@@ -12,6 +12,7 @@ pub mod error;
 pub mod event;
 pub mod ids;
 pub mod session_state;
+pub mod subagent;
 
 pub use domain::{
     static_capabilities, supports_multi_provider, LogLevel, Message, MessageReference, MessageRole,
@@ -19,8 +20,8 @@ pub use domain::{
     Run, RunStatus, Runtime, RuntimeStatus, Session, SessionStatus, TokenUsage, Workspace,
     MULTI_PROVIDER_CAPABILITY, MULTI_PROVIDER_RUNTIMES, PAUSE_RESUME_CAPABILITY,
     PRESET_NAME_MAX_CHARS, PRESET_PROMPT_MARKER_PREFIX, PRESET_PROMPT_MARKER_SUFFIX,
-    PRESET_SYSTEM_PROMPT_MAX_BYTES, THINKING_DEPTH_CAPABILITY, THINKING_DEPTH_DEFAULT,
-    THINKING_DEPTH_MAX, THINKING_DEPTH_MIN,
+    PRESET_SYSTEM_PROMPT_MAX_BYTES, SUBAGENT_CAPABILITY, SUBAGENT_CONTEXT_CAPABILITY,
+    THINKING_DEPTH_CAPABILITY, THINKING_DEPTH_DEFAULT, THINKING_DEPTH_MAX, THINKING_DEPTH_MIN,
 };
 pub use error::{EnvelopeError, UnknownValue};
 pub use event::{
@@ -42,6 +43,15 @@ pub use ids::{
 pub use session_state::{
     session_status_is_terminal, session_transition_allowed, SessionFsm, SessionStatusChange,
     SessionTransitionError,
+};
+pub use subagent::{
+    truncate_utf8, AppliedSubagentMode, SubagentContext, SubagentDeliveryMode, SubagentEvidenceRef,
+    SubagentFinding, SubagentResult, SubagentSeverity, SubagentUsage, SubagentVerdict,
+    SUBAGENT_CONCURRENCY_MAX, SUBAGENT_CONTEXT_MAX_BYTES, SUBAGENT_CONTEXT_REFS_MAX,
+    SUBAGENT_CONTEXT_TEXT_MAX_BYTES, SUBAGENT_DEPTH_MAX, SUBAGENT_ENVELOPE_MAX_BYTES,
+    SUBAGENT_EVIDENCE_MAX, SUBAGENT_FANOUT_MAX, SUBAGENT_FINDINGS_MAX, SUBAGENT_FOLD_KEEP,
+    SUBAGENT_FOLD_SUMMARY_MAX_BYTES, SUBAGENT_RESULT_MAX_BYTES, SUBAGENT_SPAWN_COUNT_MAX,
+    SUBAGENT_SUMMARY_MAX_BYTES, SUBAGENT_TIMEOUT_DEFAULT_MS, SUBAGENT_TIMEOUT_MAX_MS,
 };
 
 /// 核心层版本号——取自单一版本来源（工作区 `Cargo.toml`）。

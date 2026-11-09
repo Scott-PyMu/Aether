@@ -12,12 +12,14 @@
     "optional": [
       "runtime_id",
       "status",
-      "limit"
+      "limit",
+      "include_children"
     ],
     "field_types": {
       "runtime_id": "Option<String>",
       "status": "Option<SessionStatus>",
-      "limit": "Option<u32>"
+      "limit": "Option<u32>",
+      "include_children": "Option<bool>"
     }
   },
   "accepted_shape": {},

@@ -83,6 +83,12 @@ pub const EMBEDDED_MIGRATIONS: &[MigrationFile] = &[
         name: "0010_workflow_orchestration.sql",
         bytes: include_bytes!("../../../migrations/0010_workflow_orchestration.sql"),
     },
+    // ADR-032/M10-02：子 Agent 结果表 + 注入体表 + 父会话树索引。
+    MigrationFile {
+        version: 11,
+        name: "0011_subagent_results.sql",
+        bytes: include_bytes!("../../../migrations/0011_subagent_results.sql"),
+    },
 ];
 
 /// 迁移文件 sha256（小写十六进制）。

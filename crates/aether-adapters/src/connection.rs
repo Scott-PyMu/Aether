@@ -92,6 +92,32 @@ pub const CATALOG_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 /// 目录查询方法名（D6 只读方法；不新增 IPC 命令）。
 pub const PROVIDER_CATALOG_METHOD: &str = "provider.catalog.get";
 
+/// M10-02/ADR-032：适配器 → 核心子 Agent 请求数据源（不计 IPC 命令面）。
+///
+/// 方法：`subagent.spawn`（30s）/`subagent.cancel`（5s）/`subagent.status`（10s）/
+/// `subagent.result.get`（10s）；请求 id 与 core→adapter 方向独立。
+pub trait SubagentRequestSource: Send + Sync + 'static {
+    fn request<'a>(
+        &'a self,
+        method: &'a str,
+        params: Value,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, CatalogError>> + Send + 'a>>;
+}
+
+/// 子 Agent 方法名（D6 增量；只增不改）。
+pub const SUBAGENT_SPAWN_METHOD: &str = "subagent.spawn";
+pub const SUBAGENT_CANCEL_METHOD: &str = "subagent.cancel";
+pub const SUBAGENT_STATUS_METHOD: &str = "subagent.status";
+pub const SUBAGENT_RESULT_GET_METHOD: &str = "subagent.result.get";
+
+fn subagent_timeout(method: &str) -> Duration {
+    match method {
+        SUBAGENT_SPAWN_METHOD => Duration::from_secs(30),
+        SUBAGENT_CANCEL_METHOD => Duration::from_secs(5),
+        _ => Duration::from_secs(10),
+    }
+}
+
 /// 目录查询在途合并（coalesce）：同一连接同一时刻最多 1 个在途查询。
 struct CatalogGate {
     source: Arc<dyn ProviderCatalogSource>,
@@ -328,6 +354,27 @@ impl AdapterConnection {
         R: AsyncRead + Send + Unpin + 'static,
         W: AsyncWrite + Send + Unpin + 'static,
     {
+        Self::spawn_with_sources(
+            reader,
+            writer,
+            invalid_frame_threshold,
+            catalog_source,
+            None,
+        )
+    }
+
+    /// M10-02/ADR-032：同时注入 `provider.catalog.get` 与子 Agent 请求数据源。
+    pub fn spawn_with_sources<R, W>(
+        reader: R,
+        writer: W,
+        invalid_frame_threshold: u32,
+        catalog_source: Option<Arc<dyn ProviderCatalogSource>>,
+        subagent_source: Option<Arc<dyn SubagentRequestSource>>,
+    ) -> Self
+    where
+        R: AsyncRead + Send + Unpin + 'static,
+        W: AsyncWrite + Send + Unpin + 'static,
+    {
         let (outbound, outbound_rx) = mpsc::channel(OUTBOUND_QUEUE_CAPACITY);
         let (notifications_tx, notifications) = mpsc::channel(NOTIFICATION_QUEUE_CAPACITY);
         let (state_tx, state) = watch::channel(ConnectionState::Connecting);
@@ -356,6 +403,7 @@ impl AdapterConnection {
             hello_seen: Arc::clone(&hello_seen),
             invalid_frame_threshold,
             catalog,
+            subagent: subagent_source,
         });
 
         // 读侧限流：保证缓冲上限 = 2MiB 帧上限 + READ_CHUNK_BYTES（D6）。
@@ -608,6 +656,7 @@ struct ReaderContext {
     hello_seen: Arc<OnceLock<Hello>>,
     invalid_frame_threshold: u32,
     catalog: Option<Arc<CatalogGate>>,
+    subagent: Option<Arc<dyn SubagentRequestSource>>,
 }
 
 impl ReaderContext {
@@ -816,6 +865,72 @@ impl ReaderContext {
             }
         });
     }
+    fn spawn_subagent_request(
+        &self,
+        id: Value,
+        method: &str,
+        params: Value,
+        source: Arc<dyn SubagentRequestSource>,
+    ) {
+        let method = method.to_owned();
+        let outbound = self.outbound.clone();
+        tokio::spawn(async move {
+            let timeout = subagent_timeout(&method);
+            let result =
+                tokio::time::timeout(timeout, source.request(&method, params)).await;
+            let frame = match result {
+                Ok(Ok(value)) => {
+                    let text = json!({"jsonrpc":"2.0","id":id,"result":value}).to_string();
+                    if text.len() > crate::framing::MAX_FRAME_BYTES {
+                        let error = CatalogError::internal(format!(
+                            "{method} 响应超过 2MiB（未截断；分页需另立 ADR）"
+                        ));
+                        json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "error": {
+                                "code": error.code,
+                                "message": error.message,
+                                "data": { "aether_code": error.aether_code },
+                            },
+                        })
+                        .to_string()
+                    } else {
+                        text
+                    }
+                }
+                Ok(Err(error)) => json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": {
+                        "code": error.code,
+                        "message": error.message,
+                        "data": { "aether_code": error.aether_code },
+                    },
+                })
+                .to_string(),
+                Err(_) => {
+                    let error = CatalogError::internal(format!(
+                        "{method} 超时（{}s）",
+                        timeout.as_secs()
+                    ));
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": {
+                            "code": error.code,
+                            "message": error.message,
+                            "data": { "aether_code": error.aether_code },
+                        },
+                    })
+                    .to_string()
+                }
+            };
+            if outbound.send(Outbound::Frame(frame)).await.is_err() {
+                // 连接已关闭：丢弃迟到响应（断连清理）。
+            }
+        });
+    }
 }
 
 async fn read_loop<R>(mut framed: FramedRead<R, AetherLineCodec>, ctx: Arc<ReaderContext>)
@@ -895,9 +1010,27 @@ async fn dispatch_frame(raw: RawLine, ctx: &ReaderContext) -> bool {
             }
         }
         (Some(id), Some(name)) => {
-            // ADR-028 v0.9：唯一登记的 adapter → core 只读请求 `provider.catalog.get`
-            // （其余反向方法仍回 -32601 不断连，D6 前向兼容）。
-            if name == PROVIDER_CATALOG_METHOD {
+            // M10-02/ADR-032：适配器 → 核心子 Agent 请求（4 方法；同 provider.catalog）。
+            if matches!(
+                name,
+                SUBAGENT_SPAWN_METHOD
+                    | SUBAGENT_CANCEL_METHOD
+                    | SUBAGENT_STATUS_METHOD
+                    | SUBAGENT_RESULT_GET_METHOD
+            ) {
+                let params = object.get("params").cloned().unwrap_or(Value::Null);
+                match &ctx.subagent {
+                    Some(source) => {
+                        ctx.spawn_subagent_request(id, name, params, Arc::clone(source));
+                    }
+                    None => {
+                        let error = CatalogError::method_not_found(format!(
+                            "{name} 未接线（旧核心）"
+                        ));
+                        ctx.reply_error(&id, &error);
+                    }
+                }
+            } else if name == PROVIDER_CATALOG_METHOD {
                 let params = object.get("params").cloned();
                 match &ctx.catalog {
                     Some(gate) => {

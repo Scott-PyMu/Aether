@@ -1,0 +1,90 @@
+{
+  "schema": "aether.m9-01.command-baseline.v1",
+  "command": "subagent_spawn",
+  "index": 75,
+  "route": "daemon",
+  "exposure": "ui",
+  "reachable": true,
+  "params": {
+    "style": "strict",
+    "dto": "SubagentSpawnRequest",
+    "required": [
+      "parent_session_id",
+      "role",
+      "purpose"
+    ],
+    "optional": [
+      "mode",
+      "template",
+      "context_refs",
+      "runtime_id",
+      "provider_id",
+      "model",
+      "permission_mode",
+      "timeout_ms"
+    ],
+    "field_types": {
+      "parent_session_id": "String",
+      "role": "String",
+      "purpose": "String",
+      "mode": "Option<String>",
+      "template": "Option<String>",
+      "context_refs": "Vec<SubagentContextRef>",
+      "runtime_id": "Option<String>",
+      "provider_id": "Option<String>",
+      "model": "Option<String>",
+      "permission_mode": "Option<String>",
+      "timeout_ms": "Option<i64>"
+    }
+  },
+  "accepted_shape": {
+    "parent_session_id": "01J00000000000000000000000",
+    "role": "sample",
+    "purpose": "sample"
+  },
+  "rejects": [
+    {
+      "id": "unknown_field",
+      "stage": "strict_parse",
+      "params": {
+        "__unexpected_field": true
+      },
+      "expect": {
+        "result": "rejected",
+        "code": "unknown_field",
+        "field": "__unexpected_field"
+      }
+    },
+    {
+      "id": "invalid_json",
+      "stage": "strict_parse",
+      "params": [],
+      "expect": {
+        "result": "rejected",
+        "code": "invalid_json"
+      }
+    },
+    {
+      "id": "missing_field",
+      "stage": "strict_parse",
+      "params": {},
+      "expect": {
+        "result": "rejected",
+        "code": "missing_field",
+        "field": "parent_session_id"
+      }
+    },
+    {
+      "id": "invalid_type",
+      "stage": "strict_parse",
+      "params": {
+        "parent_session_id": 12345
+      },
+      "expect": {
+        "result": "rejected",
+        "code": "invalid_type"
+      }
+    }
+  ],
+  "note": "rejects 的期望码由 strict 解析（deny_unknown_fields）确定性给出；accepted_shape 只声明请求形态，不声明后端成功。响应体 golden 由 M9-04 追加，不改本文件。"
+}

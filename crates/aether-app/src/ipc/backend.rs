@@ -26,6 +26,8 @@ use super::dto::{
     WorkflowCreateRequest, WorkflowDeleteRequest, WorkflowIdRequest, WorkflowImportRequest,
     WorkflowListRequest, WorkflowNodeRetryRequest, WorkflowRunCancelRequest, WorkflowRunGetRequest,
     WorkflowRunListRequest, WorkflowRunRequest, WorkflowUpdateRequest,
+    SubagentCancelRequest, SubagentListRequest, SubagentResolveRequest, SubagentResultGetRequest,
+    SubagentSpawnRequest,
 };
 use super::error::IpcError;
 use super::path::ArtifactPath;
@@ -446,6 +448,31 @@ pub trait IpcBackend: Send + Sync + 'static {
         _request: &WorkflowNodeRetryRequest,
     ) -> Result<Value, IpcError> {
         Err(IpcError::not_implemented("workflow_node_retry"))
+    }
+
+    // ===== M10-02/ADR-032：子 Agent 命令面（5 条） =====
+
+    fn subagent_spawn(&self, _request: &SubagentSpawnRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("subagent_spawn"))
+    }
+
+    fn subagent_list(&self, _request: &SubagentListRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("subagent_list"))
+    }
+
+    fn subagent_cancel(&self, _request: &SubagentCancelRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("subagent_cancel"))
+    }
+
+    fn subagent_resolve(&self, _request: &SubagentResolveRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("subagent_resolve"))
+    }
+
+    fn subagent_result_get(
+        &self,
+        _request: &SubagentResultGetRequest,
+    ) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("subagent_result_get"))
     }
 }
 

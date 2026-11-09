@@ -2246,9 +2246,11 @@ fn commands_manifest_matches_frozen_baseline() {
         "startup_migrate",
         "app_exit",
     ];
-    // M9 的 63 条顺序/语义不变；M10-01 追加 11 条编排命令 → 74（70 daemon + 4 shell）。
-    assert_eq!(COMMANDS.len(), 74, "命令面 74 条（70 daemon + 4 shell）");
+    // M9 的 63 条顺序/语义不变；M10-01 追加 11 条编排命令 + M10-02 追加 5 条子 Agent
+    // → 79（75 daemon + 4 shell）。
+    assert_eq!(COMMANDS.len(), 79, "命令面 79 条（75 daemon + 4 shell）");
     assert_eq!(COMMANDS[63], "workflow_create", "M10 增量从第 64 条开始");
+    assert_eq!(COMMANDS[74], "subagent_spawn", "M10-02 增量从第 75 条开始");
     assert_eq!(
         &COMMANDS[..63],
         BASELINE,

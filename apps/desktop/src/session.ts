@@ -137,6 +137,8 @@ export interface SessionSummary {
   workspace_root?: string | null;
   /** M3-10：`session_create` 同步能力门警告（无警告省略；非阻断）。 */
   warnings?: SessionWarning[];
+  /** M10-02/ADR-032：是否有子会话（父删除按钮置灰）。 */
+  has_children?: boolean;
 }
 
 /** 运行时是否声明思考深度能力（存在即支持；ADR-010）。 */
@@ -251,6 +253,8 @@ export interface SessionListFilter {
   runtime_id?: string;
   status?: SessionStatus;
   limit?: number;
+  /** M10-02/ADR-032：包含子会话（默认 `false`）。 */
+  include_children?: boolean;
 }
 
 /** M7-07/ADR-025 §2.1-2：会话搜索入参（query ≤256；limit ≤100 缺省 20）。 */

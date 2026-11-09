@@ -94,6 +94,8 @@ pub fn build_backend(
     // ADR-028 v0.9：`provider.catalog.get` 数据源（adapter → core；存储就绪前返回
     // core_not_ready，启动尾段接线）。
     let provider_catalog = std::sync::Arc::new(provider_catalog::ProviderCatalog::new());
+    // M10-02/ADR-032：适配器 → 核心子 Agent 请求桥（控制后端在尾段绑定）。
+    let subagent_bridge = std::sync::Arc::new(subagent::SubagentBridge::new());
     let registry = runtime_registry::resolve_registry_dir(resource_dir)
         .as_deref()
         .map(runtime_registry::load_registry)
@@ -117,6 +119,8 @@ pub fn build_backend(
         spec.env_source = Some(provider_env_hook.clone());
         spec.catalog_source = Some(provider_catalog.clone()
             as std::sync::Arc<dyn aether_adapters::connection::ProviderCatalogSource>);
+        spec.subagent_source = Some(subagent_bridge.clone()
+            as std::sync::Arc<dyn aether_adapters::connection::SubagentRequestSource>);
     }
     let supervisor: Option<std::sync::Arc<aether_adapters::supervisor::Supervisor>> =
         match runtime_control::boot_supervisor_with_observer(
@@ -481,9 +485,12 @@ pub fn build_backend(
     // 升级审计同样需要单写队列（后段 `write_slot` 会被装饰器消费，先克隆）。
     let pipeline_for_bridge = pipeline.clone();
     let pipeline_for_workflow = pipeline.clone();
+    let pipeline_for_subagent = pipeline.clone();
     let write_for_bridge = write_slot.clone();
     let reads_for_workflow = reads.clone();
     let write_for_workflow = write_slot.clone();
+    let reads_for_subagent = reads.clone();
+    let write_for_subagent = write_slot.clone();
     let orchestrator = if supervisor.is_some() || pipeline.is_some() || storage_slot.is_some() {
         let orchestrator = shutdown::AppShutdown::new(
             pipeline,
@@ -665,6 +672,33 @@ pub fn build_backend(
                 ))
             }
             _ => session_backend,
+        };
+    // M10-02/ADR-032：子 Agent 命令面装饰器（最外层）+ 启动 reconcile。
+    let backend: std::sync::Arc<dyn ipc::IpcBackend> =
+        match (reads_for_subagent, write_for_subagent) {
+            (Some(reads), Some(write)) => {
+                let control = std::sync::Arc::new(subagent::SubagentControlBackend::new(
+                    backend,
+                    reads,
+                    write,
+                    pipeline_for_subagent,
+                    std::sync::Arc::new(aether_control::SystemClock),
+                    handle.clone(),
+                ));
+                match handle.block_on(control.reconcile()) {
+                    Ok((scanned, repaired)) => tracing::info!(
+                        scanned,
+                        repaired,
+                        "子 Agent 启动 reconcile 完成（补齐终态缺失结果，不重放运行）"
+                    ),
+                    Err(error) => {
+                        tracing::warn!(error = %error, "子 Agent 启动 reconcile 失败（继续启动）")
+                    }
+                }
+                subagent_bridge.bind(std::sync::Arc::clone(&control));
+                control as std::sync::Arc<dyn ipc::IpcBackend>
+            }
+            _ => backend,
         };
     BackendBundle {
         backend,

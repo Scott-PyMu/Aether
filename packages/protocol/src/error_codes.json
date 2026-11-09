@@ -301,6 +301,42 @@
       "owner": "M10-01",
       "first_adr": "ADR-031",
       "kind": "business"
+    },
+    {
+      "code": "subagent_not_found",
+      "owner": "M10-02",
+      "first_adr": "ADR-032",
+      "kind": "business"
+    },
+    {
+      "code": "subagent_limit_exceeded",
+      "owner": "M10-02",
+      "first_adr": "ADR-032",
+      "kind": "business"
+    },
+    {
+      "code": "subagent_context_rejected",
+      "owner": "M10-02",
+      "first_adr": "ADR-032",
+      "kind": "business"
+    },
+    {
+      "code": "subagent_result_not_ready",
+      "owner": "M10-02",
+      "first_adr": "ADR-032",
+      "kind": "business"
+    },
+    {
+      "code": "subagent_resolution_conflict",
+      "owner": "M10-02",
+      "first_adr": "ADR-032",
+      "kind": "business"
+    },
+    {
+      "code": "session_has_children",
+      "owner": "M10-02",
+      "first_adr": "ADR-032",
+      "kind": "business"
     }
   ]
 }

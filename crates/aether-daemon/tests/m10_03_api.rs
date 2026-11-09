@@ -139,7 +139,7 @@ fn http_api_auth_meta_rpc_limits_and_rotation() {
     let (status, meta) = get_json(&client, &format!("{base}/v1/meta"), Some(&discovery.token));
     assert_eq!(status, 200, "meta：{meta}");
     let commands = meta["commands"].as_array().expect("commands");
-    assert_eq!(commands.len(), 70, "meta 必须只列 70 daemon 命令");
+    assert_eq!(commands.len(), 75, "meta 必须只列 75 daemon 命令");
     assert!(meta["commands"]
         .as_array()
         .unwrap()

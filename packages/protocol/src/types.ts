@@ -568,6 +568,8 @@ export type SessionListRequest = {
 	runtime_id?: string | null,
 	status?: SessionStatus | null,
 	limit?: number | null,
+	/**  M10-02/ADR-032：包含子会话（默认 `false`，避免子会话污染主列表）。 */
+	include_children?: boolean | null,
 };
 
 /**  M6-01/ADR-014 决策 3：会话级权限模式设置（`session_permission_mode_set`）。 */
@@ -617,6 +619,8 @@ export type SessionSendRequest = {
 	 *  已选且有效再传 → `invalid_value`）。
 	 */
 	model?: string | null,
+	/**  M10-02/ADR-032：子 Agent 结果回注上下文（版本化、可 ack；≤16KiB）。 */
+	subagent_context?: SubagentContextInput | null,
 };
 
 /**  会话状态过滤（与附录 C `sessions.status` CHECK 枚举一一对应）。 */
@@ -685,6 +689,8 @@ export type SessionSummary_Deserialize = {
 	closed_at: number | null,
 	workspace_root: string | null,
 	warnings: SessionWarning[] | null,
+	/**  M10-02/ADR-032：是否有子会话（父删除按钮置灰；默认 `false`）。 */
+	has_children?: boolean,
 };
 
 /**
@@ -736,6 +742,8 @@ export type SessionSummary_Serialize = {
 	closed_at: number | null,
 	workspace_root?: string | null,
 	warnings?: SessionWarning[] | null,
+	/**  M10-02/ADR-032：是否有子会话（父删除按钮置灰；默认 `false`）。 */
+	has_children: boolean,
 };
 
 /**
@@ -791,6 +799,63 @@ export type StartupMigrateRequest = {
 
 /**  `startup_pick_target`（ADR-006）：无参数命令；缺省载荷等价空对象，任何成员都会被严格模式拒绝。 */
 export type StartupPickTargetRequest = Record<string, never>;
+
+/**  `subagent_cancel`：取消子 Agent（父取消树级联入口；ADR-032 D-032-3）。 */
+export type SubagentCancelRequest = {
+	child_session_id: string,
+	reason?: string | null,
+};
+
+/**  `session.send.subagent_context` 请求体（D6；ADR-032 v1.2）。 */
+export type SubagentContextInput = {
+	version: number,
+	block: string,
+	mode?: string | null,
+};
+
+/**  显式上下文引用（ADR-032 D-032-3：子会话只接收显式上下文）。 */
+export type SubagentContextRef = {
+	/**  `text|file|directory`。 */
+	kind: string,
+	path?: string | null,
+	text?: string | null,
+};
+
+/**  `subagent_list`：父会话子 Agent 树（唯一树入口）。 */
+export type SubagentListRequest = {
+	parent_session_id: string,
+	include_completed?: boolean | null,
+};
+
+/**  `subagent_resolve`：父处置（`accept|reject|rerun`；ADR-032 D-032-4）。 */
+export type SubagentResolveRequest = {
+	child_session_id: string,
+	decision: string,
+	note?: string | null,
+};
+
+/**  `subagent_result_get`：父会话按需拉取完整结果（UTF-8 字节分页）。 */
+export type SubagentResultGetRequest = {
+	parent_session_id: string,
+	child_session_id: string,
+	offset?: number | null,
+	limit_bytes?: number | null,
+};
+
+/**  `subagent_spawn`：父会话派生子 Agent（ADR-032 D-032-2）。 */
+export type SubagentSpawnRequest = {
+	parent_session_id: string,
+	role: string,
+	purpose: string,
+	mode?: string | null,
+	template?: string | null,
+	context_refs?: SubagentContextRef[],
+	runtime_id?: string | null,
+	provider_id?: string | null,
+	model?: string | null,
+	permission_mode?: string | null,
+	timeout_ms?: number | null,
+};
 
 export type WorkflowCreateRequest = {
 	name: string,

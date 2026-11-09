@@ -99,6 +99,12 @@ pub const COMMANDS: &[&str] = &[
     "workflow_run_list",
     "workflow_run_cancel",
     "workflow_node_retry",
+    // M10-02/ADR-032：子 Agent 命令面 +5（M9/ M10-01 顺序/语义不变）。
+    "subagent_spawn",
+    "subagent_list",
+    "subagent_cancel",
+    "subagent_resolve",
+    "subagent_result_get",
 ];
 
 /// 命令路由：`method` + 内层 `params` → 结果 JSON。
@@ -181,6 +187,11 @@ pub fn dispatch(state: &IpcState, method: &str, params: Value) -> Result<Value, 
         "workflow_run_list" => handlers::workflow_run_list(state, params),
         "workflow_run_cancel" => handlers::workflow_run_cancel(state, params),
         "workflow_node_retry" => handlers::workflow_node_retry(state, params),
+        "subagent_spawn" => handlers::subagent_spawn(state, params),
+        "subagent_list" => handlers::subagent_list(state, params),
+        "subagent_cancel" => handlers::subagent_cancel(state, params),
+        "subagent_resolve" => handlers::subagent_resolve(state, params),
+        "subagent_result_get" => handlers::subagent_result_get(state, params),
         other => return Err(unknown_method(other)),
     }?;
     Ok(payload.into_value())
@@ -221,9 +232,9 @@ mod tests {
     #[test]
     fn shell_and_daemon_routes_partition_the_frozen_command_surface() {
         assert_eq!(SHELL_COMMANDS.len(), 4, "壳本地命令 4 条");
-        assert_eq!(COMMANDS.len(), 74, "命令面 74 条（M9 63 + M10-01 11）");
+        assert_eq!(COMMANDS.len(), 79, "命令面 79 条（M9 63 + M10-01 11 + M10-02 5）");
         let daemon = daemon_commands();
-        assert_eq!(daemon.len(), 70, "daemon 路由 70 条");
+        assert_eq!(daemon.len(), 75, "daemon 路由 75 条");
         for method in SHELL_COMMANDS {
             assert!(COMMANDS.contains(method), "壳命令 {method} 必须在 63 内");
             assert!(is_shell_local(method));

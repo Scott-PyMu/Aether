@@ -494,6 +494,11 @@ pub enum StoreCommand {
     Workflow {
         command: crate::workflow::WorkflowCommand,
     },
+    /// M10-02/ADR-032：子 Agent 结果/注入写命令（单事务由
+    /// [`crate::subagent::apply_command`] 执行）。
+    Subagent {
+        command: crate::subagent::SubagentCommand,
+    },
 }
 
 /// 写命令结果。
@@ -547,6 +552,13 @@ pub enum StoreOutcome {
     WorkflowNodeRun { id: String, inserted: bool },
     /// [`WorkflowCommand::ReconcileRunning`] 结果：收口的运行/节点计数。
     WorkflowReconciled { runs: u64, nodes: u64 },
+    /// [`SubagentCommand::InsertResult`] 结果：是否新建（`false` = 幂等命中）。
+    SubagentResultRecorded { inserted: bool },
+    /// [`SubagentCommand::InsertInjection`] 结果：新建或既有行（唯一批次）。
+    SubagentInjectionRecorded {
+        injection: crate::subagent::SubagentInjectionRecord,
+        inserted: bool,
+    },
 }
 
 /// 执行一条写命令（单事务；由单写任务调用）。
@@ -1526,6 +1538,9 @@ pub(crate) fn apply_command(
         StoreCommand::Workflow { command } => {
             crate::workflow::apply_command(connection, command)
         }
+        StoreCommand::Subagent { command } => {
+            crate::subagent::apply_command(connection, command)
+        }
     }
 }
 
@@ -1649,6 +1664,8 @@ pub struct SessionQuery {
     pub status: Option<SessionStatus>,
     /// 父会话过滤（M2-05 父取消级联：按 `parent_session_id` 遍历子会话）。
     pub parent_session_id: Option<String>,
+    /// M10-02/ADR-032：是否包含子会话（默认 `false` = 仅根会话，避免污染主列表）。
+    pub include_children: bool,
     pub limit: Option<u32>,
 }
 
@@ -1668,6 +1685,9 @@ impl SessionQuery {
         if let Some(parent_session_id) = &self.parent_session_id {
             clauses.push("parent_session_id = ?");
             values.push(Box::new(parent_session_id.clone()));
+        }
+        if !self.include_children && self.parent_session_id.is_none() {
+            clauses.push("parent_session_id IS NULL");
         }
         let where_clause = if clauses.is_empty() {
             String::new()
@@ -2569,7 +2589,7 @@ fn read_preset_row(row: &Row<'_>) -> rusqlite::Result<Preset> {
     })
 }
 
-fn read_session_row(row: &Row<'_>) -> rusqlite::Result<Session> {
+pub(crate) fn read_session_row(row: &Row<'_>) -> rusqlite::Result<Session> {
     let status: String = row.get(5)?;
     let status = status
         .parse::<SessionStatus>()

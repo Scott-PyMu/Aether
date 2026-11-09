@@ -361,11 +361,26 @@ fn valid_payload_samples() -> Vec<(EventType, Value)> {
         ),
         (
             EventType::SubagentSpawned,
-            json!({"child_session_id": "sess-child", "mode": "explore"}),
+            json!({
+                "child_session_id": "sess-child",
+                "parent_session_id": "sess-parent",
+                "role": "explore",
+                "mode": "explore",
+                "depth": 1,
+                "context_refs_count": 0
+            }),
         ),
         (
             EventType::SubagentCompleted,
-            json!({"child_session_id": "sess-child", "verdict": "ok"}),
+            json!({
+                "child_session_id": "sess-child",
+                "parent_session_id": "sess-parent",
+                "status": "succeeded",
+                "verdict": "ok",
+                "result_ref": "subagent:sess-child",
+                "batch_id": "batch-1",
+                "injected": false
+            }),
         ),
         (
             EventType::WorkflowStarted,
@@ -657,12 +672,21 @@ fn reserved_types_have_placeholder_definitions() {
             }
             EventType::SubagentSpawned => EventPayload::SubagentSpawned(SubagentSpawnedPayload {
                 child_session_id: SessionId::new("sess-child").unwrap(),
+                parent_session_id: SessionId::new("sess-parent").unwrap(),
+                role: "explore".to_string(),
                 mode: "explore".to_string(),
+                depth: 1,
+                context_refs_count: 0,
             }),
             EventType::SubagentCompleted => {
                 EventPayload::SubagentCompleted(SubagentCompletedPayload {
                     child_session_id: SessionId::new("sess-child").unwrap(),
-                    verdict: "ok".to_string(),
+                    parent_session_id: SessionId::new("sess-parent").unwrap(),
+                    status: "succeeded".to_string(),
+                    verdict: Some("ok".to_string()),
+                    result_ref: Some("subagent:sess-child".to_string()),
+                    batch_id: "batch-1".to_string(),
+                    injected: false,
                 })
             }
             EventType::WorkflowStarted => {

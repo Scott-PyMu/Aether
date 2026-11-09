@@ -38,6 +38,10 @@ pub const PAUSE_RESUME_CAPABILITY: &str = "pause_resume";
 pub const MULTI_PROVIDER_CAPABILITY: &str = "multi_provider";
 /// 声明 `multi_provider` 的三官方运行时（ADR-028 §2.1-4；新增运行时须另立 ADR）。
 pub const MULTI_PROVIDER_RUNTIMES: [&str; 3] = ["claude-code", "codex", "deepseek-harness"];
+/// 子 Agent 派生能力项（ADR-032 D-032-1：三官方运行时静态声明）。
+pub const SUBAGENT_CAPABILITY: &str = "subagent";
+/// 子 Agent 结果交付能力项（ADR-032 v1.2：版本化、可 ack；未声明不得 auto_inject）。
+pub const SUBAGENT_CONTEXT_CAPABILITY: &str = "subagent_context";
 
 /// 官方运行时静态能力表（ADR-028 v0.9）。
 ///
@@ -46,7 +50,11 @@ pub const MULTI_PROVIDER_RUNTIMES: [&str; 3] = ["claude-code", "codex", "deepsee
 #[must_use]
 pub fn static_capabilities(runtime_id: &str) -> &'static [&'static str] {
     if MULTI_PROVIDER_RUNTIMES.contains(&runtime_id) {
-        return &[MULTI_PROVIDER_CAPABILITY];
+        return &[
+            MULTI_PROVIDER_CAPABILITY,
+            SUBAGENT_CAPABILITY,
+            SUBAGENT_CONTEXT_CAPABILITY,
+        ];
     }
     &[]
 }

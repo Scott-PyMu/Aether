@@ -54,6 +54,13 @@ const BUSINESS_CODES = [
   { code: "workflow_node_not_found", owner: "M10-01", first_adr: "ADR-031" },
   { code: "workflow_node_not_retryable", owner: "M10-01", first_adr: "ADR-031" },
   { code: "workflow_cancel_timeout", owner: "M10-01", first_adr: "ADR-031" },
+  // M10-02/ADR-032 子 Agent 业务码（6 项）。
+  { code: "subagent_not_found", owner: "M10-02", first_adr: "ADR-032" },
+  { code: "subagent_limit_exceeded", owner: "M10-02", first_adr: "ADR-032" },
+  { code: "subagent_context_rejected", owner: "M10-02", first_adr: "ADR-032" },
+  { code: "subagent_result_not_ready", owner: "M10-02", first_adr: "ADR-032" },
+  { code: "subagent_resolution_conflict", owner: "M10-02", first_adr: "ADR-032" },
+  { code: "session_has_children", owner: "M10-02", first_adr: "ADR-032" },
 ];
 
 const MODE = process.argv.slice(2).find((arg) => !arg.startsWith("--")) ?? "check";

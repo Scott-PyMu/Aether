@@ -57,6 +57,11 @@ import type {
   StartupGetRequest,
   StartupMigrateRequest,
   StartupPickTargetRequest,
+  SubagentCancelRequest,
+  SubagentListRequest,
+  SubagentResolveRequest,
+  SubagentResultGetRequest,
+  SubagentSpawnRequest,
   WorkflowCreateRequest,
   WorkflowDeleteRequest,
   WorkflowIdRequest,
@@ -156,6 +161,11 @@ export const COMMANDS = [
   "workflow_run_list",
   "workflow_run_cancel",
   "workflow_node_retry",
+  "subagent_spawn",
+  "subagent_list",
+  "subagent_cancel",
+  "subagent_resolve",
+  "subagent_result_get",
 ] as const;
 export type AetherCommand = (typeof COMMANDS)[number];
 
@@ -231,6 +241,11 @@ export const DAEMON_COMMANDS = [
   "workflow_run_list",
   "workflow_run_cancel",
   "workflow_node_retry",
+  "subagent_spawn",
+  "subagent_list",
+  "subagent_cancel",
+  "subagent_resolve",
+  "subagent_result_get",
 ] as const;
 export type AetherDaemonCommand = (typeof DAEMON_COMMANDS)[number];
 
@@ -304,7 +319,13 @@ export type AetherBusinessCode =
   | "workflow_run_not_active"
   | "workflow_node_not_found"
   | "workflow_node_not_retryable"
-  | "workflow_cancel_timeout";
+  | "workflow_cancel_timeout"
+  | "subagent_not_found"
+  | "subagent_limit_exceeded"
+  | "subagent_context_rejected"
+  | "subagent_result_not_ready"
+  | "subagent_resolution_conflict"
+  | "session_has_children";
 
 /** 事件回调（9 字段信封；EventStore 直接 ingest）。 */
 export type AetherEventHandler = (event: AetherEvent) => void;
@@ -740,6 +761,21 @@ export interface AetherClient {
 
   /** `workflow_node_retry`（严格参数）。 */
   workflowNodeRetry<T = unknown>(params: WorkflowNodeRetryRequest): Promise<T>;
+
+  /** `subagent_spawn`（严格参数）。 */
+  subagentSpawn<T = unknown>(params: SubagentSpawnRequest): Promise<T>;
+
+  /** `subagent_list`（严格参数）。 */
+  subagentList<T = unknown>(params: SubagentListRequest): Promise<T>;
+
+  /** `subagent_cancel`（严格参数）。 */
+  subagentCancel<T = unknown>(params: SubagentCancelRequest): Promise<T>;
+
+  /** `subagent_resolve`（严格参数）。 */
+  subagentResolve<T = unknown>(params: SubagentResolveRequest): Promise<T>;
+
+  /** `subagent_result_get`（严格参数）。 */
+  subagentResultGet<T = unknown>(params: SubagentResultGetRequest): Promise<T>;
 }
 
 const COMMAND_SET: ReadonlySet<string> = new Set(COMMANDS);
@@ -1012,6 +1048,21 @@ export function createAetherClient(provider: AetherBridgeProvider): AetherClient
     },
     async workflowNodeRetry<T = unknown>(params?: WorkflowNodeRetryRequest): Promise<T> {
       return call<T>("workflow_node_retry", params);
+    },
+    async subagentSpawn<T = unknown>(params?: SubagentSpawnRequest): Promise<T> {
+      return call<T>("subagent_spawn", params);
+    },
+    async subagentList<T = unknown>(params?: SubagentListRequest): Promise<T> {
+      return call<T>("subagent_list", params);
+    },
+    async subagentCancel<T = unknown>(params?: SubagentCancelRequest): Promise<T> {
+      return call<T>("subagent_cancel", params);
+    },
+    async subagentResolve<T = unknown>(params?: SubagentResolveRequest): Promise<T> {
+      return call<T>("subagent_resolve", params);
+    },
+    async subagentResultGet<T = unknown>(params?: SubagentResultGetRequest): Promise<T> {
+      return call<T>("subagent_result_get", params);
     },
   };
 }

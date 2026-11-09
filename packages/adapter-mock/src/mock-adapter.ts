@@ -273,6 +273,9 @@ export class MockAdapter {
         ...(this.options.thinkingDepthUnsupported ? [] : ["thinking_depth"]),
         // M7-03/ADR-017：pause/resume 能力项（`--no-pause-resume` 省略 → 负向夹具）。
         ...(this.options.pauseResumeUnsupported ? [] : ["pause_resume"]),
+        // M10-02/ADR-032：子 Agent 派生/结果交付（测试夹具默认声明）。
+        "subagent",
+        "subagent_context",
       ],
     };
     this.adapter = new Adapter({

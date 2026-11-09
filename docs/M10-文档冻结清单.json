@@ -15,6 +15,18 @@
       "adr": "ADR-031",
       "field": "docs/P2-架构迁移-实施计划与验收标准.md",
       "reason": "M10-01 执行状态（任务进度可更新；结构不变）"
+    },
+    {
+      "task": "M10-02",
+      "adr": "ADR-032",
+      "field": "docs/P2-架构迁移-实施计划与验收标准.md",
+      "reason": "M10-02 执行状态（任务进度可更新；结构不变）"
+    },
+    {
+      "task": "M10-02",
+      "adr": "ADR-032",
+      "field": "设计文档.md",
+      "reason": "D-032-6 要求 0011 落库时同批合入附录 C 终态 DDL；仅更新附录 C，不改冻结决策"
     }
   ],
   "design_version": "v1.32",
@@ -23,7 +35,7 @@
   "artifacts": [
     {
       "path": "设计文档.md",
-      "sha256": "bb66c47d0dec39a994b15973e8969f1c4ace2b17b5571a4e4ef06bba9b3b9961"
+      "sha256": "14891ff3d1c744b2bc1e946e65b32186de7ab2271d9dbe8ab4852c8df4d85c79"
     },
     {
       "path": "AGENTS.md",
@@ -35,7 +47,7 @@
     },
     {
       "path": "docs/P2-架构迁移-实施计划与验收标准.md",
-      "sha256": "af1df5bff964af3e4c4b93a0b63f5e4a8517478a447278a09fefb629bd307b7a"
+      "sha256": "9546f9b88d7e83733d21ef3214dcb8bb11477bd881026a18ea93b9773dde856a"
     },
     {
       "path": "docs/UI-UX-设计规格.md",

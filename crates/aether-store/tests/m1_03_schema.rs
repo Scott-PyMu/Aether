@@ -10,8 +10,9 @@ mod common;
 use aether_store::StoreError;
 use rusqlite::Connection;
 
-/// 附录 C 全部表（设计文档 v1.16；含 schema_migrations、ADR-010 的 3 张表、
-/// M6-01 的 permission_rules 与 M7-09 的 presets，共 22 张）。
+/// 附录 C 全部表（设计文档 v1.33；含 schema_migrations、ADR-010 的 3 张表、
+/// M6-01 的 permission_rules、M7-09 的 presets、M10-01 编排与 M10-02 子 Agent
+/// 结果/注入表，共 26 张）。
 const APPENDIX_C_TABLES: &[&str] = &[
     "adapter_plugins",
     "artifacts",
@@ -33,6 +34,8 @@ const APPENDIX_C_TABLES: &[&str] = &[
     "sessions",
     "sessions_fts",
     "settings",
+    "subagent_injections",
+    "subagent_results",
     "tasks",
     "workflow_runs",
     "workflows",
@@ -198,6 +201,18 @@ fn appendix_c_explicit_indexes_exist_with_expected_columns() {
             "idx_tasks_session_status",
             "tasks",
             &["session_id", "status"],
+            false,
+        ),
+        (
+            "idx_sessions_parent_status",
+            "sessions",
+            &["parent_session_id", "status"],
+            false,
+        ),
+        (
+            "idx_subagent_injections_ctx",
+            "subagent_injections",
+            &["parent_session_id", "state", "created_at"],
             false,
         ),
     ];
@@ -390,6 +405,21 @@ fn appendix_c_foreign_keys_exist() {
         (
             "workflow_runs",
             "session_id",
+            "sessions",
+            "id",
+            "CASCADE",
+        ),
+        // M10-02/ADR-032：结果/注入随子会话/父会话删除级联。
+        (
+            "subagent_results",
+            "child_session_id",
+            "sessions",
+            "id",
+            "CASCADE",
+        ),
+        (
+            "subagent_injections",
+            "parent_session_id",
             "sessions",
             "id",
             "CASCADE",

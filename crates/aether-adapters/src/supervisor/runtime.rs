@@ -86,6 +86,8 @@ pub struct RuntimeSpec {
     pub env_source: Option<Arc<dyn SpawnEnvSource>>,
     /// ADR-028 v0.9：`provider.catalog.get` 只读目录数据源（adapter → core）。
     pub catalog_source: Option<Arc<dyn ProviderCatalogSource>>,
+    /// M10-02/ADR-032：子 Agent 请求数据源（adapter → core；4 方法）。
+    pub subagent_source: Option<Arc<dyn crate::connection::SubagentRequestSource>>,
 }
 
 impl std::fmt::Debug for RuntimeSpec {
@@ -105,6 +107,13 @@ impl std::fmt::Debug for RuntimeSpec {
                     .as_ref()
                     .map(|_| "<ProviderCatalogSource>"),
             )
+            .field(
+                "subagent_source",
+                &self
+                    .subagent_source
+                    .as_ref()
+                    .map(|_| "<SubagentRequestSource>"),
+            )
             .finish()
     }
 }
@@ -117,6 +126,7 @@ impl RuntimeSpec {
             artifacts_dir: None,
             env_source: None,
             catalog_source: None,
+            subagent_source: None,
         }
     }
 
@@ -128,6 +138,7 @@ impl RuntimeSpec {
             artifacts_dir: None,
             env_source: None,
             catalog_source: None,
+            subagent_source: None,
         }
     }
 
@@ -146,6 +157,15 @@ impl RuntimeSpec {
     /// 附加 `provider.catalog.get` 只读目录数据源（ADR-028 v0.9）。
     pub fn with_catalog_source(mut self, catalog_source: Arc<dyn ProviderCatalogSource>) -> Self {
         self.catalog_source = Some(catalog_source);
+        self
+    }
+
+    /// 附加子 Agent 请求数据源（M10-02/ADR-032）。
+    pub fn with_subagent_source(
+        mut self,
+        subagent_source: Arc<dyn crate::connection::SubagentRequestSource>,
+    ) -> Self {
+        self.subagent_source = Some(subagent_source);
         self
     }
 }
@@ -302,6 +322,8 @@ pub struct RuntimeSupervisor {
     summary: std::sync::Mutex<(RuntimeStatus, Option<DisabledReason>)>,
     /// ADR-028 v0.9：`provider.catalog.get` 数据源（每次 spawn 新连接注入）。
     catalog_source: Option<Arc<dyn ProviderCatalogSource>>,
+    /// M10-02/ADR-032：子 Agent 请求数据源（每次 spawn 新连接注入）。
+    subagent_source: Option<Arc<dyn crate::connection::SubagentRequestSource>>,
 }
 
 impl RuntimeSupervisor {
@@ -315,6 +337,7 @@ impl RuntimeSupervisor {
     ) -> Self {
         let clock: SharedClock = Arc::new(SystemTimeSource::new());
         let catalog_source = spec.catalog_source.clone();
+        let subagent_source = spec.subagent_source.clone();
         Self {
             runtime_id: runtime_id.clone(),
             spec,
@@ -334,6 +357,7 @@ impl RuntimeSupervisor {
             }),
             summary: std::sync::Mutex::new((RuntimeStatus::Cold, None)),
             catalog_source,
+            subagent_source,
         }
     }
 
@@ -522,7 +546,9 @@ impl RuntimeSupervisor {
             }
         }
 
-        let connection = match process.connect_with_catalog(self.catalog_source.clone()) {
+        let connection = match process
+            .connect_with_catalog(self.catalog_source.clone(), self.subagent_source.clone())
+        {
             Ok(connection) => Arc::new(connection),
             Err(error) => {
                 self.terminate_process(&mut process, None).await;

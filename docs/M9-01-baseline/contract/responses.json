@@ -12,7 +12,7 @@
     "typed": false,
     "note": "63 条命令统一返回 JsonPayload（自由 JSON）；HEAD 没有按命令的响应 DTO，故 commands[].response.type 恒为 null，响应契约按『序列化类型清单』冻结。"
   },
-  "dto_note": "ipc/dto.rs 只有 70 个 *Request 请求 DTO、1 个非请求结构体（ReferenceEntry）与若干序列化枚举；响应结构体分布在 error/session_backend/core_health/core::domain。",
+  "dto_note": "ipc/dto.rs 只有 75 个 *Request 请求 DTO、3 个非请求结构体（SubagentContextInput/ReferenceEntry/SubagentContextRef）与若干序列化枚举；响应结构体分布在 error/session_backend/core_health/core::domain。",
   "commands": [
     {
       "command": "runtimes_list",
@@ -527,6 +527,41 @@
     },
     {
       "command": "workflow_node_retry",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "subagent_spawn",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "subagent_list",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "subagent_cancel",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "subagent_resolve",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "subagent_result_get",
       "response": {
         "kind": "json",
         "type": null
@@ -1082,6 +1117,14 @@
           "optional_when": [
             "type_option",
             "skip_serializing_if"
+          ]
+        },
+        {
+          "name": "has_children",
+          "type": "bool",
+          "required": false,
+          "optional_when": [
+            "serde_default"
           ]
         }
       ]
@@ -1930,7 +1973,7 @@
     }
   ],
   "counts": {
-    "commands": 74,
+    "commands": 79,
     "types": 29
   }
 }

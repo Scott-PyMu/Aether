@@ -25,6 +25,7 @@ pub mod ops;
 pub mod pragma;
 pub mod preflight;
 pub mod store;
+pub mod subagent;
 pub mod workflow;
 pub mod write_queue;
 
@@ -73,6 +74,7 @@ pub use ops::{
 pub use pragma::PragmaSnapshot;
 pub use preflight::{preflight, PreflightReport};
 pub use store::{quick_check, ExportReport, IntegrityReport, Store, StoreMode, TableExport};
+pub use subagent::{SubagentCommand, SubagentInjectionRecord, SubagentResultRecord};
 pub use workflow::{
     NodeRunRecord, TaskRecord, WorkflowCommand, WorkflowRecord, WorkflowRunRecord,
 };

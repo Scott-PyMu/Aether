@@ -1,8 +1,8 @@
 {
   "schema": "aether.m9-01-baseline.v1",
   "version": 1,
-  "recorded_at": "2026-11-09T12:37:04+08:00",
-  "head_commit": "811c963f40be8aecd07405979641bd30b60cb5c4",
+  "recorded_at": "2026-11-09T14:13:41+08:00",
+  "head_commit": "c68857420b8c59d6de2b3247ca778e99d19e57fd",
   "platform": {
     "os": "win32",
     "arch": "x64",
@@ -16,17 +16,17 @@
     "migrations": "migrations"
   },
   "counts": {
-    "commands": 74,
-    "reachable": 72,
+    "commands": 79,
+    "reachable": 77,
     "reserved": 2,
-    "daemon": 70,
+    "daemon": 75,
     "shell": 4,
     "ipc_error_codes": 32,
-    "business_codes": 18,
+    "business_codes": 24,
     "event_envelope_fields": 9,
     "event_types": 31,
     "settings_keys": 9,
-    "migrations": 10,
+    "migrations": 11,
     "response_types": 29,
     "event_payload_types": 31
   },
@@ -104,7 +104,12 @@
     "workflow_run_get",
     "workflow_run_list",
     "workflow_run_cancel",
-    "workflow_node_retry"
+    "workflow_node_retry",
+    "subagent_spawn",
+    "subagent_list",
+    "subagent_cancel",
+    "subagent_resolve",
+    "subagent_result_get"
   ],
   "entries": [
     {
@@ -115,7 +120,7 @@
     {
       "path": "docs/M9-01-baseline/commands/02-session_list.json",
       "command": "session_list",
-      "sha256": "bc58a3296dcfacc9f652cdcc90651a7ce166a588a26093316544a3ffa4ba3aa8"
+      "sha256": "50ffb93a8e4d2a4e84d69d2d79504135e9aadc489f606071c7d2963c8803295b"
     },
     {
       "path": "docs/M9-01-baseline/commands/03-session_create.json",
@@ -140,7 +145,7 @@
     {
       "path": "docs/M9-01-baseline/commands/07-session_send.json",
       "command": "session_send",
-      "sha256": "eec3311301892ba2a7aaee6ebdb9aecc24673500f62b5d001f9b9b466d168ba9"
+      "sha256": "478900135d5695563bd06747fcc686f467f250f671ad1326d573c61642717d15"
     },
     {
       "path": "docs/M9-01-baseline/commands/08-session_interrupt.json",
@@ -476,12 +481,37 @@
       "path": "docs/M9-01-baseline/commands/74-workflow_node_retry.json",
       "command": "workflow_node_retry",
       "sha256": "c60cd6281378fba1fc0288658bb7b2548c854328d1df3dcaf1ebfb58a6d5643b"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/75-subagent_spawn.json",
+      "command": "subagent_spawn",
+      "sha256": "079b3d4fdd145e37214934e56f06cb0501a478bf6bb6c5ce02d09c213d51296c"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/76-subagent_list.json",
+      "command": "subagent_list",
+      "sha256": "42e1d0ae0a84e0bebe3b5e7c0f95b887bede9fcf65e0d7258cb1f9e981aff889"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/77-subagent_cancel.json",
+      "command": "subagent_cancel",
+      "sha256": "9079214a200da7333983095eb8b5e49903386371ff818e6c0e484f88903c7ee5"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/78-subagent_resolve.json",
+      "command": "subagent_resolve",
+      "sha256": "e1ff1bf0fe90a17d9fe97c949544a2c01e59fdeefb9f550f074941cdbc4d7312"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/79-subagent_result_get.json",
+      "command": "subagent_result_get",
+      "sha256": "cb85a1463feed61c9c01341800ea607173da61b7465e0b3517bd9fd3214b7052"
     }
   ],
   "artifacts": [
     {
       "path": "docs/M9-01-baseline/contract/error_codes.json",
-      "sha256": "5912004f267bcc885cf53b87c6fba4faa550ac30e1e1ddb380ce426c550d46c5"
+      "sha256": "2093056c7f8bdfad5e2a970779e26917150ad35690052de9c157cb56d4a6920e"
     },
     {
       "path": "docs/M9-01-baseline/contract/events.json",
@@ -493,7 +523,7 @@
     },
     {
       "path": "docs/M9-01-baseline/contract/migrations.json",
-      "sha256": "fb1cabab11626be75572fcf22d060635272da745e741de5313505634409e4ebf"
+      "sha256": "18641aa6ec8eec0af6a37235e10c7f3b9e0e9169eb9d316fc95fad181c8c838d"
     },
     {
       "path": "docs/M9-01-baseline/contract/diagnostics.json",
@@ -505,15 +535,15 @@
     },
     {
       "path": "docs/M9-01-baseline/contract/responses.json",
-      "sha256": "64557ab9840fb2b10836384df5a4dc31889502e8f282ae300c7f2e9fd40c87e5"
+      "sha256": "72c8a4ac0209165494c03d8c2ad03234b776b38d7c57b73c6377c2fb4bec0b6e"
     },
     {
       "path": "docs/M9-01-baseline/contract/event_payloads.json",
-      "sha256": "46329ae6a26a27b8d8c9923913011c864c67a9a17c34f6eb79164e3547926c78"
+      "sha256": "e272a294f0c8dc74f1252eafc3accad35ae2b1f6bc700db413b6ab57f5592396"
     },
     {
       "path": "docs/M9-01-baseline/contract/stats.json",
-      "sha256": "016dabede7d44a0d10abb8c45b7e2037f9e053ecadb35d912de8a78de4e6f2a8"
+      "sha256": "7b58aa27046264df63d3bfebc7a0edf552b8ca12811ff587155df0b6929282eb"
     },
     {
       "path": "docs/M9-01-baseline/contract/risks.json",
@@ -536,7 +566,7 @@
       "purpose": "硬阈值冻结"
     }
   ],
-  "contract_digest": "4cc6e0eac8a998c4530ba21176187ab6ffa439c0ba6eecc84bee341eb39158b8",
+  "contract_digest": "57c732ac28e74789f08c65f36c8bfc1b25c2cad8e27a8a09e22ca0c192e808c8",
   "frozen": {
     "rule": "M9-04/M9-13 只新增，不改期望值；命令/错误码/事件/设置/迁移变更必须先走 ADR。",
     "recorded_before": "M9-02（抽取 aether-app 之前）"

@@ -517,8 +517,32 @@
           "optional_when": []
         },
         {
+          "name": "parent_session_id",
+          "type": "SessionId",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "role",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        },
+        {
           "name": "mode",
           "type": "String",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "depth",
+          "type": "u32",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "context_refs_count",
+          "type": "u32",
           "optional": false,
           "optional_when": []
         }
@@ -537,8 +561,46 @@
           "optional_when": []
         },
         {
-          "name": "verdict",
+          "name": "parent_session_id",
+          "type": "SessionId",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "status",
           "type": "String",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "verdict",
+          "type": "Option<String>",
+          "optional": true,
+          "optional_when": [
+            "type_option",
+            "skip_serializing_if",
+            "serde_default"
+          ]
+        },
+        {
+          "name": "result_ref",
+          "type": "Option<String>",
+          "optional": true,
+          "optional_when": [
+            "type_option",
+            "skip_serializing_if",
+            "serde_default"
+          ]
+        },
+        {
+          "name": "batch_id",
+          "type": "String",
+          "optional": false,
+          "optional_when": []
+        },
+        {
+          "name": "injected",
+          "type": "bool",
           "optional": false,
           "optional_when": []
         }

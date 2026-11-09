@@ -114,3 +114,19 @@ export {
   stripBrokerEnv,
   stripBrokerEnvInPlace,
 } from "./child-env";
+export {
+  SUBAGENT_CANCEL_METHOD,
+  SUBAGENT_METHOD_TIMEOUTS_MS,
+  SUBAGENT_RESULT_GET_METHOD,
+  SUBAGENT_SPAWN_METHOD,
+  SUBAGENT_SPAWN_TOOL,
+  SUBAGENT_STATUS_METHOD,
+  SubagentClient,
+  parseSubagentContext,
+  type SubagentContextPayload,
+  type SubagentDeliveryMode,
+  type SubagentListResult,
+  type SubagentResultChunk,
+  type SubagentSpawnParams,
+  type SubagentSpawnResult,
+} from "./subagent";

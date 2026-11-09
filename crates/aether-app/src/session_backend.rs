@@ -169,6 +169,9 @@ pub struct SessionSummary {
     pub workspace_root: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub warnings: Option<Vec<SessionWarning>>,
+    /// M10-02/ADR-032：是否有子会话（父删除按钮置灰；默认 `false`）。
+    #[serde(default)]
+    pub has_children: bool,
 }
 
 impl SessionSummary {
@@ -215,6 +218,7 @@ impl SessionSummary {
             closed_at: session.closed_at,
             workspace_root,
             warnings: None,
+            has_children: false,
         })
     }
 
@@ -731,6 +735,7 @@ impl IpcBackend for SessionBackend {
             runtime_id: request.runtime_id.clone(),
             status: request.status.map(map_session_status),
             parent_session_id: None,
+            include_children: request.include_children.unwrap_or(false),
             limit: request.limit,
         };
         self.call(async move {
@@ -784,6 +789,10 @@ impl IpcBackend for SessionBackend {
                 .provider_models()
                 .await
                 .map_err(|error| IpcError::internal(format!("供应商模型读取失败：{error}")))?;
+            let child_counts = reads
+                .child_session_counts()
+                .await
+                .map_err(|error| IpcError::internal(format!("子会话计数读取失败：{error}")))?;
             let summaries = sessions
                 .iter()
                 .map(|session| {
@@ -792,6 +801,11 @@ impl IpcBackend for SessionBackend {
                         .as_ref()
                         .and_then(|id| roots.get(id.as_str()).cloned().flatten());
                     let mut summary = SessionSummary::from_session(session, root)?;
+                    summary.has_children = child_counts
+                        .get(session.id.as_str())
+                        .copied()
+                        .unwrap_or(0)
+                        > 0;
                     if let Some(name) = session
                         .preset_id
                         .as_ref()
@@ -861,11 +875,42 @@ impl IpcBackend for SessionBackend {
     }
 
     /// M7-07/ADR-025 §2.1-4：硬删除会话（在途/待审批 → `session_busy`；
-    /// `events` 不级联，R7）。
+    /// `events` 不级联，R7）。M10-02/ADR-032：存在任一子会话 → `session_has_children`
+    /// （不级联、不改父指针、不产生 `session.closed`；审计 `session.deleted` denied）。
     fn session_delete(&self, request: &SessionDeleteRequest) -> Result<Value, IpcError> {
         let manager = self.manager_required()?.clone();
+        let reads = self.reads_required()?.clone();
+        let write = self.write.clone();
         let session_id = parse_session_id(&request.session_id)?;
         self.call(async move {
+            let children = reads
+                .child_session_count(session_id.as_str())
+                .await
+                .map_err(|error| IpcError::internal(format!("子会话计数失败：{error}")))?;
+            if children > 0 {
+                if let Some(write) = write {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
+                        .unwrap_or(0);
+                    let record = AuditLogRecord {
+                        id: ulid::Ulid::new().to_string(),
+                        session_id: Some(session_id.as_str().to_owned()),
+                        runtime_id: None,
+                        actor: "user".to_owned(),
+                        action: "session.deleted".to_owned(),
+                        resource: Some(format!("session:{session_id}")),
+                        detail: Some(json!({"reason": "has_children", "children": children}).to_string()),
+                        result: Some("denied".to_owned()),
+                        ts: now,
+                    };
+                    let _ = write.execute(StoreCommand::InsertAudit { record }).await;
+                }
+                return Err(IpcError::invalid_value(
+                    "请先删除子会话（父会话仍有子 Agent，不级联、不改父指针）",
+                )
+                .with_business_code(BusinessCode::SessionHasChildren));
+            }
             manager
                 .delete_session(&session_id)
                 .await
@@ -1845,6 +1890,8 @@ impl IpcBackend for SessionBackend {
         // M7-06/ADR-024：引用在命令层已校验（canonicalize + 可访问性）；此处解析为
         // 内核形态（canonical 路径 + kind）随 `session.send` 透传。
         let references = request.resolved_references()?;
+        // M10-02/ADR-032：子 Agent 结果回注（仅内部交付路径；普通用户消息为 None）。
+        let request_context = request.subagent_context_value()?;
         self.call(async move {
             let session_id = parse_session_id(&session_id)?;
             let session_row = match &reads {
@@ -1983,6 +2030,43 @@ impl IpcBackend for SessionBackend {
                     }
                 }
             }
+            // M10-02/ADR-032：子 Agent 结果回注能力门（未声明 → 拒绝，不静默降级）。
+            if let Some(context) = &request_context {
+                if context.mode != aether_core::SubagentDeliveryMode::MessageAppend {
+                    return Err(IpcError::invalid_value(format!(
+                        "适配器仅支持 message_append（请求 {}）",
+                        context.mode.as_str()
+                    ))
+                    .with_business_code(BusinessCode::SubagentContextRejected));
+                }
+                let supported = match (&supervisor, session_row.as_ref()) {
+                    (Some(supervisor), Some(session)) => match supervisor
+                        .get(session.runtime_id.as_str())
+                    {
+                        Some(runtime) => match runtime.connection().await {
+                            Some(connection) => match connection.state() {
+                                aether_adapters::connection::ConnectionState::Ready(hello)
+                                | aether_adapters::connection::ConnectionState::Degraded {
+                                    hello,
+                                    ..
+                                } => hello.runtime.capabilities.iter().any(|item| {
+                                    item == aether_core::SUBAGENT_CONTEXT_CAPABILITY
+                                }),
+                                _ => false,
+                            },
+                            None => false,
+                        },
+                        None => false,
+                    },
+                    _ => false,
+                };
+                if !supported {
+                    return Err(IpcError::invalid_value(
+                        "运行时不支持 subagent_context：拒绝结果回注（不静默降级）",
+                    )
+                    .with_business_code(BusinessCode::SubagentContextRejected));
+                }
+            }
             // M3-10/ADR-010 能力门（同步判定路径，尽力而为）：run 执行前的 runtime
             // ready 快照；未 ready（cold/starting）→ 延迟判定（不产生响应警告，
             // run 启动时由执行器按同一门再判定）。覆盖请求仅影响本次 run。
@@ -2012,6 +2096,7 @@ impl IpcBackend for SessionBackend {
                 }
                 _ => None,
             };
+            let applied_context = request_context.clone();
             let ack = manager
                 .send_with_references(
                     &session_id,
@@ -2019,6 +2104,7 @@ impl IpcBackend for SessionBackend {
                     &client_msg_id,
                     thinking_override,
                     references,
+                    request_context,
                 )
                 .await
                 .map_err(map_lifecycle_error)?;
@@ -2039,6 +2125,10 @@ impl IpcBackend for SessionBackend {
             if let Some(warnings) = warnings {
                 response["warnings"] = serde_json::to_value(warnings)
                     .map_err(|error| IpcError::internal(format!("警告序列化失败：{error}")))?;
+            }
+            if let Some(context) = applied_context {
+                response["applied_context_version"] = json!(context.version);
+                response["applied_context_mode"] = json!(context.mode.as_str());
             }
             Ok(response)
         })
