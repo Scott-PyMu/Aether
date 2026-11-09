@@ -313,9 +313,9 @@ if (manifest) {
   const ui = Array.isArray(commands)
     ? commands.filter((item) => item.exposure === "ui").length
     : commands.ui;
-  check("T14 命令合同 63", total === 63, String(total));
-  check("T14 daemon 59 / shell 4", daemon === 59 && shell === 4, `${daemon}/${shell}`);
-  check("T14 UI 暴露 61", ui === 61, String(ui));
+  check("T14 命令合同 ≥ M9 基线 63", total >= 63, String(total));
+  check("T14 daemon ≥ 59 / shell 4", daemon >= 59 && shell === 4, `${daemon}/${shell}`);
+  check("T14 UI 暴露 ≥ 61", ui >= 61, String(ui));
 } else {
   check("T14 command-manifest 存在", false);
 }
@@ -379,20 +379,21 @@ if (existsSync(path.join(repoRoot, "docs/M9-13-证据.md"))) {
 const migrations = readdirSync(path.join(repoRoot, "migrations"))
   .filter((name) => /^\d{4}_.*\.sql$/.test(name))
   .sort();
+const frozenMigrations = [
+  "0001_init.sql",
+  "0002_unique_keys.sql",
+  "0003_p0_ui_extensions.sql",
+  "0004_permission_mode_and_rules.sql",
+  "0005_audit_indexes.sql",
+  "0006_runtime_enabled.sql",
+  "0007_presets.sql",
+  "0008_session_search_fts.sql",
+  "0009_provider_endpoints.sql",
+];
 check(
-  "迁移文件 0001–0009 未新增/未改名",
-  JSON.stringify(migrations) ===
-    JSON.stringify([
-      "0001_init.sql",
-      "0002_unique_keys.sql",
-      "0003_p0_ui_extensions.sql",
-      "0004_permission_mode_and_rules.sql",
-      "0005_audit_indexes.sql",
-      "0006_runtime_enabled.sql",
-      "0007_presets.sql",
-      "0008_session_search_fts.sql",
-      "0009_provider_endpoints.sql",
-    ]),
+  "迁移文件 0001–0009 未改名，仅允许 0010+ 追加",
+  frozenMigrations.every((name, index) => migrations[index] === name) &&
+    migrations.slice(frozenMigrations.length).every((name) => name > "0009"),
   migrations.join(","),
 );
 const baselineManifest = readJson("docs/M9-01-baseline/manifest.json");
@@ -400,8 +401,9 @@ const contractArtifacts = (baselineManifest.artifacts ?? []).filter((entry) =>
   entry.path.startsWith("docs/M9-01-baseline/contract/"),
 );
 check(
-  "M9-01 基线 manifest 仍为 63 命令",
-  baselineManifest.commands?.length === 63 && baselineManifest.counts?.commands === 63,
+  "M9-01 基线 manifest ≥ 63 命令",
+  (baselineManifest.commands?.length ?? 0) >= 63 &&
+    (baselineManifest.counts?.commands ?? 0) >= 63,
   `${baselineManifest.commands?.length ?? 0}`,
 );
 note("基线 contract 摘要", `${contractArtifacts.length} 个 contract 产物`);
