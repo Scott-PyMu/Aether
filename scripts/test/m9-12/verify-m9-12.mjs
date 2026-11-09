@@ -165,10 +165,10 @@ const jobs = {
 record(
   "CI 矩阵：Windows/macOS E2E + Linux build/smoke + MSI/DMG",
   jobs.windowsE2E.includes("runs-on: windows-2022") &&
-    jobs.macosE2E.includes("runs-on: macos-14") &&
+    jobs.macosE2E.includes("runs-on: macos-latest") &&
     jobs.linux.includes("runs-on: ubuntu-22.04") &&
     jobs.windowsInstaller.includes("runs-on: windows-2022") &&
-    jobs.macosInstaller.includes("runs-on: macos-14"),
+    jobs.macosInstaller.includes("runs-on: macos-latest"),
   Object.entries(jobs)
     .map(([key, value]) => `${key}:${value ? "✓" : "✗"}`)
     .join(" "),

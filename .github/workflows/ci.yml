@@ -621,7 +621,7 @@ jobs:
 
   m9-12-e2e-macos:
     name: M9-12 Playwright Electron E2E (macOS)
-    runs-on: macos-14
+    runs-on: macos-latest
     env:
       CARGO_BUILD_JOBS: "1"
     steps:
@@ -709,7 +709,7 @@ jobs:
 
   m9-12-installer-macos:
     name: M9-12 DMG mount/copy/launch smoke (macOS)
-    runs-on: macos-14
+    runs-on: macos-latest
     env:
       CARGO_BUILD_JOBS: "1"
     steps:
