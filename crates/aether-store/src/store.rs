@@ -335,7 +335,6 @@ fn export_table(
     })?;
     let columns: Vec<String> = statement
         .column_names()
-        .into_iter()
         .map(str::to_owned)
         .collect();
     let mut rows = statement.query([]).map_err(|error| TableExportError {
