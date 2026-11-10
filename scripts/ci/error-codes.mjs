@@ -61,6 +61,14 @@ const BUSINESS_CODES = [
   { code: "subagent_result_not_ready", owner: "M10-02", first_adr: "ADR-032" },
   { code: "subagent_resolution_conflict", owner: "M10-02", first_adr: "ADR-032" },
   { code: "session_has_children", owner: "M10-02", first_adr: "ADR-032" },
+  // M10-04/ADR-034 导入业务码（7 项）。
+  { code: "import_invalid_format", owner: "M10-04", first_adr: "ADR-034" },
+  { code: "import_checksum_mismatch", owner: "M10-04", first_adr: "ADR-034" },
+  { code: "import_conflict", owner: "M10-04", first_adr: "ADR-034" },
+  { code: "import_too_large", owner: "M10-04", first_adr: "ADR-034" },
+  { code: "import_cancelled", owner: "M10-04", first_adr: "ADR-034" },
+  { code: "import_job_not_found", owner: "M10-04", first_adr: "ADR-034" },
+  { code: "import_job_not_active", owner: "M10-04", first_adr: "ADR-034" },
 ];
 
 const MODE = process.argv.slice(2).find((arg) => !arg.startsWith("--")) ?? "check";

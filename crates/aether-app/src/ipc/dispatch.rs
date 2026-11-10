@@ -105,6 +105,53 @@ pub const COMMANDS: &[&str] = &[
     "subagent_cancel",
     "subagent_resolve",
     "subagent_result_get",
+    // M10-04/ADR-034：导入命令面 +4。
+    "session_import",
+    "archive_import",
+    "import_status",
+    "import_cancel",
+];
+
+/// 维护窗口允许的命令（M10-04/ADR-034 D-034-2/D-034-4）。
+///
+/// 导入活动期间 **所有变更类命令** 拒绝（`storage_backpressure`），只读命令与
+/// 生命周期/导入控制命令保留；`backup_restore` 由导入后端返回更精确的
+/// `import_job_not_active`。
+pub const MAINTENANCE_ALLOWED_COMMANDS: &[&str] = &[
+    "health",
+    "runtimes_list",
+    "session_list",
+    "session_search",
+    "messages_page",
+    "permissions_pending",
+    "rules_list",
+    "settings_get",
+    "backup_list",
+    "workspaces_list",
+    "artifacts_list",
+    "providers_list",
+    "presets_list",
+    "audit_query",
+    "session_export",
+    "archive_export",
+    "audit_export",
+    "export_diagnostics",
+    "startup_get",
+    "startup_pick_target",
+    "ref_pick",
+    "app_exit",
+    "app_restart",
+    "workflow_list",
+    "workflow_get",
+    "workflow_run_get",
+    "workflow_run_list",
+    "subagent_list",
+    "subagent_result_get",
+    "session_import",
+    "archive_import",
+    "import_status",
+    "import_cancel",
+    "backup_restore",
 ];
 
 /// 命令路由：`method` + 内层 `params` → 结果 JSON。
@@ -112,6 +159,14 @@ pub const COMMANDS: &[&str] = &[
 /// 同步接口（DoD-2 口径）：阻塞动作（系统选择器/迁移复制）由壳层自行放到阻塞线程池
 /// 执行（Tauri：`spawn_blocking`；daemon：请求串行线程），命令语义不受影响。
 pub fn dispatch(state: &IpcState, method: &str, params: Value) -> Result<Value, IpcError> {
+    if let Some(reason) = state.maintenance_reason() {
+        if !MAINTENANCE_ALLOWED_COMMANDS.contains(&method) {
+            return Err(
+                IpcError::core_not_ready(format!("导入维护中：{reason}；当前命令为只读窗口外操作，已拒绝"))
+                    .with_business_code(super::business::BusinessCode::StorageBackpressure),
+            );
+        }
+    }
     let payload = match method {
         "runtimes_list" => handlers::runtimes_list(state),
         "session_list" => handlers::session_list(state, params),
@@ -192,6 +247,10 @@ pub fn dispatch(state: &IpcState, method: &str, params: Value) -> Result<Value, 
         "subagent_cancel" => handlers::subagent_cancel(state, params),
         "subagent_resolve" => handlers::subagent_resolve(state, params),
         "subagent_result_get" => handlers::subagent_result_get(state, params),
+        "session_import" => handlers::session_import(state, params),
+        "archive_import" => handlers::archive_import(state, params),
+        "import_status" => handlers::import_status(state, params),
+        "import_cancel" => handlers::import_cancel(state, params),
         other => return Err(unknown_method(other)),
     }?;
     Ok(payload.into_value())
@@ -232,9 +291,13 @@ mod tests {
     #[test]
     fn shell_and_daemon_routes_partition_the_frozen_command_surface() {
         assert_eq!(SHELL_COMMANDS.len(), 4, "壳本地命令 4 条");
-        assert_eq!(COMMANDS.len(), 79, "命令面 79 条（M9 63 + M10-01 11 + M10-02 5）");
+        assert_eq!(
+            COMMANDS.len(),
+            83,
+            "命令面 83 条（M9 63 + M10-01 11 + M10-02 5 + M10-04 4）"
+        );
         let daemon = daemon_commands();
-        assert_eq!(daemon.len(), 75, "daemon 路由 75 条");
+        assert_eq!(daemon.len(), 79, "daemon 路由 79 条");
         for method in SHELL_COMMANDS {
             assert!(COMMANDS.contains(method), "壳命令 {method} 必须在 63 内");
             assert!(is_shell_local(method));

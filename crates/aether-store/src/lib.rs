@@ -20,6 +20,7 @@ pub mod archive;
 pub mod backup;
 pub mod checkpoint;
 pub mod error;
+pub mod import;
 pub mod migration;
 pub mod ops;
 pub mod pragma;
@@ -59,6 +60,23 @@ pub use checkpoint::{
     checkpoint_truncate_once, checkpoint_truncate_with_backoff, CheckpointAttempt,
     CheckpointConfig, CheckpointReport, CHECKPOINT_INITIAL_BACKOFF, CHECKPOINT_MAX_ATTEMPTS,
     CHECKPOINT_MAX_BACKOFF, WAL_FORCE_CHECKPOINT_BYTES,
+};
+pub use import::{
+    apply_source_to_staging, boot_apply_pending_import, cleanup_imports, cleanup_staging,
+    create_staging_snapshot, current_time_ms, has_active_job, has_marker, import_root, is_valid_job_id,
+    job_dir, job_path, job_status_value, mark_staging, new_ulid, pending_exists, pending_path,
+    precheck_source, read_job, read_pending, reconcile_interrupted_imports, remove_pending,
+    validate_source, verify_staging, work_db_path, write_job, write_pending, ImportApplyReport,
+    ImportBootReport, ImportFailure,
+    ImportFailureInfo, ImportFailureKind, ImportJob, ImportJobStatus, ImportManifest, ImportMode,
+    ImportProgress, ImportSummary, ImportValidation, ImportWarning, PendingImport, StagingVerification,
+    ARCHIVE_IMPORT_SOURCES, AUDIT_ACTION_IMPORT_CANCELLED, AUDIT_ACTION_IMPORT_COMPLETED,
+    AUDIT_ACTION_IMPORT_FAILED, AUDIT_ACTION_IMPORT_STARTED, IMPORT_BATCH_ROWS, IMPORT_BUFFER_BYTES,
+    IMPORT_CONFLICT_MAX, IMPORT_DIR, IMPORT_FILE_MAX_BYTES, IMPORT_FORMAT_VERSION, IMPORT_JOB_FILE,
+    IMPORT_JOB_VERSION, IMPORT_LINE_MAX_BYTES, IMPORT_MANIFEST_LINE_MAX_BYTES,
+    IMPORT_PENDING_FILE, IMPORT_SOURCE_ARCHIVE_EXPORT, IMPORT_SOURCE_AUDIT_EXPORT,
+    IMPORT_SOURCE_AUTO_RETENTION, IMPORT_SOURCE_SESSION_EXPORT, IMPORT_STALE_HOURS, IMPORT_WARNING_MAX,
+    IMPORT_WORK_DB, PRE_IMPORT_INFIX, SESSION_IMPORT_SOURCES,
 };
 pub use error::StoreError;
 pub use migration::{

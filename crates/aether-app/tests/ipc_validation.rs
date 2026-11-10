@@ -27,7 +27,7 @@ use aether_app::ipc::dto::{
     SessionSendRequest, SessionWorkspaceAssignRequest, SessionDeleteRequest, SessionRenameRequest,
     SessionSearchRequest, SettingsGetRequest, SettingsSetRequest,
     WorkspaceCreateRequest, WorkspaceDeleteRequest, WorkspaceSetRequest, WorkspaceUpdateRequest,
-    WorkspacesListRequest,
+    WorkspacesListRequest, ImportCancelRequest, ImportRequest, ImportStatusRequest,
 };
 use aether_app::ipc::error::IpcError;
 use aether_app::ipc::path::{
@@ -319,6 +319,30 @@ impl IpcBackend for RecordingBackend {
     ) -> Result<Value, IpcError> {
         self.record("audit_export")
     }
+
+    fn session_import(
+        &self,
+        _request: &ImportRequest,
+        _canonical_source_path: &Path,
+    ) -> Result<Value, IpcError> {
+        self.record("session_import")
+    }
+
+    fn archive_import(
+        &self,
+        _request: &ImportRequest,
+        _canonical_source_path: &Path,
+    ) -> Result<Value, IpcError> {
+        self.record("archive_import")
+    }
+
+    fn import_status(&self, _request: &ImportStatusRequest) -> Result<Value, IpcError> {
+        self.record("import_status")
+    }
+
+    fn import_cancel(&self, _request: &ImportCancelRequest) -> Result<Value, IpcError> {
+        self.record("import_cancel")
+    }
 }
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -409,6 +433,8 @@ fn malformed_samples_return_structured_errors_and_do_not_reach_backend() {
     std::fs::write(&external_db, b"not a database").expect("写入外部候选 .db");
     let external_txt = fixture.outside.join("candidate.txt");
     std::fs::write(&external_txt, b"x").expect("写入外部候选 .txt");
+    let import_source = fixture.outside.join("sample.jsonl");
+    std::fs::write(&import_source, b"").expect("写入导入源 .jsonl");
     let missing_db = fixture.outside.join("missing.db");
     let sync_root = fixture.outside.join("OneDrive").join("workspace");
     std::fs::create_dir_all(&sync_root).expect("创建同步盘样本目录");
@@ -1148,6 +1174,55 @@ fn malformed_samples_return_structured_errors_and_do_not_reach_backend() {
             "invalid_type",
             None,
         ),
+        // ===== M10-04/ADR-034：导入命令校验矩阵 =====
+        (
+            "session_import",
+            json!({ "unexpected": 1 }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
+        (
+            "session_import",
+            json!({}),
+            "missing_field",
+            Some("source_path"),
+        ),
+        (
+            "session_import",
+            json!({ "source_path": "relative/import.jsonl" }),
+            "path_rejected",
+            None,
+        ),
+        (
+            "session_import",
+            json!({ "source_path": long_path(&external_txt) }),
+            "path_rejected",
+            None,
+        ),
+        (
+            "archive_import",
+            json!({ "source_path": long_path(&import_source), "mode": "merge" }),
+            "invalid_enum",
+            None,
+        ),
+        (
+            "archive_import",
+            json!({ "source_path": long_path(&import_source), "dry_run": "yes" }),
+            "invalid_type",
+            None,
+        ),
+        (
+            "import_status",
+            json!({ "job_id": "short" }),
+            "invalid_format",
+            Some("job_id"),
+        ),
+        (
+            "import_cancel",
+            json!({ "job_id": ULID, "unexpected": true }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
         // ===== ADR-018/M6-03：审计查询/导出校验矩阵 =====
         (
             "audit_query",
@@ -1268,6 +1343,9 @@ fn valid_requests_reach_backend_exactly_once() {
     let reference_file = fixture.root.join("reference.md");
     std::fs::write(&reference_file, b"# ref").expect("写入引用文件");
     let reference_file = long_path(&reference_file);
+    let import_source = fixture.outside.join("valid-import.jsonl");
+    std::fs::write(&import_source, b"").expect("写入导入源 .jsonl");
+    let import_source = long_path(&import_source);
 
     let samples: Vec<(&str, Value, &str)> = vec![
         ("runtimes_list", Value::Null, "runtimes_list"),
@@ -1536,6 +1614,31 @@ fn valid_requests_reach_backend_exactly_once() {
             json!({ "actor": "system", "target_dir": inside }),
             "audit_export",
         ),
+        // M10-04/ADR-034：导入命令合法形态（include_warnings/dry_run/模式可选）。
+        (
+            "session_import",
+            json!({ "source_path": import_source.clone() }),
+            "session_import",
+        ),
+        (
+            "archive_import",
+            json!({
+                "source_path": import_source.clone(),
+                "mode": "preserve",
+                "dry_run": true,
+            }),
+            "archive_import",
+        ),
+        (
+            "import_status",
+            json!({ "job_id": ULID, "include_warnings": true }),
+            "import_status",
+        ),
+        (
+            "import_cancel",
+            json!({ "job_id": ULID }),
+            "import_cancel",
+        ),
     ];
 
     for (command, payload, expected) in samples {
@@ -1628,6 +1731,10 @@ fn valid_requests_reach_backend_exactly_once() {
         "audit_query",
         "audit_export",
         "audit_export",
+        "session_import",
+        "archive_import",
+        "import_status",
+        "import_cancel",
     ]
     .into_iter()
     .map(str::to_string)
@@ -2247,10 +2354,11 @@ fn commands_manifest_matches_frozen_baseline() {
         "app_exit",
     ];
     // M9 的 63 条顺序/语义不变；M10-01 追加 11 条编排命令 + M10-02 追加 5 条子 Agent
-    // → 79（75 daemon + 4 shell）。
-    assert_eq!(COMMANDS.len(), 79, "命令面 79 条（75 daemon + 4 shell）");
+    // + M10-04 追加 4 条导入 → 83（79 daemon + 4 shell）。
+    assert_eq!(COMMANDS.len(), 83, "命令面 83 条（79 daemon + 4 shell）");
     assert_eq!(COMMANDS[63], "workflow_create", "M10 增量从第 64 条开始");
     assert_eq!(COMMANDS[74], "subagent_spawn", "M10-02 增量从第 75 条开始");
+    assert_eq!(COMMANDS[79], "session_import", "M10-04 增量从第 80 条开始");
     assert_eq!(
         &COMMANDS[..63],
         BASELINE,

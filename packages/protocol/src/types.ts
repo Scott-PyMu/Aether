@@ -172,6 +172,34 @@ export type ExportDiagnosticsRequest = {
  */
 export type HealthRequest = Record<string, never>;
 
+/**  `import_cancel`（M10-04/ADR-034 D-034-4）。 */
+export type ImportCancelRequest = {
+	job_id: string,
+};
+
+/**  导入模式（M10-04/ADR-034 D-034-3）。 */
+export type ImportMode = 
+/**  保留原 ID；冲突显式拒绝。 */
+"preserve" | 
+/**  生成新 ULID（默认）。 */
+"remap";
+
+/**
+ *  `session_import` / `archive_import`（M10-04/ADR-034 D-034-4）：
+ *  `{ source_path, mode?, dry_run? }`；首行/大小预检同步执行，后续校验异步 job。
+ */
+export type ImportRequest = {
+	source_path: string,
+	mode?: ImportMode | null,
+	dry_run?: boolean | null,
+};
+
+/**  `import_status`（M10-04/ADR-034 D-034-4）。 */
+export type ImportStatusRequest = {
+	job_id: string,
+	include_warnings?: boolean | null,
+};
+
 /**  IPC 命令错误的线上形态：`{ "code": "...", "message": "...", "field": "..." }`。 */
 export type IpcError = IpcError_Serialize | IpcError_Deserialize;
 

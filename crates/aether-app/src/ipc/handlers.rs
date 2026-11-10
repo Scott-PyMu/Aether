@@ -28,7 +28,7 @@ use super::dto::{
     WorkflowListRequest, WorkflowNodeRetryRequest, WorkflowRunCancelRequest, WorkflowRunGetRequest,
     WorkflowRunListRequest, WorkflowRunRequest, WorkflowUpdateRequest,
     SubagentCancelRequest, SubagentListRequest, SubagentResolveRequest, SubagentResultGetRequest,
-    SubagentSpawnRequest,
+    SubagentSpawnRequest, ImportCancelRequest, ImportRequest, ImportStatusRequest,
 };
 use super::error::{IpcError, IpcErrorCode};
 use super::validate::{parse_no_params, parse_strict};
@@ -913,6 +913,7 @@ pub(crate) fn workflow_import(
     payload: Value,
 ) -> Result<JsonPayload, IpcError> {
     let request: WorkflowImportRequest = parse_strict(payload)?;
+    let _canonical = request.canonical_source_path()?;
     state
         .backend_ready()?
         .workflow_import(&request)
@@ -1023,6 +1024,58 @@ pub(crate) fn subagent_result_get(
     state
         .backend_ready()?
         .subagent_result_get(&request)
+        .map(JsonPayload)
+}
+
+// ===== M10-04/ADR-034：导入命令面（严格解析 → 外部路径 canonicalize → 后端异步 job） =====
+
+/// `session_import`：单会话 JSONL（`source=session-export`）。
+pub(crate) fn session_import(
+    state: &IpcState,
+    payload: Value,
+) -> Result<JsonPayload, IpcError> {
+    let request: ImportRequest = parse_strict(payload)?;
+    let canonical = request.canonical_source_path()?;
+    state
+        .backend_ready()?
+        .session_import(&request, &canonical)
+        .map(JsonPayload)
+}
+
+/// `archive_import`：全库/保留归档 JSONL（`source=archive-export|auto-retention`）。
+pub(crate) fn archive_import(
+    state: &IpcState,
+    payload: Value,
+) -> Result<JsonPayload, IpcError> {
+    let request: ImportRequest = parse_strict(payload)?;
+    let canonical = request.canonical_source_path()?;
+    state
+        .backend_ready()?
+        .archive_import(&request, &canonical)
+        .map(JsonPayload)
+}
+
+/// `import_status`：作业状态/进度/警告（`include_warnings` 缺省 false）。
+pub(crate) fn import_status(
+    state: &IpcState,
+    payload: Value,
+) -> Result<JsonPayload, IpcError> {
+    let request: ImportStatusRequest = parse_strict(payload)?;
+    state
+        .backend_ready()?
+        .import_status(&request)
+        .map(JsonPayload)
+}
+
+/// `import_cancel`：取消 staging/validating/applying 作业（awaiting_restart 不可取消）。
+pub(crate) fn import_cancel(
+    state: &IpcState,
+    payload: Value,
+) -> Result<JsonPayload, IpcError> {
+    let request: ImportCancelRequest = parse_strict(payload)?;
+    state
+        .backend_ready()?
+        .import_cancel(&request)
         .map(JsonPayload)
 }
 

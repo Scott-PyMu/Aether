@@ -243,9 +243,16 @@ fn oversized_frame_only_fails_the_request() {
     oversized.extend_from_slice(b"\"}}");
     daemon.send_raw(&oversized);
 
-    let frame = daemon
-        .try_next_frame(FRAME_TIMEOUT)
-        .expect("超限必须回错误帧");
+    // 超限错误帧的 id 为 null；期间可能先到 `daemon.status` 通知（由夹具收纳）。
+    let frame = loop {
+        let frame = daemon
+            .try_next_frame(FRAME_TIMEOUT)
+            .expect("超限必须回错误帧");
+        if frame.get("error").is_some() {
+            break frame;
+        }
+        daemon.notifications.push(frame);
+    };
     assert_eq!(frame["error"]["code"], json!(-32003));
     assert_eq!(frame["error"]["data"]["aether_code"], json!("too_large"));
     assert_eq!(

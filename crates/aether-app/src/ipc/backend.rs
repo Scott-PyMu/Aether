@@ -27,7 +27,7 @@ use super::dto::{
     WorkflowListRequest, WorkflowNodeRetryRequest, WorkflowRunCancelRequest, WorkflowRunGetRequest,
     WorkflowRunListRequest, WorkflowRunRequest, WorkflowUpdateRequest,
     SubagentCancelRequest, SubagentListRequest, SubagentResolveRequest, SubagentResultGetRequest,
-    SubagentSpawnRequest,
+    SubagentSpawnRequest, ImportCancelRequest, ImportRequest, ImportStatusRequest,
 };
 use super::error::IpcError;
 use super::path::ArtifactPath;
@@ -473,6 +473,41 @@ pub trait IpcBackend: Send + Sync + 'static {
         _request: &SubagentResultGetRequest,
     ) -> Result<Value, IpcError> {
         Err(IpcError::not_implemented("subagent_result_get"))
+    }
+
+    // ===== M10-04/ADR-034：导入命令面（4 条） =====
+
+    /// 单会话 JSONL 导入（`source=session-export`；异步 job）。
+    fn session_import(
+        &self,
+        _request: &ImportRequest,
+        _canonical_source_path: &Path,
+    ) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("session_import"))
+    }
+
+    /// 归档 JSONL 导入（`source=archive-export|auto-retention`；异步 job）。
+    fn archive_import(
+        &self,
+        _request: &ImportRequest,
+        _canonical_source_path: &Path,
+    ) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("archive_import"))
+    }
+
+    /// 导入作业状态（轮询；`include_warnings` 控制警告列表）。
+    fn import_status(&self, _request: &ImportStatusRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("import_status"))
+    }
+
+    /// 取消活动导入作业（staging/validating/applying 有效）。
+    fn import_cancel(&self, _request: &ImportCancelRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("import_cancel"))
+    }
+
+    /// 维护窗口原因（M10-04/ADR-034）：`Some` 时命令层拒绝变更类命令。
+    fn maintenance_state(&self) -> Option<String> {
+        None
     }
 }
 

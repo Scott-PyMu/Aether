@@ -218,7 +218,11 @@ fn m9_04_baseline_reject_matrix_covers_all_63_commands() {
         .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
         .collect();
     files.sort();
-    assert_eq!(files.len(), 79, "基线条目必须 79 条（M9 63 + M10-01 11 + M10-02 5）");
+    assert_eq!(
+        files.len(),
+        83,
+        "基线条目必须 83 条（M9 63 + M10-01 11 + M10-02 5 + M10-04 4）"
+    );
     let mut seen = Vec::new();
     let mut rejects = 0usize;
     let mut semantic = 0usize;
@@ -255,8 +259,8 @@ fn m9_04_baseline_reject_matrix_covers_all_63_commands() {
             semantic += 1;
         }
     }
-    assert_eq!(seen.len(), 79);
-    // M10-02 起 COMMANDS 为 79（M9 的 63 条顺序不变）；基线覆盖全部 79 条。
+    assert_eq!(seen.len(), 83);
+    // M10-04 起 COMMANDS 为 83（M9 的 63 条顺序不变）；基线覆盖全部 83 条。
     for command in COMMANDS {
         assert!(
             seen.iter().any(|name| name == command),
@@ -322,8 +326,8 @@ fn m9_04_error_code_matrix_is_32_plus_9_and_all_reachable() {
     assert_eq!(IpcErrorCode::ALL.len(), 32);
     assert_eq!(
         BusinessCode::ALL.len(),
-        24,
-        "业务码 24 项（M9 的 9 + M10-01/ADR-031 的 9 + M10-02/ADR-032 的 6）"
+        31,
+        "业务码 31 项（M9 的 9 + M10-01/ADR-031 的 9 + M10-02/ADR-032 的 6 + M10-04/ADR-034 的 7）"
     );
 
     let mut seen_ipc = Vec::new();

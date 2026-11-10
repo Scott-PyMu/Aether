@@ -26,7 +26,7 @@ const ADR_SRC = "docs/adr/ADR-029-electron-shell-rust-daemon.md";
 const TARGET = "packages/protocol/src/path-commands.json";
 
 /** 路径字段名（DTO 字段；`BackupSource` 另有 `external.path`）。 */
-const PATH_FIELD_NAMES = new Set(["path", "root_path", "target_dir"]);
+const PATH_FIELD_NAMES = new Set(["path", "root_path", "target_dir", "source_path"]);
 /** 已复核的路径参数命令全集（新增/删除须走评审；与 DTO 生成结果必须一致）。 */
 const REVIEWED_PATH_COMMANDS = [
   "artifact_add",
@@ -39,6 +39,9 @@ const REVIEWED_PATH_COMMANDS = [
   "session_export",
   "archive_export",
   "audit_export",
+  "workflow_import",
+  "session_import",
+  "archive_import",
 ];
 /** 校验调用 → 结构化错误码（与 DTO 实现一致）。 */
 const VALIDATOR_ERROR = [
@@ -46,6 +49,7 @@ const VALIDATOR_ERROR = [
   ["canonical_external_path", "path_rejected"],
   ["canonical_target_dir", "path_rejected"],
   ["canonical_root_path", "path_rejected"],
+  ["canonical_source_path", "path_rejected"],
   ["migrate(", "path_rejected"],
 ];
 

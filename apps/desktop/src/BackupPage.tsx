@@ -32,6 +32,14 @@ import {
   type BackupRetentionSegment,
 } from "./backup";
 import {
+  importIpc as productionImportIpc,
+  importIsCancellable,
+  importIsTerminal,
+  type ImportIpc,
+  type ImportJobStatus,
+  type ImportStatus,
+} from "./import";
+import {
   BACKUP_REMINDER_KEY,
   settingsIpc as productionSettingsIpc,
   type BackupReminder,
@@ -46,6 +54,8 @@ export interface BackupPageProps {
   settings?: SettingsIpc;
   /** 归档 IPC（M5-05：一键归档/会话导出；缺省 = 生产实现）。 */
   archive?: ArchiveIpc;
+  /** 导入 IPC（M10-04/ADR-034；缺省 = 生产实现）。 */
+  importer?: ImportIpc;
   /** 返回工作台（`overlay-back`）。 */
   onBack: () => void;
 }
@@ -67,10 +77,21 @@ function kindLabel(kind: string): string {
   return kind === "auto" ? "自动" : "手动";
 }
 
+const IMPORT_STATUS_LABEL: Record<ImportStatus, string> = {
+  staging: "已受理（准备校验）",
+  validating: "校验中",
+  applying: "应用 staging",
+  awaiting_restart: "待重启完成（维护窗口：只读）",
+  completed: "已完成",
+  failed: "失败",
+  cancelled: "已取消",
+};
+
 export function BackupPage({
   ipc = backupIpc,
   settings = productionSettingsIpc,
   archive = productionArchiveIpc,
+  importer = productionImportIpc,
   onBack,
 }: BackupPageProps) {
   const [backups, setBackups] = useState<BackupRecord[]>([]);
@@ -93,6 +114,14 @@ export function BackupPage({
   const [archiveResult, setArchiveResult] = useState<{
     result: "ok" | "failed";
     message: string;
+  } | null>(null);
+  /** M10-04：导入源路径/作业状态/提交失败。 */
+  const [importSource, setImportSource] = useState("");
+  const [importJob, setImportJob] = useState<ImportJobStatus | null>(null);
+  const [importBusy, setImportBusy] = useState(false);
+  const [importError, setImportError] = useState<{
+    message: string;
+    code: string | null;
   } | null>(null);
 
   const refresh = useCallback(async () => {
@@ -206,6 +235,95 @@ export function BackupPage({
       setArchiveResult({ result: "failed", message: describeIpcError(failure) });
     }
   }, [archive, archiveAll]);
+
+  /** M10-04：作业非终态时 1s 轮询（`import_status`；awaiting_restart 停止轮询）。 */
+  useEffect(() => {
+    if (importJob === null || importIsTerminal(importJob.status)) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void importer
+        .status(importJob.job_id, true)
+        .then((next) => setImportJob(next))
+        .catch((failure: unknown) => {
+          setImportError({
+            message: describeIpcError(failure),
+            code: ipcErrorCode(failure),
+          });
+        });
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [importer, importJob]);
+
+  const pickImportSource = useCallback(async () => {
+    setImportError(null);
+    try {
+      const picked = await importer.pickFile();
+      if (picked !== null) {
+        setImportSource(picked);
+      }
+    } catch (failure) {
+      setImportError({
+        message: describeIpcError(failure),
+        code: ipcErrorCode(failure),
+      });
+    }
+  }, [importer]);
+
+  const startImport = useCallback(
+    async (kind: "session" | "archive", dryRun: boolean) => {
+      setImportBusy(true);
+      setImportError(null);
+      setImportJob(null);
+      try {
+        const source = importSource.trim();
+        const started =
+          kind === "archive"
+            ? await importer.startArchive(source, "remap", dryRun)
+            : await importer.startSession(source, "remap", dryRun);
+        setImportJob(await importer.status(started.job_id, true));
+      } catch (failure) {
+        setImportError({
+          message: describeIpcError(failure),
+          code: ipcErrorCode(failure),
+        });
+      } finally {
+        setImportBusy(false);
+      }
+    },
+    [importSource, importer],
+  );
+
+  const cancelImport = useCallback(async () => {
+    if (importJob === null) {
+      return;
+    }
+    setImportBusy(true);
+    try {
+      await importer.cancel(importJob.job_id);
+      setImportJob(await importer.status(importJob.job_id, true));
+    } catch (failure) {
+      setImportError({
+        message: describeIpcError(failure),
+        code: ipcErrorCode(failure),
+      });
+    } finally {
+      setImportBusy(false);
+    }
+  }, [importJob, importer]);
+
+  const restartForImport = useCallback(async () => {
+    setImportBusy(true);
+    try {
+      await importer.restart();
+    } catch (failure) {
+      setImportError({
+        message: describeIpcError(failure),
+        code: ipcErrorCode(failure),
+      });
+      setImportBusy(false);
+    }
+  }, [importer]);
 
   const requestRestore = useCallback((source: PendingRestore) => {
     setPending(source);
@@ -349,6 +467,139 @@ export function BackupPage({
               role={archiveResult.result === "failed" ? "alert" : "status"}
             >
               {archiveResult.message}
+            </p>
+          ) : null}
+        </section>
+
+        {/* M10-04/ADR-034：JSONL 导入入口/进度/警告/取消/失败恢复（S-06 复用）。 */}
+        <section className="import-section" data-testid="import-section">
+          <h3>导入（ADR-034）</h3>
+          <p className="import-hint">
+            选择导出的 JSONL（session-export / archive-export / auto-retention）；
+            真实导入在「待重启」后由应用重启完成原子切换；失败/取消不改变既有数据。
+          </p>
+          <div className="import-actions">
+            <input
+              type="text"
+              data-testid="import-file"
+              value={importSource}
+              placeholder="绝对路径（例如 E:\\exports\\session-….jsonl）"
+              onChange={(event) => setImportSource(event.target.value)}
+            />
+            <button
+              type="button"
+              data-testid="import-pick"
+              disabled={importBusy}
+              onClick={() => void pickImportSource()}
+            >
+              选择文件…
+            </button>
+            <button
+              type="button"
+              data-testid="import"
+              data-result={importJob?.status ?? ""}
+              disabled={importBusy || importSource.trim().length === 0}
+              onClick={() => void startImport("session", false)}
+            >
+              导入会话
+            </button>
+            <button
+              type="button"
+              data-testid="import-archive"
+              disabled={importBusy || importSource.trim().length === 0}
+              onClick={() => void startImport("archive", false)}
+            >
+              导入归档
+            </button>
+            <button
+              type="button"
+              data-testid="import-dry-run"
+              disabled={importBusy || importSource.trim().length === 0}
+              onClick={() => void startImport("session", true)}
+            >
+              仅预览
+            </button>
+          </div>
+          {importJob ? (
+            <div
+              className="import-status"
+              data-testid="import-status"
+              data-status={importJob.status}
+              data-job-id={importJob.job_id}
+              data-dry-run={String(importJob.dry_run)}
+              role={importJob.status === "failed" ? "alert" : "status"}
+            >
+              <p>
+                状态：{IMPORT_STATUS_LABEL[importJob.status]}（{importJob.mode}；
+                {importJob.dry_run ? "dry-run" : "真实导入"}）；进度 {importJob.progress.rows} 行 /{" "}
+                {formatBytes(importJob.progress.bytes)}
+                {importJob.progress.total_bytes
+                  ? ` / ${formatBytes(importJob.progress.total_bytes)}`
+                  : ""}
+              </p>
+              {importJob.summary ? (
+                <p data-testid="import-summary">
+                  会话 {importJob.summary.sessions} / 消息 {importJob.summary.messages} / 事件{" "}
+                  {importJob.summary.events} / 运行 {importJob.summary.runs} / 审计{" "}
+                  {importJob.summary.audits} / 重复 {importJob.summary.duplicates} / 跳过{" "}
+                  {importJob.summary.skipped}
+                </p>
+              ) : null}
+              {importJob.warnings && importJob.warnings.length > 0 ? (
+                <ul data-testid="import-warnings">
+                  {importJob.warnings.map((warning, index) => (
+                    <li key={`${warning.code}-${index}`} data-code={warning.code}>
+                      {warning.code}
+                      {warning.path ? `（${warning.path}）` : ""}：{warning.detail}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {importJob.warnings_truncated ? (
+                <p role="status">警告过多，仅显示前 100 条。</p>
+              ) : null}
+              {importJob.error ? (
+                <p
+                  className="backup-error"
+                  data-testid="import-error"
+                  data-error-code={importJob.error.code}
+                  role="alert"
+                >
+                  {importJob.error.code}：{importJob.error.message}
+                </p>
+              ) : null}
+              <div className="import-status-actions">
+                {importIsCancellable(importJob.status) ? (
+                  <button
+                    type="button"
+                    data-testid="import-cancel"
+                    disabled={importBusy}
+                    onClick={() => void cancelImport()}
+                  >
+                    取消导入
+                  </button>
+                ) : null}
+                {importJob.status === "awaiting_restart" ? (
+                  <button
+                    type="button"
+                    data-testid="import-restart"
+                    disabled={importBusy}
+                    onClick={() => void restartForImport()}
+                  >
+                    立即重启完成导入
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+          {importError ? (
+            <p
+              className="backup-error"
+              data-testid="import-submit-error"
+              data-code={importError.code ?? ""}
+              role="alert"
+            >
+              {importError.message}
             </p>
           ) : null}
         </section>

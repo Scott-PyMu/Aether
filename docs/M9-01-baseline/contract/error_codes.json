@@ -339,6 +339,48 @@
       "owner": "M10-02",
       "first_adr": "ADR-032",
       "kind": "business"
+    },
+    {
+      "code": "import_invalid_format",
+      "owner": "M10-04",
+      "first_adr": "ADR-034",
+      "kind": "business"
+    },
+    {
+      "code": "import_checksum_mismatch",
+      "owner": "M10-04",
+      "first_adr": "ADR-034",
+      "kind": "business"
+    },
+    {
+      "code": "import_conflict",
+      "owner": "M10-04",
+      "first_adr": "ADR-034",
+      "kind": "business"
+    },
+    {
+      "code": "import_too_large",
+      "owner": "M10-04",
+      "first_adr": "ADR-034",
+      "kind": "business"
+    },
+    {
+      "code": "import_cancelled",
+      "owner": "M10-04",
+      "first_adr": "ADR-034",
+      "kind": "business"
+    },
+    {
+      "code": "import_job_not_found",
+      "owner": "M10-04",
+      "first_adr": "ADR-034",
+      "kind": "business"
+    },
+    {
+      "code": "import_job_not_active",
+      "owner": "M10-04",
+      "first_adr": "ADR-034",
+      "kind": "business"
     }
   ]
 }

@@ -145,6 +145,7 @@ fn t9_backup_restore_roundtrip_is_consistent() {
             program_max_version: program_schema_version(),
             now_ms: 1_700_000_000_500,
             fault: RestoreFault::None,
+            scene_infix: PRE_RESTORE_INFIX,
         },
         || Ok(()),
     )
@@ -191,6 +192,7 @@ fn seven_steps_rename_scene_and_retain_pre_restore_files() {
             program_max_version: program_schema_version(),
             now_ms: 1_700_000_000_700,
             fault: RestoreFault::None,
+            scene_infix: PRE_RESTORE_INFIX,
         },
         || {
             stopped = true;
@@ -244,6 +246,7 @@ fn failure_after_placement_rolls_back_scene() {
                 step: RestoreStep::PlaceCandidate,
                 message: "注入：就位后失败".to_owned(),
             },
+            scene_infix: PRE_RESTORE_INFIX,
         },
         || Ok(()),
     )

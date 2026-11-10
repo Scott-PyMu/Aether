@@ -2348,6 +2348,126 @@
           "$ref": "#/components/schemas/SubagentResultGetRequest"
         }
       }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jsonrpc",
+        "id",
+        "method"
+      ],
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "method": {
+          "const": "session_import"
+        },
+        "params": {
+          "$ref": "#/components/schemas/ImportRequest"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jsonrpc",
+        "id",
+        "method"
+      ],
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "method": {
+          "const": "archive_import"
+        },
+        "params": {
+          "$ref": "#/components/schemas/ImportRequest"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jsonrpc",
+        "id",
+        "method"
+      ],
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "method": {
+          "const": "import_status"
+        },
+        "params": {
+          "$ref": "#/components/schemas/ImportStatusRequest"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jsonrpc",
+        "id",
+        "method"
+      ],
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "method": {
+          "const": "import_cancel"
+        },
+        "params": {
+          "$ref": "#/components/schemas/ImportCancelRequest"
+        }
+      }
     }
   ]
 }

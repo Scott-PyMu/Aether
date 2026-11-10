@@ -1,8 +1,8 @@
 {
   "schema": "aether.m9-01-baseline.v1",
   "version": 1,
-  "recorded_at": "2026-11-09T14:13:41+08:00",
-  "head_commit": "c68857420b8c59d6de2b3247ca778e99d19e57fd",
+  "recorded_at": "2026-11-10T09:54:03+08:00",
+  "head_commit": "6d2c6cacc6199091e2d6351aa4747dff36ba1e9d",
   "platform": {
     "os": "win32",
     "arch": "x64",
@@ -16,13 +16,13 @@
     "migrations": "migrations"
   },
   "counts": {
-    "commands": 79,
-    "reachable": 77,
+    "commands": 83,
+    "reachable": 81,
     "reserved": 2,
-    "daemon": 75,
+    "daemon": 79,
     "shell": 4,
     "ipc_error_codes": 32,
-    "business_codes": 24,
+    "business_codes": 31,
     "event_envelope_fields": 9,
     "event_types": 31,
     "settings_keys": 9,
@@ -109,7 +109,11 @@
     "subagent_list",
     "subagent_cancel",
     "subagent_resolve",
-    "subagent_result_get"
+    "subagent_result_get",
+    "session_import",
+    "archive_import",
+    "import_status",
+    "import_cancel"
   ],
   "entries": [
     {
@@ -506,12 +510,32 @@
       "path": "docs/M9-01-baseline/commands/79-subagent_result_get.json",
       "command": "subagent_result_get",
       "sha256": "cb85a1463feed61c9c01341800ea607173da61b7465e0b3517bd9fd3214b7052"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/80-session_import.json",
+      "command": "session_import",
+      "sha256": "081d31628d6aec109650f997bc1247c1d3a2142c56dc0d1a339d712199f51324"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/81-archive_import.json",
+      "command": "archive_import",
+      "sha256": "7a4fe42ee28528101dd50b8a9bbc47623aff68eeae328b0a879b4d080d53846f"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/82-import_status.json",
+      "command": "import_status",
+      "sha256": "fff4dd706cccc8570bf188cae1c2a9ddf74fe97e2067f6013c539f128143e62a"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/83-import_cancel.json",
+      "command": "import_cancel",
+      "sha256": "44bfea8abd00194bcedd84963c7723f9dd22232886788c853c24e537d6f9a066"
     }
   ],
   "artifacts": [
     {
       "path": "docs/M9-01-baseline/contract/error_codes.json",
-      "sha256": "2093056c7f8bdfad5e2a970779e26917150ad35690052de9c157cb56d4a6920e"
+      "sha256": "65a66ad85ca6d58bb8284371fd347757210d309a35fd764c76ee571564bbd8a8"
     },
     {
       "path": "docs/M9-01-baseline/contract/events.json",
@@ -535,7 +559,7 @@
     },
     {
       "path": "docs/M9-01-baseline/contract/responses.json",
-      "sha256": "72c8a4ac0209165494c03d8c2ad03234b776b38d7c57b73c6377c2fb4bec0b6e"
+      "sha256": "e72c12990126a15323b02a09517a29b449426c2b0c122eb98aced7b4ecdb262a"
     },
     {
       "path": "docs/M9-01-baseline/contract/event_payloads.json",
@@ -543,7 +567,7 @@
     },
     {
       "path": "docs/M9-01-baseline/contract/stats.json",
-      "sha256": "7b58aa27046264df63d3bfebc7a0edf552b8ca12811ff587155df0b6929282eb"
+      "sha256": "d993b3b16c1f6c311415fb3b49c1ca1423bd7cc6a6f546e679f5ed3d0fb3baa7"
     },
     {
       "path": "docs/M9-01-baseline/contract/risks.json",
@@ -566,7 +590,7 @@
       "purpose": "硬阈值冻结"
     }
   ],
-  "contract_digest": "57c732ac28e74789f08c65f36c8bfc1b25c2cad8e27a8a09e22ca0c192e808c8",
+  "contract_digest": "7f7ecbc7d18fcdb436a37f9aecd1773255be291779b40ddf8acb5e63a18bcab3",
   "frozen": {
     "rule": "M9-04/M9-13 只新增，不改期望值；命令/错误码/事件/设置/迁移变更必须先走 ADR。",
     "recorded_before": "M9-02（抽取 aether-app 之前）"

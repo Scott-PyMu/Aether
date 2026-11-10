@@ -81,7 +81,14 @@
                 "subagent_context_rejected",
                 "subagent_result_not_ready",
                 "subagent_resolution_conflict",
-                "session_has_children"
+                "session_has_children",
+                "import_invalid_format",
+                "import_checksum_mismatch",
+                "import_conflict",
+                "import_too_large",
+                "import_cancelled",
+                "import_job_not_found",
+                "import_job_not_active"
               ]
             },
             {

@@ -28,7 +28,7 @@ function makeBridge(): AetherBridge & {
 }
 
 describe("@aether/protocol typed client（M9-08）", () => {
-  it("恰好 79 个命名方法，且与 COMMANDS 一一对应", () => {
+  it("恰好 83 个命名方法，且与 COMMANDS 一一对应", () => {
     const client = createAetherClient(makeBridge());
     const reserved = new Set(["rpc", "onEvent", "version"]);
     const methods = Object.keys(client).filter(
@@ -36,9 +36,9 @@ describe("@aether/protocol typed client（M9-08）", () => {
         !reserved.has(key) &&
         typeof (client as unknown as Record<string, unknown>)[key] === "function",
     );
-    expect(methods).toHaveLength(79);
-    expect(COMMANDS).toHaveLength(79);
-    expect(new Set(COMMANDS).size).toBe(79);
+    expect(methods).toHaveLength(83);
+    expect(COMMANDS).toHaveLength(83);
+    expect(new Set(COMMANDS).size).toBe(83);
     for (const command of COMMANDS) {
       const method = command.replace(/_([a-z0-9])/g, (_, char: string) =>
         char.toUpperCase(),

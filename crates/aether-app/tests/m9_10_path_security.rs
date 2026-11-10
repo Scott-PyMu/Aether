@@ -67,7 +67,7 @@ fn path_command_manifest_covers_p1_8_and_reviewed_set() {
     const MANIFEST: &str = include_str!("../../../packages/protocol/src/path-commands.json");
     let model: Value = serde_json::from_str(MANIFEST).expect("path-commands.json 必须是合法 JSON");
     assert_eq!(model["schema"], "aether.path-commands.v1");
-    assert_eq!(model["counts"]["commands"], 10);
+    assert_eq!(model["counts"]["commands"], 13);
     assert_eq!(model["counts"]["required"], 8);
 
     let names: Vec<String> = model["commands"]
@@ -97,13 +97,16 @@ fn path_command_manifest_covers_p1_8_and_reviewed_set() {
         sorted,
         vec![
             "archive_export",
+            "archive_import",
             "artifact_add",
             "audit_export",
             "backup_create",
             "backup_restore",
             "export_diagnostics",
             "session_export",
+            "session_import",
             "startup_migrate",
+            "workflow_import",
             "workspace_create",
             "workspace_set",
         ],

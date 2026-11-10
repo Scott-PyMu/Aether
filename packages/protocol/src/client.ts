@@ -16,6 +16,9 @@ import type {
   BackupRestoreRequest,
   ExportDiagnosticsRequest,
   HealthRequest,
+  ImportCancelRequest,
+  ImportRequest,
+  ImportStatusRequest,
   MessagesPageRequest,
   PermissionResolveRequest,
   PermissionsPendingRequest,
@@ -166,6 +169,10 @@ export const COMMANDS = [
   "subagent_cancel",
   "subagent_resolve",
   "subagent_result_get",
+  "session_import",
+  "archive_import",
+  "import_status",
+  "import_cancel",
 ] as const;
 export type AetherCommand = (typeof COMMANDS)[number];
 
@@ -246,6 +253,10 @@ export const DAEMON_COMMANDS = [
   "subagent_cancel",
   "subagent_resolve",
   "subagent_result_get",
+  "session_import",
+  "archive_import",
+  "import_status",
+  "import_cancel",
 ] as const;
 export type AetherDaemonCommand = (typeof DAEMON_COMMANDS)[number];
 
@@ -325,7 +336,14 @@ export type AetherBusinessCode =
   | "subagent_context_rejected"
   | "subagent_result_not_ready"
   | "subagent_resolution_conflict"
-  | "session_has_children";
+  | "session_has_children"
+  | "import_invalid_format"
+  | "import_checksum_mismatch"
+  | "import_conflict"
+  | "import_too_large"
+  | "import_cancelled"
+  | "import_job_not_found"
+  | "import_job_not_active";
 
 /** 事件回调（9 字段信封；EventStore 直接 ingest）。 */
 export type AetherEventHandler = (event: AetherEvent) => void;
@@ -776,6 +794,18 @@ export interface AetherClient {
 
   /** `subagent_result_get`（严格参数）。 */
   subagentResultGet<T = unknown>(params: SubagentResultGetRequest): Promise<T>;
+
+  /** `session_import`（严格参数）。 */
+  sessionImport<T = unknown>(params: ImportRequest): Promise<T>;
+
+  /** `archive_import`（严格参数）。 */
+  archiveImport<T = unknown>(params: ImportRequest): Promise<T>;
+
+  /** `import_status`（严格参数）。 */
+  importStatus<T = unknown>(params: ImportStatusRequest): Promise<T>;
+
+  /** `import_cancel`（严格参数）。 */
+  importCancel<T = unknown>(params: ImportCancelRequest): Promise<T>;
 }
 
 const COMMAND_SET: ReadonlySet<string> = new Set(COMMANDS);
@@ -1063,6 +1093,18 @@ export function createAetherClient(provider: AetherBridgeProvider): AetherClient
     },
     async subagentResultGet<T = unknown>(params?: SubagentResultGetRequest): Promise<T> {
       return call<T>("subagent_result_get", params);
+    },
+    async sessionImport<T = unknown>(params?: ImportRequest): Promise<T> {
+      return call<T>("session_import", params);
+    },
+    async archiveImport<T = unknown>(params?: ImportRequest): Promise<T> {
+      return call<T>("archive_import", params);
+    },
+    async importStatus<T = unknown>(params?: ImportStatusRequest): Promise<T> {
+      return call<T>("import_status", params);
+    },
+    async importCancel<T = unknown>(params?: ImportCancelRequest): Promise<T> {
+      return call<T>("import_cancel", params);
     },
   };
 }

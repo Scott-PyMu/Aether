@@ -390,6 +390,11 @@ pub struct RestoreRequest {
     pub program_max_version: i64,
     pub now_ms: i64,
     pub fault: RestoreFault,
+    /// 现场保护文件后缀（`aether.db<infix><ts>`）。
+    ///
+    /// 普通恢复使用 [`PRE_RESTORE_INFIX`]；M10-04 导入复用本引擎时使用
+    /// `aether_store::import::PRE_IMPORT_INFIX`（ADR-034 D-034-2 `.pre-import`）。
+    pub scene_infix: &'static str,
 }
 
 /// 单步记录（报告/证据）。
@@ -566,7 +571,7 @@ where
     })?;
 
     // 现场保护计划先落 journal（kill 后按计划回滚）。
-    let scene_plan = plan_scene(&request.db_path, request.now_ms);
+    let scene_plan = plan_scene(&request.db_path, request.now_ms, request.scene_infix);
     let mut journal = RestoreJournal {
         v: 1,
         status: "placing".to_owned(),
@@ -683,6 +688,7 @@ pub fn recover_or_apply_pending_restore(
                 program_max_version: program_schema_version(),
                 now_ms: now_ms(),
                 fault: RestoreFault::None,
+                scene_infix: PRE_RESTORE_INFIX,
             };
             match execute_restore(&request, || Ok(())) {
                 Ok(report) => {
@@ -724,10 +730,10 @@ pub fn recover_or_apply_pending_restore(
     }
 }
 
-fn plan_scene(db_path: &Path, ts: i64) -> SceneProtection {
+fn plan_scene(db_path: &Path, ts: i64, infix: &str) -> SceneProtection {
     let rename = |source: &Path| -> Option<PathBuf> {
         if source.exists() {
-            Some(renamed_path(source, ts))
+            Some(renamed_path(source, ts, infix))
         } else {
             None
         }
@@ -740,12 +746,12 @@ fn plan_scene(db_path: &Path, ts: i64) -> SceneProtection {
     }
 }
 
-fn renamed_path(source: &Path, ts: i64) -> PathBuf {
+fn renamed_path(source: &Path, ts: i64, infix: &str) -> PathBuf {
     let name = source
         .file_name()
         .map(|value| value.to_string_lossy().to_string())
         .unwrap_or_else(|| "aether.db".to_owned());
-    source.with_file_name(format!("{name}{PRE_RESTORE_INFIX}{ts}"))
+    source.with_file_name(format!("{name}{infix}{ts}"))
 }
 
 fn sidecar_path(db_path: &Path, suffix: &str) -> PathBuf {
@@ -1208,7 +1214,7 @@ mod tests {
         std::fs::write(&db, b"db").unwrap();
         assert!(read_restore_journal(&db).unwrap().is_none());
 
-        let scene = plan_scene(&db, 7);
+        let scene = plan_scene(&db, 7, PRE_RESTORE_INFIX);
         assert!(scene.db.is_some());
         let journal = RestoreJournal {
             v: 1,

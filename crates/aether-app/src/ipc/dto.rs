@@ -1563,6 +1563,97 @@ impl CommandRequest for ArchiveExportRequest {
     }
 }
 
+/// 导入模式（M10-04/ADR-034 D-034-3）。
+#[derive(Debug, Clone, Copy, Default, Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportMode {
+    /// 保留原 ID；冲突显式拒绝。
+    Preserve,
+    /// 生成新 ULID（默认）。
+    #[default]
+    Remap,
+}
+
+impl From<ImportMode> for aether_store::import::ImportMode {
+    fn from(value: ImportMode) -> Self {
+        match value {
+            ImportMode::Preserve => Self::Preserve,
+            ImportMode::Remap => Self::Remap,
+        }
+    }
+}
+
+/// `session_import` / `archive_import`（M10-04/ADR-034 D-034-4）：
+/// `{ source_path, mode?, dry_run? }`；首行/大小预检同步执行，后续校验异步 job。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct ImportRequest {
+    pub source_path: String,
+    #[serde(default)]
+    pub mode: Option<ImportMode>,
+    #[serde(default)]
+    pub dry_run: Option<bool>,
+}
+
+impl ImportRequest {
+    /// canonicalize 后的源文件路径（存在文件 + `.jsonl` 后缀；目录/相对路径拒绝）。
+    pub fn canonical_source_path(&self) -> Result<std::path::PathBuf, IpcError> {
+        path::validate_external_file(&self.source_path, "jsonl")
+    }
+
+    /// 生效模式（缺省 `remap`）。
+    pub fn mode_value(&self) -> aether_store::import::ImportMode {
+        self.mode.unwrap_or_default().into()
+    }
+
+    /// 是否 dry-run（缺省 false）。
+    pub fn dry_run_value(&self) -> bool {
+        self.dry_run.unwrap_or(false)
+    }
+}
+
+impl CommandRequest for ImportRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        ensure_not_empty(&self.source_path, "source_path")?;
+        ensure_max_chars(&self.source_path, "source_path", MAX_PATH_CHARS)?;
+        Ok(())
+    }
+}
+
+/// `import_status`（M10-04/ADR-034 D-034-4）。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct ImportStatusRequest {
+    pub job_id: String,
+    #[serde(default)]
+    pub include_warnings: Option<bool>,
+}
+
+impl CommandRequest for ImportStatusRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.job_id) {
+            return Err(IpcError::invalid_format("job_id", "必须是 26 位 ULID"));
+        }
+        Ok(())
+    }
+}
+
+/// `import_cancel`（M10-04/ADR-034 D-034-4）。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct ImportCancelRequest {
+    pub job_id: String,
+}
+
+impl CommandRequest for ImportCancelRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.job_id) {
+            return Err(IpcError::invalid_format("job_id", "必须是 26 位 ULID"));
+        }
+        Ok(())
+    }
+}
+
 /// 审计 actor 白名单（ADR-018 附录 A-1：`user` / `agent` / `system`）。
 pub const AUDIT_ACTORS: [&str; 3] = ["user", "agent", "system"];
 /// 审计 action 上限（ADR-018 附录 A-1：`action` ≤64 字符）。
@@ -2220,6 +2311,13 @@ pub struct WorkflowImportRequest {
     pub source_path: String,
     #[serde(default)]
     pub name_override: Option<String>,
+}
+
+impl WorkflowImportRequest {
+    /// canonicalize 后的源文件路径（存在文件 + `.json` 后缀）。
+    pub fn canonical_source_path(&self) -> Result<std::path::PathBuf, IpcError> {
+        path::validate_external_file(&self.source_path, "json")
+    }
 }
 
 impl CommandRequest for WorkflowImportRequest {

@@ -71,7 +71,7 @@ for (const command of [
 ]) {
   check(`命令面含 ${command}`, dispatch.includes(`"${command}"`));
 }
-check("命令面 79 条（75 daemon + 4 shell）", /COMMANDS\.len\(\), 79/.test(dispatch));
+check("命令面 83 条（79 daemon + 4 shell）", /COMMANDS\.len\(\),\s*83/.test(dispatch));
 
 const event = read("crates/aether-core/src/event.rs");
 for (const needle of [
@@ -140,11 +140,11 @@ for (const testid of [
 check("UI 不新增 subagent-result-detail testid", !ui.includes('data-testid="subagent-result-detail"'));
 
 const manifest = JSON.parse(read("packages/protocol/src/command-manifest.json"));
-check("command-manifest 79 条", manifest.counts?.total === 79);
-check("command-manifest daemon=75", manifest.counts?.daemon === 75);
+check("command-manifest 83 条", manifest.counts?.total === 83);
+check("command-manifest daemon=79", manifest.counts?.daemon === 79);
 const errors = JSON.parse(read("packages/protocol/src/error_codes.json"));
 check("error_codes ipc=32", errors.ipc?.length === 32);
-check("error_codes business=24", errors.business?.length === 24);
+check("error_codes business=31", errors.business?.length === 31);
 
 // ---------- 可执行验证 ----------
 run(

@@ -180,6 +180,15 @@ impl IpcState {
         self.inner.picker.get().cloned()
     }
 
+    /// 维护窗口原因（M10-04/ADR-034）：后端未注入/启动门未 Ready 时不阻断命令层
+    /// 既有语义（`startup_*` 保持可达）；仅在后端可用时透传维护状态。
+    pub fn maintenance_reason(&self) -> Option<String> {
+        self.inner
+            .backend
+            .get()
+            .and_then(|backend| backend.maintenance_state())
+    }
+
     /// 业务命令入口：启动门未 Ready 时阻断（主界面不可达的命令层兜底）；
     /// 后端尚未注入（启动序列未完成）时返回 `core_not_ready`（ADR-007 增量 2）。
     pub fn backend_ready(&self) -> Result<&dyn IpcBackend, IpcError> {

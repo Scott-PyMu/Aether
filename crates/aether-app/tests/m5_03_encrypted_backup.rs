@@ -1025,6 +1025,7 @@ fn dod4_encrypted_path_protects_scene_and_rolls_back_on_injected_failure() {
                 step: RestoreStep::PlaceCandidate,
                 message: "M5-03 注入：加密路径就位后失败".to_owned(),
             },
+            scene_infix: aether_store::PRE_RESTORE_INFIX,
         },
         || Ok(()),
     )
@@ -1058,6 +1059,7 @@ fn dod4_encrypted_path_protects_scene_and_rolls_back_on_injected_failure() {
             program_max_version: program_schema_version(),
             now_ms: fixture.clock.now_ms() + 1,
             fault: RestoreFault::None,
+            scene_infix: aether_store::PRE_RESTORE_INFIX,
         },
         || Ok(()),
     )

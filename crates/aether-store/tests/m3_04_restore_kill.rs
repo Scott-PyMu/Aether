@@ -40,6 +40,7 @@ fn m3_04_restore_child_process() {
                 step: RestoreStep::ProtectScene,
                 pause: Duration::from_secs(120),
             },
+            scene_infix: aether_store::PRE_RESTORE_INFIX,
         },
         || Ok(()),
     );

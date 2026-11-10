@@ -1,0 +1,32 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "source_path": {
+      "type": "string"
+    },
+    "mode": {
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/ImportMode"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "dry_run": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "source_path"
+  ]
+}

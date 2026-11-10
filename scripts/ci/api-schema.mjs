@@ -681,7 +681,7 @@ function checkContract(manifest, openapi) {
   const aetherEnum = rpcError.properties.data.properties.aether_code.enum;
   const businessEnum = rpcError.properties.data.properties.business_code.anyOf[0].enum;
   if (aetherEnum.length !== 32) failures.push(`aether_code 枚举 ${aetherEnum.length} ≠ 32`);
-  if (businessEnum.length !== 24) failures.push(`business_code 枚举 ${businessEnum.length} ≠ 24`);
+  if (businessEnum.length !== 31) failures.push(`business_code 枚举 ${businessEnum.length} ≠ 31`);
 
   // RpcRequest / RpcResponse 自校验（成功/错误 envelope 字段级）。
   const success = { jsonrpc: "2.0", id: 1, result: {} };

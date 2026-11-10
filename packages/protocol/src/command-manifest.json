@@ -6,10 +6,10 @@
     "groups": "docs/adr/ADR-029-electron-shell-rust-daemon.md §4.6/§16.1"
   },
   "counts": {
-    "total": 79,
-    "daemon": 75,
+    "total": 83,
+    "daemon": 79,
     "shell": 4,
-    "ui": 77,
+    "ui": 81,
     "reserved": 2,
     "groups": 18
   },
@@ -93,6 +93,10 @@
     {
       "group": "subagent",
       "count": 5
+    },
+    {
+      "group": "import",
+      "count": 4
     }
   ],
   "commands": [
@@ -963,6 +967,50 @@
       "params": {
         "style": "strict",
         "dto": "SubagentResultGetRequest"
+      }
+    },
+    {
+      "index": 80,
+      "name": "session_import",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "import",
+      "params": {
+        "style": "strict",
+        "dto": "ImportRequest"
+      }
+    },
+    {
+      "index": 81,
+      "name": "archive_import",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "import",
+      "params": {
+        "style": "strict",
+        "dto": "ImportRequest"
+      }
+    },
+    {
+      "index": 82,
+      "name": "import_status",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "import",
+      "params": {
+        "style": "strict",
+        "dto": "ImportStatusRequest"
+      }
+    },
+    {
+      "index": 83,
+      "name": "import_cancel",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "import",
+      "params": {
+        "style": "strict",
+        "dto": "ImportCancelRequest"
       }
     }
   ]

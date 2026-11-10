@@ -64,11 +64,25 @@ pub enum BusinessCode {
     SubagentResolutionConflict,
     /// 父会话仍有子会话，拒绝删除（M10-02/ADR-032 D-032-5；`invalid_value`）。
     SessionHasChildren,
+    /// 导入格式/版本/字段非法（**M10-04**/ADR-034 D-034-1；`invalid_format`）。
+    ImportInvalidFormat,
+    /// 导入 manifest 行数/哈希不一致（M10-04/ADR-034；`invalid_value`）。
+    ImportChecksumMismatch,
+    /// `preserve` 模式 ID 冲突（M10-04/ADR-034 D-034-3；`invalid_value` + details）。
+    ImportConflict,
+    /// 导入文件/行/空间超限（M10-04/ADR-034 D-034-1/D-034-2；`too_large`）。
+    ImportTooLarge,
+    /// 导入已取消（M10-04/ADR-034 D-034-2；`invalid_value`）。
+    ImportCancelled,
+    /// 导入作业不存在（M10-04/ADR-034 D-034-4；`invalid_value`）。
+    ImportJobNotFound,
+    /// 导入作业不在活动状态（M10-04/ADR-034 D-034-4；`invalid_value`）。
+    ImportJobNotActive,
 }
 
 impl BusinessCode {
     /// 全部业务码（顺序 = `error_codes.json` 的 `business` 顺序 = ADR-018 A-7 登记顺序）。
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 31] = [
         Self::SessionBusy,
         Self::SessionPaused,
         Self::StorageBackpressure,
@@ -93,6 +107,13 @@ impl BusinessCode {
         Self::SubagentResultNotReady,
         Self::SubagentResolutionConflict,
         Self::SessionHasChildren,
+        Self::ImportInvalidFormat,
+        Self::ImportChecksumMismatch,
+        Self::ImportConflict,
+        Self::ImportTooLarge,
+        Self::ImportCancelled,
+        Self::ImportJobNotFound,
+        Self::ImportJobNotActive,
     ];
 
     /// 线上取值（snake_case；`data.business_code` 唯一来源）。
@@ -122,6 +143,13 @@ impl BusinessCode {
             Self::SubagentResultNotReady => "subagent_result_not_ready",
             Self::SubagentResolutionConflict => "subagent_resolution_conflict",
             Self::SessionHasChildren => "session_has_children",
+            Self::ImportInvalidFormat => "import_invalid_format",
+            Self::ImportChecksumMismatch => "import_checksum_mismatch",
+            Self::ImportConflict => "import_conflict",
+            Self::ImportTooLarge => "import_too_large",
+            Self::ImportCancelled => "import_cancelled",
+            Self::ImportJobNotFound => "import_job_not_found",
+            Self::ImportJobNotActive => "import_job_not_active",
         }
     }
 
@@ -137,12 +165,13 @@ mod tests {
 
     #[test]
     fn business_codes_are_frozen_unique_snake_case_values() {
-        // ADR-018 A-7 的 9 项 + M10-01/ADR-031 的 9 项编排业务码 + M10-02/ADR-032 的 6 项。
-        assert_eq!(BusinessCode::ALL.len(), 24, "业务码 24 项");
+        // ADR-018 A-7 的 9 项 + M10-01/ADR-031 的 9 项编排业务码 + M10-02/ADR-032 的 6 项
+        // + M10-04/ADR-034 的 7 项导入业务码。
+        assert_eq!(BusinessCode::ALL.len(), 31, "业务码 31 项");
         let mut values: Vec<&str> = BusinessCode::ALL.iter().map(|code| code.as_str()).collect();
         values.sort_unstable();
         values.dedup();
-        assert_eq!(values.len(), 24, "业务码取值必须唯一");
+        assert_eq!(values.len(), 31, "业务码取值必须唯一");
         for code in BusinessCode::ALL {
             let text = code.as_str();
             assert!(

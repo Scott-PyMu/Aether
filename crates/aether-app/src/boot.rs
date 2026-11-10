@@ -80,6 +80,27 @@ pub fn build_backend(
     // M3-04（D13 七步第 3–6 步）：待处理恢复在存储打开**之前**执行（无写者窗口）；
     // 中断（kill -9）遗留的现场日志在此回滚（DoD4）。结果在核心启动后写审计。
     let restore_outcome = backup_control::boot_apply_pending_restore(&data_dir);
+    // M10-04/ADR-034：待重启导入在存储打开前执行（无写者窗口；staging + 原子切换；
+    // 失败/中断不改变既有库，staging 由启动清理）。
+    let import_boot = import_control::boot_apply_pending_import(
+        &data_dir,
+        aether_store::import::current_time_ms(),
+        crate::disk::available_bytes,
+    );
+    match &import_boot {
+        Ok(Some(report)) => tracing::info!(
+            job_id = %report.job_id,
+            kind = %report.kind,
+            already_applied = report.already_applied,
+            duration_ms = report.duration_ms,
+            sessions = report.summary.sessions,
+            messages = report.summary.messages,
+            events = report.summary.events,
+            "导入启动切换完成（staging → aether.db；既有数据未丢失）"
+        ),
+        Ok(None) => {}
+        Err(error) => tracing::error!(error = %error, "导入启动切换失败（作业已标记 failed；既有数据未改变）"),
+    }
 
     // M2-07（ADR-007 §5-2）：监督器摘要接线在 health 之前完成，
     // `health.runtimes` 与监督器状态一一对应（字段映射冻结）。
@@ -491,6 +512,8 @@ pub fn build_backend(
     let write_for_workflow = write_slot.clone();
     let reads_for_subagent = reads.clone();
     let write_for_subagent = write_slot.clone();
+    // M10-04/ADR-034：导入装饰器（最外层；维护窗口 + import.*/export.* 审计）。
+    let write_for_import = write_slot.clone();
     let orchestrator = if supervisor.is_some() || pipeline.is_some() || storage_slot.is_some() {
         let orchestrator = shutdown::AppShutdown::new(
             pipeline,
@@ -700,6 +723,17 @@ pub fn build_backend(
             }
             _ => backend,
         };
+    // M10-04/ADR-034：导入命令面装饰器（最外层）。
+    let backend: std::sync::Arc<dyn ipc::IpcBackend> = match write_for_import {
+        Some(write) => std::sync::Arc::new(import_control::ImportControlBackend::new(
+            backend,
+            data_dir.clone(),
+            write,
+            handle.clone(),
+            std::sync::Arc::new(aether_control::SystemClock),
+        )),
+        None => backend,
+    };
     BackendBundle {
         backend,
         shutdown: orchestrator,

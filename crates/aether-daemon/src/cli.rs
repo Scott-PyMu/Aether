@@ -433,7 +433,25 @@ fn import_command(endpoint: &Endpoint, args: &[String], pretty: bool) -> Result<
         print_group_help("import");
         return Ok(0);
     }
-    let (positional, values) = flags(args, &["mode"], &["archive", "dry-run", "json", "pretty"])?;
+    let (positional, values) = flags(
+        args,
+        &["mode", "status", "cancel"],
+        &["archive", "dry-run", "watch", "include-warnings", "json", "pretty"],
+    )?;
+    if let Some(job_id) = values.get("status") {
+        let mut params = json!({"job_id": job_id});
+        if values.contains_key("include-warnings") {
+            params["include_warnings"] = Value::Bool(true);
+        }
+        let result = call_rpc(endpoint, "import_status", params)?;
+        print_json(&result, pretty)?;
+        return Ok(0);
+    }
+    if let Some(job_id) = values.get("cancel") {
+        let result = call_rpc(endpoint, "import_cancel", json!({"job_id": job_id}))?;
+        print_json(&result, pretty)?;
+        return Ok(0);
+    }
     let source = require_positional(&positional, 0, "import <file>")?;
     let method = if values.contains_key("archive") {
         "archive_import"
@@ -446,8 +464,37 @@ fn import_command(endpoint: &Endpoint, args: &[String], pretty: bool) -> Result<
         params["dry_run"] = Value::Bool(true);
     }
     let result = call_rpc(endpoint, method, params)?;
-    print_json(&result, pretty)?;
-    Ok(0)
+    let Some(job_id) = result
+        .get("job_id")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+    else {
+        print_json(&result, pretty)?;
+        return Ok(0);
+    };
+    if !values.contains_key("watch") {
+        print_json(&result, pretty)?;
+        return Ok(0);
+    }
+    // `--watch`：1s 轮询；JSONL 输出；awaiting_restart 是成功终态（需重启切换）。
+    loop {
+        let status = call_rpc(
+            endpoint,
+            "import_status",
+            json!({"job_id": job_id, "include_warnings": true}),
+        )?;
+        print_json(&status, false)?;
+        let state = status
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        match state {
+            "completed" | "awaiting_restart" => return Ok(0),
+            "failed" => return Err(CliFailure::internal("导入失败（既有数据未改变）")),
+            "cancelled" => return Ok(7),
+            _ => std::thread::sleep(Duration::from_secs(1)),
+        }
+    }
 }
 
 fn export_command(endpoint: &Endpoint, args: &[String], pretty: bool) -> Result<u8, CliFailure> {
@@ -1065,8 +1112,13 @@ fn print_group_help(group: &str) {
   aetherd --cli subagent resolve <child_session_id> --decision <accept|reject|rerun> [--note <text>]
 说明：M10-02 实现前，daemon 对 subagent_* 返回 not_implemented（退出码 3）。",
         "import" => "\
-用法：aetherd --cli import <file> [--archive] [--mode <mode>] [--dry-run]
-说明：M10-04 实现前，daemon 对 session_import/archive_import 返回 not_implemented（退出码 3）。",
+用法：
+  aetherd --cli import <file> [--archive] [--mode remap|preserve] [--dry-run] [--watch]
+  aetherd --cli import --status <job_id> [--include-warnings]
+  aetherd --cli import --cancel <job_id>
+说明：JSONL 导入（ADR-034）；真实导入在作业 awaiting_restart 后重启 daemon 完成原子切换；
+      dry-run 只预览；失败/取消不改变既有数据。退出码：0 成功/待重启；1 失败；2 用法；
+      3 未找到；4 鉴权；5 未就绪；6 超时；7 取消。",
         "export" => "\
 用法：aetherd --cli export <session_id> [--target-dir <dir>]
 说明：调用 session_export；JSON 输出。",
@@ -1102,7 +1154,7 @@ aetherd --cli — Aether headless CLI（同一业务核心；ADR-033）
   session list|create|send|messages|interrupt
   workflow run|status|cancel|retry-node
   subagent tree|result|resolve
-  import <file> [--archive] [--dry-run]
+  import <file> [--archive] [--dry-run] [--watch] | --status <job_id> | --cancel <job_id>
   export <session_id> [--target-dir <dir>]
   events --session <id> [--last-seq N]
   api rotate-token

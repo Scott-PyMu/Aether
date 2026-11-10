@@ -6,7 +6,7 @@
     "required": "docs/adr/ADR-029-electron-shell-rust-daemon.md §5.3"
   },
   "counts": {
-    "commands": 10,
+    "commands": 13,
     "required": 8
   },
   "required": [
@@ -139,6 +139,42 @@
         }
       ],
       "validator": "canonical_target_dir",
+      "error_code": "path_rejected"
+    },
+    {
+      "name": "workflow_import",
+      "dto": "WorkflowImportRequest",
+      "path_fields": [
+        {
+          "name": "source_path",
+          "type": "String"
+        }
+      ],
+      "validator": "canonical_source_path",
+      "error_code": "path_rejected"
+    },
+    {
+      "name": "session_import",
+      "dto": "ImportRequest",
+      "path_fields": [
+        {
+          "name": "source_path",
+          "type": "String"
+        }
+      ],
+      "validator": "canonical_source_path",
+      "error_code": "path_rejected"
+    },
+    {
+      "name": "archive_import",
+      "dto": "ImportRequest",
+      "path_fields": [
+        {
+          "name": "source_path",
+          "type": "String"
+        }
+      ],
+      "validator": "canonical_source_path",
       "error_code": "path_rejected"
     }
   ]

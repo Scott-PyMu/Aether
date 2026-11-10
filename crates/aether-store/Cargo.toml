@@ -19,6 +19,8 @@ hex = "0.4"
 serde_json = "1.0"
 # M3-04：备份/恢复台账与报告的序列化（已在 Cargo.lock，MIT/Apache-2.0）。
 serde = { version = "1", features = ["derive"] }
+# M10-04/ADR-034：导入 ID 重映射（ULID；与 aether-app 同类依赖）。
+ulid = "=1.1.3"
 # 设计 D2/D3：单写任务与读连接池运行在核心 tokio 多线程运行时上（M1-04）。
 # 仅需 rt/sync/time（框架由上层提供）；已在 Cargo.lock（tokio 1.53，MIT）。
 tokio = { version = "1", features = ["rt", "sync", "time"] }

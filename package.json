@@ -129,6 +129,8 @@
     "generate:api-schema": "node scripts/ci/api-schema.mjs generate",
     "verify:api-schema": "node scripts/ci/api-schema.mjs check",
     "verify:m10-03": "node scripts/test/m10-03/verify-m10-03.mjs",
+    "verify:m10-04": "node scripts/test/m10-04/verify-m10-04.mjs",
+    "test:m10-04:big": "node scripts/test/m10-04/big-import.mjs",
     "verify:api": "node scripts/test/m10-03/verify-m10-03.mjs",
     "external:m10-03": "node scripts/test/m10-03/external-client.mjs",
     "spike:m10-02:q5": "node scripts/test/m10-02/context-spike.mjs && node scripts/test/m10-02/real-cli-spike.mjs",
