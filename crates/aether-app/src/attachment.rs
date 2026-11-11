@@ -12,11 +12,20 @@ use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use aether_core::{AttachmentMime, ImageDimensions, ATTACHMENT_MAX_BYTES};
+use aether_adapters::connection::ConnectionState;
+use aether_adapters::supervisor::Supervisor;
+use aether_control::{
+    AttachmentResolveError, AttachmentResolveErrorKind, AttachmentResolveFuture, AttachmentResolver,
+};
+use aether_core::{
+    static_capabilities, AttachmentMime, ImageDimensions, Message, OutboundAttachment, SessionId,
+    ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_EDGE, ATTACHMENT_MAX_PIXELS, MULTIMODAL_CAPABILITY,
+};
+use aether_store::ReadPool;
 use sha2::{Digest, Sha256};
-
 /// 附件根目录名（相对 `data_dir`）。
 pub const ATTACHMENT_DIR: &str = "attachments";
 /// 缩略图缓存子目录（不写 DB；ADR-035 D-035-3）。
@@ -245,6 +254,266 @@ pub fn cleanup_orphans(
         }
     }
     (cleaned, kept)
+}
+
+/// 附件重放解析器（M10-05/ADR-035）：retry/resume 从 `content_parts` 重新水合。
+///
+/// 每次重放重新校验：
+/// - 运行时 `multimodal`（静态表或 hello/initialize）；
+/// - 模型 `vision`（明确 false 拒绝；未知允许）；
+/// - 附件归属/文件存在/canonicalize 路径/内容 sha256/size/像素上限；
+/// - 单消息 ≤8。
+///
+/// 任一失败返回结构化错误（由控制层映射业务码），不静默降级为纯文本。
+pub struct AttachmentReplayResolver {
+    reads: ReadPool,
+    data_dir: PathBuf,
+    supervisor: Option<Arc<Supervisor>>,
+}
+
+impl AttachmentReplayResolver {
+    pub fn new(
+        reads: ReadPool,
+        data_dir: impl Into<PathBuf>,
+        supervisor: Option<Arc<Supervisor>>,
+    ) -> Self {
+        Self {
+            reads,
+            data_dir: data_dir.into(),
+            supervisor,
+        }
+    }
+
+    async fn resolve_inner(
+        &self,
+        session_id: &SessionId,
+        message: &Message,
+    ) -> Result<Vec<OutboundAttachment>, AttachmentResolveError> {
+        let parts = message
+            .content_parts
+            .as_ref()
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| {
+                AttachmentResolveError::new(
+                    AttachmentResolveErrorKind::Invalid,
+                    "messages.content_parts 不是数组（不变量破坏）",
+                )
+            })?;
+        if parts.len() > aether_core::ATTACHMENT_MAX_PER_MESSAGE {
+            return Err(AttachmentResolveError::new(
+                AttachmentResolveErrorKind::LimitExceeded,
+                format!(
+                    "单条消息附件上限 {} 个（实际 {}）",
+                    aether_core::ATTACHMENT_MAX_PER_MESSAGE,
+                    parts.len()
+                ),
+            ));
+        }
+        let session = self
+            .reads
+            .session(session_id)
+            .await
+            .map_err(|error| {
+                AttachmentResolveError::new(
+                    AttachmentResolveErrorKind::StorageFailed,
+                    format!("会话读取失败：{error}"),
+                )
+            })?
+            .ok_or_else(|| {
+                AttachmentResolveError::new(
+                    AttachmentResolveErrorKind::StorageFailed,
+                    "会话不存在（无法校验附件重放能力）",
+                )
+            })?;
+        // 运行时 multimodal：静态表优先，未声明时看 hello/initialize。
+        let mut runtime_supported =
+            static_capabilities(session.runtime_id.as_str()).contains(&MULTIMODAL_CAPABILITY);
+        if !runtime_supported {
+            if let Some(supervisor) = self.supervisor.as_ref() {
+                if let Some(runtime) = supervisor.get(session.runtime_id.as_str()) {
+                    if let Some(connection) = runtime.connection().await {
+                        runtime_supported = match connection.state() {
+                            ConnectionState::Ready(hello)
+                            | ConnectionState::Degraded { hello, .. } => hello
+                                .runtime
+                                .capabilities
+                                .iter()
+                                .any(|item| item == MULTIMODAL_CAPABILITY),
+                            ConnectionState::Connecting | ConnectionState::Disconnected(_) => false,
+                        };
+                    }
+                }
+            }
+        }
+        if !runtime_supported {
+            return Err(AttachmentResolveError::new(
+                AttachmentResolveErrorKind::Unsupported,
+                format!(
+                    "运行时 {} 未声明 multimodal：拒绝重放附件（不静默丢弃）",
+                    session.runtime_id.as_str()
+                ),
+            ));
+        }
+        // 模型 vision：明确 false 拒绝；未知允许（与首次发送口径一致）。
+        if let (Some(provider_id), Some(model)) = (
+            crate::session_backend::session_provider_id(&session),
+            session.model.as_deref(),
+        ) {
+            let models = self.reads.provider_models().await.map_err(|error| {
+                AttachmentResolveError::new(
+                    AttachmentResolveErrorKind::StorageFailed,
+                    format!("供应商模型读取失败：{error}"),
+                )
+            })?;
+            if let Some(record) = models
+                .iter()
+                .find(|item| item.provider_id == provider_id && item.model_id == model)
+            {
+                if crate::session_backend::vision_state(&record.capabilities)
+                    == crate::session_backend::VisionState::Blocked
+                {
+                    return Err(AttachmentResolveError::new(
+                        AttachmentResolveErrorKind::Unsupported,
+                        format!("模型 {model} 明确声明 vision=false：拒绝重放附件"),
+                    ));
+                }
+            }
+        }
+
+        let mut attachments = Vec::with_capacity(parts.len());
+        for part in parts {
+            let attachment_id = part
+                .get("attachment_id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    AttachmentResolveError::new(
+                        AttachmentResolveErrorKind::Invalid,
+                        "content_parts[] 缺少 attachment_id",
+                    )
+                })?;
+            let record = self
+                .reads
+                .attachment(attachment_id)
+                .await
+                .map_err(|error| {
+                    AttachmentResolveError::new(
+                        AttachmentResolveErrorKind::StorageFailed,
+                        format!("附件读取失败：{error}"),
+                    )
+                })?
+                .ok_or_else(|| {
+                    AttachmentResolveError::new(
+                        AttachmentResolveErrorKind::StorageFailed,
+                        format!("附件不存在或已删除：{attachment_id}"),
+                    )
+                })?;
+            if record.session_id != session_id.as_str() {
+                return Err(AttachmentResolveError::new(
+                    AttachmentResolveErrorKind::StorageFailed,
+                    format!("附件不属于当前会话：{attachment_id}"),
+                ));
+            }
+            let mime = AttachmentMime::from_wire(&record.mime).ok_or_else(|| {
+                AttachmentResolveError::new(
+                    AttachmentResolveErrorKind::Invalid,
+                    format!("附件 MIME 非白名单（DB 不变量破坏）：{}", record.mime),
+                )
+            })?;
+            let dimensions = match (record.width, record.height) {
+                (Some(width), Some(height)) => Some(ImageDimensions {
+                    width: u32::try_from(width).map_err(|_| {
+                        AttachmentResolveError::new(
+                            AttachmentResolveErrorKind::TooLarge,
+                            format!("附件宽度越界：{width}"),
+                        )
+                    })?,
+                    height: u32::try_from(height).map_err(|_| {
+                        AttachmentResolveError::new(
+                            AttachmentResolveErrorKind::TooLarge,
+                            format!("附件高度越界：{height}"),
+                        )
+                    })?,
+                }),
+                _ => None,
+            };
+            let absolute =
+                resolve_storage_path(&self.data_dir, &record.storage_path).map_err(|error| {
+                    AttachmentResolveError::new(
+                        AttachmentResolveErrorKind::StorageFailed,
+                        format!("附件路径校验失败：{error}"),
+                    )
+                })?;
+            if !absolute.is_file() {
+                return Err(AttachmentResolveError::new(
+                    AttachmentResolveErrorKind::StorageFailed,
+                    format!("附件文件缺失：{attachment_id}"),
+                ));
+            }
+            let (bytes, sha256) = read_and_hash(&absolute).map_err(|error| match error {
+                AttachmentReadError::TooLarge(size) => AttachmentResolveError::new(
+                    AttachmentResolveErrorKind::TooLarge,
+                    format!(
+                        "附件超过单文件上限 {} 字节（实际 {size}）",
+                        ATTACHMENT_MAX_BYTES
+                    ),
+                ),
+                AttachmentReadError::Io(error) => AttachmentResolveError::new(
+                    AttachmentResolveErrorKind::StorageFailed,
+                    format!("附件读取失败：{error}"),
+                ),
+            })?;
+            if sha256 != record.sha256 || i64::try_from(bytes.len()).ok() != Some(record.size_bytes)
+            {
+                return Err(AttachmentResolveError::new(
+                    AttachmentResolveErrorKind::StorageFailed,
+                    format!("附件内容校验失败（sha256/size 不一致）：{attachment_id}"),
+                ));
+            }
+            let dimensions = match dimensions {
+                Some(dimensions) => dimensions,
+                None => sniff_file(&absolute)
+                    .map(|(_, dimensions)| dimensions)
+                    .map_err(|error| {
+                        AttachmentResolveError::new(
+                            AttachmentResolveErrorKind::Invalid,
+                            format!("附件尺寸读取失败：{error}"),
+                        )
+                    })?,
+            };
+            if !dimensions.within_limits() {
+                return Err(AttachmentResolveError::new(
+                    AttachmentResolveErrorKind::TooLarge,
+                    format!(
+                        "图像超限：{}×{}（上限 {} 像素且最长边 ≤ {}）",
+                        dimensions.width,
+                        dimensions.height,
+                        ATTACHMENT_MAX_PIXELS,
+                        ATTACHMENT_MAX_EDGE
+                    ),
+                ));
+            }
+            attachments.push(OutboundAttachment {
+                attachment_id: record.id.clone(),
+                mime,
+                width: Some(dimensions.width),
+                height: Some(dimensions.height),
+                path: absolute.to_string_lossy().to_string(),
+                size_bytes: record.size_bytes,
+                sha256: record.sha256.clone(),
+            });
+        }
+        Ok(attachments)
+    }
+}
+
+impl AttachmentResolver for AttachmentReplayResolver {
+    fn resolve<'a>(
+        &'a self,
+        session_id: &'a SessionId,
+        message: &'a Message,
+    ) -> AttachmentResolveFuture<'a> {
+        Box::pin(async move { self.resolve_inner(session_id, message).await })
+    }
 }
 
 /// 诊断指标（ADR-035 D-035-6：只含数量/字节数，不含绝对路径）。

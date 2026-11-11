@@ -16,6 +16,7 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+pub mod attachments;
 pub mod backpressure;
 pub mod cancel;
 pub mod clock;
@@ -36,6 +37,10 @@ pub mod storage_state;
 mod time;
 mod ulid;
 
+pub use attachments::{
+    message_has_attachments, AttachmentResolveError, AttachmentResolveErrorKind,
+    AttachmentResolveFuture, AttachmentResolver,
+};
 pub use backpressure::{
     BackpressureConfig, BackpressureController, BackpressureError, BackpressureMetrics,
     ControlReadGate, DeliveryPoll, IsolationReason, IsolationSink, NoopIsolationSink,

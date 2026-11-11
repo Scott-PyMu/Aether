@@ -155,9 +155,15 @@ mustContain("crates/aether-app/src/attachment.rs", [
   "store_content",
   "resolve_storage_path",
   "cleanup_orphans",
+  "AttachmentReplayResolver",
   "sync_all",
   "rename",
 ]);
+mustContain("crates/aether-control/src/lifecycle.rs", [
+  "resolve_replay_attachments",
+  "AttachmentRejected",
+]);
+mustContain("crates/aether-app/src/boot.rs", ["with_attachment_resolver"]);
 mustContain("crates/aether-app/src/session_backend.rs", [
   "fn attachment_add",
   "fn attachment_list",

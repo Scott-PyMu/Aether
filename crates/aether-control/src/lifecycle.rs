@@ -363,6 +363,12 @@ pub enum LifecycleError {
         reason: String,
         since_ms: i64,
     },
+    /// 附件重放失败（M10-05/ADR-035：retry/resume 必须重放完整输入；
+    /// 不支持/文件缺失/哈希不一致等结构化拒绝，不静默降级为纯文本）。
+    AttachmentRejected {
+        kind: crate::attachments::AttachmentResolveErrorKind,
+        message: String,
+    },
     /// 存储层错误。
     Storage {
         code: String,
@@ -394,6 +400,7 @@ impl LifecycleError {
             Self::PersistDegraded { .. } => "persist_degraded",
             Self::StorageBackpressure { .. } => "storage_backpressure",
             Self::AdapterIsolated { .. } => "storage_backpressure",
+            Self::AttachmentRejected { .. } => "attachment_rejected",
             Self::Storage { .. } => "storage_error",
             Self::Pipeline { .. } => "pipeline_error",
             Self::Internal { .. } => "internal",
@@ -448,6 +455,9 @@ impl std::fmt::Display for LifecycleError {
                  （来源 {reason}）；拒绝新会话/新 run（M2-04/D8）"
             ),
             Self::Storage { code, message } => write!(f, "存储错误（{code}）：{message}"),
+            Self::AttachmentRejected { kind, message } => {
+                write!(f, "附件重放失败（{kind:?}）：{message}")
+            }
             Self::Pipeline { code, message } => write!(f, "事件管线错误（{code}）：{message}"),
             Self::Internal { reason } => write!(f, "生命周期内部错误：{reason}"),
         }
@@ -604,6 +614,8 @@ struct ManagerInner {
     run_task_index: Mutex<HashMap<tokio::task::Id, (SessionId, RunId)>>,
     /// 空闲内存采样源（M7-02/ADR-022；`None` = 未接线——闸门保持缺省上限，不巡检）。
     free_ram: Mutex<Option<Arc<dyn FreeRamSource>>>,
+    /// 附件重放解析器（M10-05；`None` = 未接线，带附件的 retry/resume 结构化拒绝）。
+    attachment_resolver: Mutex<Option<Arc<dyn crate::attachments::AttachmentResolver>>>,
     /// 闸门快照单元（`health.concurrency_gate` 同步读；`None` = 未接线）。
     gate_cell: Mutex<Option<ConcurrencyGateCell>>,
     /// `session.pause` 线协议下发钩子（M7-03/ADR-017；`None` = 未接线 = 跳过下发）。
@@ -655,6 +667,7 @@ impl SessionManager {
                 run_tasks: Mutex::new(JoinSet::new()),
                 run_task_index: Mutex::new(HashMap::new()),
                 free_ram: Mutex::new(None),
+                attachment_resolver: Mutex::new(None),
                 gate_cell: Mutex::new(None),
                 pause_notifier: Mutex::new(None),
                 pause_counters: PauseCounters {
@@ -682,6 +695,17 @@ impl SessionManager {
     #[must_use]
     pub fn with_free_ram(&self, source: Arc<dyn FreeRamSource>) -> Self {
         *lock_free_ram(&self.inner) = Some(source);
+        self.clone()
+    }
+
+    /// 注入附件重放解析器（M10-05/ADR-035：retry/resume 重放完整输入；
+    /// 未接线时带附件的重放返回 `AttachmentRejected`，不静默降级为纯文本）。
+    #[must_use]
+    pub fn with_attachment_resolver(
+        &self,
+        resolver: Arc<dyn crate::attachments::AttachmentResolver>,
+    ) -> Self {
+        *lock_attachment_resolver(&self.inner) = Some(resolver);
         self.clone()
     }
 
@@ -942,6 +966,35 @@ impl SessionManager {
         Ok(self.inner.reads.run(run_id).await?)
     }
 
+    /// 重放附件解析（M10-05）：无附件 → 空；有附件但解析器未接线/校验失败 →
+    /// 结构化 `AttachmentRejected`（不静默降级为纯文本）。
+    async fn resolve_replay_attachments(
+        &self,
+        session_id: &SessionId,
+        message: &Message,
+    ) -> Result<Vec<aether_core::OutboundAttachment>, LifecycleError> {
+        if !crate::attachments::message_has_attachments(message) {
+            return Ok(Vec::new());
+        }
+        let resolver = {
+            let guard = lock_attachment_resolver(&self.inner);
+            guard.clone()
+        };
+        let Some(resolver) = resolver else {
+            return Err(LifecycleError::AttachmentRejected {
+                kind: crate::attachments::AttachmentResolveErrorKind::StorageFailed,
+                message: "附件重放解析器未接线：拒绝重放（不静默丢弃附件）".to_owned(),
+            });
+        };
+        resolver
+            .resolve(session_id, message)
+            .await
+            .map_err(|error| LifecycleError::AttachmentRejected {
+                kind: error.kind,
+                message: error.message,
+            })
+    }
+
     /// 一键重放（M3-06 `run_retry`；ADR-004/ADR-005）：
     /// - 准入：run 存在且为终态（`failed`/`timeout`/`cancelled`）；会话非终态；
     ///   管线准入（`persist_degraded`/背压）与适配器级背压检查；
@@ -981,6 +1034,11 @@ impl SessionManager {
                     "run {run_id} 的输入消息 {input_message_id} 不存在（审计数据不完整）"
                 ),
             })?;
+        // M10-05/ADR-035：重试必须重放完整输入（文本 + 附件），并重新执行能力门；
+        // 失败返回结构化错误，不静默降级为纯文本。
+        let replay_attachments = self
+            .resolve_replay_attachments(&run.session_id, &input_message)
+            .await?;
 
         self.inner
             .pipeline
@@ -1064,7 +1122,8 @@ impl SessionManager {
                     thinking_override: false,
                     // M7-06/ADR-024：引用为内存态不落库——重放不带引用（任务证据登记）。
                     references: Vec::new(),
-                    attachments: Vec::new(),
+                    // M10-05/ADR-035：附件从 content_parts 重新水合（含能力门/文件校验）。
+                    attachments: replay_attachments.clone(),
                     subagent_context: None,
                     last_activity_ms: now,
                     cancel,
@@ -1089,7 +1148,7 @@ impl SessionManager {
                     thinking_depth,
                     thinking_override: false,
                     references: Vec::new(),
-                    attachments: Vec::new(),
+                    attachments: replay_attachments,
                     subagent_context: None,
                 });
                 (true, false)
@@ -1332,6 +1391,10 @@ impl SessionManager {
                     marker.input_message_id
                 ),
             })?;
+        // M10-05/ADR-035：暂停恢复同样重放完整输入（文本 + 附件），并重新执行能力门。
+        let replay_attachments = self
+            .resolve_replay_attachments(session_id, &input_message)
+            .await?;
         let session_row = self
             .inner
             .reads
@@ -1382,7 +1445,8 @@ impl SessionManager {
                 thinking_override: false,
                 // M7-06/ADR-024：暂停重放不带引用（内存态；任务证据登记）。
                 references: Vec::new(),
-                attachments: Vec::new(),
+                // M10-05/ADR-035：附件重新水合（失败时保持 paused，已在上方返回结构化错误）。
+                attachments: replay_attachments,
                 subagent_context: None,
                 last_activity_ms: now,
                 cancel,
@@ -3834,6 +3898,15 @@ fn lock_free_ram(
     inner: &Arc<ManagerInner>,
 ) -> std::sync::MutexGuard<'_, Option<Arc<dyn FreeRamSource>>> {
     match inner.free_ram.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+fn lock_attachment_resolver(
+    inner: &Arc<ManagerInner>,
+) -> std::sync::MutexGuard<'_, Option<Arc<dyn crate::attachments::AttachmentResolver>>> {
+    match inner.attachment_resolver.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     }

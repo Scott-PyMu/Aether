@@ -11,6 +11,7 @@
 
 use std::sync::Arc;
 
+use aether_app::attachment::AttachmentReplayResolver;
 use aether_app::core_health::{boot_core_full, CoreBoot, StaticRuntimeSummaries};
 use aether_app::ipc::backend::{IpcBackend, NotImplementedBackend};
 use aether_app::ipc::business::BusinessCode;
@@ -20,14 +21,16 @@ use aether_app::ipc::dto::{
 use aether_app::runtime_control::{boot_supervisor, mock_spec};
 use aether_app::session_backend::SessionBackend;
 use aether_control::{
-    ExecutorFuture, ExecutorOutcome, LifecycleConfig, RunExecutor, RunRequest, SessionManager,
-    SystemClock,
+    AttachmentResolveErrorKind, AttachmentResolver, ExecutorFuture, ExecutorOutcome,
+    LifecycleConfig, RunExecutor, RunRequest, SessionManager, SystemClock,
 };
+use aether_core::{AttachmentMime, Message, MessageRole, SessionId};
 use aether_store::Store;
 use serde_json::json;
 use tempfile::TempDir;
 
 const SESSION: &str = "01J8ZQ5R0N7W9Y8X6V4T2S0K1A";
+const SESSION_REPLAY: &str = "01J8ZQ5R0N7W9Y8X6V4T2S0K1B";
 
 #[derive(Default)]
 struct CancellableExecutor;
@@ -49,6 +52,7 @@ struct Harness {
     runtime: tokio::runtime::Runtime,
     #[allow(dead_code)]
     slot: Arc<aether_app::shutdown::StorageSlot>,
+    reads: aether_store::ReadPool,
     backend: Arc<dyn IpcBackend>,
 }
 
@@ -69,13 +73,15 @@ fn harness() -> Harness {
         store
             .execute_write(
                 "INSERT INTO runtimes (id, name, kind, version, created_at, updated_at) \
-                 VALUES ('mock', 'Mock', 'mock', '0.1.0', 1, 1)",
+                 VALUES ('mock', 'Mock', 'mock', '0.1.0', 1, 1), \
+                        ('claude-code', 'Claude Code', 'claude', '0.1.0', 1, 1)",
             )
             .unwrap();
         store
             .execute_write(&format!(
                 "INSERT INTO sessions (id, runtime_id, title, status, created_at, updated_at) \
-                 VALUES ('{SESSION}', 'mock', 't', 'idle', 1, 1)"
+                 VALUES ('{SESSION}', 'mock', 't', 'idle', 1, 1), \
+                        ('{SESSION_REPLAY}', 'claude-code', 'replay', 'idle', 1, 1)"
             ))
             .unwrap();
     }
@@ -116,7 +122,7 @@ fn harness() -> Harness {
             Arc::new(NotImplementedBackend),
             Some(manager),
             None,
-            Some(reads),
+            Some(reads.clone()),
             Some(supervisor),
             handle,
         )
@@ -127,6 +133,7 @@ fn harness() -> Harness {
         dir,
         runtime,
         slot,
+        reads,
         backend,
     }
 }
@@ -284,6 +291,90 @@ fn session_send_with_attachment_on_unsupported_runtime_is_not_silently_dropped()
         .query_row("SELECT COUNT(*) FROM runs", [], |row| row.get(0))
         .unwrap();
     assert_eq!((messages, runs), (0, 0));
+}
+
+#[test]
+fn replay_resolver_rehydrates_attachments_and_rejects_missing_or_unsupported() {
+    let h = harness();
+    let source = h.dir.path().join("replay.png");
+    std::fs::write(&source, png_header(64, 48)).unwrap();
+    let added = h
+        .backend
+        .attachment_add(
+            &AttachmentAddRequest {
+                session_id: SESSION_REPLAY.to_owned(),
+                source_path: source.to_string_lossy().to_string(),
+                kind: Some("image".to_owned()),
+            },
+            &source,
+        )
+        .expect("attachment_add");
+    let attachment_id = added["attachment_id"].as_str().unwrap().to_owned();
+    let sha = added["sha256"].as_str().unwrap().to_owned();
+    let message = Message {
+        id: aether_core::MessageId::new("01J8ZQ5R0N7W9Y8X6V4T2S0K1M").unwrap(),
+        session_id: SessionId::new(SESSION_REPLAY).unwrap(),
+        run_id: None,
+        client_msg_id: None,
+        role: MessageRole::User,
+        content: "重放图片".to_owned(),
+        content_parts: Some(json!([
+            { "kind": "image", "attachment_id": attachment_id, "mime": "image/png" }
+        ])),
+        tool_calls: None,
+        parent_message_id: None,
+        seq: 1,
+        created_at: 1,
+    };
+    let resolver = AttachmentReplayResolver::new(h.reads.clone(), h.dir.path(), None);
+    let session_id = SessionId::new(SESSION_REPLAY).unwrap();
+    let outbound = h
+        .runtime
+        .block_on(resolver.resolve(&session_id, &message))
+        .expect("resolver");
+    assert_eq!(outbound.len(), 1);
+    assert_eq!(outbound[0].attachment_id, attachment_id);
+    assert_eq!(outbound[0].mime, AttachmentMime::Png);
+    assert_eq!(outbound[0].sha256, sha);
+    assert!(outbound[0].path.ends_with(".png"));
+
+    let stored = h
+        .dir
+        .path()
+        .join("attachments")
+        .join(&sha[..2])
+        .join(format!("{sha}.png"));
+    std::fs::remove_file(&stored).unwrap();
+    let error = h
+        .runtime
+        .block_on(resolver.resolve(&session_id, &message))
+        .expect_err("文件缺失必须拒绝");
+    assert_eq!(error.kind, AttachmentResolveErrorKind::StorageFailed);
+
+    // mock 运行时未声明 multimodal → 结构化 Unsupported（即使文件存在）。
+    let mock_source = h.dir.path().join("mock.png");
+    std::fs::write(&mock_source, png_header(64, 48)).unwrap();
+    let mock_added = h
+        .backend
+        .attachment_add(
+            &AttachmentAddRequest {
+                session_id: SESSION.to_owned(),
+                source_path: mock_source.to_string_lossy().to_string(),
+                kind: Some("image".to_owned()),
+            },
+            &mock_source,
+        )
+        .expect("mock attachment_add");
+    let mut mock_message = message.clone();
+    mock_message.session_id = SessionId::new(SESSION).unwrap();
+    mock_message.content_parts = Some(json!([
+        { "kind": "image", "attachment_id": mock_added["attachment_id"], "mime": "image/png" }
+    ]));
+    let error = h
+        .runtime
+        .block_on(resolver.resolve(&SessionId::new(SESSION).unwrap(), &mock_message))
+        .expect_err("未声明 multimodal 必须拒绝");
+    assert_eq!(error.kind, AttachmentResolveErrorKind::Unsupported);
 }
 
 #[test]

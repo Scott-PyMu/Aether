@@ -3570,7 +3570,7 @@ fn attachment_summary_json(attachment: &AttachmentRecord) -> Value {
 
 /// 模型视觉能力判定（ADR-035 D-035-4 / 附录 C）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum VisionState {
+pub(crate) enum VisionState {
     Allowed,
     Blocked,
     Unknown,
@@ -3581,7 +3581,7 @@ enum VisionState {
 /// - 含 `vision` → 允许；
 /// - 含 `vision=false` / `vision:false` → 明确拒绝；
 /// - 其余（空/未知）→ 警告继续。
-fn vision_state(capabilities: &[String]) -> VisionState {
+pub(crate) fn vision_state(capabilities: &[String]) -> VisionState {
     if capabilities
         .iter()
         .any(|item| matches!(item.as_str(), "vision=false" | "vision:false"))
@@ -3740,7 +3740,7 @@ enum SelectionPlan {
 }
 
 /// 会话当前选择的 provider id（`sessions.config.aether.provider_id`）。
-fn session_provider_id(session: &aether_core::Session) -> Option<&str> {
+pub(crate) fn session_provider_id(session: &aether_core::Session) -> Option<&str> {
     session
         .config
         .get("aether")
@@ -3974,6 +3974,25 @@ pub fn map_lifecycle_error(error: LifecycleError) -> IpcError {
         }
         LifecycleError::SessionBusy { .. } => IpcError::invalid_value(error.to_string())
             .with_business_code(BusinessCode::SessionBusy),
+        LifecycleError::AttachmentRejected { kind, message } => match kind {
+            aether_control::AttachmentResolveErrorKind::Unsupported => {
+                IpcError::invalid_value(message)
+                    .with_business_code(BusinessCode::AttachmentTypeUnsupported)
+            }
+            aether_control::AttachmentResolveErrorKind::TooLarge => IpcError::too_large(
+                "attachments",
+                message,
+            )
+            .with_business_code(BusinessCode::AttachmentTooLarge),
+            aether_control::AttachmentResolveErrorKind::LimitExceeded => IpcError::out_of_range(
+                "attachments",
+                message,
+            )
+            .with_business_code(BusinessCode::AttachmentLimitExceeded),
+            aether_control::AttachmentResolveErrorKind::StorageFailed
+            | aether_control::AttachmentResolveErrorKind::Invalid => IpcError::internal(message)
+                .with_business_code(BusinessCode::AttachmentStorageFailed),
+        },
         LifecycleError::SessionPaused { .. } => IpcError::invalid_value(error.to_string())
             .with_business_code(BusinessCode::SessionPaused),
         LifecycleError::StorageBackpressure { .. } => IpcError::invalid_value(error.to_string())

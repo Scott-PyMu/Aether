@@ -322,6 +322,13 @@ pub fn build_backend(
                     Some(executor) => executor.clone(),
                     None => std::sync::Arc::new(adapter_executor::UnavailableExecutor),
                 };
+                let replay_resolver = std::sync::Arc::new(
+                    crate::attachment::AttachmentReplayResolver::new(
+                        reads.clone(),
+                        data_dir.clone(),
+                        supervisor.clone(),
+                    ),
+                );
                 let mut manager = aether_control::SessionManager::new(
                     aether_control::LifecycleConfig::default(),
                     std::sync::Arc::new(aether_control::SystemClock),
@@ -333,7 +340,8 @@ pub fn build_backend(
                 // M7-02/ADR-022：并发闸门——空闲内存采样（启动即采样 + 5s 巡检；
                 // `clamp(floor(free_ram_gb/1.5), 2, 10)`）与 health 快照单元共享。
                 .with_free_ram(std::sync::Arc::new(aether_control::SysinfoFreeRam::new()))
-                .with_concurrency_gate(concurrency_gate.clone());
+                .with_concurrency_gate(concurrency_gate.clone())
+                .with_attachment_resolver(replay_resolver);
                 // M7-03/ADR-017：`session.pause` 线协议下发钩子（受控中断收口后
                 // best-effort 通知适配器；未接线/无适配器会话 = 跳过）。
                 if let Some(executor) = &executor {
