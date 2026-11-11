@@ -263,6 +263,7 @@ run("worker 缩略图 smoke", "node", [
   "scripts/test/m10-05/.tmp/worker-fixture.png",
   "scripts/test/m10-05/.tmp/worker-thumb.webp",
 ]);
+run("worker 真实四格式矩阵", "node", ["scripts/test/m10-05/worker-format-matrix.mjs"]);
 {
   const thumb = path.join(root, "scripts/test/m10-05/.tmp/worker-thumb.webp");
   const magic = existsSync(thumb) ? readFileSync(thumb).subarray(0, 12).toString("latin1") : "";
