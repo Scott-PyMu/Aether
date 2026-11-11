@@ -234,6 +234,125 @@ describe("M10-05 附件输入区（ADR-035 / UI-UX attachment）", () => {
     fireEvent.change(screen.getByTestId("composer-input"), { target: { value: "无附件" } });
     fireEvent.click(screen.getByTestId("composer-send"));
     await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
-    expect(sendMessage.mock.calls[0]?.[0]).not.toHaveProperty("attachments");
+  });
+
+  it("发送回执 multimodal_model_unverified → 警告展示；仅附件也可发送", async () => {
+    const sendMessage = vi.fn(async (input: Parameters<SessionIpc["sendMessage"]>[0]) => ({
+      session_id: input.session_id,
+      message_id: "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+      run_id: RUN_1,
+      queued: false,
+      duplicate: false,
+      warnings: [
+        {
+          code: "multimodal_model_unverified",
+          field: "attachments",
+          runtime_id: "claude-code",
+          message: "模型未声明 vision",
+        },
+      ],
+    }));
+    const ipc = fakeIpc(["multimodal"]);
+    ipc.sendMessage = sendMessage;
+    await open(ipc, fakeAttachments(), "C:\\ws\\shot.png");
+    fireEvent.click(screen.getByTestId("composer-attach"));
+    const item = await screen.findByTestId("attachment-item", {}, { timeout: 5000 });
+    await waitFor(() => expect(item.getAttribute("data-state")).toBe("ready"));
+    expect(item.textContent).toContain("KiB");
+    fireEvent.click(screen.getByTestId("composer-send"));
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+    const input = sendMessage.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(input.text).toBe("");
+    expect(input.attachments).toEqual([ATTACHMENT]);
+    expect((await screen.findByTestId("multimodal-warning")).textContent).toContain(
+      "vision",
+    );
+  });
+
+  it("粘贴/拖拽图片 → attachment_add；第 9 个附件结构化拒绝", async () => {
+    const attachments = fakeAttachments();
+    const View = window as unknown as {
+      aether?: { pathForFile: (file: File) => string };
+    };
+    const previous = View.aether;
+    View.aether = { pathForFile: () => "C:\\ws\\pasted.png" };
+    try {
+      await open(fakeIpc(["multimodal"]), attachments, null);
+      const file = new File([new Uint8Array([0x89])], "pasted.png", {
+        type: "image/png",
+      });
+      fireEvent.paste(screen.getByTestId("composer-input"), {
+        clipboardData: { files: [file] },
+      });
+      await waitFor(() =>
+        expect(attachments.add).toHaveBeenCalledWith(SESSION, "C:\\ws\\pasted.png"),
+      );
+      await waitFor(() =>
+        expect(screen.getByTestId("attachment-picker").getAttribute("data-count")).toBe("1"),
+      );
+      fireEvent.drop(screen.getByTestId("composer"), {
+        dataTransfer: { files: [file] },
+        clientX: 0,
+        clientY: 0,
+      });
+      await waitFor(() => expect(attachments.add).toHaveBeenCalledTimes(2));
+
+      for (let index = 2; index < 9; index += 1) {
+        fireEvent.drop(screen.getByTestId("composer"), {
+          dataTransfer: { files: [file] },
+          clientX: 0,
+          clientY: 0,
+        });
+      }
+      await waitFor(() =>
+        expect(screen.getByTestId("attachment-picker").getAttribute("data-count")).toBe("8"),
+      );
+      fireEvent.drop(screen.getByTestId("composer"), {
+        dataTransfer: { files: [file] },
+        clientX: 0,
+        clientY: 0,
+      });
+      const error = await screen.findByTestId("workbench-error");
+      expect(error.getAttribute("data-code")).toBe("attachment_limit_exceeded");
+    } finally {
+      View.aether = previous;
+    }
+  });
+
+  it("历史消息 content_parts + attachment_list → 缩略图渲染", async () => {
+    const ipc = fakeIpc(["multimodal"]);
+    const page: MessagesPageResult = {
+      session_id: SESSION,
+      max_seq: null,
+      events: [],
+      messages: [
+        {
+          id: "01J8ZQ5R0N7W9Y8X6V4T2S0K1M",
+          session_id: SESSION,
+          run_id: RUN_1,
+          client_msg_id: null,
+          role: "user",
+          content: "历史图片",
+          content_parts: [
+            { kind: "image", attachment_id: ATTACHMENT, mime: "image/png" },
+          ],
+          seq: 1,
+          created_at: 2,
+        },
+      ],
+      complete: true,
+    };
+    ipc.messagesPage = vi.fn(async () => page);
+    await open(
+      ipc,
+      fakeAttachments({ list: vi.fn(async () => [summary()]) }),
+      null,
+    );
+    const thumb = await waitFor(() => {
+      const found = document.querySelector(".message-attachment-thumb");
+      expect(found).not.toBeNull();
+      return found as HTMLImageElement;
+    });
+    expect(thumb.getAttribute("src")).toBe(`aether-attachment://thumb/${SHA}`);
   });
 });

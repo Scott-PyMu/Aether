@@ -385,9 +385,14 @@ export function SessionWorkbench({
   const [pendingReferences, setPendingReferences] = useState<SessionReference[]>([]);
   // M10-05/ADR-035：待发送附件（上传中不阻塞输入；发送仅取 ready）。
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
+  // 快速粘贴/拖拽时 state 更新存在批处理窗口：用 ref 同步执行数量限额判定。
+  const pendingAttachmentCount = useRef(0);
   // attachment_id → sha256（消息历史缩略图协议需要；来源 attachment_list + 本次上传摘要）。
   const [attachmentIndex, setAttachmentIndex] = useState<Record<string, string>>({});
   const [multimodalWarning, setMultimodalWarning] = useState<string | null>(null);
+  useEffect(() => {
+    pendingAttachmentCount.current = pendingAttachments.length;
+  }, [pendingAttachments]);
   const composerRef = useRef<HTMLDivElement | null>(null);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1262,6 +1267,7 @@ export function SessionWorkbench({
       setPendingReferences([]);
       // M10-05：附件已绑定到本次消息（DB 元数据保留；输入条清空）。
       setPendingAttachments([]);
+      pendingAttachmentCount.current = 0;
       setLastAck({
         runId: ack.run_id,
         duplicate: ack.duplicate,
@@ -1357,22 +1363,16 @@ export function SessionWorkbench({
         return;
       }
       const key = `${trimmed}#${Date.now()}#${Math.random().toString(36).slice(2)}`;
-      let rejected: string | null = null;
-      setPendingAttachments((previous) => {
-        if (previous.length >= ATTACHMENT_MAX_PER_MESSAGE) {
-          rejected = "attachment_limit_exceeded";
-          return previous;
-        }
-        return [
-          ...previous,
-          { key, sourcePath: trimmed, state: "uploading" },
-        ];
-      });
-      if (rejected) {
-        setErrorCode(rejected);
+      if (pendingAttachmentCount.current >= ATTACHMENT_MAX_PER_MESSAGE) {
+        setErrorCode("attachment_limit_exceeded");
         setError(`单条消息附件上限 ${ATTACHMENT_MAX_PER_MESSAGE} 个`);
         return;
       }
+      pendingAttachmentCount.current += 1;
+      setPendingAttachments((previous) => [
+        ...previous,
+        { key, sourcePath: trimmed, state: "uploading" },
+      ]);
       void (async () => {
         try {
           const summary = await attachmentIpcProp.add(activeSessionId, trimmed);
@@ -1401,6 +1401,7 @@ export function SessionWorkbench({
   /** M10-05：删除待发送附件（已上传的同步删除 DB 行；失败条目仅本地移除）。 */
   const removeAttachment = useCallback(
     (item: PendingAttachment) => {
+      pendingAttachmentCount.current = Math.max(0, pendingAttachmentCount.current - 1);
       setPendingAttachments((previous) =>
         previous.filter((candidate) => candidate.key !== item.key),
       );
@@ -1422,6 +1423,7 @@ export function SessionWorkbench({
   /** M10-05：失败重试（重新走 `attachment_add`，同一路径）。 */
   const retryAttachment = useCallback(
     (item: PendingAttachment) => {
+      pendingAttachmentCount.current = Math.max(0, pendingAttachmentCount.current - 1);
       setPendingAttachments((previous) =>
         previous.filter((candidate) => candidate.key !== item.key),
       );

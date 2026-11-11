@@ -174,7 +174,7 @@ check(
   (openapi.components?.schemas?.RpcRequest?.oneOf ?? []).length === 82,
   `实际 ${(openapi.components?.schemas?.RpcRequest?.oneOf ?? []).length}`,
 );
-check("schema 数 = 102", Object.keys(openapi.components?.schemas ?? {}).length === 102);
+check("schema 数 = 105", Object.keys(openapi.components?.schemas ?? {}).length === 105);
 
 // 3) 契约计数不变（M10-03 +0）
 const manifest = readJson("packages/protocol/src/command-manifest.json");

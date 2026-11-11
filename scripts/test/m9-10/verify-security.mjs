@@ -353,20 +353,23 @@ expect(
 );
 const pathManifest = readJson("packages/protocol/src/path-commands.json");
 expect(pathManifest.schema === "aether.path-commands.v1", "path-commands schema 不符");
-expect(pathManifest.counts?.commands === 10, "路径命令数必须 10");
+expect(pathManifest.counts?.commands === 13, "路径命令数必须 13");
 expect(pathManifest.counts?.required === 8, "P1-8 必有命令必须 8");
 const pathNames = (pathManifest.commands ?? []).map((entry) => entry.name).sort();
 expect(
   JSON.stringify(pathNames) ===
     JSON.stringify([
       "archive_export",
+      "archive_import",
       "artifact_add",
       "audit_export",
       "backup_create",
       "backup_restore",
       "export_diagnostics",
       "session_export",
+      "session_import",
       "startup_migrate",
+      "workflow_import",
       "workspace_create",
       "workspace_set",
     ]),
