@@ -413,6 +413,8 @@ describe("M10-05 附件输入区（ADR-035 / UI-UX attachment）", () => {
     expect(inline.getAttribute("data-business-code")).toBe("attachment_storage_failed");
     expect(inline.getAttribute("data-code")).toBe("attachment_storage_failed");
     expect(inline.getAttribute("data-error")).toBe("attachment_replay");
+    expect(inline.querySelector("button")).toBeNull();
+    expect(inline.textContent).not.toContain("知道了");
     expect(screen.queryByTestId("workbench-error")).toBeNull();
   });
 

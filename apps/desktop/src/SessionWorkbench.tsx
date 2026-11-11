@@ -2514,13 +2514,6 @@ export function SessionWorkbench({
                         data-business-code={retryError.businessCode}
                       >
                         {retryError.message}
-                        <button
-                          type="button"
-                          data-action="dismiss-retry-error"
-                          onClick={() => setRetryError(null)}
-                        >
-                          知道了
-                        </button>
                       </p>
                     ) : null}
                   </article>
