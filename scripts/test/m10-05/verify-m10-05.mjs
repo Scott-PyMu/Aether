@@ -229,14 +229,19 @@ mustContain("apps/desktop/src/SessionWorkbench.tsx", [
   "data-error-code={item.errorCode}",
   "runtimeSupportsMultimodal",
   "onComposerPaste",
+  "run-retry-error",
+  "data-business-code",
 ]);
 mustContain("apps/desktop/src/attachments.ts", [
   "ATTACHMENT_MAX_BYTES",
   "ATTACHMENT_MAX_PER_MESSAGE",
   "ATTACHMENT_MIME_WHITELIST",
   "attachmentThumbUrl",
+  "attachmentErrorMessage",
+  "attachmentFailureHint",
   "MULTIMODAL_MODEL_UNVERIFIED",
 ]);
+mustContain("apps/desktop/src/startup.ts", ["ipcBusinessCode"]);
 mustContain("apps/desktop/src/session.ts", ["attachments?: string[]", "MessageContentPart"]);
 
 // ---------- 6) 证据 ----------

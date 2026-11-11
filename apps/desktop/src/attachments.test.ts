@@ -13,6 +13,8 @@ vi.mock("@aether/protocol", () => ({ client }));
 
 import {
   attachmentDisplayName,
+  attachmentErrorMessage,
+  attachmentFailureHint,
   attachmentIpc,
   attachmentThumbUrl,
   formatAttachmentBytes,
@@ -83,5 +85,26 @@ describe("attachments.ts（M10-05）", () => {
     expect(formatAttachmentBytes(0)).toBe("0 B");
     expect(formatAttachmentBytes(1024)).toBe("1 KiB");
     expect(formatAttachmentBytes(1536 * 1024)).toBe("1.5 MiB");
+  });
+
+  it("附件失败友好文案/短提示（业务码优先）", () => {
+    expect(attachmentErrorMessage("attachment_storage_failed", "raw")).toContain(
+      "附件文件已丢失或损坏",
+    );
+    expect(attachmentErrorMessage("attachment_type_unsupported", "raw")).toContain(
+      "不支持图片输入",
+    );
+    expect(attachmentErrorMessage("attachment_too_large", "raw")).toContain(
+      "超过大小或像素限制",
+    );
+    expect(attachmentErrorMessage("attachment_limit_exceeded", "raw")).toContain(
+      "最多 8 个",
+    );
+    expect(attachmentErrorMessage("invalid_value", "raw")).toBe("raw");
+    expect(attachmentFailureHint("attachment_too_large")).toContain("10 MiB");
+    expect(attachmentFailureHint("attachment_type_unsupported")).toContain("PNG");
+    expect(attachmentFailureHint("attachment_limit_exceeded")).toContain("8");
+    expect(attachmentFailureHint("attachment_storage_failed")).toContain("重试");
+    expect(attachmentFailureHint(null)).toContain("上传失败");
   });
 });

@@ -116,3 +116,42 @@ export function formatAttachmentBytes(bytes: number): string {
   if (bytes >= 1024) return `${Math.round(bytes / 1024)} KiB`;
   return `${bytes} B`;
 }
+
+/**
+ * 附件失败友好文案（M10-05；优先按 `business_code`，未知时回退后端 message）。
+ *
+ * 口径：明确告知“本次操作未执行”，并给出可操作建议；不把后端 ULID/路径原样抛给用户。
+ */
+export function attachmentErrorMessage(
+  businessCode: string | null | undefined,
+  fallback: string,
+): string {
+  switch (businessCode) {
+    case "attachment_storage_failed":
+      return "附件文件已丢失或损坏，本次操作未执行。请恢复附件文件，或重新添加图片后发送新消息。";
+    case "attachment_type_unsupported":
+      return "当前模型或运行时不支持图片输入，本次操作未执行。请切换到支持视觉的模型，或移除附件后重试。";
+    case "attachment_too_large":
+      return "附件超过大小或像素限制，本次操作未执行。请压缩/裁剪图片后重新添加。";
+    case "attachment_limit_exceeded":
+      return "单条消息最多 8 个附件，本次操作未执行。请删除部分附件后重试。";
+    default:
+      return fallback;
+  }
+}
+
+/** 附件条失败项的短提示（用于 `data-state="failed"` 的可见文案/标题）。 */
+export function attachmentFailureHint(errorCode: string | null | undefined): string {
+  switch (errorCode) {
+    case "attachment_too_large":
+      return "超过 10 MiB / 25MP 限制";
+    case "attachment_type_unsupported":
+      return "仅支持 PNG/JPEG/WebP/GIF";
+    case "attachment_limit_exceeded":
+      return "单条消息最多 8 个";
+    case "attachment_storage_failed":
+      return "存储失败，可重试";
+    default:
+      return "上传失败，可重试";
+  }
+}

@@ -99,3 +99,13 @@ export function describeIpcError(error: unknown): string {
 export function ipcErrorCode(error: unknown): string | null {
   return aetherErrorCode(error);
 }
+
+/**
+ * IPC 错误的业务码（`business_code`；不存在时 `null`）。
+ *
+ * UI 判定顺序为 `business_code` → `aether_code`；`attachment_*` 的友好文案
+ * 依赖本函数，避免把 `internal`/`invalid_value` 当作最终提示。
+ */
+export function ipcBusinessCode(error: unknown): string | null {
+  return tryAetherError(error)?.business_code ?? null;
+}

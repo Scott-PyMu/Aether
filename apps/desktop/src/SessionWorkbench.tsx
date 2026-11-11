@@ -20,6 +20,8 @@ import { artifactsIpc as productionArtifactsIpc, type ArtifactsIpc } from "./art
 import {
   attachmentIpc as productionAttachmentIpc,
   attachmentDisplayName,
+  attachmentErrorMessage,
+  attachmentFailureHint,
   attachmentThumbUrl,
   ATTACHMENT_MAX_PER_MESSAGE,
   formatAttachmentBytes,
@@ -29,7 +31,7 @@ import {
   type AttachmentIpc,
   type AttachmentSummary,
 } from "./attachments";
-import { describeIpcError, ipcErrorCode } from "./startup";
+import { describeIpcError, ipcBusinessCode, ipcErrorCode } from "./startup";
 import {
   defaultAetherEventListener,
   type AetherEventListener,
@@ -398,6 +400,18 @@ export function SessionWorkbench({
   const [error, setError] = useState<string | null>(null);
   /** 结构化错误码（UI-UX §7.3 通用行：错误元素补 `data-code`；无码为 `null`）。 */
   const [errorCode, setErrorCode] = useState<string | null>(null);
+  /** 业务码（attachment_* 友好文案/诊断；无业务码为 `null`）。 */
+  const [errorBusinessCode, setErrorBusinessCode] = useState<string | null>(null);
+  /** retry 附件行内错误（runId 关联；仅附件业务码使用，避免全局条难以定位）。 */
+  const [retryError, setRetryError] = useState<{
+    runId: string;
+    message: string;
+    businessCode: string;
+    aetherCode: string;
+  } | null>(null);
+  useEffect(() => {
+    setRetryError(null);
+  }, [activeSessionId]);
   const [lastAck, setLastAck] = useState<{
     runId: string;
     duplicate: boolean;
@@ -621,12 +635,15 @@ export function SessionWorkbench({
 
   /** 结构化错误上报（展示文本 + `data-code`；UI-UX §7.3）。 */
   const reportError = useCallback((failure: unknown) => {
-    setError(describeIpcError(failure));
+    const businessCode = ipcBusinessCode(failure);
+    setError(attachmentErrorMessage(businessCode, describeIpcError(failure)));
     setErrorCode(ipcErrorCode(failure));
+    setErrorBusinessCode(businessCode);
   }, []);
   const clearError = useCallback(() => {
     setError(null);
     setErrorCode(null);
+    setErrorBusinessCode(null);
   }, []);
 
   const refreshRuntimes = useCallback(async () => {
@@ -1386,7 +1403,10 @@ export function SessionWorkbench({
             ),
           );
         } catch (failure) {
-          const code = ipcErrorCode(failure) ?? "attachment_storage_failed";
+          const code =
+            ipcBusinessCode(failure) ??
+            ipcErrorCode(failure) ??
+            "attachment_storage_failed";
           setPendingAttachments((previous) =>
             previous.map((item) =>
               item.key === key ? { ...item, state: "failed", errorCode: code } : item,
@@ -1622,16 +1642,28 @@ export function SessionWorkbench({
         (activeProviderState === "invalid" || activeModelState !== "active")
       ) {
         setErrorCode("invalid_value");
+        setErrorBusinessCode(null);
         setError("供应商失效或模型失效/缺失：请先补选后再重试");
         return;
       }
       setRetryingRunId(runId);
+      setRetryError(null);
       clearError();
       try {
         await ipc.retryRun(runId);
         await refreshSessions();
       } catch (failure) {
-        reportError(failure);
+        const businessCode = ipcBusinessCode(failure);
+        if (businessCode?.startsWith("attachment_")) {
+          setRetryError({
+            runId,
+            message: attachmentErrorMessage(businessCode, describeIpcError(failure)),
+            businessCode,
+            aetherCode: ipcErrorCode(failure) ?? "",
+          });
+        } else {
+          reportError(failure);
+        }
       } finally {
         setRetryingRunId(null);
       }
@@ -2473,6 +2505,24 @@ export function SessionWorkbench({
                         </button>
                       </div>
                     ) : null}
+                    {retryError && retryError.runId === bubble.runId ? (
+                      <p
+                        className="run-retry-error"
+                        role="alert"
+                        data-error="attachment_replay"
+                        data-code={retryError.aetherCode}
+                        data-business-code={retryError.businessCode}
+                      >
+                        {retryError.message}
+                        <button
+                          type="button"
+                          data-action="dismiss-retry-error"
+                          onClick={() => setRetryError(null)}
+                        >
+                          知道了
+                        </button>
+                      </p>
+                    ) : null}
                   </article>
                 );
               }}
@@ -2623,6 +2673,14 @@ export function SessionWorkbench({
                       {item.summary ? (
                         <span className="composer-attachment-size">
                           {formatAttachmentBytes(item.summary.size_bytes)}
+                        </span>
+                      ) : null}
+                      {item.state === "failed" ? (
+                        <span
+                          className="composer-attachment-error"
+                          title={attachmentFailureHint(item.errorCode)}
+                        >
+                          {attachmentFailureHint(item.errorCode)}
                         </span>
                       ) : null}
                       {item.state === "failed" ? (
@@ -3026,6 +3084,7 @@ export function SessionWorkbench({
               className="workbench-error"
               data-testid="workbench-error"
               data-code={errorCode ?? ""}
+              data-business-code={errorBusinessCode ?? ""}
               role="alert"
             >
               {error}

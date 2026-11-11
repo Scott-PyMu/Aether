@@ -1,9 +1,10 @@
 /**
  * M10-05/ADR-035 前端：附件采集/能力门/发送/失败重试（UI-UX `attachment` 锚点组）。
  */
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { AetherEvent } from "@aether/protocol";
 import type { ArtifactsIpc } from "./artifacts";
 import type { AttachmentIpc, AttachmentSummary } from "./attachments";
 import { EventStore } from "./eventStore";
@@ -36,14 +37,14 @@ function runtime(capabilities: string[]): RuntimeInfo {
   };
 }
 
-function sessionSummary(): SessionSummary {
+function sessionSummary(status: SessionStatus = "idle"): SessionSummary {
   return {
     id: SESSION,
     runtime_id: "claude-code",
     workspace_id: null,
     parent_session_id: null,
     title: "附件会话",
-    status: "idle" as SessionStatus,
+    status,
     model: "claude-opus",
     created_at: 1,
     updated_at: 1,
@@ -132,7 +133,7 @@ async function open(
   ipc: SessionIpc,
   attachments: AttachmentIpc,
   pickPath: string | null,
-): Promise<void> {
+): Promise<EventStore> {
   const store = new EventStore();
   stores.push(store);
   render(
@@ -145,6 +146,27 @@ async function open(
   );
   fireEvent.click(await screen.findByTestId("session-item"));
   await screen.findByTestId("composer-input");
+  return store;
+}
+
+let eventSeq = 0;
+function event(
+  type: string,
+  payload: unknown,
+  runId: string | null,
+): AetherEvent {
+  eventSeq += 1;
+  return {
+    v: 1,
+    id: `01J${String(eventSeq).padStart(23, "0")}`,
+    session_id: SESSION,
+    run_id: runId,
+    runtime_id: "claude-code",
+    seq: eventSeq,
+    ts: 1_700_000_000_000 + eventSeq,
+    type,
+    payload,
+  };
 }
 
 describe("M10-05 附件输入区（ADR-035 / UI-UX attachment）", () => {
@@ -354,5 +376,63 @@ describe("M10-05 附件输入区（ADR-035 / UI-UX attachment）", () => {
       return found as HTMLImageElement;
     });
     expect(thumb.getAttribute("src")).toBe(`aether-attachment://thumb/${SHA}`);
+  });
+
+  it("retry 附件失败：消息气泡行内友好提示 + business_code", async () => {
+    const retryRun = vi.fn(async () => {
+      throw {
+        aether_code: "internal",
+        business_code: "attachment_storage_failed",
+        message: "附件文件缺失：01J8ZQ5R0N7W9Y8X6V4T2S0K1Z",
+      };
+    });
+    const ipc = fakeIpc(["multimodal"]);
+    ipc.retryRun = retryRun;
+    const store = await open(ipc, fakeAttachments(), null);
+    act(() => {
+      store.ingest(event("run.started", { run_id: RUN_1 }, RUN_1));
+      store.ingest(
+        event(
+          "run.failed",
+          {
+            run_id: RUN_1,
+            error: { code: "run_failed", message: "首次失败", recoverable: true },
+          },
+          RUN_1,
+        ),
+      );
+      store.flush();
+    });
+    fireEvent.click(await screen.findByTestId("run-retry"));
+    const inline = await waitFor(() => {
+      const found = document.querySelector(".run-retry-error");
+      expect(found).not.toBeNull();
+      return found as HTMLElement;
+    });
+    expect(inline.textContent).toContain("附件文件已丢失或损坏");
+    expect(inline.getAttribute("data-business-code")).toBe("attachment_storage_failed");
+    expect(inline.getAttribute("data-code")).toBe("attachment_storage_failed");
+    expect(inline.getAttribute("data-error")).toBe("attachment_replay");
+    expect(screen.queryByTestId("workbench-error")).toBeNull();
+  });
+
+  it("resume 附件失败：全局错误条显示友好文案 + business_code", async () => {
+    const ipc = fakeIpc(["multimodal", "pause_resume"]);
+    ipc.listSessions = vi.fn(async () => [sessionSummary("paused")]);
+    ipc.resumeSession = vi.fn(async () => {
+      throw {
+        aether_code: "invalid_value",
+        business_code: "attachment_type_unsupported",
+        message: "模型 claude-opus 明确声明 vision=false：拒绝重放附件",
+      };
+    });
+    await open(ipc, fakeAttachments(), null);
+    fireEvent.click(await screen.findByTestId("session-pause-toggle"));
+    const error = await screen.findByTestId("workbench-error");
+    expect(error.textContent).toContain("当前模型或运行时不支持图片输入");
+    expect(error.getAttribute("data-business-code")).toBe(
+      "attachment_type_unsupported",
+    );
+    expect(error.getAttribute("data-code")).toBe("attachment_type_unsupported");
   });
 });
