@@ -144,7 +144,9 @@
     "m9-13:regression": "node scripts/test/m9-13/regression.mjs",
     "coverage:m9-13": "node scripts/test/m9-13/coverage-compare.mjs",
     "smoke": "node scripts/test/m9-11/smoke-installer.mjs",
-    "ci:local": "node scripts/test/ci-local.mjs"
+    "ci:local": "node scripts/test/ci-local.mjs",
+    "verify:m10-05": "node scripts/test/m10-05/verify-m10-05.mjs",
+    "stage:native-runtime": "node scripts/ci/stage-native-runtime.mjs"
   },
   "devDependencies": {
     "electron-builder": "26.18.0",

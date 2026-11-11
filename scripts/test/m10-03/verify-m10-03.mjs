@@ -161,7 +161,7 @@ const openapiPath = "docs/api/aetherd-v1.openapi.json";
 check("OpenAPI 存在", existsSync(path.join(root, openapiPath)));
 const openapi = readJson(openapiPath);
 const catalog = openapi["x-aether-command-catalog"] ?? [];
-check("OpenAPI daemon 命令 = 79", catalog.length === 79, `实际 ${catalog.length}`);
+check("OpenAPI daemon 命令 = 82", catalog.length === 82, `实际 ${catalog.length}`);
 check("OpenAPI 无 shell 命令", !catalog.some((item) => item.name === "app_exit"));
 check(
   "OpenAPI 路径齐全",
@@ -170,21 +170,21 @@ check(
   ),
 );
 check(
-  "RpcRequest oneOf = 79",
-  (openapi.components?.schemas?.RpcRequest?.oneOf ?? []).length === 79,
+  "RpcRequest oneOf = 82",
+  (openapi.components?.schemas?.RpcRequest?.oneOf ?? []).length === 82,
   `实际 ${(openapi.components?.schemas?.RpcRequest?.oneOf ?? []).length}`,
 );
 check("schema 数 = 102", Object.keys(openapi.components?.schemas ?? {}).length === 102);
 
 // 3) 契约计数不变（M10-03 +0）
 const manifest = readJson("packages/protocol/src/command-manifest.json");
-check("command-manifest total = 83", manifest.counts.total === 83);
-check("daemon 命令 = 79", manifest.counts.daemon === 79);
+check("command-manifest total = 86", manifest.counts.total === 86);
+check("daemon 命令 = 82", manifest.counts.daemon === 82);
 check("shell 命令仍 4", manifest.counts.shell === 4);
 
 const errorCodes = readJson("packages/protocol/src/error_codes.json");
 check("IpcErrorCode 仍 32", (errorCodes.ipc ?? []).length === 32, `实际 ${(errorCodes.ipc ?? []).length}`);
-check("business 码 = 31", (errorCodes.business ?? []).length === 31, `实际 ${(errorCodes.business ?? []).length}`);
+check("business 码 = 35", (errorCodes.business ?? []).length === 35, `实际 ${(errorCodes.business ?? []).length}`);
 
 const registry = readJson("docs/M10-00-登记表.json");
 check("M10-03 登记命令 +0", !registry.commands.some((item) => item.task === "M10-03"));
@@ -218,4 +218,4 @@ if (failures.length > 0) {
   console.error(`[m10-03] ${failures.length} 项失败（${passed}/${checks.length} 通过）`);
   process.exit(1);
 }
-console.log(`[m10-03] OK：${checks.length}/${checks.length} 项通过（ADR-033 v1.1；79 daemon 命令；OpenAPI diff=0）`);
+console.log(`[m10-03] OK：${checks.length}/${checks.length} 项通过（ADR-033 v1.1；82 daemon 命令；OpenAPI diff=0）`);

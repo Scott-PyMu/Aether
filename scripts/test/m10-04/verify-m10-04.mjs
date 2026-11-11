@@ -4,7 +4,7 @@
  *
  * 检查面：
  *  1. ADR-034 已接受；迁移 0001–0011 未修改、无 0012；
- *  2. 命令面 +4（83/79/4；UI 81；import 分组 4）；业务码 +7（31）；
+ *  2. 命令面 +4（当时 83/79/4；当前基线随 M10-05 升为 86/82/4；import 分组 4）；业务码 +7（当时 31）；
  *  3. store 导入常量/函数（20GiB/2MiB/64KiB/1MiB/1000/staging/原子切换/预导入）；
  *  4. app 后端（异步 job/维护窗口/审计 import 与 export 动作、backup_restore 互斥）；
  *  5. CLI 导入 status/cancel/watch；UI 导入入口/状态/警告/取消/重启；
@@ -74,8 +74,8 @@ const migrationFiles = execFileSync(
   .split(/\r?\n/)
   .map((line) => line.trim())
   .filter(Boolean);
-check("迁移仍为 0001–0011", migrationFiles.length === 11, migrationFiles.join(","));
-check("无 0012 迁移", !migrationFiles.some((name) => name.startsWith("0012")));
+check("迁移 ≥ 0001–0011", migrationFiles.length >= 11, migrationFiles.join(","));
+check("M10-05 迁移 0012 存在", migrationFiles.some((name) => name.startsWith("0012")));
 check("已发布迁移未修改", git(["diff", "--name-only", "--", "migrations"]) === "");
 
 // 2) 命令面/业务码
@@ -83,10 +83,10 @@ const dispatch = read("crates/aether-app/src/ipc/dispatch.rs");
 for (const command of ["session_import", "archive_import", "import_status", "import_cancel"]) {
   check(`命令面含 ${command}`, dispatch.includes(`"${command}"`));
 }
-check("COMMANDS = 83", /COMMANDS\.len\(\),\s*83/.test(dispatch));
+check("COMMANDS = 86", /COMMANDS\.len\(\),\s*86/.test(dispatch));
 const manifest = readJson("packages/protocol/src/command-manifest.json");
-check("manifest total=83", manifest.counts?.total === 83);
-check("manifest daemon=79", manifest.counts?.daemon === 79);
+check("manifest total=86", manifest.counts?.total === 86);
+check("manifest daemon=82", manifest.counts?.daemon === 82);
 check("manifest shell=4", manifest.counts?.shell === 4);
 check("manifest ui=81", manifest.counts?.ui === 81);
 check(
@@ -95,7 +95,7 @@ check(
 );
 const errors = readJson("packages/protocol/src/error_codes.json");
 check("ipc 仍 32", errors.ipc?.length === 32);
-check("business=31", errors.business?.length === 31, `实际 ${errors.business?.length}`);
+check("business=35", errors.business?.length === 35, `实际 ${errors.business?.length}`);
 for (const code of [
   "import_invalid_format",
   "import_checksum_mismatch",
@@ -206,7 +206,7 @@ check(
 
 // 6) 生成物一致性（不运行协议生成器，避免未提交 diff；运行静态生成器 check）
 for (const [script, expected] of [
-  ["scripts/ci/command-manifest.mjs", "83/79/4"],
+  ["scripts/ci/command-manifest.mjs", "86/82/4"],
   ["scripts/ci/path-commands.mjs", "路径命令"],
   ["scripts/ci/error-codes.mjs", "ipc=32"],
 ]) {
@@ -256,5 +256,5 @@ if (failures.length > 0) {
   process.exit(1);
 }
 console.log(
-  `[m10-04] OK：${checks.length}/${checks.length} 项通过（ADR-034；83 命令 / 31 业务码；导入 staging/原子切换/脱敏）`,
+  `[m10-04] OK：${checks.length}/${checks.length} 项通过（ADR-034；86 命令 / 35 业务码；导入 staging/原子切换/脱敏）`,
 );

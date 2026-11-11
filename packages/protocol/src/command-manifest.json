@@ -6,10 +6,10 @@
     "groups": "docs/adr/ADR-029-electron-shell-rust-daemon.md §4.6/§16.1"
   },
   "counts": {
-    "total": 83,
-    "daemon": 79,
+    "total": 86,
+    "daemon": 82,
     "shell": 4,
-    "ui": 81,
+    "ui": 84,
     "reserved": 2,
     "groups": 18
   },
@@ -97,6 +97,10 @@
     {
       "group": "import",
       "count": 4
+    },
+    {
+      "group": "attachment",
+      "count": 3
     }
   ],
   "commands": [
@@ -1011,6 +1015,39 @@
       "params": {
         "style": "strict",
         "dto": "ImportCancelRequest"
+      }
+    },
+    {
+      "index": 84,
+      "name": "attachment_add",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "attachment",
+      "params": {
+        "style": "strict",
+        "dto": "AttachmentAddRequest"
+      }
+    },
+    {
+      "index": 85,
+      "name": "attachment_list",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "attachment",
+      "params": {
+        "style": "strict",
+        "dto": "AttachmentListRequest"
+      }
+    },
+    {
+      "index": 86,
+      "name": "attachment_remove",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "attachment",
+      "params": {
+        "style": "strict",
+        "dto": "AttachmentRemoveRequest"
       }
     }
   ]

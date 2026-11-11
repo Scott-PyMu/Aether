@@ -795,13 +795,19 @@ impl AdapterRunExecutor {
         // 核心侧的重复 `session.send` 已由存储层 `UNIQUE(session_id, client_msg_id)`
         // 在到达适配器之前去重（ADR-005 持久化支撑），因此以 run id 为键不丢失去重语义，
         // 且避免重放复用输入消息 id 时被适配器幂等命中而返回旧 run。
+        let wire_attachments: Vec<aether_core::MessageAttachment> = request
+            .attachments
+            .iter()
+            .map(aether_core::OutboundAttachment::wire)
+            .collect();
         let ack = client
-            .send_with_references(
+            .send_with_attachments(
                 &adapter_session,
                 request.run_id.as_str(),
                 &request.text,
                 send_override,
                 &request.references,
+                &wire_attachments,
                 request.subagent_context.as_ref(),
             )
             .await

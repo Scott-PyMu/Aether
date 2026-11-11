@@ -10,7 +10,8 @@ use serde_json::Value;
 
 use super::dto::{
     AppRestartRequest, ArchiveExportRequest, ArtifactAddRequest, ArtifactRemoveRequest,
-    ArtifactsListRequest, AuditExportRequest, AuditQueryRequest, BackupCreateRequest,
+    ArtifactsListRequest, AttachmentAddRequest, AttachmentListRequest, AttachmentRemoveRequest,
+    AuditExportRequest, AuditQueryRequest, BackupCreateRequest,
     BackupRestoreRequest, ExportDiagnosticsRequest, MessagesPageRequest, PermissionResolveRequest,
     PermissionsPendingRequest, PresetAddRequest, PresetDeleteRequest, PresetUpdateRequest,
     PresetsListRequest, ProviderCreateRequest, ProviderDeleteRequest, ProviderModelAddRequest,
@@ -268,6 +269,25 @@ pub trait IpcBackend: Send + Sync + 'static {
     /// ADR-010/M3-09：删除会话引用（不存在 → 幂等 `{ removed: false }`）。
     fn artifact_remove(&self, _request: &ArtifactRemoveRequest) -> Result<Value, IpcError> {
         Err(IpcError::not_implemented("artifact_remove"))
+    }
+
+    /// M10-05/ADR-035：附件采集（`resolved` 为命令层 canonicalize 结果）。
+    fn attachment_add(
+        &self,
+        _request: &AttachmentAddRequest,
+        _resolved: &std::path::Path,
+    ) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("attachment_add"))
+    }
+
+    /// M10-05/ADR-035：会话附件元数据清单。
+    fn attachment_list(&self, _request: &AttachmentListRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("attachment_list"))
+    }
+
+    /// M10-05/ADR-035：删除附件元数据（幂等）。
+    fn attachment_remove(&self, _request: &AttachmentRemoveRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("attachment_remove"))
     }
 
     /// ADR-010/M3-11：供应商与模型清单（无参数；**不含 `api_key` 本体**，

@@ -2,7 +2,7 @@
   "schema": "aether.m10.doc-freeze.v1",
   "task": "M10-00",
   "frozen_at": "2026-11-05",
-  "amended_at": "2026-11-09",
+  "amended_at": "2026-11-11",
   "amendments": [
     {
       "task": "M10-01",
@@ -27,6 +27,12 @@
       "adr": "ADR-032",
       "field": "设计文档.md",
       "reason": "D-032-6 要求 0011 落库时同批合入附录 C 终态 DDL；仅更新附录 C，不改冻结决策"
+    },
+    {
+      "task": "M10-05",
+      "adr": "ADR-035",
+      "field": "docs/P2-架构迁移-实施计划与验收标准.md",
+      "reason": "M10-05 执行状态与登记计数（命令 86/82/4、业务码 35、迁移 0012、附件/能力门/UtilityProcess）写入 P2 计划；设计语义未变。"
     }
   ],
   "design_version": "v1.32",
@@ -47,7 +53,7 @@
     },
     {
       "path": "docs/P2-架构迁移-实施计划与验收标准.md",
-      "sha256": "5866094d7ef96147554f2c6bcf69c65b9f1570b67ecd2500ae6ffb2f455deec6"
+      "sha256": "fa43970cbce3736177d30cec57bcef70db3abe9664adce50f9061f6d8d65e345"
     },
     {
       "path": "docs/UI-UX-设计规格.md",

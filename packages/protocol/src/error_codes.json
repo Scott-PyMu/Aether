@@ -379,6 +379,30 @@
       "owner": "M10-04",
       "first_adr": "ADR-034",
       "kind": "business"
+    },
+    {
+      "code": "attachment_type_unsupported",
+      "owner": "M10-05",
+      "first_adr": "ADR-035",
+      "kind": "business"
+    },
+    {
+      "code": "attachment_too_large",
+      "owner": "M10-05",
+      "first_adr": "ADR-035",
+      "kind": "business"
+    },
+    {
+      "code": "attachment_limit_exceeded",
+      "owner": "M10-05",
+      "first_adr": "ADR-035",
+      "kind": "business"
+    },
+    {
+      "code": "attachment_storage_failed",
+      "owner": "M10-05",
+      "first_adr": "ADR-035",
+      "kind": "business"
     }
   ]
 }

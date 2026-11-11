@@ -328,6 +328,10 @@ pub struct SessionSendRequest {
     /// M10-02/ADR-032：子 Agent 结果回注上下文（版本化、可 ack；≤16KiB）。
     #[serde(default)]
     pub subagent_context: Option<SubagentContextInput>,
+    /// M10-05/ADR-035：随消息发送的附件 id（≤8；归属/存在/能力门在核心校验；
+    /// 不支持时返回 `attachment_type_unsupported`，不创建 run）。
+    #[serde(default)]
+    pub attachments: Option<Vec<String>>,
 }
 
 /// `session.send.subagent_context` 请求体（D6；ADR-032 v1.2）。
@@ -465,6 +469,30 @@ impl CommandRequest for SessionSendRequest {
             path::validate_artifact_path(&entry.path)?;
         }
         self.subagent_context_value()?;
+        if let Some(attachments) = &self.attachments {
+            if attachments.len() > aether_core::ATTACHMENT_MAX_PER_MESSAGE {
+                return Err(IpcError::too_large(
+                    "attachments",
+                    format!(
+                        "单条消息附件上限 {} 个（实际 {}）",
+                        aether_core::ATTACHMENT_MAX_PER_MESSAGE,
+                        attachments.len()
+                    ),
+                ));
+            }
+            let mut seen = std::collections::BTreeSet::new();
+            for attachment_id in attachments {
+                if !is_ulid(attachment_id) {
+                    return Err(IpcError::invalid_format(
+                        "attachments[]",
+                        "附件 id 必须是 26 位 ULID",
+                    ));
+                }
+                if !seen.insert(attachment_id) {
+                    return Err(IpcError::invalid_value("attachments[] 不允许重复附件 id"));
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -605,6 +633,80 @@ impl CommandRequest for ArtifactRemoveRequest {
         }
         if !is_ulid(&self.artifact_id) {
             return Err(IpcError::invalid_format("artifact_id", "必须是 26 位 ULID"));
+        }
+        Ok(())
+    }
+}
+
+/// `attachment_add`（M10-05/ADR-035 D-035-3）：`source_path` 由选择器/拖拽提供，
+/// 核心 canonicalize + 读取 + 魔数校验 + 哈希；`kind` 缺省/`image`（当前仅图像）。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct AttachmentAddRequest {
+    pub session_id: String,
+    pub source_path: String,
+    #[serde(default)]
+    pub kind: Option<String>,
+}
+
+impl AttachmentAddRequest {
+    /// `kind` 校验（当前仅 `image`；未提供视为 `image`）。
+    pub fn kind_value(&self) -> Result<&'static str, IpcError> {
+        match self.kind.as_deref() {
+            None | Some("image") => Ok("image"),
+            Some(other) => Err(IpcError::invalid_enum(
+                "kind",
+                format!("附件类型非法（{other}）；当前仅支持 image"),
+            )),
+        }
+    }
+}
+
+impl CommandRequest for AttachmentAddRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.session_id) {
+            return Err(IpcError::invalid_format("session_id", "必须是 26 位 ULID"));
+        }
+        ensure_not_empty(&self.source_path, "source_path")?;
+        ensure_max_chars(&self.source_path, "source_path", MAX_PATH_CHARS)?;
+        if self.source_path.contains('\0') {
+            return Err(IpcError::invalid_value("source_path 包含 NUL 字符"));
+        }
+        self.kind_value()?;
+        Ok(())
+    }
+}
+
+/// `attachment_list`（M10-05/ADR-035 D-035-3）：只返回元数据，按 `created_at` 升序。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct AttachmentListRequest {
+    pub session_id: String,
+}
+
+impl CommandRequest for AttachmentListRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.session_id) {
+            return Err(IpcError::invalid_format("session_id", "必须是 26 位 ULID"));
+        }
+        Ok(())
+    }
+}
+
+/// `attachment_remove`（M10-05/ADR-035 D-035-3）：幂等；不存在 → `{ removed: false }`。
+#[derive(Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct AttachmentRemoveRequest {
+    pub attachment_id: String,
+}
+
+impl CommandRequest for AttachmentRemoveRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if !is_ulid(&self.attachment_id) {
+            return Err(IpcError::invalid_format(
+                "attachment_id",
+                "必须是 26 位 ULID",
+            ));
         }
         Ok(())
     }

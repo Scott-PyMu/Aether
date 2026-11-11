@@ -84,10 +84,11 @@ pub use migration::{
     MIGRATIONS_TABLE,
 };
 pub use ops::{
-    ArtifactRecord, AuditLogRecord, AuditQuery, AuditQueryResult, PermissionGrantRecord,
-    PermissionRecord, PermissionRuleRecord, ProviderModelRecord, ProviderRecord, SessionQuery,
-    SessionSearchHit, StoreCommand, StoreOutcome, StoreSummary, WorkspaceSessionCount,
-    WorkspaceSessionCounts, AUDIT_QUERY_DEFAULT_LIMIT, AUDIT_QUERY_MAX_LIMIT, SUMMARY_TABLES,
+    ArtifactRecord, AttachmentRecord, AttachmentUsage, AuditLogRecord, AuditQuery,
+    AuditQueryResult, PermissionGrantRecord, PermissionRecord, PermissionRuleRecord,
+    ProviderModelRecord, ProviderRecord, SessionQuery, SessionSearchHit, StoreCommand, StoreOutcome,
+    StoreSummary, WorkspaceSessionCount, WorkspaceSessionCounts, AUDIT_QUERY_DEFAULT_LIMIT,
+    AUDIT_QUERY_MAX_LIMIT, SUMMARY_TABLES,
 };
 pub use pragma::PragmaSnapshot;
 pub use preflight::{preflight, PreflightReport};

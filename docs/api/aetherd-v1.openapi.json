@@ -373,6 +373,59 @@
           "session_id"
         ]
       },
+      "AttachmentAddRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "source_path": {
+            "type": "string"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "session_id",
+          "source_path"
+        ]
+      },
+      "AttachmentListRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          }
+        },
+        "required": [
+          "session_id"
+        ]
+      },
+      "AttachmentRemoveRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "attachment_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          }
+        },
+        "required": [
+          "attachment_id"
+        ]
+      },
       "AuditExportRequest": {
         "type": "object",
         "additionalProperties": false,
@@ -1856,6 +1909,19 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/SubagentContextInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "attachments": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
               },
               {
                 "type": "null"
@@ -5566,6 +5632,96 @@
                 "$ref": "#/components/schemas/ImportCancelRequest"
               }
             }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "attachment_add"
+              },
+              "params": {
+                "$ref": "#/components/schemas/AttachmentAddRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "attachment_list"
+              },
+              "params": {
+                "$ref": "#/components/schemas/AttachmentListRequest"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "attachment_remove"
+              },
+              "params": {
+                "$ref": "#/components/schemas/AttachmentRemoveRequest"
+              }
+            }
           }
         ]
       },
@@ -5689,7 +5845,11 @@
                       "import_too_large",
                       "import_cancelled",
                       "import_job_not_found",
-                      "import_job_not_active"
+                      "import_job_not_active",
+                      "attachment_type_unsupported",
+                      "attachment_too_large",
+                      "attachment_limit_exceeded",
+                      "attachment_storage_failed"
                     ]
                   },
                   {
@@ -6338,6 +6498,30 @@
       "route": "daemon",
       "params_style": "strict",
       "params_dto": "ImportCancelRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "attachment_add",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "AttachmentAddRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "attachment_list",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "AttachmentListRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "attachment_remove",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "AttachmentRemoveRequest",
       "request_schema": "#/components/schemas/RpcRequest"
     }
   ]

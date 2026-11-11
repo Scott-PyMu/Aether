@@ -136,6 +136,8 @@ impl IpcBackend for WorkflowControlBackend {
         session_workspace_assign: SessionWorkspaceAssignRequest,
         artifacts_list: ArtifactsListRequest,
         artifact_remove: ArtifactRemoveRequest,
+        attachment_list: AttachmentListRequest,
+        attachment_remove: AttachmentRemoveRequest,
         providers_list: ProvidersListRequest,
         provider_create: ProviderCreateRequest,
         provider_update: ProviderUpdateRequest,
@@ -153,6 +155,14 @@ impl IpcBackend for WorkflowControlBackend {
     );
 
     forward_none!(runtimes_list, rules_list, backup_list);
+
+    fn attachment_add(
+        &self,
+        request: &AttachmentAddRequest,
+        resolved: &std::path::Path,
+    ) -> Result<Value, IpcError> {
+        self.inner.attachment_add(request, resolved)
+    }
 
     fn backup_auto_status(&self) -> Result<Option<Value>, IpcError> {
         self.inner.backup_auto_status()

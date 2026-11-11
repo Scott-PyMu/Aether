@@ -89,6 +89,12 @@ pub const EMBEDDED_MIGRATIONS: &[MigrationFile] = &[
         name: "0011_subagent_results.sql",
         bytes: include_bytes!("../../../migrations/0011_subagent_results.sql"),
     },
+    // ADR-035/M10-05：多模态附件外置元数据 + provider_models.capabilities。
+    MigrationFile {
+        version: 12,
+        name: "0012_attachments.sql",
+        bytes: include_bytes!("../../../migrations/0012_attachments.sql"),
+    },
 ];
 
 /// 迁移文件 sha256（小写十六进制）。

@@ -12,11 +12,23 @@
  * `@aether/protocol` typed client）与 `permissionIpc`（权限/运行时控制命令面，默认
  * typed client）——E2E/单测注入替身即可覆盖完整交互路径。
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type ReactNode } from "react";
 
 import { appEventStore } from "./aetherStore";
 import { archiveIpc as productionArchiveIpc, type ArchiveIpc } from "./archive";
 import { artifactsIpc as productionArtifactsIpc, type ArtifactsIpc } from "./artifacts";
+import {
+  attachmentIpc as productionAttachmentIpc,
+  attachmentDisplayName,
+  attachmentThumbUrl,
+  ATTACHMENT_MAX_PER_MESSAGE,
+  formatAttachmentBytes,
+  MULTIMODAL_MODEL_UNVERIFIED,
+  runtimeSupportsMultimodal,
+  validateAttachmentCandidate,
+  type AttachmentIpc,
+  type AttachmentSummary,
+} from "./attachments";
 import { describeIpcError, ipcErrorCode } from "./startup";
 import {
   defaultAetherEventListener,
@@ -184,6 +196,11 @@ export interface SessionWorkbenchProps {
    * 缺省 = 生产 Tauri 实现；测试注入替身）。
    */
   presetsIpc?: PresetsIpc;
+  /**
+   * M10-05/ADR-035：附件 IPC（`attachment_add/list/remove`；缺省 = 生产 typed client；
+   * 测试注入替身以覆盖上传/失败/删除/能力门）。
+   */
+  attachmentIpc?: AttachmentIpc;
   /** M7-09/ADR-026：新建会话入口当前选中的预设（由 `App` 持有，供设置页「使用中」标记）。 */
   activePresetId?: string | null;
   /** M7-09/ADR-026：预设选择变更（缺省 = 本地只读展示）。 */
@@ -225,6 +242,15 @@ function mergeMessages(previous: MessageRow[], incoming: MessageRow[]): MessageR
 /** 单次发送引用条数上限（M7-06/ADR-024 §2.1-5：≤32 条；核心命令层同值校验）。 */
 export const MAX_SESSION_REFERENCES = 32;
 
+/** 待发送附件状态（M10-05；UI-UX `data-state` 口径）。 */
+export interface PendingAttachment {
+  key: string;
+  sourcePath: string;
+  state: "uploading" | "ready" | "failed";
+  summary?: AttachmentSummary;
+  errorCode?: string;
+}
+
 /**
  * 拖拽路径 → 引用类型（拖拽事件只携带路径，无类型信息）。
  *
@@ -253,6 +279,7 @@ export function SessionWorkbench({
   eventListener = defaultAetherEventListener,
   settingsIpc: settingsIpcProp = productionSettingsIpc,
   presetsIpc: presetsIpcProp = productionPresetsIpc,
+  attachmentIpc: attachmentIpcProp = productionAttachmentIpc,
   activePresetId = null,
   onActivePresetChange,
   presetsVersion = 0,
@@ -297,6 +324,32 @@ export function SessionWorkbench({
   /** 布局是否为「显式」（持久化存在或用户已操作）——决定是否自动打开首个会话。 */
   const layoutExplicit = useRef(false);
   const activeSessionId = layout.active;
+  // M10-05/ADR-035：加载当前会话附件索引（attachment_id → sha256），供历史消息缩略图。
+  useEffect(() => {
+    let cancelled = false;
+    setAttachmentIndex({});
+    if (!activeSessionId) {
+      return () => {
+        cancelled = true;
+      };
+    }
+    void attachmentIpcProp
+      .list(activeSessionId)
+      .then((items) => {
+        if (cancelled) return;
+        const index: Record<string, string> = {};
+        for (const item of items) {
+          index[item.attachment_id] = item.sha256;
+        }
+        setAttachmentIndex(index);
+      })
+      .catch(() => {
+        // 附件索引失败不阻塞消息流（缩略图降级为空；错误由用户操作路径报告）。
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSessionId, attachmentIpcProp]);
   const [messages, setMessages] = useState<MessageRow[]>([]);
   const [selectedRuntime, setSelectedRuntime] = useState<string>("");
   /**
@@ -330,6 +383,11 @@ export function SessionWorkbench({
    * 发送成功后清空；**引用 ≠ 预授权**——Agent 读取仍走 `fs.read` 权限门）。
    */
   const [pendingReferences, setPendingReferences] = useState<SessionReference[]>([]);
+  // M10-05/ADR-035：待发送附件（上传中不阻塞输入；发送仅取 ready）。
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
+  // attachment_id → sha256（消息历史缩略图协议需要；来源 attachment_list + 本次上传摘要）。
+  const [attachmentIndex, setAttachmentIndex] = useState<Record<string, string>>({});
+  const [multimodalWarning, setMultimodalWarning] = useState<string | null>(null);
   const composerRef = useRef<HTMLDivElement | null>(null);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1131,7 +1189,22 @@ export function SessionWorkbench({
 
   const onSend = useCallback(async () => {
     const text = draft.trim();
-    if (!activeSessionId || text.length === 0 || sendInFlight.current) {
+    const readyAttachments = pendingAttachments.flatMap((item) =>
+      item.state === "ready" && item.summary ? [item.summary] : [],
+    );
+    const uploadingAttachments = pendingAttachments.some(
+      (item) => item.state === "uploading",
+    );
+    if (
+      !activeSessionId ||
+      (text.length === 0 && readyAttachments.length === 0) ||
+      sendInFlight.current
+    ) {
+      return;
+    }
+    if (uploadingAttachments) {
+      setErrorCode("attachment_limit_exceeded");
+      setError("附件仍在上传：请等待上传完成后再发送（不会静默丢弃）");
       return;
     }
     sendInFlight.current = true;
@@ -1171,13 +1244,24 @@ export function SessionWorkbench({
         thinking_depth: thinkingDepth,
         // M7-06/ADR-024：随消息附带的文件引用（空数组省略字段）。
         ...(pendingReferences.length > 0 ? { references: pendingReferences } : {}),
+        // M10-05/ADR-035：附件 id（≤8；能力门/归属在核心复核）。
+        ...(readyAttachments.length > 0
+          ? { attachments: readyAttachments.map((item) => item.attachment_id) }
+          : {}),
       });
       setThinkingWarning(thinkingWarningOf(ack.warnings));
+      setMultimodalWarning(
+        ack.warnings?.some((warning) => warning.code === MULTIMODAL_MODEL_UNVERIFIED)
+          ? "模型未声明 vision 能力：附件已按运行时能力发送（未经模型能力验证）"
+          : null,
+      );
       setDraft("");
       setReselectProviderId(null);
       setReselectModelId(null);
       // M7-06：引用为一次性上下文（不落库、不跨 run；发送成功后清空）。
       setPendingReferences([]);
+      // M10-05：附件已绑定到本次消息（DB 元数据保留；输入条清空）。
+      setPendingAttachments([]);
       setLastAck({
         runId: ack.run_id,
         duplicate: ack.duplicate,
@@ -1194,6 +1278,16 @@ export function SessionWorkbench({
           client_msg_id: null,
           role: "user",
           content: text,
+          content_parts:
+            readyAttachments.length > 0
+              ? readyAttachments.map((item) => ({
+                  kind: "image",
+                  attachment_id: item.attachment_id,
+                  mime: item.mime,
+                  width: item.width ?? null,
+                  height: item.height ?? null,
+                }))
+              : null,
           seq: Number.MAX_SAFE_INTEGER,
           created_at: Date.now(),
         };
@@ -1213,6 +1307,7 @@ export function SessionWorkbench({
     clearError,
     draft,
     ipc,
+    pendingAttachments,
     pendingReferences,
     refreshSessions,
     reportError,
@@ -1243,6 +1338,117 @@ export function SessionWorkbench({
       previous.filter((reference) => reference.path !== path),
     );
   }, []);
+
+  /**
+   * M10-05/ADR-035：附件采集（粘贴/拖拽/文件选择共用）。
+   *
+   * UI 先做类型/大小/数量前置校验（不阻塞输入）；上传失败保留条目并显示
+   * `data-error-code`，可重试/删除。权威校验在核心（魔数/像素/会话限额）。
+   */
+  const addAttachment = useCallback(
+    (path: string) => {
+      const trimmed = path.trim();
+      if (!activeSessionId || trimmed.length === 0) {
+        return;
+      }
+      if (!runtimeSupportsMultimodal(activeSessionRuntime?.capabilities)) {
+        setErrorCode("attachment_type_unsupported");
+        setError("当前运行时未声明 multimodal：附件入口不可用（不会静默丢弃）");
+        return;
+      }
+      const key = `${trimmed}#${Date.now()}#${Math.random().toString(36).slice(2)}`;
+      let rejected: string | null = null;
+      setPendingAttachments((previous) => {
+        if (previous.length >= ATTACHMENT_MAX_PER_MESSAGE) {
+          rejected = "attachment_limit_exceeded";
+          return previous;
+        }
+        return [
+          ...previous,
+          { key, sourcePath: trimmed, state: "uploading" },
+        ];
+      });
+      if (rejected) {
+        setErrorCode(rejected);
+        setError(`单条消息附件上限 ${ATTACHMENT_MAX_PER_MESSAGE} 个`);
+        return;
+      }
+      void (async () => {
+        try {
+          const summary = await attachmentIpcProp.add(activeSessionId, trimmed);
+          setAttachmentIndex((previous) => ({
+            ...previous,
+            [summary.attachment_id]: summary.sha256,
+          }));
+          setPendingAttachments((previous) =>
+            previous.map((item) =>
+              item.key === key ? { ...item, state: "ready", summary } : item,
+            ),
+          );
+        } catch (failure) {
+          const code = ipcErrorCode(failure) ?? "attachment_storage_failed";
+          setPendingAttachments((previous) =>
+            previous.map((item) =>
+              item.key === key ? { ...item, state: "failed", errorCode: code } : item,
+            ),
+          );
+        }
+      })();
+    },
+    [activeSessionRuntime, activeSessionId, attachmentIpcProp],
+  );
+
+  /** M10-05：删除待发送附件（已上传的同步删除 DB 行；失败条目仅本地移除）。 */
+  const removeAttachment = useCallback(
+    (item: PendingAttachment) => {
+      setPendingAttachments((previous) =>
+        previous.filter((candidate) => candidate.key !== item.key),
+      );
+      if (item.summary) {
+        const removedId = item.summary.attachment_id;
+        setAttachmentIndex((previous) => {
+          const next = { ...previous };
+          delete next[removedId];
+          return next;
+        });
+        void attachmentIpcProp.remove(removedId).catch((failure) => {
+          reportError(failure);
+        });
+      }
+    },
+    [attachmentIpcProp, reportError],
+  );
+
+  /** M10-05：失败重试（重新走 `attachment_add`，同一路径）。 */
+  const retryAttachment = useCallback(
+    (item: PendingAttachment) => {
+      setPendingAttachments((previous) =>
+        previous.filter((candidate) => candidate.key !== item.key),
+      );
+      addAttachment(item.sourcePath);
+    },
+    [addAttachment],
+  );
+
+  /** M10-05：文件选择器入口（受运行时多模态能力门约束）。 */
+  const onPickAttachment = useCallback(async () => {
+    if (!activeSessionId) {
+      return;
+    }
+    if (!runtimeSupportsMultimodal(activeSessionRuntime?.capabilities)) {
+      setErrorCode("attachment_type_unsupported");
+      setError("当前运行时未声明 multimodal：附件入口不可用（不会静默丢弃）");
+      return;
+    }
+    try {
+      const picked = await artifactsIpcProp.pick("file");
+      if (picked) {
+        addAttachment(picked);
+      }
+    } catch (failure) {
+      reportError(failure);
+    }
+  }, [activeSessionId, activeSessionRuntime, artifactsIpcProp, addAttachment, reportError]);
 
   /**
    * M7-06/ADR-024：`@` 入口（空输入框按 `@` → 系统文件选择器 → 添加引用）。
@@ -1291,15 +1497,53 @@ export function SessionWorkbench({
       for (const file of files) {
         const path = window.aether?.pathForFile(file);
         if (path) {
-          addReference(path, kindForPath(path));
+          // M10-05：图像文件走附件通道；其他文件保持引用语义（ADR-024）。
+          if (file.type.startsWith("image/") || /\.(png|jpe?g|webp|gif)$/i.test(file.name)) {
+            const rejection = validateAttachmentCandidate(file);
+            if (rejection) {
+              setErrorCode(rejection);
+              setError(
+                rejection === "attachment_too_large"
+                  ? "附件超过 10 MiB 上限（ADR-035）"
+                  : "附件类型不受支持（仅 PNG/JPEG/WebP/GIF）",
+              );
+              continue;
+            }
+            addAttachment(path);
+          } else {
+            addReference(path, kindForPath(path));
+          }
         }
       }
     },
-    [addReference],
+    [addAttachment, addReference],
   );
 
-  const onInterrupt = useCallback(async () => {
-    if (!activeSessionId) {
+  /**
+   * M10-05/ADR-035：粘贴图像（剪贴板文件 → `attachment_add`；非图像忽略，
+   * 不劫持文本粘贴）。
+   */
+  const onComposerPaste = useCallback(
+    (event: ClipboardEvent<HTMLTextAreaElement>) => {
+      const files = Array.from(event.clipboardData?.files ?? []);
+      const images = files.filter(
+        (file) => file.type.startsWith("image/") || /\.(png|jpe?g|webp|gif)$/i.test(file.name),
+      );
+      if (images.length === 0) {
+        return;
+      }
+      event.preventDefault();
+      for (const file of images) {
+        const path = window.aether?.pathForFile(file);
+        if (path) {
+          addAttachment(path);
+        }
+      }
+    },
+    [addAttachment],
+  );
+
+  const onInterrupt = useCallback(async () => {    if (!activeSessionId) {
       return;
     }
     try {
@@ -2160,6 +2404,25 @@ export function SessionWorkbench({
                         <Markdown text={bubble.text} />
                       )}
                     </div>
+                    {bubble.attachments && bubble.attachments.length > 0 ? (
+                      <div className="message-attachments" data-kind="image">
+                        {bubble.attachments.map((part) => {
+                          const sha = attachmentIndex[part.attachment_id];
+                          if (!sha) {
+                            return null;
+                          }
+                          return (
+                            <img
+                              key={part.attachment_id}
+                              className="message-attachment-thumb"
+                              src={attachmentThumbUrl(sha)}
+                              alt={part.mime}
+                              loading="lazy"
+                            />
+                          );
+                        })}
+                      </div>
+                    ) : null}
                     {bubble.role === "user" ? (
                       <span className="message-meta">已发送</span>
                     ) : null}
@@ -2301,6 +2564,89 @@ export function SessionWorkbench({
             onDragOver={onComposerDragOver}
             onDrop={onComposerDrop}
           >
+            {/* M10-05/ADR-035：附件条（只展示缩略图；renderer 不解码原图）。
+                能力门：运行时未声明 `multimodal` → 入口置灰 + 原因（不静默丢弃）。 */}
+            <div
+              className="composer-attachments"
+              data-testid="attachment-picker"
+              data-count={pendingAttachments.length}
+              data-enabled={String(runtimeSupportsMultimodal(activeSessionRuntime?.capabilities))}
+              data-warning={
+                multimodalWarning ? MULTIMODAL_MODEL_UNVERIFIED : undefined
+              }
+            >
+              {pendingAttachments.length === 0 ? (
+                <span className="composer-attachments-hint">
+                  {runtimeSupportsMultimodal(activeSessionRuntime?.capabilities)
+                    ? "附件：拖入/粘贴图片，或点击图片按钮（PNG/JPEG/WebP/GIF，≤10 MiB）"
+                    : "当前运行时未声明 multimodal：附件入口不可用"}
+                </span>
+              ) : (
+                <ul className="composer-attachment-list">
+                  {pendingAttachments.map((item) => (
+                    <li
+                      key={item.key}
+                      className="composer-attachment"
+                      data-testid="attachment-item"
+                      data-attachment-id={
+                        item.summary?.attachment_id ?? item.key
+                      }
+                      data-kind="image"
+                      data-state={item.state}
+                      data-error-code={item.errorCode}
+                    >
+                      {item.summary ? (
+                        <img
+                          data-testid="attachment-preview"
+                          className="composer-attachment-thumb"
+                          src={attachmentThumbUrl(item.summary.sha256)}
+                          alt={attachmentDisplayName(item.sourcePath)}
+                          loading="lazy"
+                          draggable={false}
+                        />
+                      ) : (
+                        <span
+                          className="composer-attachment-placeholder"
+                          aria-hidden="true"
+                        >
+                          {item.state === "failed" ? "!" : "…"}
+                        </span>
+                      )}
+                      <span
+                        className="composer-attachment-name"
+                        title={attachmentDisplayName(item.sourcePath)}
+                      >
+                        {attachmentDisplayName(item.sourcePath)}
+                      </span>
+                      {item.summary ? (
+                        <span className="composer-attachment-size">
+                          {formatAttachmentBytes(item.summary.size_bytes)}
+                        </span>
+                      ) : null}
+                      {item.state === "failed" ? (
+                        <button
+                          type="button"
+                          data-action="retry"
+                          disabled={sending}
+                          onClick={() => retryAttachment(item)}
+                        >
+                          重试
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        data-action="remove"
+                        disabled={sending}
+                        onClick={() => removeAttachment(item)}
+                        aria-label={`移除附件 ${attachmentDisplayName(item.sourcePath)}`}
+                      >
+                        ×
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
             {/* M7-06/ADR-024 A-3：随消息附带的文件引用（拖拽 / `@` 入口；锚点
                 `file-reference`）。**引用 ≠ 预授权**：Agent 读取仍走 fs.read 权限门。 */}
             <div
@@ -2347,6 +2693,7 @@ export function SessionWorkbench({
               // M7-03/ADR-017：paused 态发送被拒（session_paused，草稿保留；UI-UX §3.3）。
               disabled={!activeSessionId || degraded || activeSession?.status === "paused"}
               onChange={(event) => setDraft(event.target.value)}
+              onPaste={onComposerPaste}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
                   event.preventDefault();
@@ -2463,10 +2810,18 @@ export function SessionWorkbench({
                 type="button"
                 className="ic"
                 data-testid="composer-attach"
-                title="添加文件引用（也可在空输入框按 @）"
-                aria-label="添加文件引用"
-                disabled={!activeSessionId || degraded}
-                onClick={() => void onPickReference()}
+                title={
+                  runtimeSupportsMultimodal(activeSessionRuntime?.capabilities)
+                    ? "添加图片附件（PNG/JPEG/WebP/GIF，≤10 MiB）"
+                    : "当前运行时未声明 multimodal：附件入口不可用"
+                }
+                aria-label="添加图片附件"
+                disabled={
+                  !activeSessionId ||
+                  degraded ||
+                  !runtimeSupportsMultimodal(activeSessionRuntime?.capabilities)
+                }
+                onClick={() => void onPickAttachment()}
               >
                 <svg viewBox="0 0 24 24">
                   <path d="M21 11l-9 9a6 6 0 01-8.5-8.5l9-9a4 4 0 015.5 5.5l-9 9a2 2 0 01-2.8-2.8l8-8" />
@@ -2609,7 +2964,9 @@ export function SessionWorkbench({
                   !activeSessionId ||
                   degraded ||
                   sending ||
-                  draft.trim().length === 0 ||
+                  (draft.trim().length === 0 &&
+                    !pendingAttachments.some((item) => item.state === "ready")) ||
+                  pendingAttachments.some((item) => item.state === "uploading") ||
                   activeSession?.status === "paused" ||
                   (activeRequiresProvider && activeProviderState === "invalid") ||
                   (activeRequiresProvider &&
@@ -2630,6 +2987,16 @@ export function SessionWorkbench({
                 </svg>
               </button>
             </div>
+            {multimodalWarning ? (
+              <p
+                className="composer-warning"
+                data-testid="multimodal-warning"
+                data-warning={MULTIMODAL_MODEL_UNVERIFIED}
+                role="note"
+              >
+                {multimodalWarning}
+              </p>
+            ) : null}
             {thinkingWarning ? (
               <p
                 className="thinking-warning"

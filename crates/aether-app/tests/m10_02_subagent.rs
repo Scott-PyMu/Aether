@@ -205,7 +205,11 @@ impl IpcBackend for FakeBackend {
         let write = self.write.clone();
         self.call(async move {
             write
-                .execute(StoreCommand::BeginRunIdempotent { message, run })
+                .execute(StoreCommand::BeginRunIdempotent {
+                    message,
+                    run,
+                    attachment_ids: Vec::new(),
+                })
                 .await
                 .map_err(|error| IpcError::internal(error.to_string()))?;
             Ok(())

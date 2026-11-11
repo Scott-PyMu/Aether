@@ -191,15 +191,15 @@ const expectedCounts = {
   daemon,
   shell,
   ipc_error_codes: 32,
-  business_codes: 31,
+  business_codes: 35,
   event_envelope_fields: 9,
   settings_keys: 9,
-  migrations: 11,
+  migrations: 12,
 };
 for (const [key, value] of Object.entries(expectedCounts)) {
   if (counts[key] !== value) fail(`counts.${key} 必须是 ${value}，实际 ${counts[key]}`);
 }
-if (daemon !== 79) fail(`daemon 路由必须是 79，实际 ${daemon}`);
+if (daemon !== 82) fail(`daemon 路由必须是 82，实际 ${daemon}`);
 if (shell !== 4) fail(`shell 路由必须是 4，实际 ${shell}`);
 
 // ---- 辅助产物 ----
@@ -327,9 +327,9 @@ if (!stats) {
 } else {
   const rules = [
     ["commands.total", stats.commands?.total, EXPECTED_COMMANDS],
-    ["commands.daemon", stats.commands?.daemon, 79],
+    ["commands.daemon", stats.commands?.daemon, 82],
     ["commands.shell", stats.commands?.shell, 4],
-    ["commands.reachable", stats.commands?.reachable, 81],
+    ["commands.reachable", stats.commands?.reachable, 84],
     ["protocol.dod_reference_bindings_lines", stats.protocol?.dod_reference_bindings_lines, 1003],
   ];
   for (const [path, actualValue, expected] of rules) {

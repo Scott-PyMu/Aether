@@ -7,6 +7,7 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+pub mod attachments;
 pub mod domain;
 pub mod error;
 pub mod event;
@@ -14,6 +15,13 @@ pub mod ids;
 pub mod session_state;
 pub mod subagent;
 
+pub use attachments::{
+    sanitize_attachment_name, sniff_image, AttachmentContentPart, AttachmentMime, ImageDimensions,
+    MessageAttachment, OutboundAttachment, ATTACHMENT_FILENAME_MAX_CHARS, ATTACHMENT_MAX_BYTES,
+    ATTACHMENT_MAX_EDGE, ATTACHMENT_MAX_PER_MESSAGE, ATTACHMENT_MAX_PER_SESSION,
+    ATTACHMENT_MAX_PIXELS, ATTACHMENT_MAX_SESSION_BYTES, MULTIMODAL_CAPABILITY,
+    MULTIMODAL_MODEL_UNVERIFIED, VISION_CAPABILITY,
+};
 pub use domain::{
     static_capabilities, supports_multi_provider, LogLevel, Message, MessageReference, MessageRole,
     PermissionDecision, PermissionMode, PermissionScope, PermissionStatus, Preset, ReferenceKind,

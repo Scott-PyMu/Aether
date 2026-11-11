@@ -12,7 +12,8 @@
     "0008_session_search_fts.sql",
     "0009_provider_endpoints.sql",
     "0010_workflow_orchestration.sql",
-    "0011_subagent_results.sql"
+    "0011_subagent_results.sql",
+    "0012_attachments.sql"
   ],
   "rule": "0001–0009 已发布不可修改；新约束走 0002+ 增量迁移（ADR-004）"
 }

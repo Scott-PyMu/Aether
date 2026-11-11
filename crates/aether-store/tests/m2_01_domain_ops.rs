@@ -175,6 +175,7 @@ async fn domain_commands_and_reads_round_trip() {
         .execute(StoreCommand::BeginRunIdempotent {
             message: message.clone(),
             run: run_record.clone(),
+            attachment_ids: Vec::new(),
         })
         .await
         .unwrap();

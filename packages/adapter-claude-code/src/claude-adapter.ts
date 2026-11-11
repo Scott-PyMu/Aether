@@ -73,6 +73,7 @@ export const RUNTIME_CAPABILITIES: readonly string[] = [
   "pause_resume",
   // ADR-028：按会话 provider 向核心凭据 broker 取数（同一适配器并发多供应商）。
   "multi_provider",
+  "multimodal",
   // M10-02/ADR-032：子 Agent 派生与版本化结果交付（默认 message_append）。
   "subagent",
   "subagent_context",

@@ -76,6 +76,7 @@ import {
   writeOfflineDiagnostics,
 } from "./offlineDiagnostics";
 import { createShellLogger, readFileTail, type ShellLogger } from "./shellLog";
+import { disposeAttachmentProtocol, registerAttachmentProtocol } from "./attachmentProtocol";
 import {
   APP_SCHEME,
   APP_URL,
@@ -234,6 +235,17 @@ protocol.registerSchemesAsPrivileged([
       stream: true,
     },
   },
+  {
+    // M10-05/ADR-035：缩略图协议（只允许 GET + 64hex + 附件根白名单）。
+    scheme: "aether-attachment",
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: false,
+      stream: true,
+    },
+  },
 ]);
 
 // 单实例：`userData` 会影响锁作用域；必须在 requestSingleInstanceLock 之前设置。
@@ -290,6 +302,7 @@ function installLifecycle(): void {
     }
     clearRestartTimer();
     runtime.browserHost?.dispose();
+    disposeAttachmentProtocol();
     const client = runtime.client;
     if (client === null) {
       return;
@@ -360,6 +373,11 @@ function installLifecycle(): void {
 async function onReady(): Promise<void> {
   Menu.setApplicationMenu(null);
   registerAppProtocol();
+  // M10-05/ADR-035：缩略图协议（UtilityProcess 解码；renderer 不接收原图）。
+  registerAttachmentProtocol({
+    dataDir: () => runtime.dataDir,
+    log: (event, detail) => runtime.logger.log("info", event, detail ?? {}),
+  });
   installSessionSecurity();
   installWebContentsHardening();
   installCertificatePolicy();

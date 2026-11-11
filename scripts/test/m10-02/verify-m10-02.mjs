@@ -7,7 +7,7 @@
  *  2. Rust 集成测试（派生/隔离/权限/拦截/父授权/取消）；
  *  3. 适配器 SDK 协议客户端与工具定义；
  *  4. UI-03 子会话树/结果卡锚点与交互；
- *  5. 生成物（79 命令 / 24 业务码）与 M9-01 基线；
+ *  5. 生成物（86 命令 / 35 业务码）与 M9-01 基线；
  *  6. 证据文档 `docs/M10-02-证据.md` DoD-1～8。
  */
 import { execFileSync } from "node:child_process";
@@ -71,7 +71,7 @@ for (const command of [
 ]) {
   check(`命令面含 ${command}`, dispatch.includes(`"${command}"`));
 }
-check("命令面 83 条（79 daemon + 4 shell）", /COMMANDS\.len\(\),\s*83/.test(dispatch));
+check("命令面 86 条（82 daemon + 4 shell）", /COMMANDS\.len\(\),\s*86/.test(dispatch));
 
 const event = read("crates/aether-core/src/event.rs");
 for (const needle of [
@@ -140,11 +140,11 @@ for (const testid of [
 check("UI 不新增 subagent-result-detail testid", !ui.includes('data-testid="subagent-result-detail"'));
 
 const manifest = JSON.parse(read("packages/protocol/src/command-manifest.json"));
-check("command-manifest 83 条", manifest.counts?.total === 83);
-check("command-manifest daemon=79", manifest.counts?.daemon === 79);
+check("command-manifest 86 条", manifest.counts?.total === 86);
+check("command-manifest daemon=82", manifest.counts?.daemon === 82);
 const errors = JSON.parse(read("packages/protocol/src/error_codes.json"));
 check("error_codes ipc=32", errors.ipc?.length === 32);
-check("error_codes business=31", errors.business?.length === 31);
+check("error_codes business=35", errors.business?.length === 35);
 
 // ---------- 可执行验证 ----------
 run(

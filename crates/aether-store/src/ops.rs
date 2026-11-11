@@ -116,6 +116,33 @@ pub struct ProviderModelRecord {
     pub display_name: String,
     pub enabled: bool,
     pub created_at: i64,
+    /// 模型能力（ADR-035 D-035-4：JSON 数组，如 `["vision"]`；缺省空）。
+    pub capabilities: Vec<String>,
+}
+
+/// 附件元数据（M10-05/ADR-035 D-035-2；内容外置，DB 不存二进制）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachmentRecord {
+    pub id: String,
+    pub session_id: String,
+    /// 绑定到消息后写入；发送前为 `None`。
+    pub message_id: Option<String>,
+    /// 内容 sha256（64 位十六进制小写）。
+    pub sha256: String,
+    pub mime: String,
+    pub size_bytes: i64,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    /// 相对 `data_dir` 的规范化路径（不存绝对路径）。
+    pub storage_path: String,
+    pub created_at: i64,
+}
+
+/// 会话附件用量（ADR-035 D-035-1：≤200 个 / ≤1 GiB）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AttachmentUsage {
+    pub count: u64,
+    pub bytes: u64,
 }
 
 /// 审计行（`audit_log` 表；P0 最小集：会话生命周期 + 权限请求/决议 + 适配器状态变化）。
@@ -326,7 +353,15 @@ pub enum StoreCommand {
     },
     /// 原子幂等发送：按 `(session_id, client_msg_id)` 查重，命中返回既有消息/run；
     /// 未命中同事务插入用户消息与 run 行（`messages.seq` 由存储侧分配）。
-    BeginRunIdempotent { message: Message, run: Run },
+    ///
+    /// M10-05/ADR-035：`attachment_ids` 在同事务内绑定到新消息
+    /// （`attachments.message_id`）；任一附件缺失/不属于会话 → 事务回滚，
+    /// 不产生半成品消息（不得静默丢附件）。
+    BeginRunIdempotent {
+        message: Message,
+        run: Run,
+        attachment_ids: Vec<String>,
+    },
     /// 插入消息（助手/工具/系统消息；`client_msg_id` 为 `NULL`，`seq=0` 时自动分配）。
     InsertMessage { message: Message },
     /// 更新消息正文（终稿覆盖）。
@@ -422,6 +457,21 @@ pub enum StoreCommand {
     ///
     /// 单写者约束：引用写路径同样经 [`crate::WriteQueue::execute`]（AGENTS §2.4）。
     InsertArtifact { artifact: ArtifactRecord },
+    /// 插入附件元数据（M10-05 `attachment_add`；ADR-035 D-035-2）。
+    ///
+    /// `INSERT … ON CONFLICT(session_id, sha256) DO NOTHING` + 回读：同会话同内容
+    /// 幂等返回既有行（不重复插入、不改变原 `id`/`created_at`）。
+    InsertAttachment { attachment: AttachmentRecord },
+    /// 删除附件元数据（M10-05 `attachment_remove`）；返回无其他 DB 引用的
+    /// `storage_path` 供调用方异步删文件（ADR-035 D-035-2「不删除仍被引用的内容」）。
+    RemoveAttachment { attachment_id: String },
+    /// 设置供应商模型能力（`provider_models.capabilities`；ADR-035 D-035-4）。
+    /// `capabilities` 为规范 JSON 数组文本（调用方序列化）。
+    SetProviderModelCapabilities {
+        provider_id: String,
+        model_id: String,
+        capabilities: String,
+    },
     /// 删除会话引用（M3-09 `artifact_remove`；不存在时影响 0 行——幂等语义）。
     ///
     /// 单写者约束：删除同样经 [`crate::WriteQueue::execute`]（AGENTS §2.4）。
@@ -518,6 +568,18 @@ pub enum StoreOutcome {
         artifact: ArtifactRecord,
         /// `true` = 本次新建；`false` = 幂等命中既有行（UNIQUE 兜底）。
         inserted: bool,
+    },
+    /// [`StoreCommand::InsertAttachment`] 结果：新增或既有元数据。
+    AttachmentRecorded {
+        attachment: AttachmentRecord,
+        /// `true` = 本次新建；`false` = 幂等命中既有行（UNIQUE 兜底）。
+        inserted: bool,
+    },
+    /// [`StoreCommand::RemoveAttachment`] 结果：删除行 + 可清理的磁盘路径
+    /// （`None` = 不存在或仍被其他附件行引用；`removed=false` = 幂等未命中）。
+    AttachmentRemoved {
+        removed: bool,
+        storage_path: Option<String>,
     },
     /// [`StoreCommand::DeleteWorkspace`] 结果：存在会话引用（`sessions.workspace_id`），
     /// **未删除**、未级联、未改派（ADR-026 §2.1-1：`workspace_in_use`）。
@@ -814,7 +876,11 @@ pub(crate) fn apply_command(
             transaction.commit().map_err(txn_failed)?;
             Ok(StoreOutcome::Applied { affected })
         }
-        StoreCommand::BeginRunIdempotent { message, run } => {
+        StoreCommand::BeginRunIdempotent {
+            message,
+            run,
+            attachment_ids,
+        } => {
             let transaction = connection.transaction().map_err(txn_failed)?;
             let existing: Option<(String, Option<String>)> = transaction
                 .query_row(
@@ -849,6 +915,39 @@ pub(crate) fn apply_command(
             }
             insert_message(&transaction, message)?;
             insert_run(&transaction, run)?;
+            // M10-05/ADR-035：附件绑定与新消息同一事务；任一附件缺失/不属于会话 →
+            // 整体回滚（不产生「消息已发送但附件被静默丢弃」的半成品）。
+            for attachment_id in attachment_ids {
+                let bound = transaction
+                    .execute(
+                        "UPDATE attachments SET message_id = ?1 \
+                         WHERE id = ?2 AND session_id = ?3 AND message_id IS NULL",
+                        params![
+                            message.id.as_str(),
+                            attachment_id.as_str(),
+                            message.session_id.as_str()
+                        ],
+                    )
+                    .map_err(txn_failed)?;
+                if bound == 0 {
+                    // 已绑定（附件复用）合法；仅当行缺失/不属于会话时报错。
+                    let exists: Option<i64> = transaction
+                        .query_row(
+                            "SELECT 1 FROM attachments WHERE id = ?1 AND session_id = ?2",
+                            params![attachment_id.as_str(), message.session_id.as_str()],
+                            |row| row.get(0),
+                        )
+                        .optional()
+                        .map_err(txn_failed)?;
+                    if exists.is_none() {
+                        return Err(StoreError::Internal {
+                            reason: format!(
+                                "附件不可绑定（缺失/不属于会话）：{attachment_id}"
+                            ),
+                        });
+                    }
+                }
+            }
             transaction.commit().map_err(txn_failed)?;
             Ok(StoreOutcome::RunAccepted {
                 message_id: message.id.clone(),
@@ -1360,6 +1459,93 @@ pub(crate) fn apply_command(
                 inserted: inserted > 0,
             })
         }
+        StoreCommand::InsertAttachment { attachment } => {
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            let inserted = transaction
+                .execute(
+                    "INSERT INTO attachments (id, session_id, message_id, sha256, mime, size_bytes, \
+                     width, height, storage_path, created_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) \
+                     ON CONFLICT(session_id, sha256) DO NOTHING",
+                    params![
+                        attachment.id,
+                        attachment.session_id,
+                        attachment.message_id,
+                        attachment.sha256,
+                        attachment.mime,
+                        attachment.size_bytes,
+                        attachment.width,
+                        attachment.height,
+                        attachment.storage_path,
+                        attachment.created_at,
+                    ],
+                )
+                .map_err(txn_failed)?;
+            let record = transaction
+                .query_row(
+                    "SELECT id, session_id, message_id, sha256, mime, size_bytes, width, height, \
+                     storage_path, created_at FROM attachments \
+                     WHERE session_id = ?1 AND sha256 = ?2",
+                    params![attachment.session_id, attachment.sha256],
+                    read_attachment_row,
+                )
+                .map_err(txn_failed)?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::AttachmentRecorded {
+                attachment: record,
+                inserted: inserted > 0,
+            })
+        }
+        StoreCommand::RemoveAttachment { attachment_id } => {
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            let storage_path: Option<String> = transaction
+                .query_row(
+                    "SELECT storage_path FROM attachments WHERE id = ?1",
+                    params![attachment_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(txn_failed)?;
+            let removed = transaction
+                .execute(
+                    "DELETE FROM attachments WHERE id = ?1",
+                    params![attachment_id],
+                )
+                .map_err(txn_failed)?;
+            let referenced = match &storage_path {
+                Some(path) => transaction
+                    .query_row(
+                        "SELECT 1 FROM attachments WHERE storage_path = ?1 LIMIT 1",
+                        params![path],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .optional()
+                    .map_err(txn_failed)?
+                    .is_some(),
+                None => true,
+            };
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::AttachmentRemoved {
+                removed: removed > 0,
+                storage_path: if referenced { None } else { storage_path },
+            })
+        }
+        StoreCommand::SetProviderModelCapabilities {
+            provider_id,
+            model_id,
+            capabilities,
+        } => {
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            let affected = transaction
+                .execute(
+                    "UPDATE provider_models SET capabilities = ?3 \
+                     WHERE provider_id = ?1 AND model_id = ?2",
+                    params![provider_id, model_id, capabilities],
+                )
+                .map_err(txn_failed)?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::Applied { affected })
+        }
         StoreCommand::RemoveArtifact {
             session_id,
             artifact_id,
@@ -1463,7 +1649,7 @@ pub(crate) fn apply_command(
             let affected = transaction
                 .execute(
                     "INSERT INTO provider_models (id, provider_id, model_id, display_name, enabled, \
-                     created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                     created_at, capabilities) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                     params![
                         model.id,
                         model.provider_id,
@@ -1471,6 +1657,11 @@ pub(crate) fn apply_command(
                         model.display_name,
                         i64::from(model.enabled),
                         model.created_at,
+                        serde_json::to_string(&model.capabilities).map_err(|error| {
+                            StoreError::Internal {
+                                reason: format!("provider_models.capabilities 序列化失败：{error}"),
+                            }
+                        })?,
                     ],
                 )
                 .map_err(txn_failed)?;
@@ -2114,6 +2305,87 @@ impl ReadPool {
         .await
     }
 
+    /// 会话附件清单（M10-05 `attachment_list`；按 `created_at` 升序、`rowid` 兜底）。
+    pub async fn attachments(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Vec<AttachmentRecord>, StoreError> {
+        let session = session_id.as_str().to_owned();
+        self.with_connection(move |connection| {
+            let mut statement = connection.prepare(
+                "SELECT id, session_id, message_id, sha256, mime, size_bytes, width, height, \
+                 storage_path, created_at FROM attachments \
+                 WHERE session_id = ?1 ORDER BY created_at ASC, rowid ASC",
+            )?;
+            let rows = statement.query_map([session.as_str()], read_attachment_row)?;
+            let mut attachments = Vec::new();
+            for row in rows {
+                attachments.push(row?);
+            }
+            Ok(attachments)
+        })
+        .await
+    }
+
+    /// 按 id 读取附件元数据（发送绑定校验；不存在为 `None`）。
+    pub async fn attachment(
+        &self,
+        attachment_id: &str,
+    ) -> Result<Option<AttachmentRecord>, StoreError> {
+        let attachment_id = attachment_id.to_owned();
+        self.with_connection(move |connection| {
+            connection
+                .query_row(
+                    "SELECT id, session_id, message_id, sha256, mime, size_bytes, width, height, \
+                     storage_path, created_at FROM attachments WHERE id = ?1",
+                    params![attachment_id],
+                    read_attachment_row,
+                )
+                .optional()
+                .map_err(StoreError::from)
+        })
+        .await
+    }
+
+    /// 会话附件用量（数量 + 字节；ADR-035 D-035-1 限额判定）。
+    pub async fn attachment_usage(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<AttachmentUsage, StoreError> {
+        let session = session_id.as_str().to_owned();
+        self.with_connection(move |connection| {
+            connection
+                .query_row(
+                    "SELECT COUNT(*), COALESCE(SUM(size_bytes), 0) FROM attachments \
+                     WHERE session_id = ?1",
+                    params![session],
+                    |row| {
+                        Ok(AttachmentUsage {
+                            count: row.get::<_, i64>(0)? as u64,
+                            bytes: row.get::<_, i64>(1)? as u64,
+                        })
+                    },
+                )
+                .map_err(StoreError::from)
+        })
+        .await
+    }
+
+    /// 全部附件 `storage_path`（启动孤儿扫描：磁盘文件 >24h 无 DB 引用 → 清理）。
+    pub async fn all_attachment_storage_paths(&self) -> Result<Vec<String>, StoreError> {
+        self.with_connection(move |connection| {
+            let mut statement =
+                connection.prepare("SELECT storage_path FROM attachments ORDER BY rowid ASC")?;
+            let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+            let mut paths = Vec::new();
+            for row in rows {
+                paths.push(row?);
+            }
+            Ok(paths)
+        })
+        .await
+    }
+
     /// 供应商清单（M3-11 `providers_list` 语义；按 `created_at` 升序、`rowid` 兜底）。
     pub async fn providers(&self) -> Result<Vec<ProviderRecord>, StoreError> {
         self.with_connection(move |connection| {
@@ -2153,7 +2425,7 @@ impl ReadPool {
     pub async fn provider_models(&self) -> Result<Vec<ProviderModelRecord>, StoreError> {
         self.with_connection(move |connection| {
             let mut statement = connection.prepare(
-                "SELECT id, provider_id, model_id, display_name, enabled, created_at \
+                "SELECT id, provider_id, model_id, display_name, enabled, created_at, capabilities \
                  FROM provider_models ORDER BY created_at ASC, rowid ASC",
             )?;
             let rows = statement.query_map([], read_provider_model_row)?;
@@ -2178,7 +2450,7 @@ impl ReadPool {
         self.with_connection(move |connection| {
             connection
                 .query_row(
-                    "SELECT id, provider_id, model_id, display_name, enabled, created_at \
+                    "SELECT id, provider_id, model_id, display_name, enabled, created_at, capabilities \
                      FROM provider_models WHERE provider_id = ?1 AND model_id = ?2",
                     params![provider_id, model_id],
                     read_provider_model_row,
@@ -2762,6 +3034,7 @@ fn read_provider_row(row: &Row<'_>) -> rusqlite::Result<ProviderRecord> {
 }
 
 fn read_provider_model_row(row: &Row<'_>) -> rusqlite::Result<ProviderModelRecord> {
+    let capabilities: String = row.get(6)?;
     Ok(ProviderModelRecord {
         id: row.get(0)?,
         provider_id: row.get(1)?,
@@ -2769,6 +3042,23 @@ fn read_provider_model_row(row: &Row<'_>) -> rusqlite::Result<ProviderModelRecor
         display_name: row.get(3)?,
         enabled: row.get::<_, i64>(4)? != 0,
         created_at: row.get(5)?,
+        capabilities: serde_json::from_str(&capabilities)
+            .map_err(|_| parse_column_error(6, "provider_models.capabilities"))?,
+    })
+}
+
+fn read_attachment_row(row: &Row<'_>) -> rusqlite::Result<AttachmentRecord> {
+    Ok(AttachmentRecord {
+        id: row.get(0)?,
+        session_id: row.get(1)?,
+        message_id: row.get(2)?,
+        sha256: row.get(3)?,
+        mime: row.get(4)?,
+        size_bytes: row.get(5)?,
+        width: row.get(6)?,
+        height: row.get(7)?,
+        storage_path: row.get(8)?,
+        created_at: row.get(9)?,
     })
 }
 
@@ -2917,6 +3207,7 @@ mod tests {
             &StoreCommand::BeginRunIdempotent {
                 message: message.clone(),
                 run: run_record_value.clone(),
+                attachment_ids: Vec::new(),
             },
         )
         .unwrap();
@@ -2943,6 +3234,7 @@ mod tests {
                     "01J0000000000000000000000A",
                     "01J000000000000000000000M2",
                 ),
+                attachment_ids: Vec::new(),
             },
         )
         .unwrap();
@@ -2980,6 +3272,7 @@ mod tests {
                 &StoreCommand::BeginRunIdempotent {
                     message: user_message(message_id, "01J0000000000000000000000A", client),
                     run: run_record(&run_id, "01J0000000000000000000000A", message_id),
+                    attachment_ids: Vec::new(),
                 },
             )
             .unwrap();

@@ -379,6 +379,31 @@ impl AdapterSessionClient {
         references: &[aether_core::MessageReference],
         subagent_context: Option<&aether_core::SubagentContext>,
     ) -> Result<SendAck, SessionClientError> {
+        self.send_with_attachments(
+            session_id,
+            client_msg_id,
+            text,
+            thinking_depth,
+            references,
+            &[],
+            subagent_context,
+        )
+        .await
+    }
+
+    /// `session.send` + 图像附件引用（M10-05/ADR-035：`[{kind,path,mime,size_bytes,
+    /// sha256,artifact_ref}]`；数据体不进线协议，引用帧 <1MiB）。
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send_with_attachments(
+        &self,
+        session_id: &str,
+        client_msg_id: &str,
+        text: &str,
+        thinking_depth: Option<u8>,
+        references: &[aether_core::MessageReference],
+        attachments: &[aether_core::MessageAttachment],
+        subagent_context: Option<&aether_core::SubagentContext>,
+    ) -> Result<SendAck, SessionClientError> {
         let mut params = json!({
             "session_id": session_id,
             "client_msg_id": client_msg_id,
@@ -390,6 +415,11 @@ impl AdapterSessionClient {
         if !references.is_empty() {
             params["references"] = serde_json::to_value(references).map_err(|error| {
                 SessionClientError::Protocol(format!("references 序列化失败：{error}"))
+            })?;
+        }
+        if !attachments.is_empty() {
+            params["attachments"] = serde_json::to_value(attachments).map_err(|error| {
+                SessionClientError::Protocol(format!("attachments 序列化失败：{error}"))
             })?;
         }
         if let Some(context) = subagent_context {

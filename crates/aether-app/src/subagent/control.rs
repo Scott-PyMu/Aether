@@ -495,6 +495,7 @@ impl SubagentControlBackend {
             provider_id: None,
             model: None,
             subagent_context: None,
+            attachments: None,
         };
         let sent = match self.inner_send(send).await {
             Ok(value) => value,
@@ -900,6 +901,7 @@ impl SubagentControlBackend {
                         block: block.clone(),
                         mode: Some(mode.as_str().to_owned()),
                     }),
+                    attachments: None,
                 };
                 match self.inner_send(span).await {
                     Ok(response) => {
@@ -1092,6 +1094,7 @@ impl SubagentControlBackend {
             provider_id: None,
             model: None,
             subagent_context: None,
+            attachments: None,
         };
         let sent = match self.inner_send(send).await {
             Ok(value) => value,
@@ -1624,6 +1627,14 @@ impl IpcBackend for SubagentControlBackend {
         self.inner.runtimes_list()
     }
 
+    fn attachment_add(
+        &self,
+        request: &AttachmentAddRequest,
+        resolved: &std::path::Path,
+    ) -> Result<Value, IpcError> {
+        self.inner.attachment_add(request, resolved)
+    }
+
     forward_request!(
         session_list: SessionListRequest,
         session_search: SessionSearchRequest,
@@ -1654,6 +1665,8 @@ impl IpcBackend for SubagentControlBackend {
         workspace_delete: WorkspaceDeleteRequest,
         artifacts_list: ArtifactsListRequest,
         artifact_remove: ArtifactRemoveRequest,
+        attachment_list: AttachmentListRequest,
+        attachment_remove: AttachmentRemoveRequest,
         providers_list: ProvidersListRequest,
         provider_create: ProviderCreateRequest,
         provider_update: ProviderUpdateRequest,

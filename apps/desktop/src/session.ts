@@ -210,8 +210,19 @@ export interface MessageRow {
   client_msg_id?: string | null;
   role: "user" | "assistant" | "system" | "tool";
   content: string;
+  /** M10-05/ADR-035：附件引用（`messages.content_parts`；不含二进制）。 */
+  content_parts?: MessageContentPart[] | null;
   seq: number;
   created_at: number;
+}
+
+/** `messages.content_parts` 附件引用（ADR-035 D-035-2）。 */
+export interface MessageContentPart {
+  kind: "image" | string;
+  attachment_id: string;
+  mime: string;
+  width?: number | null;
+  height?: number | null;
 }
 
 /** `run_retry` 回执（M3-06：一键重放产生的新 run；旧 run 保留审计）。 */
@@ -319,6 +330,8 @@ export interface SessionIpc {
     thinking_depth?: number;
     /** M7-06/ADR-024：随消息附带的文件引用（≤32；引用 ≠ 预授权）。 */
     references?: SessionReference[];
+    /** M10-05/ADR-035：随消息发送的附件 id（≤8；能力门/归属在核心复核）。 */
+    attachments?: string[];
     /** ADR-028 v0.9：旧会话补选供应商（仅 provider_id 为空时允许）。 */
     provider_id?: string;
     /** ADR-028 v0.9：旧会话一次性补选模型（model 空/失效/不属于时允许）。 */

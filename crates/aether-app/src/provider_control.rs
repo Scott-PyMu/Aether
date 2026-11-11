@@ -447,6 +447,7 @@ impl ProviderControl {
                 display_name,
                 enabled: true,
                 created_at: now_ms(),
+                capabilities: Vec::new(),
             };
             let outcome = write
                 .execute(StoreCommand::InsertProviderModel {
@@ -599,6 +600,7 @@ impl ProviderControl {
                     display_name: model_id.clone(),
                     enabled: true,
                     created_at: now_ms(),
+                    capabilities: Vec::new(),
                 };
                 match write
                     .execute(StoreCommand::InsertProviderModel { model })
@@ -774,6 +776,7 @@ fn model_json(model: &ProviderModelRecord) -> Value {
         "model_id": model.model_id,
         "display_name": model.display_name,
         "enabled": model.enabled,
+        "capabilities": model.capabilities,
     })
 }
 

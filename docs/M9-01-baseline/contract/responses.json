@@ -12,7 +12,7 @@
     "typed": false,
     "note": "63 条命令统一返回 JsonPayload（自由 JSON）；HEAD 没有按命令的响应 DTO，故 commands[].response.type 恒为 null，响应契约按『序列化类型清单』冻结。"
   },
-  "dto_note": "ipc/dto.rs 只有 78 个 *Request 请求 DTO、3 个非请求结构体（SubagentContextInput/ReferenceEntry/SubagentContextRef）与若干序列化枚举；响应结构体分布在 error/session_backend/core_health/core::domain。",
+  "dto_note": "ipc/dto.rs 只有 81 个 *Request 请求 DTO、3 个非请求结构体（SubagentContextInput/ReferenceEntry/SubagentContextRef）与若干序列化枚举；响应结构体分布在 error/session_backend/core_health/core::domain。",
   "commands": [
     {
       "command": "runtimes_list",
@@ -590,6 +590,27 @@
     },
     {
       "command": "import_cancel",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "attachment_add",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "attachment_list",
+      "response": {
+        "kind": "json",
+        "type": null
+      }
+    },
+    {
+      "command": "attachment_remove",
       "response": {
         "kind": "json",
         "type": null
@@ -2001,7 +2022,7 @@
     }
   ],
   "counts": {
-    "commands": 83,
+    "commands": 86,
     "types": 29
   }
 }

@@ -27,6 +27,7 @@ dsh_env.txt
 
 # 发布产物（安装器收集目录）
 dist-out/
+apps/desktop/native-runtime/
 
 # M9-11 打包暂存（daemon + runtime-bundle；构建期生成，不入库）
 /build/

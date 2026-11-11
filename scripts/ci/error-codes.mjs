@@ -69,6 +69,11 @@ const BUSINESS_CODES = [
   { code: "import_cancelled", owner: "M10-04", first_adr: "ADR-034" },
   { code: "import_job_not_found", owner: "M10-04", first_adr: "ADR-034" },
   { code: "import_job_not_active", owner: "M10-04", first_adr: "ADR-034" },
+  // M10-05/ADR-035 附件业务码（4 项）。
+  { code: "attachment_type_unsupported", owner: "M10-05", first_adr: "ADR-035" },
+  { code: "attachment_too_large", owner: "M10-05", first_adr: "ADR-035" },
+  { code: "attachment_limit_exceeded", owner: "M10-05", first_adr: "ADR-035" },
+  { code: "attachment_storage_failed", owner: "M10-05", first_adr: "ADR-035" },
 ];
 
 const MODE = process.argv.slice(2).find((arg) => !arg.startsWith("--")) ?? "check";

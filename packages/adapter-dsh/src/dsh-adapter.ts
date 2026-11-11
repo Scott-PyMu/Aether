@@ -76,6 +76,7 @@ export const RUNTIME_CAPABILITIES: readonly string[] = [
   "pause_resume",
   // ADR-028 v0.9：会话级多供应商（per-session DSH_HOME/profile + 按 run 取凭据）。
   "multi_provider",
+  "multimodal",
   // M10-02/ADR-032：子 Agent 派生与版本化结果交付。
   "subagent",
   "subagent_context",

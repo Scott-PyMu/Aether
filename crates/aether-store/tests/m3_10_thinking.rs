@@ -232,6 +232,7 @@ async fn dod1_roundtrip_and_update_commands() {
         .execute(StoreCommand::BeginRunIdempotent {
             message: message(MESSAGE, SESSION, "01J8ZQ5R0N7W9Y8X6V4T2S0KCM"),
             run: run(RUN_ACTIVE, SESSION, MESSAGE, Some(4)),
+            attachment_ids: Vec::new(),
         })
         .await
         .unwrap();

@@ -14,11 +14,14 @@
 import type { AetherEvent } from "@aether/protocol";
 
 import type { MessageRow } from "./session";
+import type { MessageContentPart } from "./session";
 
 export interface ChatBubble {
   key: string;
   role: "user" | "assistant";
   text: string;
+  /** M10-05/ADR-035：消息附件引用（缩略图协议由 main 提供）。 */
+  attachments?: MessageContentPart[];
   /** 流式进行中（`message.delta` 已到、终稿未到）。 */
   streaming: boolean;
   runId: string | null;
@@ -89,6 +92,7 @@ export function projectSession(
         key: `msg:${message.id}`,
         role: "user",
         text: message.content,
+        attachments: message.content_parts ?? undefined,
         streaming: false,
         runId: message.run_id ?? null,
         ts: message.created_at,
@@ -100,6 +104,7 @@ export function projectSession(
         key,
         role: "assistant",
         text: message.content,
+        attachments: message.content_parts ?? undefined,
         streaming: false,
         runId: message.run_id ?? null,
         ts: message.created_at,

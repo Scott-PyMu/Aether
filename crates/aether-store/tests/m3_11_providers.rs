@@ -48,6 +48,7 @@ fn model(id: &str, provider_id: &str, model_id: &str, created_at: i64) -> Provid
         display_name: model_id.to_owned(),
         enabled: true,
         created_at,
+        capabilities: Vec::new(),
     }
 }
 
@@ -121,8 +122,15 @@ fn dod1_provider_tables_match_adr_010_and_seed_builtins() {
                 Some("1".to_owned())
             ),
             ("created_at".to_owned(), "INTEGER".to_owned(), 1, None),
+            // ADR-035：模型能力 JSON 数组（缺省空数组）。
+            (
+                "capabilities".to_owned(),
+                "TEXT".to_owned(),
+                1,
+                Some("'[]'".to_owned())
+            ),
         ],
-        "provider_models 列定义必须与 ADR-010 附录 A 一致"
+        "provider_models 列定义必须与 ADR-010 附录 A / ADR-035 一致"
     );
 
     // UNIQUE(provider_id, model_id)：表级约束（自动索引）。

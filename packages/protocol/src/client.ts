@@ -9,6 +9,9 @@ import type {
   ArtifactAddRequest,
   ArtifactRemoveRequest,
   ArtifactsListRequest,
+  AttachmentAddRequest,
+  AttachmentListRequest,
+  AttachmentRemoveRequest,
   AuditExportRequest,
   AuditQueryRequest,
   BackupCreateRequest,
@@ -173,6 +176,9 @@ export const COMMANDS = [
   "archive_import",
   "import_status",
   "import_cancel",
+  "attachment_add",
+  "attachment_list",
+  "attachment_remove",
 ] as const;
 export type AetherCommand = (typeof COMMANDS)[number];
 
@@ -257,6 +263,9 @@ export const DAEMON_COMMANDS = [
   "archive_import",
   "import_status",
   "import_cancel",
+  "attachment_add",
+  "attachment_list",
+  "attachment_remove",
 ] as const;
 export type AetherDaemonCommand = (typeof DAEMON_COMMANDS)[number];
 
@@ -343,7 +352,11 @@ export type AetherBusinessCode =
   | "import_too_large"
   | "import_cancelled"
   | "import_job_not_found"
-  | "import_job_not_active";
+  | "import_job_not_active"
+  | "attachment_type_unsupported"
+  | "attachment_too_large"
+  | "attachment_limit_exceeded"
+  | "attachment_storage_failed";
 
 /** 事件回调（9 字段信封；EventStore 直接 ingest）。 */
 export type AetherEventHandler = (event: AetherEvent) => void;
@@ -806,6 +819,15 @@ export interface AetherClient {
 
   /** `import_cancel`（严格参数）。 */
   importCancel<T = unknown>(params: ImportCancelRequest): Promise<T>;
+
+  /** `attachment_add`（严格参数）。 */
+  attachmentAdd<T = unknown>(params: AttachmentAddRequest): Promise<T>;
+
+  /** `attachment_list`（严格参数）。 */
+  attachmentList<T = unknown>(params: AttachmentListRequest): Promise<T>;
+
+  /** `attachment_remove`（严格参数）。 */
+  attachmentRemove<T = unknown>(params: AttachmentRemoveRequest): Promise<T>;
 }
 
 const COMMAND_SET: ReadonlySet<string> = new Set(COMMANDS);
@@ -1105,6 +1127,15 @@ export function createAetherClient(provider: AetherBridgeProvider): AetherClient
     },
     async importCancel<T = unknown>(params?: ImportCancelRequest): Promise<T> {
       return call<T>("import_cancel", params);
+    },
+    async attachmentAdd<T = unknown>(params?: AttachmentAddRequest): Promise<T> {
+      return call<T>("attachment_add", params);
+    },
+    async attachmentList<T = unknown>(params?: AttachmentListRequest): Promise<T> {
+      return call<T>("attachment_list", params);
+    },
+    async attachmentRemove<T = unknown>(params?: AttachmentRemoveRequest): Promise<T> {
+      return call<T>("attachment_remove", params);
     },
   };
 }

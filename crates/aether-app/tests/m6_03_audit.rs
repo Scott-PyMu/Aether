@@ -938,6 +938,7 @@ fn protocol_reported_tool_calls_are_fully_audited_end_to_end() {
                 provider_id: None,
                 model: None,
                 subagent_context: None,
+                attachments: None,
             })
             .expect("session_send");
         let run_id = ack["run_id"].as_str().expect("run_id").to_owned();

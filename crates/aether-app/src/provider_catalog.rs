@@ -136,6 +136,7 @@ mod tests {
                     display_name: "DeepSeek Flash".to_owned(),
                     enabled: true,
                     created_at: 1,
+                    capabilities: Vec::new(),
                 },
             }))
             .unwrap();

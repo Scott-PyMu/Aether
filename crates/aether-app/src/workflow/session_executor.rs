@@ -121,6 +121,7 @@ impl SessionAgentExecutor {
             provider_id: None,
             model: None,
             subagent_context: None,
+            attachments: None,
         };
         let response = tokio::task::spawn_blocking(move || backend.session_send(&request))
             .await

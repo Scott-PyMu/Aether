@@ -20,6 +20,7 @@
 
 pub mod adapter_executor;
 pub mod archive_control;
+pub mod attachment;
 pub mod audit_bridge;
 pub mod import_control;
 pub mod backup_auto;

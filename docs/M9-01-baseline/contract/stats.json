@@ -2,15 +2,15 @@
   "schema": "aether.m9-01.stats.v1",
   "unit_note": "行数按「以 \\n 分隔的行数」计（含空行，末尾换行不额外计一行）；调用点按正则匹配次数计。",
   "commands": {
-    "total": 83,
-    "daemon": 79,
+    "total": 86,
+    "daemon": 82,
     "shell": 4,
-    "reachable": 81,
+    "reachable": 84,
     "reserved": 2
   },
   "frontend": {
-    "source_files": 60,
-    "test_files": 51,
+    "source_files": 61,
+    "test_files": 52,
     "invoke_call_sites": 0,
     "invoke_files": 0
   },
@@ -20,9 +20,9 @@
     "matches_dod_reference": true
   },
   "core": {
-    "lines": 2255,
-    "files": 7,
-    "rust_test_files": 97
+    "lines": 2700,
+    "files": 8,
+    "rust_test_files": 100
   },
   "method": {
     "commands": "crates/aether-app/src/ipc/dispatch.rs › pub const COMMANDS: &[&str]",

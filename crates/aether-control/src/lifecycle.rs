@@ -159,6 +159,8 @@ pub struct RunRequest {
     /// 随消息附带的文件引用（M7-06/ADR-024：透传 `session.send.references`；内存态，
     /// 不落库——重放（`run_retry`/暂停恢复）不带引用，见任务证据）。
     pub references: Vec<MessageReference>,
+    /// M10-05/ADR-035：随消息附带的图像附件（引用帧；数据体不进线协议）。
+    pub attachments: Vec<aether_core::OutboundAttachment>,
     /// M10-02/ADR-032：`session.send.subagent_context`（版本化、可 ack；仅子 Agent
     /// 结果回注路径使用；普通用户消息为 `None`）。
     pub subagent_context: Option<aether_core::SubagentContext>,
@@ -517,6 +519,8 @@ struct ActiveRun {
     thinking_override: bool,
     /// 随消息附带的文件引用（M7-06/ADR-024；内存态，不落库）。
     references: Vec<MessageReference>,
+    /// M10-05/ADR-035：图像附件（引用帧；`content_parts` 已随消息落库）。
+    attachments: Vec<aether_core::OutboundAttachment>,
     /// M10-02/ADR-032：子 Agent 结果回注上下文（内存态；重放不带）。
     subagent_context: Option<aether_core::SubagentContext>,
     last_activity_ms: i64,
@@ -534,6 +538,7 @@ struct QueuedRun {
     thinking_depth: u8,
     thinking_override: bool,
     references: Vec<MessageReference>,
+    attachments: Vec<aether_core::OutboundAttachment>,
     subagent_context: Option<aether_core::SubagentContext>,
 }
 
@@ -1059,6 +1064,7 @@ impl SessionManager {
                     thinking_override: false,
                     // M7-06/ADR-024：引用为内存态不落库——重放不带引用（任务证据登记）。
                     references: Vec::new(),
+                    attachments: Vec::new(),
                     subagent_context: None,
                     last_activity_ms: now,
                     cancel,
@@ -1083,6 +1089,7 @@ impl SessionManager {
                     thinking_depth,
                     thinking_override: false,
                     references: Vec::new(),
+                    attachments: Vec::new(),
                     subagent_context: None,
                 });
                 (true, false)
@@ -1375,6 +1382,7 @@ impl SessionManager {
                 thinking_override: false,
                 // M7-06/ADR-024：暂停重放不带引用（内存态；任务证据登记）。
                 references: Vec::new(),
+                attachments: Vec::new(),
                 subagent_context: None,
                 last_activity_ms: now,
                 cancel,
@@ -1612,6 +1620,31 @@ impl SessionManager {
         references: Vec<MessageReference>,
         subagent_context: Option<aether_core::SubagentContext>,
     ) -> Result<SendAck, LifecycleError> {
+        self.send_with_attachments(
+            session_id,
+            text,
+            client_msg_id,
+            thinking_override,
+            references,
+            Vec::new(),
+            subagent_context,
+        )
+        .await
+    }
+
+    /// M10-05/ADR-035：`session_send` + 图像附件（引用帧；消息 `content_parts` 与
+    /// 附件绑定在同一存储事务内完成，见 `BeginRunIdempotent.attachment_ids`）。
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send_with_attachments(
+        &self,
+        session_id: &SessionId,
+        text: &str,
+        client_msg_id: &str,
+        thinking_override: Option<u8>,
+        references: Vec<MessageReference>,
+        attachments: Vec<aether_core::OutboundAttachment>,
+        subagent_context: Option<aether_core::SubagentContext>,
+    ) -> Result<SendAck, LifecycleError> {
         self.inner
             .pipeline
             .admission()
@@ -1667,6 +1700,20 @@ impl SessionManager {
         let thinking_is_override = thinking_override.is_some();
 
         let now = self.inner.clock.now_ms();
+        // M10-05/ADR-035：附件引用写入 `messages.content_parts`（不存二进制）。
+        let content_parts = if attachments.is_empty() {
+            None
+        } else {
+            let parts: Vec<aether_core::AttachmentContentPart> =
+                attachments.iter().map(|item| item.content_part()).collect();
+            Some(serde_json::to_value(parts).map_err(|error| LifecycleError::Internal {
+                reason: format!("附件 content_parts 序列化失败：{error}"),
+            })?)
+        };
+        let attachment_ids: Vec<String> = attachments
+            .iter()
+            .map(|item| item.attachment_id.clone())
+            .collect();
         let message = Message {
             id: MessageId::new(ulid::generate()).map_err(internal_from)?,
             session_id: session_id.clone(),
@@ -1674,7 +1721,7 @@ impl SessionManager {
             client_msg_id: Some(client_msg_id.to_owned()),
             role: MessageRole::User,
             content: text.to_owned(),
-            content_parts: None,
+            content_parts,
             tool_calls: None,
             parent_message_id: None,
             seq: 0,
@@ -1696,6 +1743,7 @@ impl SessionManager {
             .execute(StoreCommand::BeginRunIdempotent {
                 message: message.clone(),
                 run: run.clone(),
+                attachment_ids,
             })
             .await?;
         let (message_id, run_id, duplicate) = match outcome {
@@ -1742,6 +1790,7 @@ impl SessionManager {
                     thinking_depth: requested_thinking_depth,
                     thinking_override: thinking_is_override,
                     references: references.clone(),
+                    attachments: attachments.clone(),
                     subagent_context: subagent_context.clone(),
                     last_activity_ms: now,
                     cancel,
@@ -1767,6 +1816,7 @@ impl SessionManager {
                     thinking_depth: requested_thinking_depth,
                     thinking_override: thinking_is_override,
                     references,
+                    attachments,
                     subagent_context,
                 });
                 (true, None)
@@ -2956,6 +3006,7 @@ async fn take_run_start(
         thinking_depth: active.thinking_depth,
         thinking_override: active.thinking_override,
         references: active.references.clone(),
+        attachments: active.attachments.clone(),
         subagent_context: active.subagent_context.clone(),
         cancel: active.cancel.clone(),
     }))
@@ -2969,6 +3020,7 @@ struct RunStart {
     thinking_depth: u8,
     thinking_override: bool,
     references: Vec<MessageReference>,
+    attachments: Vec<aether_core::OutboundAttachment>,
     subagent_context: Option<aether_core::SubagentContext>,
     cancel: RunCancelToken,
 }
@@ -2987,6 +3039,7 @@ async fn dispatch_and_finalize(
         thinking_depth: start.thinking_depth,
         thinking_override: start.thinking_override,
         references: start.references.clone(),
+        attachments: start.attachments.clone(),
         subagent_context: start.subagent_context.clone(),
         cancel: start.cancel.clone(),
     };
@@ -3082,6 +3135,7 @@ async fn detach_and_prepare(
                     thinking_depth: queued.thinking_depth,
                     thinking_override: queued.thinking_override,
                     references: queued.references,
+                    attachments: queued.attachments,
                     subagent_context: queued.subagent_context,
                     // M2-05：提升的 run 亦为会话取消树子节点。
                     cancel: RunCancelToken::child_of(&session.cancel),
@@ -3095,6 +3149,7 @@ async fn detach_and_prepare(
                         thinking_depth: start.thinking_depth,
                         thinking_override: start.thinking_override,
                         references: start.references.clone(),
+                        attachments: start.attachments.clone(),
                         subagent_context: start.subagent_context.clone(),
                         last_activity_ms: inner.clock.now_ms(),
                         cancel: start.cancel.clone(),
@@ -3733,6 +3788,7 @@ fn promote_waiting_locked(
         thinking_depth: queued.thinking_depth,
         thinking_override: queued.thinking_override,
         references: queued.references,
+        attachments: queued.attachments,
         subagent_context: queued.subagent_context,
         last_activity_ms: inner.clock.now_ms(),
         cancel,

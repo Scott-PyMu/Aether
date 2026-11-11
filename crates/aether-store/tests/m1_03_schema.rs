@@ -16,6 +16,7 @@ use rusqlite::Connection;
 const APPENDIX_C_TABLES: &[&str] = &[
     "adapter_plugins",
     "artifacts",
+    "attachments",
     "audit_log",
     "backups",
     "events",
@@ -215,6 +216,12 @@ fn appendix_c_explicit_indexes_exist_with_expected_columns() {
             &["parent_session_id", "state", "created_at"],
             false,
         ),
+        (
+            "idx_attachments_session",
+            "attachments",
+            &["session_id", "created_at"],
+            false,
+        ),
     ];
 
     let mut expected_names: Vec<String> = expected
@@ -225,7 +232,7 @@ fn appendix_c_explicit_indexes_exist_with_expected_columns() {
     assert_eq!(
         user_indexes(conn),
         expected_names,
-        "不得增删附录 C / ADR-004 / ADR-005 之外的索引"
+        "不得增删附录 C / ADR-004 / ADR-005 / ADR-035 之外的索引"
     );
 
     for (name, table, columns, unique) in expected {
@@ -423,6 +430,21 @@ fn appendix_c_foreign_keys_exist() {
             "sessions",
             "id",
             "CASCADE",
+        ),
+        // M10-05/ADR-035：附件随会话删除级联；消息删除置空 message_id。
+        (
+            "attachments",
+            "session_id",
+            "sessions",
+            "id",
+            "CASCADE",
+        ),
+        (
+            "attachments",
+            "message_id",
+            "messages",
+            "id",
+            "SET NULL",
         ),
     ];
 

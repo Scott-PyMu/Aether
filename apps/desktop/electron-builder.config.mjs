@@ -86,11 +86,16 @@ export default {
     "apps/desktop/dist/**/*",
     // main/preload/壳级页面：`<appPath>/apps/desktop/electron/dist`
     "apps/desktop/electron/dist/**/*",
+    "apps/desktop/native-runtime/**/*",
     "package.json",
   ],
   // `BrowserWindow.loadFile()` 经 `file://` 无法读取 asar 内页面（Electron 45 实测：
   // ERR_FILE_NOT_FOUND）；壳级页面（S-00/S-12/S-13）解包到 `app.asar.unpacked`。
-  asarUnpack: ["apps/desktop/electron/dist/shell/**"],
+  asarUnpack: [
+    "apps/desktop/electron/dist/shell/**",
+    // M10-05/ADR-035：native `.node` 必须解包（Node dlopen 不能读 asar）。
+    "apps/desktop/native-runtime/**",
+  ],
   extraResources: [
     // `<resources>/bin/aetherd(.exe)`
     { from: path.join(stageDir, "bin"), to: "bin" },

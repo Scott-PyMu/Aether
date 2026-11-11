@@ -78,11 +78,19 @@ pub enum BusinessCode {
     ImportJobNotFound,
     /// 导入作业不在活动状态（M10-04/ADR-034 D-034-4；`invalid_value`）。
     ImportJobNotActive,
+    /// 附件类型/能力不支持（**M10-05**/ADR-035 D-035-1/D-035-4；`invalid_value`）。
+    AttachmentTypeUnsupported,
+    /// 附件超过单文件/总量/像素限额（M10-05/ADR-035；`too_large`）。
+    AttachmentTooLarge,
+    /// 附件数量/单消息条数超限（M10-05/ADR-035；`out_of_range`）。
+    AttachmentLimitExceeded,
+    /// 附件存储失败（M10-05/ADR-035 D-035-2/D-035-6；`internal`）。
+    AttachmentStorageFailed,
 }
 
 impl BusinessCode {
     /// 全部业务码（顺序 = `error_codes.json` 的 `business` 顺序 = ADR-018 A-7 登记顺序）。
-    pub const ALL: [Self; 31] = [
+    pub const ALL: [Self; 35] = [
         Self::SessionBusy,
         Self::SessionPaused,
         Self::StorageBackpressure,
@@ -114,6 +122,10 @@ impl BusinessCode {
         Self::ImportCancelled,
         Self::ImportJobNotFound,
         Self::ImportJobNotActive,
+        Self::AttachmentTypeUnsupported,
+        Self::AttachmentTooLarge,
+        Self::AttachmentLimitExceeded,
+        Self::AttachmentStorageFailed,
     ];
 
     /// 线上取值（snake_case；`data.business_code` 唯一来源）。
@@ -150,6 +162,10 @@ impl BusinessCode {
             Self::ImportCancelled => "import_cancelled",
             Self::ImportJobNotFound => "import_job_not_found",
             Self::ImportJobNotActive => "import_job_not_active",
+            Self::AttachmentTypeUnsupported => "attachment_type_unsupported",
+            Self::AttachmentTooLarge => "attachment_too_large",
+            Self::AttachmentLimitExceeded => "attachment_limit_exceeded",
+            Self::AttachmentStorageFailed => "attachment_storage_failed",
         }
     }
 
@@ -166,12 +182,12 @@ mod tests {
     #[test]
     fn business_codes_are_frozen_unique_snake_case_values() {
         // ADR-018 A-7 的 9 项 + M10-01/ADR-031 的 9 项编排业务码 + M10-02/ADR-032 的 6 项
-        // + M10-04/ADR-034 的 7 项导入业务码。
-        assert_eq!(BusinessCode::ALL.len(), 31, "业务码 31 项");
+        // + M10-04/ADR-034 的 7 项导入业务码 + M10-05/ADR-035 的 4 项附件业务码。
+        assert_eq!(BusinessCode::ALL.len(), 35, "业务码 35 项");
         let mut values: Vec<&str> = BusinessCode::ALL.iter().map(|code| code.as_str()).collect();
         values.sort_unstable();
         values.dedup();
-        assert_eq!(values.len(), 31, "业务码取值必须唯一");
+        assert_eq!(values.len(), 35, "业务码取值必须唯一");
         for code in BusinessCode::ALL {
             let text = code.as_str();
             assert!(

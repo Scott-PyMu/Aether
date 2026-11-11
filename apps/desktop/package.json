@@ -5,13 +5,14 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "pnpm typecheck && pnpm build:renderer && pnpm build:electron",
+    "build": "pnpm typecheck && node ../../scripts/ci/stage-native-runtime.mjs && pnpm build:renderer && pnpm build:electron",
     "build:renderer": "vite build",
     "build:electron": "node electron/build.mjs",
     "preview": "vite preview",
     "test": "vitest run",
     "coverage": "vitest run --coverage",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "stage:native-runtime": "node ../../scripts/ci/stage-native-runtime.mjs"
   },
   "dependencies": {
     "@aether/protocol": "workspace:*",

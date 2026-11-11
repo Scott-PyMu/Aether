@@ -8,7 +8,8 @@ use serde_json::Value;
 
 use super::dto::{
     AppExitRequest, AppRestartRequest, ArchiveExportRequest, ArtifactAddRequest,
-    ArtifactRemoveRequest, ArtifactsListRequest, AuditExportRequest, AuditQueryRequest,
+    ArtifactRemoveRequest, ArtifactsListRequest, AttachmentAddRequest, AttachmentListRequest,
+    AttachmentRemoveRequest, AuditExportRequest, AuditQueryRequest,
     BackupCreateRequest, BackupListRequest, BackupRestoreRequest, ExportDiagnosticsRequest,
     HealthRequest, MessagesPageRequest, PermissionResolveRequest, PermissionsPendingRequest,
     PresetAddRequest, PresetDeleteRequest, PresetUpdateRequest, PresetsListRequest,
@@ -624,6 +625,44 @@ pub(crate) fn artifact_remove(
     state
         .backend_ready()?
         .artifact_remove(&request)
+        .map(JsonPayload)
+}
+
+/// ADR-035/M10-05：附件采集（canonicalize 在命令层；魔数/大小/像素/限额在校验后端）。
+pub(crate) fn attachment_add(
+    state: &IpcState,
+    payload: Value,
+) -> Result<JsonPayload, IpcError> {
+    let request: AttachmentAddRequest = parse_strict(payload)?;
+    request.kind_value()?;
+    let resolved = super::path::validate_attachment_source(&request.source_path)?;
+    state
+        .backend_ready()?
+        .attachment_add(&request, &resolved)
+        .map(JsonPayload)
+}
+
+/// ADR-035/M10-05：会话附件清单（只读元数据）。
+pub(crate) fn attachment_list(
+    state: &IpcState,
+    payload: Value,
+) -> Result<JsonPayload, IpcError> {
+    let request: AttachmentListRequest = parse_strict(payload)?;
+    state
+        .backend_ready()?
+        .attachment_list(&request)
+        .map(JsonPayload)
+}
+
+/// ADR-035/M10-05：删除附件（幂等；DB 行 + 无引用文件异步清理）。
+pub(crate) fn attachment_remove(
+    state: &IpcState,
+    payload: Value,
+) -> Result<JsonPayload, IpcError> {
+    let request: AttachmentRemoveRequest = parse_strict(payload)?;
+    state
+        .backend_ready()?
+        .attachment_remove(&request)
         .map(JsonPayload)
 }
 

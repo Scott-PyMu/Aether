@@ -18,7 +18,8 @@
       "references",
       "provider_id",
       "model",
-      "subagent_context"
+      "subagent_context",
+      "attachments"
     ],
     "field_types": {
       "session_id": "String",
@@ -28,7 +29,8 @@
       "references": "Vec<ReferenceEntry>",
       "provider_id": "Option<String>",
       "model": "Option<String>",
-      "subagent_context": "Option<SubagentContextInput>"
+      "subagent_context": "Option<SubagentContextInput>",
+      "attachments": "Option<Vec<String>>"
     }
   },
   "accepted_shape": {

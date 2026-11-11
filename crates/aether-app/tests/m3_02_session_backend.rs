@@ -495,6 +495,7 @@ fn session_create_persists_model_and_send_interrupt_dispose_are_wired() {
             provider_id: None,
             model: None,
             subagent_context: None,
+            attachments: None,
         })
         .expect("session_send");
     let run_id = ack["run_id"].as_str().expect("run_id").to_owned();

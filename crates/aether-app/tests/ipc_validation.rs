@@ -16,7 +16,8 @@ use std::sync::{Arc, Mutex};
 use aether_app::ipc::backend::IpcBackend;
 use aether_app::ipc::dto::{
     AppRestartRequest, ArchiveExportRequest, ArtifactAddRequest, ArtifactRemoveRequest,
-    ArtifactsListRequest, AuditExportRequest, AuditQueryRequest, BackupCreateRequest,
+    ArtifactsListRequest, AttachmentAddRequest, AttachmentListRequest, AttachmentRemoveRequest,
+    AuditExportRequest, AuditQueryRequest, BackupCreateRequest,
     BackupRestoreRequest, ExportDiagnosticsRequest, MessagesPageRequest, PermissionResolveRequest,
     PermissionsPendingRequest, PresetAddRequest, PresetDeleteRequest, PresetUpdateRequest,
     PresetsListRequest, ProviderCreateRequest, ProviderDeleteRequest, ProviderModelAddRequest,
@@ -224,6 +225,22 @@ impl IpcBackend for RecordingBackend {
 
     fn artifact_remove(&self, _request: &ArtifactRemoveRequest) -> Result<Value, IpcError> {
         self.record("artifact_remove")
+    }
+
+    fn attachment_add(
+        &self,
+        _request: &AttachmentAddRequest,
+        _resolved: &Path,
+    ) -> Result<Value, IpcError> {
+        self.record("attachment_add")
+    }
+
+    fn attachment_list(&self, _request: &AttachmentListRequest) -> Result<Value, IpcError> {
+        self.record("attachment_list")
+    }
+
+    fn attachment_remove(&self, _request: &AttachmentRemoveRequest) -> Result<Value, IpcError> {
+        self.record("attachment_remove")
     }
 
     fn providers_list(&self, _request: &ProvidersListRequest) -> Result<Value, IpcError> {
@@ -1045,6 +1062,77 @@ fn malformed_samples_return_structured_errors_and_do_not_reach_backend() {
             json!({ "session_id": ULID, "artifact_id": ULID, "unexpected": true }),
             "unknown_field",
             Some("unexpected"),
+        ),
+        // ===== ADR-035/M10-05：附件三命令校验矩阵 =====
+        (
+            "attachment_add",
+            json!({ "session_id": "short", "source_path": "C:/tmp/a.png" }),
+            "invalid_format",
+            Some("session_id"),
+        ),
+        (
+            "attachment_add",
+            json!({ "session_id": ULID, "source_path": "" }),
+            "invalid_format",
+            Some("source_path"),
+        ),
+        (
+            "attachment_add",
+            json!({ "session_id": ULID, "source_path": "C:/tmp/a.png", "kind": "video" }),
+            "invalid_enum",
+            Some("kind"),
+        ),
+        (
+            "attachment_add",
+            json!({ "session_id": ULID, "source_path": "relative/a.png", "kind": "image" }),
+            "path_rejected",
+            None,
+        ),
+        (
+            "attachment_list",
+            json!({ "session_id": "short" }),
+            "invalid_format",
+            Some("session_id"),
+        ),
+        (
+            "attachment_list",
+            json!({ "session_id": ULID, "unexpected": 1 }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
+        (
+            "attachment_remove",
+            json!({ "attachment_id": "short" }),
+            "invalid_format",
+            Some("attachment_id"),
+        ),
+        (
+            "attachment_remove",
+            json!({ "attachment_id": ULID, "unexpected": 1 }),
+            "unknown_field",
+            Some("unexpected"),
+        ),
+        (
+            "session_send",
+            json!({
+                "session_id": ULID,
+                "text": "hi",
+                "client_msg_id": CLIENT_MSG_ID,
+                "attachments": ["short"],
+            }),
+            "invalid_format",
+            Some("attachments[]"),
+        ),
+        (
+            "session_send",
+            json!({
+                "session_id": ULID,
+                "text": "hi",
+                "client_msg_id": CLIENT_MSG_ID,
+                "attachments": (0..9).map(|_| ULID).collect::<Vec<_>>(),
+            }),
+            "too_large",
+            Some("attachments"),
         ),
         // ===== ADR-010/M3-11：供应商七命令校验矩阵 =====
         (
@@ -2354,11 +2442,12 @@ fn commands_manifest_matches_frozen_baseline() {
         "app_exit",
     ];
     // M9 的 63 条顺序/语义不变；M10-01 追加 11 条编排命令 + M10-02 追加 5 条子 Agent
-    // + M10-04 追加 4 条导入 → 83（79 daemon + 4 shell）。
-    assert_eq!(COMMANDS.len(), 83, "命令面 83 条（79 daemon + 4 shell）");
+    // + M10-04 追加 4 条导入 + M10-05 追加 3 条附件 → 86（82 daemon + 4 shell）。
+    assert_eq!(COMMANDS.len(), 86, "命令面 86 条（82 daemon + 4 shell）");
     assert_eq!(COMMANDS[63], "workflow_create", "M10 增量从第 64 条开始");
     assert_eq!(COMMANDS[74], "subagent_spawn", "M10-02 增量从第 75 条开始");
     assert_eq!(COMMANDS[79], "session_import", "M10-04 增量从第 80 条开始");
+    assert_eq!(COMMANDS[83], "attachment_add", "M10-05 增量从第 84 条开始");
     assert_eq!(
         &COMMANDS[..63],
         BASELINE,

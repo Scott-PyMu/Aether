@@ -62,6 +62,19 @@
           "type": "null"
         }
       ]
+    },
+    "attachments": {
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": [

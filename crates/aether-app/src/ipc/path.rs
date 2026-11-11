@@ -176,6 +176,22 @@ pub fn validate_artifact_path(raw: &str) -> Result<ArtifactPath, IpcError> {
     ))
 }
 
+/// 校验附件源路径（M10-05 `attachment_add`；ADR-035 D-035-3）：
+/// 绝对路径、canonicalize、必须为普通文件；外部选择器/拖拽路径不受允许根限制
+/// （与 `artifact_add` 同口径：本地用户选择即信任输入，数据体仍由核心校验）。
+///
+/// 失败一律 `path_rejected`（注册错误码：`path_rejected`）；类型/大小校验在
+/// 命令后端按魔数/字节数执行并返回附件业务码。
+pub fn validate_attachment_source(raw: &str) -> Result<PathBuf, IpcError> {
+    let canonical = canonicalize_checked(raw)?;
+    let metadata = std::fs::metadata(&canonical)
+        .map_err(|error| IpcError::path_rejected(format!("附件源不可访问：{error}")))?;
+    if !metadata.is_file() {
+        return Err(IpcError::path_rejected("附件源必须是普通文件（不能是目录）"));
+    }
+    Ok(canonical)
+}
+
 /// 校验迁移目标目录（M1-06 `startup_migrate`）：绝对路径、存在且为目录。
 ///
 /// 同步盘 / 源目录关系校验在 [`crate::startup::StartupGate::migrate`] 内用同一

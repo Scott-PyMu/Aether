@@ -39,15 +39,16 @@ use aether_core::{
 };
 use aether_security::{normalize_rule_target, PermissionResource, RuleError, RuleTargetKind};
 use aether_store::{
-    ArtifactRecord, AuditLogRecord, PermissionRuleRecord, ReadPool, SessionQuery, StoreCommand,
-    StoreOutcome, WriteQueue,
+    ArtifactRecord, AttachmentRecord, AuditLogRecord, PermissionRuleRecord, ReadPool, SessionQuery,
+    StoreCommand, StoreOutcome, WriteQueue,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::ipc::backend::IpcBackend;
 use crate::ipc::dto::{
-    ArtifactAddRequest, ArtifactRemoveRequest, ArtifactsListRequest, MessagesPageRequest,
+    ArtifactAddRequest, ArtifactRemoveRequest, ArtifactsListRequest, AttachmentAddRequest,
+    AttachmentListRequest, AttachmentRemoveRequest, MessagesPageRequest,
     PermissionResolveRequest, PermissionsPendingRequest, PresetAddRequest, PresetDeleteRequest,
     PresetUpdateRequest, PresetsListRequest, ProviderCreateRequest, ProviderDeleteRequest,
     ProviderModelAddRequest, ProviderModelToggleRequest, ProviderModelsFetchRequest,
@@ -1808,6 +1809,185 @@ impl IpcBackend for SessionBackend {
         })
     }
 
+    // ===== M10-05/ADR-035：多模态附件（内容寻址外置；DB 只存元数据）=====
+
+    /// `attachment_add`：魔数/限额/像素校验 → 内容哈希 → 原子外置存储 → 元数据落库。
+    ///
+    /// 失败不产生附件行/不落文件（临时文件在原子写失败时清理）；同会话同内容幂等。
+    fn attachment_add(
+        &self,
+        request: &AttachmentAddRequest,
+        resolved: &std::path::Path,
+    ) -> Result<Value, IpcError> {
+        let reads = self.reads_required()?.clone();
+        let write = self.write_required()?.clone();
+        let data_dir = self.data_dir.clone().ok_or_else(|| {
+            IpcError::core_not_ready("数据目录未接线：附件存储不可用（启动序列未完成）")
+        })?;
+        let session_id = parse_session_id(&request.session_id)?;
+        let source = resolved.to_path_buf();
+        self.call(async move {
+            let session = reads
+                .session(&session_id)
+                .await
+                .map_err(|error| IpcError::internal(format!("会话读取失败：{error}")))?;
+            if session.is_none() {
+                return Err(session_not_found(&session_id));
+            }
+            // 1) 文件头嗅探（不整图解码；先于任何解码器构造）。
+            let (mime, dimensions) = crate::attachment::sniff_file(&source).map_err(|error| {
+                if error.contains("不受支持") {
+                    IpcError::invalid_value(error)
+                        .with_business_code(BusinessCode::AttachmentTypeUnsupported)
+                } else {
+                    IpcError::path_rejected(error)
+                }
+            })?;
+            if !dimensions.within_limits() {
+                return Err(IpcError::too_large(
+                    "source_path",
+                    format!(
+                        "图像超限：{}×{}（上限 {} 像素且最长边 ≤ {}）",
+                        dimensions.width,
+                        dimensions.height,
+                        aether_core::ATTACHMENT_MAX_PIXELS,
+                        aether_core::ATTACHMENT_MAX_EDGE
+                    ),
+                )
+                .with_business_code(BusinessCode::AttachmentTooLarge));
+            }
+            // 2) 读取 + 哈希（单文件 ≤10 MiB）。
+            let (bytes, sha256) = crate::attachment::read_and_hash(&source).map_err(|error| {
+                match error {
+                    crate::attachment::AttachmentReadError::TooLarge(size) => IpcError::too_large(
+                        "source_path",
+                        format!(
+                            "单文件上限 {} 字节（实际 {size}）",
+                            aether_core::ATTACHMENT_MAX_BYTES
+                        ),
+                    )
+                    .with_business_code(BusinessCode::AttachmentTooLarge),
+                    crate::attachment::AttachmentReadError::Io(error) => {
+                        IpcError::path_rejected(format!("附件源读取失败：{error}"))
+                    }
+                }
+            })?;
+            // 3) 会话限额（200 个 / 1 GiB）。
+            let usage = reads
+                .attachment_usage(&session_id)
+                .await
+                .map_err(|error| IpcError::internal(format!("附件用量读取失败：{error}")))?;
+            if usage.count >= aether_core::ATTACHMENT_MAX_PER_SESSION as u64
+                || usage.bytes.saturating_add(bytes.len() as u64)
+                    > aether_core::ATTACHMENT_MAX_SESSION_BYTES
+            {
+                return Err(IpcError::out_of_range(
+                    "session_id",
+                    format!(
+                        "会话附件限额：≤{} 个且 ≤{} 字节（当前 {} 个 / {} 字节）",
+                        aether_core::ATTACHMENT_MAX_PER_SESSION,
+                        aether_core::ATTACHMENT_MAX_SESSION_BYTES,
+                        usage.count,
+                        usage.bytes
+                    ),
+                )
+                .with_business_code(BusinessCode::AttachmentLimitExceeded));
+            }
+            // 4) 原子外置存储（全局内容寻址；已存在不覆盖）。
+            let storage_path = crate::attachment::relative_content_path(&sha256, mime);
+            crate::attachment::store_content(&data_dir, &sha256, mime, &bytes).map_err(|error| {
+                IpcError::internal(error).with_business_code(BusinessCode::AttachmentStorageFailed)
+            })?;
+            // 5) 元数据落库（同会话同内容幂等；不覆盖既有 id/created_at）。
+            let record = AttachmentRecord {
+                id: ulid::Ulid::new().to_string(),
+                session_id: session_id.as_str().to_owned(),
+                message_id: None,
+                sha256,
+                mime: mime.as_str().to_owned(),
+                size_bytes: i64::try_from(bytes.len()).map_err(|_| {
+                    IpcError::internal("附件字节数超出 SQLite INTEGER 范围")
+                })?,
+                width: Some(i64::from(dimensions.width)),
+                height: Some(i64::from(dimensions.height)),
+                storage_path,
+                created_at: now_ms(),
+            };
+            let outcome = write
+                .execute(StoreCommand::InsertAttachment { attachment: record })
+                .await
+                .map_err(|error| {
+                    IpcError::internal(format!("附件元数据落库失败：{error}"))
+                        .with_business_code(BusinessCode::AttachmentStorageFailed)
+                })?;
+            match outcome {
+                StoreOutcome::AttachmentRecorded { attachment, .. } => {
+                    Ok(attachment_summary_json(&attachment))
+                }
+                other => Err(IpcError::internal(format!(
+                    "附件落库返回了非预期结果：{other:?}"
+                ))),
+            }
+        })
+    }
+
+    /// `attachment_list`：按 `created_at` 升序返回元数据（不返回 `storage_path`）。
+    fn attachment_list(&self, request: &AttachmentListRequest) -> Result<Value, IpcError> {
+        let reads = self.reads_required()?.clone();
+        let session_id = parse_session_id(&request.session_id)?;
+        self.call(async move {
+            let session = reads
+                .session(&session_id)
+                .await
+                .map_err(|error| IpcError::internal(format!("会话读取失败：{error}")))?;
+            if session.is_none() {
+                return Err(session_not_found(&session_id));
+            }
+            let attachments = reads
+                .attachments(&session_id)
+                .await
+                .map_err(|error| IpcError::internal(format!("附件读取失败：{error}")))?;
+            Ok(json!({
+                "items": attachments
+                    .iter()
+                    .map(attachment_summary_json)
+                    .collect::<Vec<_>>(),
+            }))
+        })
+    }
+
+    /// `attachment_remove`：删除 DB 行；无其他引用时异步删文件（幂等）。
+    fn attachment_remove(&self, request: &AttachmentRemoveRequest) -> Result<Value, IpcError> {
+        let write = self.write_required()?.clone();
+        let data_dir = self.data_dir.clone();
+        let attachment_id = request.attachment_id.clone();
+        self.call(async move {
+            let outcome = write
+                .execute(StoreCommand::RemoveAttachment { attachment_id })
+                .await
+                .map_err(|error| IpcError::internal(format!("附件删除失败：{error}")))?;
+            match outcome {
+                StoreOutcome::AttachmentRemoved {
+                    removed,
+                    storage_path,
+                } => {
+                    if let (Some(data_dir), Some(relative)) = (data_dir.as_ref(), storage_path) {
+                        if let Err(error) =
+                            crate::attachment::remove_content_if_unreferenced(data_dir, &relative)
+                        {
+                            // 文件清理失败不撤销 DB 删除；启动孤儿扫描兜底（24h）。
+                            tracing::warn!(error = %error, "附件文件清理失败（孤儿扫描兜底）");
+                        }
+                    }
+                    Ok(json!({ "removed": removed }))
+                }
+                other => Err(IpcError::internal(format!(
+                    "附件删除返回了非预期结果：{other:?}"
+                ))),
+            }
+        })
+    }
+
     // ===== M7-09（ADR-026 §2.2）：Agent 预设四命令（薄转发 [`PresetControl`]；
     // 校验/内置保护/审计语义全部在 preset_control，本层不复刻）。=====
 
@@ -1881,12 +2061,15 @@ impl IpcBackend for SessionBackend {
         let executor = self.executor.clone();
         let write = self.write.clone();
         let provider_env = self.provider_env.clone();
+        let data_dir = self.data_dir.clone();
         let session_id = request.session_id.clone();
         let text = request.text.clone();
         let client_msg_id = request.client_msg_id.clone();
         let request_provider = request.provider_id.clone();
         let request_model = request.model.clone();
         let thinking_override = request.thinking_depth_value()?;
+        // M10-05/ADR-035：附件 id（≤8 已在命令层校验；归属/能力门在本层）。
+        let attachment_ids = request.attachments.clone().unwrap_or_default();
         // M7-06/ADR-024：引用在命令层已校验（canonicalize + 可访问性）；此处解析为
         // 内核形态（canonical 路径 + kind）随 `session.send` 透传。
         let references = request.resolved_references()?;
@@ -2067,6 +2250,133 @@ impl IpcBackend for SessionBackend {
                     .with_business_code(BusinessCode::SubagentContextRejected));
                 }
             }
+            // M10-05/ADR-035：附件能力门 + 归属校验 + 线协议引用组装。
+            let mut multimodal_warning = None;
+            let mut outbound_attachments = Vec::new();
+            if !attachment_ids.is_empty() {
+                let Some(session) = session_row.as_ref() else {
+                    return Err(IpcError::core_not_ready(
+                        "会话读取未接线：无法校验附件归属与能力（启动序列未完成）",
+                    ));
+                };
+                let Some(data_dir) = data_dir.as_ref() else {
+                    return Err(IpcError::core_not_ready(
+                        "数据目录未接线：附件发送不可用（启动序列未完成）",
+                    ));
+                };
+                // 运行时 `multimodal`：静态表（三官方）优先，未声明时看 hello/initialize。
+                let mut supported = aether_core::static_capabilities(session.runtime_id.as_str())
+                    .contains(&aether_core::MULTIMODAL_CAPABILITY);
+                if !supported {
+                    if let Some(supervisor) = supervisor.as_ref() {
+                        if let Some(runtime) = supervisor.get(session.runtime_id.as_str()) {
+                            if let Some(connection) = runtime.connection().await {
+                                supported = match connection.state() {
+                                    ConnectionState::Ready(hello)
+                                    | ConnectionState::Degraded { hello, .. } => hello
+                                        .runtime
+                                        .capabilities
+                                        .iter()
+                                        .any(|item| item == aether_core::MULTIMODAL_CAPABILITY),
+                                    _ => false,
+                                };
+                            }
+                        }
+                    }
+                }
+                if !supported {
+                    return Err(IpcError::invalid_value(format!(
+                        "运行时 {} 未声明 multimodal：拒绝发送附件（不静默丢弃）",
+                        session.runtime_id.as_str()
+                    ))
+                    .with_business_code(BusinessCode::AttachmentTypeUnsupported));
+                }
+                // 模型能力：`vision` 允许；`vision=false` 拒绝；未知 → 非阻断警告。
+                let mut model_state = VisionState::Unknown;
+                if let (Some(provider_id), Some(model)) =
+                    (session_provider_id(session), session.model.as_deref())
+                {
+                    let models = reads
+                        .as_ref()
+                        .ok_or_else(|| {
+                            IpcError::core_not_ready("供应商模型读取未接线：无法判定 vision 能力")
+                        })?
+                        .provider_models()
+                        .await
+                        .map_err(|error| {
+                            IpcError::internal(format!("供应商模型读取失败：{error}"))
+                        })?;
+                    if let Some(record) = models
+                        .iter()
+                        .find(|item| item.provider_id == provider_id && item.model_id == model)
+                    {
+                        model_state = vision_state(&record.capabilities);
+                    }
+                }
+                if model_state == VisionState::Blocked {
+                    return Err(IpcError::invalid_value(format!(
+                        "模型 {} 明确声明 vision=false：拒绝发送附件（不静默丢弃）",
+                        session.model.as_deref().unwrap_or("<未选择>")
+                    ))
+                    .with_business_code(BusinessCode::AttachmentTypeUnsupported));
+                }
+                if model_state == VisionState::Unknown {
+                    multimodal_warning = Some(SessionWarning {
+                        code: aether_core::MULTIMODAL_MODEL_UNVERIFIED.to_owned(),
+                        field: "attachments".to_owned(),
+                        runtime_id: session.runtime_id.as_str().to_owned(),
+                        message: "模型未声明 vision 能力：附件将按运行时能力发送（未验证）".to_owned(),
+                    });
+                }
+                for attachment_id in &attachment_ids {
+                    let record = reads
+                        .as_ref()
+                        .ok_or_else(|| {
+                            IpcError::core_not_ready("附件读取未接线：无法校验附件归属")
+                        })?
+                        .attachment(attachment_id)
+                        .await
+                        .map_err(|error| IpcError::internal(format!("附件读取失败：{error}")))?
+                        .ok_or_else(|| {
+                            IpcError::invalid_value(format!(
+                                "附件不存在或已删除：{attachment_id}"
+                            ))
+                        })?;
+                    if record.session_id != session.id.as_str() {
+                        return Err(IpcError::invalid_value(format!(
+                            "附件不属于当前会话：{attachment_id}"
+                        )));
+                    }
+                    let mime = aether_core::AttachmentMime::from_wire(&record.mime).ok_or_else(
+                        || {
+                            IpcError::internal(format!(
+                                "附件 MIME 非白名单（DB 不变量破坏）：{}",
+                                record.mime
+                            ))
+                        },
+                    )?;
+                    let absolute = crate::attachment::resolve_storage_path(
+                        data_dir,
+                        &record.storage_path,
+                    )
+                    .map_err(|error| IpcError::internal(format!("附件路径校验失败：{error}")))?;
+                    if !absolute.is_file() {
+                        return Err(IpcError::internal(format!(
+                            "附件文件缺失：{attachment_id}（拒绝发送，不静默丢弃）"
+                        ))
+                        .with_business_code(BusinessCode::AttachmentStorageFailed));
+                    }
+                    outbound_attachments.push(aether_core::OutboundAttachment {
+                        attachment_id: record.id.clone(),
+                        mime,
+                        width: record.width.and_then(|value| u32::try_from(value).ok()),
+                        height: record.height.and_then(|value| u32::try_from(value).ok()),
+                        path: absolute.to_string_lossy().to_string(),
+                        size_bytes: record.size_bytes,
+                        sha256: record.sha256.clone(),
+                    });
+                }
+            }
             // M3-10/ADR-010 能力门（同步判定路径，尽力而为）：run 执行前的 runtime
             // ready 快照；未 ready（cold/starting）→ 延迟判定（不产生响应警告，
             // run 启动时由执行器按同一门再判定）。覆盖请求仅影响本次 run。
@@ -2098,12 +2408,13 @@ impl IpcBackend for SessionBackend {
             };
             let applied_context = request_context.clone();
             let ack = manager
-                .send_with_references(
+                .send_with_attachments(
                     &session_id,
                     &text,
                     &client_msg_id,
                     thinking_override,
                     references,
+                    outbound_attachments,
                     request_context,
                 )
                 .await
@@ -2122,8 +2433,15 @@ impl IpcBackend for SessionBackend {
                     "limit": queue.limit,
                 });
             }
+            let mut warning_items = Vec::new();
             if let Some(warnings) = warnings {
-                response["warnings"] = serde_json::to_value(warnings)
+                warning_items.extend(warnings);
+            }
+            if let Some(warning) = multimodal_warning {
+                warning_items.push(warning);
+            }
+            if !warning_items.is_empty() {
+                response["warnings"] = serde_json::to_value(warning_items)
                     .map_err(|error| IpcError::internal(format!("警告序列化失败：{error}")))?;
             }
             if let Some(context) = applied_context {
@@ -3236,6 +3554,49 @@ fn artifact_json(artifact: &ArtifactRecord) -> Value {
     })
 }
 
+/// 附件摘要（ADR-035 Q10 A：**不返回 `storage_path`**；renderer 用 `sha256` 构造
+/// `aether-attachment://thumb/<sha256>`）。
+fn attachment_summary_json(attachment: &AttachmentRecord) -> Value {
+    json!({
+        "attachment_id": attachment.id,
+        "sha256": attachment.sha256,
+        "mime": attachment.mime,
+        "size_bytes": attachment.size_bytes,
+        "width": attachment.width,
+        "height": attachment.height,
+        "created_at": attachment.created_at,
+    })
+}
+
+/// 模型视觉能力判定（ADR-035 D-035-4 / 附录 C）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VisionState {
+    Allowed,
+    Blocked,
+    Unknown,
+}
+
+/// `provider_models.capabilities` → 视觉能力三态。
+///
+/// - 含 `vision` → 允许；
+/// - 含 `vision=false` / `vision:false` → 明确拒绝；
+/// - 其余（空/未知）→ 警告继续。
+fn vision_state(capabilities: &[String]) -> VisionState {
+    if capabilities
+        .iter()
+        .any(|item| matches!(item.as_str(), "vision=false" | "vision:false"))
+    {
+        return VisionState::Blocked;
+    }
+    if capabilities
+        .iter()
+        .any(|item| item == aether_core::VISION_CAPABILITY)
+    {
+        return VisionState::Allowed;
+    }
+    VisionState::Unknown
+}
+
 /// DTO 会话状态 → 核心状态（取值一一对应；DTO 校验已限定枚举）。
 fn map_session_status(status: crate::ipc::dto::SessionStatus) -> SessionStatus {
     match status {
@@ -3798,6 +4159,7 @@ mod tests {
                     display_name: "DeepSeek Flash".to_owned(),
                     enabled: true,
                     created_at: 1,
+                    capabilities: Vec::new(),
                 },
             }))
             .unwrap();
@@ -3964,6 +4326,7 @@ mod tests {
                 display_name: "Opus".to_owned(),
                 enabled: true,
                 created_at: 1,
+                capabilities: Vec::new(),
             },
             aether_store::ProviderModelRecord {
                 id: "01J0000000000000000000T04".to_owned(),
@@ -3972,6 +4335,7 @@ mod tests {
                 display_name: "Disabled".to_owned(),
                 enabled: false,
                 created_at: 1,
+                capabilities: Vec::new(),
             },
         ];
         (session, providers, models)

@@ -110,6 +110,10 @@ pub const COMMANDS: &[&str] = &[
     "archive_import",
     "import_status",
     "import_cancel",
+    // M10-05/ADR-035：附件命令面 +3。
+    "attachment_add",
+    "attachment_list",
+    "attachment_remove",
 ];
 
 /// 维护窗口允许的命令（M10-04/ADR-034 D-034-2/D-034-4）。
@@ -151,6 +155,7 @@ pub const MAINTENANCE_ALLOWED_COMMANDS: &[&str] = &[
     "archive_import",
     "import_status",
     "import_cancel",
+    "attachment_list",
     "backup_restore",
 ];
 
@@ -251,6 +256,9 @@ pub fn dispatch(state: &IpcState, method: &str, params: Value) -> Result<Value, 
         "archive_import" => handlers::archive_import(state, params),
         "import_status" => handlers::import_status(state, params),
         "import_cancel" => handlers::import_cancel(state, params),
+        "attachment_add" => handlers::attachment_add(state, params),
+        "attachment_list" => handlers::attachment_list(state, params),
+        "attachment_remove" => handlers::attachment_remove(state, params),
         other => return Err(unknown_method(other)),
     }?;
     Ok(payload.into_value())
@@ -293,11 +301,11 @@ mod tests {
         assert_eq!(SHELL_COMMANDS.len(), 4, "壳本地命令 4 条");
         assert_eq!(
             COMMANDS.len(),
-            83,
-            "命令面 83 条（M9 63 + M10-01 11 + M10-02 5 + M10-04 4）"
+            86,
+            "命令面 86 条（M9 63 + M10-01 11 + M10-02 5 + M10-04 4 + M10-05 3）"
         );
         let daemon = daemon_commands();
-        assert_eq!(daemon.len(), 79, "daemon 路由 79 条");
+        assert_eq!(daemon.len(), 82, "daemon 路由 82 条");
         for method in SHELL_COMMANDS {
             assert!(COMMANDS.contains(method), "壳命令 {method} 必须在 63 内");
             assert!(is_shell_local(method));

@@ -86,6 +86,18 @@ for (const page of shellPages) {
   console.log(`[electron-build] shell/${page}`);
 }
 
+// M10-05/ADR-035: UtilityProcess decoder worker must keep external require (native .node),
+// not be bundled by Vite; copy the plain CJS file.
+{
+  const source = path.join(appRoot, "electron", "attachmentWorker.cjs");
+  if (!existsSync(source)) {
+    console.error(`[electron-build] missing attachment worker: ${source}`);
+    process.exit(1);
+  }
+  cpSync(source, path.join(outDir, "attachmentWorker.cjs"));
+  console.log("[electron-build] attachmentWorker.cjs");
+}
+
 const manifest = {
   schema: "aether.electron-build.v1",
   built_at: new Date().toISOString(),

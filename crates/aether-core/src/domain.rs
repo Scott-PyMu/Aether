@@ -8,6 +8,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
+use crate::attachments::MULTIMODAL_CAPABILITY;
 use crate::error::{parse_variant, UnknownValue};
 use crate::ids::{MessageId, PresetId, RunId, RuntimeId, SessionId, WorkspaceId};
 
@@ -54,6 +55,7 @@ pub fn static_capabilities(runtime_id: &str) -> &'static [&'static str] {
             MULTI_PROVIDER_CAPABILITY,
             SUBAGENT_CAPABILITY,
             SUBAGENT_CONTEXT_CAPABILITY,
+            MULTIMODAL_CAPABILITY,
         ];
     }
     &[]

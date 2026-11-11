@@ -31,7 +31,8 @@ use crate::ipc::backend::IpcBackend;
 use crate::ipc::business::BusinessCode;
 use crate::ipc::dto::{
     AppRestartRequest, ArchiveExportRequest, ArtifactAddRequest, ArtifactRemoveRequest,
-    ArtifactsListRequest, AuditExportRequest, AuditQueryRequest, BackupCreateRequest,
+    ArtifactsListRequest, AttachmentAddRequest, AttachmentListRequest, AttachmentRemoveRequest,
+    AuditExportRequest, AuditQueryRequest, BackupCreateRequest,
     BackupRestoreRequest, ExportDiagnosticsRequest,
     ImportCancelRequest, ImportRequest, ImportStatusRequest, MessagesPageRequest,
     PermissionResolveRequest, PermissionsPendingRequest, PresetAddRequest, PresetDeleteRequest,
@@ -647,6 +648,8 @@ impl IpcBackend for ImportControlBackend {
         workspace_delete: WorkspaceDeleteRequest,
         artifacts_list: ArtifactsListRequest,
         artifact_remove: ArtifactRemoveRequest,
+        attachment_list: AttachmentListRequest,
+        attachment_remove: AttachmentRemoveRequest,
         providers_list: ProvidersListRequest,
         provider_create: ProviderCreateRequest,
         provider_update: ProviderUpdateRequest,
@@ -684,6 +687,14 @@ impl IpcBackend for ImportControlBackend {
 
     fn app_restart(&self, request: &AppRestartRequest) -> Result<Value, IpcError> {
         self.inner.app_restart(request)
+    }
+
+    fn attachment_add(
+        &self,
+        request: &AttachmentAddRequest,
+        resolved: &std::path::Path,
+    ) -> Result<Value, IpcError> {
+        self.inner.attachment_add(request, resolved)
     }
 
     fn backup_auto_status(&self) -> Result<Option<Value>, IpcError> {

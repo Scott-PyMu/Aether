@@ -95,6 +95,26 @@ export type ArtifactsListRequest = {
 };
 
 /**
+ *  `attachment_add`（M10-05/ADR-035 D-035-3）：`source_path` 由选择器/拖拽提供，
+ *  核心 canonicalize + 读取 + 魔数校验 + 哈希；`kind` 缺省/`image`（当前仅图像）。
+ */
+export type AttachmentAddRequest = {
+	session_id: string,
+	source_path: string,
+	kind?: string | null,
+};
+
+/**  `attachment_list`（M10-05/ADR-035 D-035-3）：只返回元数据，按 `created_at` 升序。 */
+export type AttachmentListRequest = {
+	session_id: string,
+};
+
+/**  `attachment_remove`（M10-05/ADR-035 D-035-3）：幂等；不存在 → `{ removed: false }`。 */
+export type AttachmentRemoveRequest = {
+	attachment_id: string,
+};
+
+/**
  *  `audit_export`（M6-03/ADR-023 §2.1-4；ADR-018 附录 A-1）：
  *  过滤条件同 `audit_query`；导出 JSONL + manifest（行数/sha256）；外部路径 +
  *  空间检查与 `session_export` 同口径；原子写（中断不留半成品）。
@@ -649,6 +669,11 @@ export type SessionSendRequest = {
 	model?: string | null,
 	/**  M10-02/ADR-032：子 Agent 结果回注上下文（版本化、可 ack；≤16KiB）。 */
 	subagent_context?: SubagentContextInput | null,
+	/**
+	 *  M10-05/ADR-035：随消息发送的附件 id（≤8；归属/存在/能力门在核心校验；
+	 *  不支持时返回 `attachment_type_unsupported`，不创建 run）。
+	 */
+	attachments?: string[] | null,
 };
 
 /**  会话状态过滤（与附录 C `sessions.status` CHECK 枚举一一对应）。 */

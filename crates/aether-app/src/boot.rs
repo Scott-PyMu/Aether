@@ -216,6 +216,29 @@ pub fn build_backend(
                 }
                 // M3-04：备份/恢复命令面的存储句柄（读写队列均已就绪）。
                 let backup_deps = (reads.clone(), write.clone());
+                // M10-05/ADR-035 D-035-2/D-035-6：启动孤儿扫描（>24h 且无 DB 引用）；
+                // 不删除仍被引用的内容，IO 失败仅诊断、不阻断启动。
+                match handle.block_on(reads.all_attachment_storage_paths()) {
+                    Ok(paths) => {
+                        let referenced: std::collections::HashSet<String> =
+                            paths.into_iter().collect();
+                        let (cleaned, kept) = attachment::cleanup_orphans(
+                            &data_dir,
+                            &referenced,
+                            std::time::SystemTime::now(),
+                        );
+                        if cleaned > 0 {
+                            tracing::info!(
+                                cleaned,
+                                kept,
+                                "附件孤儿清理完成（ADR-035：>24h 无 DB 引用）"
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(error = %error, "附件孤儿扫描失败（继续启动）");
+                    }
+                }
                 // M2-07 DoD3：核心 RSS 巡检（2GB 告警 / 2.5GB 强制 delta 限流；
                 // env 钩子供测试/演练注入阈值）。任务随应用生命周期存活（detached）。
                 {
