@@ -3,14 +3,14 @@
 | 项 | 内容 |
 |---|---|
 | 编号 | ADR-037（M10-00-07） |
-| 版本 | **v1.0（2026-11-05）** |
-| 状态 | **已接受（2026-11-05，M10-00 ADR 批次；用户授权 AI 审批；人工复核建议见 `docs/M10-00-ADR批次评审.md`）** |
-| 决策日期 | 2026-11-05 |
-| 决策载体 | 《设计文档》**v1.31**（D5/D8/D9、§5 P2）；`docs/P2-架构迁移-实施计划与验收标准.md` **v0.9**；`docs/M10-00-登记表.json` |
+| 版本 | **v1.1（2026-11-12）** |
+| 状态 | **已接受（v1.1：2026-11-12 用户裁定 fail-closed；v1.0：2026-11-05 M10-00 ADR 批次）** |
+| 决策日期 | 2026-11-05（v1.0）；2026-11-12（v1.1） |
+| 决策载体 | 《设计文档》**v1.34**（D5/D8/D9、§5 P2）；`docs/P2-架构迁移-实施计划与验收标准.md` **v0.12**；`docs/M10-00-登记表.json` |
 | 关联 | 设计 §5 P2、CP-02；ADR-015（热插拔）、ADR-017（暂停/恢复）、ADR-022（路由/并发闸门）、ADR-023（审计）、ADR-031（工作流节点）、ADR-032（子 Agent） |
 | 取代 / 被取代 | 无（新增）；**扩展** ADR-022 的固定优先级/并发闸门，不改变既有 `session_send`/`run_retry` 语义 |
 | 回退条件 | 见 §7 |
-| 实现状态 | **未开始（登记先行；M10-07 执行）**；未登记前不得写业务代码 |
+| 实现状态 | **M10-07 已实现（2026-11-12）**；v1.1 fail-closed 重启口径已落库 |
 
 ## 1. 背景与触发
 
@@ -58,7 +58,7 @@ P1 已实现固定优先级路由（`claude-code=10`、`codex=20`、`deepseek-ha
 
 ### D-037-4 故障、重启与收口
 
-- daemon 重启：`queued` run 保留并按原 `queued_at/priority` 重新入队（不丢）；`running` run 置 `failed`（`recoverable=true`）或 `timeout`？统一置 `failed` + `error.code=interrupted`，UI 可 `run_retry`；**不自动重放**（避免重复副作用）。
+- **daemon 重启（v1.1 fail-closed）**：所有未收口 run（`queued` + `running`）统一置 `failed` + `error.code=run_interrupted`（`recoverable=true`），广播 `run.failed`；**不自动重建队列、不自动重放**（避免重复副作用；对齐 fail-closed 恢复；参考 hermes-studio 行为）。会话回 `idle`（`paused` 保持 paused）；用户经 `run_retry` 显式重放。
 - 适配器断连：在途 run 标 `failed`（`adapter_unavailable`，可重试）；排队的 run 不受影响；适配器恢复后队列继续推进。
 - 存储背压：L1/L2/L3 沿用 ADR-003/ADR-022；L2 拒绝新 run；L3 熔断适配器；队列不清空、不重复计数。
 - 取消/终态释放：`session_interrupt`/`session_pause`/`run_retry`/`session_dispose` 必须释放队列槽与并发计数；取消排队 run → 出队 + 审计；无孤儿。
@@ -81,7 +81,7 @@ P1 已实现固定优先级路由（`claude-code=10`、`codex=20`、`deepseek-ha
   - `runs.max_attempts INTEGER`
   - `runs.wait_reason TEXT`
   - 索引 `runs(status, priority DESC, queued_at ASC)`
-- 队列内存实现 + DB 持久化双写：入队写 `runs`，推进以 DB 为准；重启重建。
+- 队列内存实现 + DB 持久化双写：入队写 `runs`（供 `queue_list`/审计/诊断），推进以内存队列为准；**daemon 重启不重建队列，未收口 run 统一 fail-closed（见 D-037-4 v1.1）**。
 
 ### D-037-6 UI/E2E
 
@@ -92,9 +92,9 @@ P1 已实现固定优先级路由（`claude-code=10`、`codex=20`、`deepseek-ha
 
 ## 3. 影响
 
-- 《设计文档》v1.31：D8 补优先级/超时/重试/队列可观测；D5 路由补负载/健康；D7 命令面 +1（累计 86）+ 既有命令增量；附录 C 增 0010+ 规划位。
-- P2 计划 v0.9：M10-07 解锁；G9 以 10 并发零错误/无超卖/无饥饿为验收口径（与 M10-01/02 合并）。
-- UI-UX v0.18：不新增锚点组；复用 `session-status`/健康面板；队列原因文案见 §5.4。
+- 《设计文档》v1.34：D8 补优先级/超时/重试/队列可观测 + **重启 fail-closed**；D5 路由补负载/健康；D7 命令面 +1（累计 87）+ 既有命令增量；附录 C 增 0010+ 规划位。
+- P2 计划 v0.12：M10-07 解锁；G9 以 10 并发零错误/无超卖/无饥饿为验收口径（与 M10-01/02 合并）。
+- UI-UX v0.19：不新增锚点组；复用 `session-status`/健康面板；队列原因文案见 §5.4。
 - 不新增事件类型（run 状态沿用 `run.*`；队列位置走响应/`health`）；不扩展 `IpcErrorCode` 32。
 
 ## 4. 主要风险与缓解
@@ -104,7 +104,7 @@ P1 已实现固定优先级路由（`claude-code=10`、`codex=20`、`deepseek-ha
 | 饥饿/优先级反转 | wait_boost 上限 + 5min guard + 公平性测试 | 长队列出现无限等待 → G9 不通过 |
 | 超卖 | 双层队列不重复计数；闸门前置；10 并发断言 | active > limit → 停止实现 |
 | 重试重复执行 | attempt 记录；终态检查；旧 attempt 保留 | 重复副作用 → 冻结 M10-07 |
-| 重启丢队列 | `runs` 持久化 + 启动重建 | 队列丢失/重复 → 修复后重跑 |
+| 重启丢队列/重复副作用 | **v1.1 fail-closed：所有未收口 run → failed，不自动重放**；用户显式 `run_retry` | 重启后自动执行/重复副作用 → G9 不通过 |
 | 路由不确定 | 固定权重 + 明确 tie-break + 审计 | 同输入不同候选 → G9 不通过 |
 | 背压死锁 | 复用 ADR-003/022；L3 熔断；队列不阻塞 reader | 死锁 → 停止实现 |
 
@@ -116,6 +116,7 @@ P1 已实现固定优先级路由（`claude-code=10`、`codex=20`、`deepseek-ha
 | 按负载动态改 runtime_weight | 路由不确定/难复现；负载仅作同分 tie-break |
 | 无等待加权 FIFO | 长任务饥饿；引入 wait_boost |
 | 自动重放 running run | 重复副作用；改为 failed + 人工 retry |
+| 重启自动重建 queued 队列 | 崩溃前工具可能已部分执行/上下文不可还原；v1.1 改为 fail-closed（参考 hermes-studio） |
 | 队列放内存不落库 | 重启丢失；必须持久化 |
 
 ## 6. 契约登记汇总
@@ -141,12 +142,14 @@ P1 已实现固定优先级路由（`claude-code=10`、`codex=20`、`deepseek-ha
 |---|---|---|---|
 | 2026-11-05 | 文档维护（AI） | v1.0 创建 | 按 M10-00 DoD-1/2/7/8；登记先行，代码未改 |
 | 2026-11-05 | 独立评审（AI，M10-00 批次） | 通过 | 检查优先级/公平性/重试分类/路由/10 并发/迁移；闭环见 `docs/M10-00-ADR批次评审.md` |
+| 2026-11-12 | 用户裁定 + AI 执行 | v1.1 通过 | 改为 fail-closed：daemon 重启不再重建 queued 队列、不自动重放；所有未收口 run → failed `run_interrupted`；对齐 hermes-studio |
 
 ## 9. 变更记录
 
 | 版本 | 日期 | 变更 | 作者 |
 |---|---|---|---|
 | v1.0 | 2026-11-05 | 创建：score/公平性/超时重试/路由/故障收口/queue_list/0010+ | 文档维护 |
+| v1.1 | 2026-11-12 | **fail-closed 重启口径**：所有未收口 run（queued+running）→ failed `run_interrupted`；不重建 queued 队列、不自动重放；paused 保持 paused；用户显式 `run_retry`（参考 hermes-studio 行为） | 用户裁定 + 文档维护 |
 
 ---
 

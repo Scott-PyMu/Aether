@@ -52,13 +52,6 @@ impl Default for RunSchedule {
     }
 }
 
-/// 带调度元数据的 run 行（重启重建/队列诊断）。
-#[derive(Debug, Clone, PartialEq)]
-pub struct ScheduledRun {
-    pub run: Run,
-    pub schedule: RunSchedule,
-}
-
 /// run 版本摘要（同一输入消息的 attempt 链；M10-07 自动重试去重）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunAttemptRef {
@@ -2195,31 +2188,6 @@ impl ReadPool {
         .await
     }
 
-    /// 未收口 run + 调度元数据（M10-07/ADR-037 D-037-4：daemon 重启后 `queued`
-    /// run 按原 `queued_at/priority` 重新入队；`running` run 收口为 failed）。
-    pub async fn unfinished_runs_scheduled(&self) -> Result<Vec<ScheduledRun>, StoreError> {
-        self.with_connection(move |connection| {
-            let mut statement = connection.prepare(
-                "SELECT id, session_id, status, input_message_id, thinking_depth, error, started_at, finished_at, \
-                        priority, COALESCE(queued_at, started_at), retry_count, max_attempts, wait_reason \
-                 FROM runs WHERE status IN ('queued', 'running') \
-                 ORDER BY COALESCE(queued_at, started_at) ASC, rowid ASC",
-            )?;
-            let rows = statement.query_map([], |row| {
-                Ok(ScheduledRun {
-                    run: read_run_row(row)?,
-                    schedule: read_run_schedule_columns(row, 8)?,
-                })
-            })?;
-            let mut runs = Vec::new();
-            for row in rows {
-                runs.push(row?);
-            }
-            Ok(runs)
-        })
-        .await
-    }
-
     /// 读取单个 run 的调度元数据（`queue_list` 诊断/自动重试判定）。
     pub async fn run_schedule(&self, run_id: &RunId) -> Result<Option<RunSchedule>, StoreError> {
         let run = run_id.as_str().to_owned();
@@ -3108,21 +3076,6 @@ fn read_run_row(row: &Row<'_>) -> rusqlite::Result<Run> {
         error: row.get(5)?,
         started_at: row.get(6)?,
         finished_at: row.get(7)?,
-    })
-}
-
-/// 调度元数据列（`priority, queued_at, retry_count, max_attempts, wait_reason`；
-/// 偏移由调用方指定，便于与 `read_run_row` 拼接）。
-fn read_run_schedule_columns(row: &Row<'_>, offset: usize) -> rusqlite::Result<RunSchedule> {
-    Ok(RunSchedule {
-        priority: i32::try_from(row.get::<_, i64>(offset)?).unwrap_or(0),
-        queued_at: row.get(offset + 1)?,
-        retry_count: u32::try_from(row.get::<_, i64>(offset + 2)?).unwrap_or(0),
-        max_attempts: row
-            .get::<_, Option<i64>>(offset + 3)?
-            .map(|value| u32::try_from(value).unwrap_or(1).clamp(1, 5))
-            .unwrap_or(1),
-        wait_reason: row.get(offset + 4)?,
     })
 }
 

@@ -86,7 +86,7 @@ pub use migration::{
 pub use ops::{
     ArtifactRecord, AttachmentRecord, AttachmentUsage, AuditLogRecord, AuditQuery,
     AuditQueryResult, PermissionGrantRecord, PermissionRecord, PermissionRuleRecord,
-    ProviderModelRecord, ProviderRecord, RunAttemptRef, RunSchedule, ScheduledRun, SessionQuery,
+    ProviderModelRecord, ProviderRecord, RunAttemptRef, RunSchedule, SessionQuery,
     SessionSearchHit, StoreCommand, StoreOutcome, StoreSummary, WorkspaceSessionCount,
     WorkspaceSessionCounts, AUDIT_QUERY_DEFAULT_LIMIT, AUDIT_QUERY_MAX_LIMIT, SUMMARY_TABLES,
 };

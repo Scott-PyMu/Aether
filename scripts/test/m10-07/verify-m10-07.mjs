@@ -79,6 +79,9 @@ function run(label, command, args) {
 // ---------- 1) ADR / 迁移 ----------
 mustContain("docs/adr/ADR-037-m10-scheduler-priority-retry-routing.md", [
   "已接受",
+  "v1.1",
+  "fail-closed",
+  "不自动重建队列",
   "score = base_priority",
   "wait_boost",
   "starvation_guard_ms=300000",
@@ -154,7 +157,11 @@ mustContain("crates/aether-control/src/lifecycle.rs", [
   "scheduler.starvation_guard",
   "run.timeout",
   "RUN_TIMEOUT_CODE",
-  "runs_requeued",
+  "不自动重放",
+  "fail-closed",
+  "unfinished_runs",
+  "run_interrupted",
+  "run.timeout",
   "finalize_timeout",
   "schedule_auto_retry",
   "runtime_loads",
@@ -297,5 +304,5 @@ if (failures.length > 0) {
   process.exit(1);
 }
 console.log(
-  `\n[m10-07] OK：${passed}/${checks.length} 项通过（ADR-037；87 命令 / 35 业务码；优先级/超时/重试/queue_list）`,
+  `\n[m10-07] OK：${passed}/${checks.length} 项通过（ADR-037 v1.1；87 命令 / 35 业务码；优先级/超时/重试/queue_list/fail-closed）`,
 );

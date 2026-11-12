@@ -378,10 +378,8 @@ pub struct RetryAck {
 /// 重启状态重建报告（M3-06）：核心重启后未收口 run/会话的收口清单。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReconcileReport {
-    /// 被收口为 `failed`（`run_interrupted`，可重试）的 run。
+    /// 被收口为 `failed`（`run_interrupted`，可重试）的 run（queued + running；不自动重放）。
     pub runs_failed: Vec<RunId>,
-    /// M10-07/ADR-037：重启后保留并重新入队的 `queued` run（不丢队列）。
-    pub runs_requeued: Vec<RunId>,
     /// 被收回 `idle` 的会话。
     pub sessions_reset: Vec<SessionId>,
 }
@@ -1759,49 +1757,35 @@ impl SessionManager {
         })
     }
 
-    /// 重启状态重建（M3-06；D5 口径 + M10-07/ADR-037 D-037-4）：
-    /// 核心重启后（存储/管线就绪、会话管理器构造完成）调用一次：
-    /// 1. `running` run → `failed`（错误码 [`RUN_INTERRUPTED_CODE`]，`recoverable=true`）
-    ///    + `run.failed` 事件；**`queued` run 保留并按原 `queued_at/priority` 重新入队**
-    ///      （不自动重放 running run，避免重复副作用）；
-    /// 2. 非终态、非空闲会话（`creating`/`running`/`waiting_permission`）→
-    ///    `idle` + `session.status_changed` 事件；
-    ///    **`paused` 保留不收口**（M7-03/ADR-017 §2.1-6：不自动恢复、不自动清理）；
-    /// 3. 重建队列后按闸门推进可派发 run（不超卖）。
+    /// ???????M3-06?D5 ?? + M10-07/ADR-037 v1.1 D-037-4??
+    /// ????????/????????????????????
+    /// 1. **????? run?`queued` + `running`?? `failed`**????
+    ///    [`RUN_INTERRUPTED_CODE`]?`recoverable=true`?+ `run.failed` ???
+    ///    **?????????????**?fail-closed??????????
+    /// 2. ??????????`creating`/`running`/`waiting_permission`??
+    ///    `idle` + `session.status_changed` ???
+    ///    **`paused` ?????**?M7-03/ADR-017 ?2.1-6??????????????
+    /// 3. ??? `run_retry` ?????Mode R/N ????? ADR-005 ????
     ///
-    /// 语义：崩溃前**未确认**的 run 不伪造完成；收口为失败后可经 `run_retry` 重放
-    /// （Mode R/N 由执行器按 ADR-005 决定）。逐条尽力收口：单条失败仅记录诊断，
-    /// 不阻断其余条目。
+    /// ?????????????????????????
     pub async fn reconcile_interrupted_runs(&self) -> Result<ReconcileReport, LifecycleError> {
-        let now = self.inner.clock.now_ms();
-        let runs = self.inner.reads.unfinished_runs_scheduled().await?;
+        let runs = self.inner.reads.unfinished_runs().await?;
         let mut report = ReconcileReport::default();
-        let mut queued_by_session: HashMap<SessionId, Vec<aether_store::ScheduledRun>> =
-            HashMap::new();
-        for scheduled in runs {
-            let run = scheduled.run.clone();
+        for run in runs {
             let session = match self.inner.reads.session(&run.session_id).await? {
                 Some(session) => session,
                 None => {
                     tracing::warn!(
                         run_id = %run.id,
                         session_id = %run.session_id,
-                        "重启收口：run 的会话行缺失，跳过（仅记录）"
+                        "?????run ??????????????"
                     );
                     continue;
                 }
             };
-            if run.status == aether_core::RunStatus::Queued {
-                // M10-07：排队 run 保留，重启后重建队列（不丢、不重复）。
-                queued_by_session
-                    .entry(run.session_id.clone())
-                    .or_default()
-                    .push(scheduled);
-                continue;
-            }
             let error = ErrorInfo {
                 code: RUN_INTERRUPTED_CODE.to_owned(),
-                message: "核心重启中断：run 未收到终态（未确认），已按失败收口，可重试（M3-06）"
+                message: "???????? run ???????????????? run_retry ????"
                     .to_owned(),
                 recoverable: true,
             };
@@ -1813,7 +1797,7 @@ impl SessionManager {
                 )
                 .await
             {
-                tracing::warn!(run_id = %run.id, error = %failure, "重启收口：run 行更新失败，跳过");
+                tracing::warn!(run_id = %run.id, error = %failure, "?????run ????????");
                 continue;
             }
             if let Err(failure) = self
@@ -1828,20 +1812,20 @@ impl SessionManager {
                 )
                 .await
             {
-                tracing::warn!(run_id = %run.id, error = %failure, "重启收口：run.failed 事件提交失败（仅记录）");
+                tracing::warn!(run_id = %run.id, error = %failure, "?????run.failed ???????????");
             }
             report.runs_failed.push(run.id);
         }
 
         let sessions = self.inner.reads.sessions_for_recovery().await?;
         for session in sessions {
-            // M7-03/ADR-017 §2.1-6：`paused` 核心重启后**保持 paused**（不自动恢复、
-            // 不自动清理）；暂停标记不跨重启（内存），重启后 `session_resume` 走
-            // `paused → idle`（被中断 run 已 `run_interrupted` 失败，可显式 `run_retry`）。
+            // M7-03/ADR-017 ?2.1-6?`paused` ?????**?? paused**???????
+            // ??????????????????????? `session_resume` ?
+            // `paused ? idle`???? run ? `run_interrupted` ?????? `run_retry`??
             if session.status == SessionStatus::Paused {
                 tracing::info!(
                     session_id = %session.id,
-                    "重启收口：paused 会话保留（ADR-017；不自动恢复/清理）"
+                    "?????paused ?????ADR-017??????/???"
                 );
                 continue;
             }
@@ -1857,10 +1841,10 @@ impl SessionManager {
                 })
                 .await
             {
-                tracing::warn!(session_id = %session.id, error = %failure, "重启收口：会话行更新失败，跳过");
+                tracing::warn!(session_id = %session.id, error = %failure, "???????????????");
                 continue;
             }
-            // M3-07（D9/SE-03）：重启收口的状态回退同样计入会话生命周期审计（尽力而为）。
+            // M3-07?D9/SE-03??????????????????????????????
             if let Err(failure) = insert_audit_inner(
                 &self.inner,
                 &session.id,
@@ -1871,11 +1855,12 @@ impl SessionManager {
                     "from": session.status.as_str(),
                     "to": SessionStatus::Idle.as_str(),
                     "recovered": true,
+                    "replay": "fail_closed",
                 }),
             )
             .await
             {
-                tracing::warn!(session_id = %session.id, error = %failure, "重启收口：审计写入失败（仅记录）");
+                tracing::warn!(session_id = %session.id, error = %failure, "????????????????");
             }
             if let Err(failure) = self
                 .emit(
@@ -1890,243 +1875,9 @@ impl SessionManager {
                 )
                 .await
             {
-                tracing::warn!(session_id = %session.id, error = %failure, "重启收口：会话状态事件提交失败（仅记录）");
+                tracing::warn!(session_id = %session.id, error = %failure, "????????????????????");
             }
             report.sessions_reset.push(session.id);
-        }
-
-        // M10-07/ADR-037 D-037-4：按原 queued_at/priority 重建排队 run（不丢队列）。
-        let mut dispatches: Vec<(SessionId, RunId)> = Vec::new();
-        for (session_id, mut queued) in queued_by_session {
-            queued.sort_by(|left, right| {
-                left.schedule
-                    .queued_at
-                    .unwrap_or(left.run.started_at)
-                    .cmp(&right.schedule.queued_at.unwrap_or(right.run.started_at))
-                    .then_with(|| left.run.id.as_str().cmp(right.run.id.as_str()))
-            });
-            let session_row = match self.inner.reads.session(&session_id).await? {
-                Some(session) => session,
-                None => continue,
-            };
-            // M7-03/ADR-017：`paused` 会话重启后保持 paused，不自动派发排队 run；
-            // 终态会话同理。将 queued run 收口为可重试失败（不自动重放、无孤儿）。
-            if session_row.status == SessionStatus::Paused
-                || aether_core::session_status_is_terminal(session_row.status)
-            {
-                for item in queued {
-                    let error = ErrorInfo {
-                        code: RUN_INTERRUPTED_CODE.to_owned(),
-                        message: "重启重建：会话处于 paused/终态，排队 run 不自动派发；可按会话恢复后重试"
-                            .to_owned(),
-                        recoverable: true,
-                    };
-                    if self
-                        .finish_run(
-                            &item.run.id,
-                            aether_core::RunStatus::Failed,
-                            Some(error.code.clone()),
-                        )
-                        .await
-                        .is_ok()
-                    {
-                        report.runs_failed.push(item.run.id.clone());
-                        let run_id = item.run.id.clone();
-                        let payload_run = run_id.clone();
-                        let _ = self
-                            .emit(
-                                &session_id,
-                                Some(&run_id),
-                                &session_row.runtime_id,
-                                EventPayload::RunFailed(RunFailedPayload {
-                                    run_id: payload_run,
-                                    error,
-                                }),
-                            )
-                            .await;
-                    }
-                }
-                continue;
-            }
-            // 每会话最多「1 在途 + 1 等待」；超出（异常/历史数据）按失败收口，避免孤儿。
-            let mut overflow = Vec::new();
-            if queued.len() > 2 {
-                overflow = queued.split_off(2);
-            }
-            let mut prepared: Vec<(
-                aether_store::ScheduledRun,
-                MessageId,
-                String,
-                Vec<aether_core::OutboundAttachment>,
-            )> = Vec::new();
-            for item in queued {
-                let Some(input_message_id) = item.run.input_message_id.clone() else {
-                    tracing::warn!(run_id = %item.run.id, "重启重建：queued run 缺少输入消息，按失败收口");
-                    if self
-                        .fail_requeue_run(
-                            &session_id,
-                            &session_row.runtime_id,
-                            &item.run.id,
-                            "重启重建：queued run 缺少输入消息，无法安全重放",
-                        )
-                        .await
-                    {
-                        report.runs_failed.push(item.run.id.clone());
-                    }
-                    continue;
-                };
-                let Some(message) = self.inner.reads.message(&input_message_id).await? else {
-                    tracing::warn!(run_id = %item.run.id, "重启重建：输入消息缺失，按失败收口");
-                    if self
-                        .fail_requeue_run(
-                            &session_id,
-                            &session_row.runtime_id,
-                            &item.run.id,
-                            "重启重建：输入消息缺失，无法安全重放",
-                        )
-                        .await
-                    {
-                        report.runs_failed.push(item.run.id.clone());
-                    }
-                    continue;
-                };
-                let attachments = match self.resolve_replay_attachments(&session_id, &message).await
-                {
-                    Ok(items) => items,
-                    Err(error) => {
-                        tracing::warn!(run_id = %item.run.id, error = %error, "重启重建：附件水合失败，按失败收口");
-                        if self
-                            .fail_requeue_run(
-                                &session_id,
-                                &session_row.runtime_id,
-                                &item.run.id,
-                                "重启重建：附件水合失败，无法安全重放（不静默丢弃附件）",
-                            )
-                            .await
-                        {
-                            report.runs_failed.push(item.run.id.clone());
-                        }
-                        continue;
-                    }
-                };
-                prepared.push((item, input_message_id, message.content.clone(), attachments));
-            }
-            let mut state = lock_state(&self.inner).await;
-            hydrate_inner(&self.inner, &mut state, &session_id).await?;
-            let runtime_id = session_row.runtime_id.clone();
-            for (index, (item, input_message_id, text, attachments)) in
-                prepared.into_iter().enumerate()
-            {
-                let schedule = item.schedule.clone();
-                let run_id = item.run.id.clone();
-                let queued_at = schedule.queued_at.unwrap_or(item.run.started_at);
-                let priority = schedule.priority;
-                let max_attempts = schedule.max_attempts.max(1);
-                let retry_count = schedule.retry_count;
-                if index == 0 {
-                    let Some(session) = state.sessions.get_mut(&session_id) else {
-                        continue;
-                    };
-                    let cancel = RunCancelToken::child_of(&session.cancel);
-                    session.active = Some(ActiveRun {
-                        run_id: run_id.clone(),
-                        input_message_id: input_message_id.clone(),
-                        runtime_id: runtime_id.clone(),
-                        text,
-                        thinking_depth: item
-                            .run
-                            .thinking_depth
-                            .unwrap_or(aether_core::THINKING_DEPTH_DEFAULT),
-                        thinking_override: false,
-                        references: Vec::new(),
-                        attachments,
-                        subagent_context: None,
-                        last_activity_ms: now,
-                        cancel,
-                        dispatched: false,
-                        priority,
-                        timeout_ms: DEFAULT_RUN_TIMEOUT_MS,
-                        max_attempts,
-                        retry_count,
-                        queued_at,
-                        dispatched_at_ms: None,
-                        timeout_requested_at_ms: None,
-                    });
-                    state.gate.queue.enqueue(GateWaiter::new(
-                        session_id.clone(),
-                        run_id.clone(),
-                        priority,
-                        runtime_weight(&runtime_id),
-                        queued_at,
-                        WaitReason::ConcurrencyGate,
-                    ));
-                } else {
-                    let Some(session) = state.sessions.get_mut(&session_id) else {
-                        continue;
-                    };
-                    session.waiting = Some(QueuedRun {
-                        run_id: run_id.clone(),
-                        input_message_id: input_message_id.clone(),
-                        runtime_id: runtime_id.clone(),
-                        text,
-                        thinking_depth: item
-                            .run
-                            .thinking_depth
-                            .unwrap_or(aether_core::THINKING_DEPTH_DEFAULT),
-                        thinking_override: false,
-                        references: Vec::new(),
-                        attachments,
-                        subagent_context: None,
-                        priority,
-                        timeout_ms: DEFAULT_RUN_TIMEOUT_MS,
-                        max_attempts,
-                        retry_count,
-                        queued_at,
-                    });
-                }
-                report.runs_requeued.push(run_id);
-            }
-            // 重建后按闸门推进（准入可行时；不超卖）。
-            if self.inner.pipeline.admission().is_ok() {
-                dispatches.extend(gate_advance_locked(&mut state, now));
-            }
-            publish_gate_snapshot(&self.inner, &state);
-            drop(state);
-            for item in overflow {
-                let run_id = item.run.id.clone();
-                let error = ErrorInfo {
-                    code: "queue_overflow_on_recover".to_owned(),
-                    message:
-                        "重启重建：同一会话排队 run 超过 2 条（1 在途 + 1 等待），已按失败收口"
-                            .to_owned(),
-                    recoverable: true,
-                };
-                if self
-                    .finish_run(
-                        &run_id,
-                        aether_core::RunStatus::Failed,
-                        Some(error.code.clone()),
-                    )
-                    .await
-                    .is_ok()
-                {
-                    report.runs_failed.push(run_id.clone());
-                    let _ = self
-                        .emit(
-                            &session_id,
-                            Some(&run_id),
-                            &session_row.runtime_id,
-                            EventPayload::RunFailed(RunFailedPayload {
-                                run_id: run_id.clone(),
-                                error,
-                            }),
-                        )
-                        .await;
-                }
-            }
-        }
-        for (session_id, run_id) in dispatches {
-            self.spawn_run(session_id, run_id);
         }
         Ok(report)
     }
@@ -3386,44 +3137,6 @@ impl SessionManager {
             })
             .await?;
         Ok(())
-    }
-
-    /// 重启重建失败收口（M10-07：queued run 无法安全重放 → `run_interrupted` + 事件）。
-    async fn fail_requeue_run(
-        &self,
-        session_id: &SessionId,
-        runtime_id: &RuntimeId,
-        run_id: &RunId,
-        reason: &str,
-    ) -> bool {
-        let error = ErrorInfo {
-            code: RUN_INTERRUPTED_CODE.to_owned(),
-            message: reason.to_owned(),
-            recoverable: true,
-        };
-        if self
-            .finish_run(
-                run_id,
-                aether_core::RunStatus::Failed,
-                Some(error.code.clone()),
-            )
-            .await
-            .is_err()
-        {
-            return false;
-        }
-        let _ = self
-            .emit(
-                session_id,
-                Some(run_id),
-                runtime_id,
-                EventPayload::RunFailed(RunFailedPayload {
-                    run_id: run_id.clone(),
-                    error,
-                }),
-            )
-            .await;
-        true
     }
 
     /// 会话生命周期审计写入（M3-07；D9/SE-03 P0 最小集）。
