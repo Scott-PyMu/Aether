@@ -1,0 +1,4 @@
+# 统一 LF：生成物（protocol/types、command-manifest、error_codes、docs/api、
+# M9-01 基线）按字节哈希/`git diff --exit-code` 校验；Windows checkout 若转 CRLF
+# 会导致基线哈希与生成物 diff 假失败。
+* text=auto eol=lf
