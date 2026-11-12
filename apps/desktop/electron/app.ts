@@ -138,6 +138,8 @@ interface ShellRuntime {
   versions: RuntimeVersions;
   windowCreatedAt: number;
   windowReadyAt: number | null;
+  windowShownAt: number | null;
+  startupPageVisibleAt: number | null;
   uiReadyAt: number | null;
   sessionCreateMs: number | null;
   daemonSpawnedAt: number | null;
@@ -172,6 +174,77 @@ let keychainHooks: KeychainHooks | null = null;
 let concurrentRpc = 0;
 const hardenedContents = new WeakSet<WebContents>();
 
+/**
+ * 启动页揭示宽限：窗口 ready-to-show 后先不显示，等主 renderer 加载完成直接显示主 UI；
+ * 若启动超过该预算（自进程启动计时），才显示 S-00 启动页，避免正常启动闪一下。
+ * 取值与 M9 窗口可见预算一致（≤1.5s）。
+ */
+const STARTUP_REVEAL_GRACE_MS = 1_500;
+let startupRevealTimer: ReturnType<typeof setTimeout> | null = null;
+let startupRevealWindow: BrowserWindow | null = null;
+
+function clearStartupRevealTimer(): void {
+  if (startupRevealTimer !== null) {
+    clearTimeout(startupRevealTimer);
+    startupRevealTimer = null;
+  }
+  startupRevealWindow = null;
+}
+
+function markWindowShown(win: BrowserWindow, startupPage: boolean): void {
+  if (!win.isDestroyed() && !win.isVisible()) {
+    win.show();
+  }
+  if (runtime.windowShownAt === null) {
+    runtime.windowShownAt = Date.now();
+  }
+  if (startupPage && runtime.startupPageVisibleAt === null) {
+    runtime.startupPageVisibleAt = Date.now();
+  }
+}
+
+/**
+ * 启动页兜底显示：正常启动若在宽限内完成，主 UI 直接显示、S-00 不出现；
+ * 超过宽限仍在启动，则显示 S-00，避免无窗口/无反馈。
+ */
+function scheduleStartupReveal(win: BrowserWindow): void {
+  clearStartupRevealTimer();
+  startupRevealWindow = win;
+  const elapsed = Date.now() - runtime.startedAt;
+  const delay = Math.max(0, STARTUP_REVEAL_GRACE_MS - elapsed);
+  startupRevealTimer = setTimeout(() => {
+    startupRevealTimer = null;
+    if (startupRevealWindow !== win) {
+      return;
+    }
+    startupRevealWindow = null;
+    if (win.isDestroyed() || win.isVisible()) {
+      return;
+    }
+    runtime.logger.log("info", "window.startup_page_shown", {
+      elapsedMs: Date.now() - runtime.startedAt,
+    });
+    markWindowShown(win, true);
+  }, delay);
+  win.once("closed", () => {
+    if (startupRevealWindow === win) {
+      clearStartupRevealTimer();
+    }
+  });
+}
+
+/** 主 renderer 已加载：直接显示窗口（正常启动路径不显示 S-00）。 */
+function revealMainWindow(win: BrowserWindow): void {
+  clearStartupRevealTimer();
+  if (win.isDestroyed()) {
+    return;
+  }
+  runtime.logger.log("info", "window.main_ui_shown", {
+    elapsedMs: Date.now() - runtime.startedAt,
+  });
+  markWindowShown(win, false);
+}
+
 const initialDataDir = resolveDataDir();
 const runtime: ShellRuntime = {
   startedAt: Date.now(),
@@ -191,6 +264,8 @@ const runtime: ShellRuntime = {
   versions: {},
   windowCreatedAt: 0,
   windowReadyAt: null,
+  windowShownAt: null,
+  startupPageVisibleAt: null,
   uiReadyAt: null,
   sessionCreateMs: null,
   daemonSpawnedAt: null,
@@ -534,7 +609,8 @@ async function createMainWindowAndStart(): Promise<void> {
       minHeight: WINDOW_MIN_HEIGHT,
     });
     hardenContents(win.webContents);
-    const ready = waitForWindowReady(win);
+    scheduleStartupReveal(win);
+    const ready = waitForWindowReady(win, 1_500, false);
     const loaded = win.loadFile(shellAsset("startup", "startup.html"));
     // 提前挂接拒绝处理，避免 ready 先完成时出现 unhandled rejection；后续仍会 await。
     void loaded.catch(() => {});
@@ -548,7 +624,9 @@ async function createMainWindowAndStart(): Promise<void> {
     await loaded;
     runtime.suppressAllClosed = false;
     await startDaemonForWindow(win, { loadRenderer: true });
+    revealMainWindow(win);
   } catch (error) {
+    clearStartupRevealTimer();
     runtime.logger.log("error", "startup.window_failed", { error: errorText(error) });
     runtime.suppressAllClosed = false;
     showFatalWindow({
@@ -985,6 +1063,7 @@ async function loadMainRenderer(win: BrowserWindow): Promise<void> {
 
 /** S-12：关闭主窗口并显示独立最小 renderer（不加载主 UI）。 */
 function showFatalWindow(failure: StartupFailure): void {
+  clearStartupRevealTimer();
   if (runtime.fatalWindow !== null && !runtime.fatalWindow.isDestroyed()) {
     runtime.fatalWindow.focus();
     return;
@@ -1126,8 +1205,12 @@ function createSecureWindow(preload: string): BrowserWindow {
   return win;
 }
 
-/** 等待 `ready-to-show`（最多 1.5s），到点直接显示（窗口可见预算）。 */
-function waitForWindowReady(win: BrowserWindow, timeoutMs = 1_500): Promise<void> {
+/** 等待 `ready-to-show`（最多 1.5s），到点按 `autoShow` 决定是否直接显示。 */
+function waitForWindowReady(
+  win: BrowserWindow,
+  timeoutMs = 1_500,
+  autoShow = true,
+): Promise<void> {
   return new Promise((resolve) => {
     let done = false;
     const finish = (): void => {
@@ -1136,8 +1219,11 @@ function waitForWindowReady(win: BrowserWindow, timeoutMs = 1_500): Promise<void
       }
       done = true;
       clearTimeout(timer);
-      if (!win.isDestroyed() && !win.isVisible()) {
+      if (autoShow && !win.isDestroyed() && !win.isVisible()) {
         win.show();
+        if (runtime.windowShownAt === null) {
+          runtime.windowShownAt = Date.now();
+        }
       }
       resolve();
     };
@@ -1390,6 +1476,11 @@ async function dispatchRpc(method: string, params: unknown): Promise<unknown> {
       runtime.logger.log("info", "ui.ready", {
         uiReadyMs: runtime.uiReadyAt - runtime.startedAt,
       });
+      // 主 UI 已挂载并开始轮询 health：直接显示主界面（正常启动不显示 S-00）。
+      const mainWindow = runtime.mainWindow;
+      if (mainWindow !== null && !mainWindow.isDestroyed()) {
+        revealMainWindow(mainWindow);
+      }
     }
     if (method === "session_create" && runtime.sessionCreateMs === null) {
       const elapsed = Date.now() - requestStartedAt;
@@ -1650,6 +1741,8 @@ function installE2EHook(): void {
       startedAt: runtime.startedAt,
       windowCreatedAt: runtime.windowCreatedAt,
       windowReadyAt: runtime.windowReadyAt,
+      windowShownAt: runtime.windowShownAt,
+      startupPageVisibleAt: runtime.startupPageVisibleAt,
       uiReadyAt: runtime.uiReadyAt,
       sessionCreateMs: runtime.sessionCreateMs,
       daemonSpawnedAt: runtime.daemonSpawnedAt,

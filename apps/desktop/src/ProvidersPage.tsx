@@ -12,6 +12,7 @@
  *   `provider-test-result`，`data-status` = ok / unreachable / auth_failed / timeout）；
  *   `从供应商获取` = 真实调用（`provider_models_fetch`；归一化 + 幂等 upsert）。
  */
+import { tryAetherError } from "@aether/protocol";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
@@ -29,6 +30,7 @@ import {
   type ProvidersIpc,
 } from "./providers";
 import { describeIpcError, ipcErrorCode } from "./startup";
+import { t } from "./i18n";
 
 /** 连通性测试展示态（UI-UX §7.3 `provider-test-result` 的 `data-status` 取值域）。 */
 export type TestStatus = "ok" | "unreachable" | "auth_failed" | "timeout";
@@ -179,12 +181,12 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
     const name = formName.trim();
     const baseUrl = formBaseUrl.trim();
     if (!name) {
-      setError("请填写供应商名称");
+      setError(t("providers.enter_a_provider_name"));
       setErrorCode("invalid_format");
       return;
     }
     if (formMode === "custom" && !editing && !baseUrl) {
-      setError("自定义供应商必须填写 Base URL");
+      setError(t("providers.a_base_url_is_required"));
       setErrorCode("missing_field");
       return;
     }
@@ -213,7 +215,7 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
           input.api_key = "";
         }
         await ipc.update(input);
-        setNotice(`已保存供应商：${name}`);
+        setNotice(t("providers.provider_saved", { p0: name }));
       } else {
         const input: Parameters<ProvidersIpc["create"]>[0] = {
           name,
@@ -228,7 +230,7 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
           input.api_key = formApiKey;
         }
         const created = await ipc.create(input);
-        setNotice(`已添加供应商：${created.name}`);
+        setNotice(t("providers.provider_added", { p0: created.name }));
       }
       await refresh();
       setApiKeyTouched(false);
@@ -278,7 +280,7 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
       try {
         await ipc.remove(id);
         setConfirmDeleteId(null);
-        setNotice("供应商已删除（模型与密钥引用一并移除）");
+        setNotice(t("providers.provider_deleted_models_and_key"));
         await refresh();
       } catch (failure) {
         setConfirmDeleteId(null);
@@ -296,7 +298,7 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
     }
     const modelId = modelIdDraft.trim();
     if (!modelId) {
-      setError("请填写模型 ID");
+      setError(t("providers.enter_a_model_id"));
       setErrorCode("invalid_format");
       return;
     }
@@ -346,7 +348,7 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
       const result = await ipc.test(editing.id);
       setTestResult({
         status: "ok",
-        text: `连通性测试通过（${result.latency_ms}ms，${result.models_count} 个模型）`,
+        text: t("providers.connectivity_test_passed_ms_models", { p0: result.latency_ms, p1: result.models_count }),
       });
     } catch (failure) {
       const code = ipcErrorCode(failure);
@@ -354,8 +356,9 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
       if (code === "provider_auth_failed") {
         setTestResult({ status: "auth_failed", text: message });
       } else if (code === "provider_unreachable") {
+        const rawMessage = tryAetherError(failure)?.message ?? message;
         setTestResult({
-          status: message.includes("超时") ? "timeout" : "unreachable",
+          status: /timeout|超时/i.test(rawMessage) ? "timeout" : "unreachable",
           text: message,
         });
       } else {
@@ -377,7 +380,7 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
     try {
       const result = await ipc.fetchModels(editing.id);
       setModelsNotice(
-        `已获取 ${result.fetched} 个模型（新增 ${result.added} / 刷新 ${result.refreshed}）`,
+        t("providers.fetched_models_added_refreshed", { p0: result.fetched, p1: result.added, p2: result.refreshed }),
       );
       await refresh(editing.id);
     } catch (failure) {
@@ -391,14 +394,14 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
     if (formMode === "official" && formType !== "custom") {
       return OFFICIAL_PROVIDER_PRESETS[formType].preview;
     }
-    return formBaseUrl ? `${formBaseUrl}/v1/chat/completions` : "输入 Base URL 后显示请求路径";
+    return formBaseUrl ? `${formBaseUrl}/v1/chat/completions` : t("providers.enter_a_base_url_to");
   }, [formBaseUrl, formMode, formType]);
 
   const formTitle = editing
-    ? "编辑供应商"
+    ? t("providers.edit_provider")
     : formMode === "custom"
-      ? "添加自定义供应商"
-      : "添加供应商";
+      ? t("providers.add_custom_provider")
+      : t("providers.add_provider");
 
   if (view === "form") {
     return (
@@ -409,7 +412,7 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
               type="button"
               className="back"
               data-testid="provider-form-back"
-              aria-label="返回供应商列表"
+              aria-label={t("providers.back_to_provider_list")}
               onClick={backToList}
             >
               <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -424,15 +427,15 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
               disabled={busy}
               onClick={() => void onSave()}
             >
-              {editing ? "保存" : "创建"}
+              {editing ? t("app.action.save") : t("app.action.create")}
             </button>
           </div>
 
-          <div className="form-section-title">基本信息</div>
+          <div className="form-section-title">{t("providers.basic_information")}</div>
           <div className="form-card">
             {formMode === "official" && !editing ? (
               <div className="form-row">
-                <div className="form-label">供应商类型</div>
+                <div className="form-label">{t("providers.provider_type")}</div>
                 <select
                   className="form-input"
                   data-testid="provider-type-select"
@@ -450,12 +453,12 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
             ) : null}
 
             <div className="form-row">
-              <div className="form-label">供应商名称</div>
+              <div className="form-label">{t("providers.provider_name")}</div>
               <input
                 type="text"
                 className="form-input"
                 data-testid="provider-name-input"
-                placeholder="例如: My Anthropic"
+                placeholder={t("providers.e_g_my_anthropic")}
                 value={formName}
                 disabled={busy}
                 onChange={(event) => setFormName(event.target.value)}
@@ -465,7 +468,7 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
             <div className="form-row">
               <div className="form-label">Base URL</div>
               <div className="preview-hint">
-                预览：<b>{previewPath}</b>
+                {t("providers.preview")}<b>{previewPath}</b>
               </div>
               {(["anthropic", "openai", "dsh"] as const).map((protocol) => {
                 const preview = endpointPreview(
@@ -487,7 +490,7 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
                     data-protocol={protocol}
                     data-source={preview.source}
                   >
-                    {protocol} 端点：<b>{preview.url}</b>
+                    {protocol} {t("providers.endpoint")}<b>{preview.url}</b>
                   </p>
                 );
               })}
@@ -503,10 +506,10 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
             </div>
 
             <div className="form-row">
-              <div className="form-label">协议端点（默认已按供应商预填，可覆盖）</div>
+              <div className="form-label">{t("providers.protocol_endpoint_prefilled_by_provider")}</div>
               <div className="provider-endpoint-grid">
                 <label className="provider-endpoint-field">
-                  <span>Anthropic 兼容（Claude Code）</span>
+                  <span>{t("providers.anthropic_compatible_claude_code")}</span>
                   <input
                     type="text"
                     className="form-input"
@@ -523,7 +526,7 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
                   />
                 </label>
                 <label className="provider-endpoint-field">
-                  <span>OpenAI 兼容（Codex）</span>
+                  <span>{t("providers.openai_compatible_codex")}</span>
                   <input
                     type="text"
                     className="form-input"
@@ -540,7 +543,7 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
                   />
                 </label>
                 <label className="provider-endpoint-field">
-                  <span>Google / 原生</span>
+                  <span>{t("providers.google_native")}</span>
                   <input
                     type="text"
                     className="form-input"
@@ -557,12 +560,12 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
                   />
                 </label>
                 <label className="provider-endpoint-field">
-                  <span>DSH / 原生</span>
+                  <span>{t("providers.dsh_native")}</span>
                   <input
                     type="text"
                     className="form-input"
                     data-testid="provider-endpoint-dsh"
-                    placeholder="DSH profile 端点（可选）"
+                    placeholder={t("providers.dsh_profile_endpoint_optional")}
                     value={formEndpoints.dsh ?? ""}
                     disabled={busy}
                     onChange={(event) =>
@@ -575,14 +578,14 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
                 </label>
               </div>
               <p className="preview-hint">
-                Claude Code 使用 Anthropic 端点；Codex 使用 OpenAI 端点；端点不是密钥，可随时修改。
+                {t("providers.claude_code_uses_the_anthropic")}
               </p>
               <p
                 className="preview-hint provider-endpoint-risk"
                 data-testid="provider-endpoint-risk"
                 role="note"
               >
-                {PROVIDER_ENDPOINT_RISK_NOTICE}
+                {t(PROVIDER_ENDPOINT_RISK_NOTICE)}
               </p>
             </div>
 
@@ -594,18 +597,18 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
                   className="btn-test"
                   data-testid="provider-test"
                   disabled={busy || !editing}
-                  title={editing ? "发起真实连通性测试（10s 超时）" : "创建保存后可测试连接"}
+                  title={editing ? t("providers.run_a_real_connectivity_test") : t("providers.connectivity_can_be_tested_after")}
                   onClick={() => void onTest()}
                 >
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z" />
                   </svg>
-                  测试连接
+                  {t("providers.test_connection")}
                 </button>
               </div>
               {editing?.api_key_ref ? (
                 <p className="provider-key-ref" data-testid="provider-api-key-ref-readonly">
-                  当前密钥引用（只读）：{editing.api_key_ref}
+                  {t("providers.current_key_reference_read_only")}{editing.api_key_ref}
                 </p>
               ) : null}
               <div className="input-wrap provider-key-input">
@@ -613,7 +616,7 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
                   className="form-input"
                   type={showKey ? "text" : "password"}
                   data-testid="provider-api-key-input"
-                  placeholder={editing ? "输入新密钥以覆盖（留空保持不变）" : "输入 API Key"}
+                  placeholder={editing ? t("providers.enter_a_new_key_to") : t("providers.enter_api_key")}
                   value={formApiKey}
                   disabled={busy}
                   onChange={(event) => {
@@ -625,8 +628,8 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
                   type="button"
                   className="eye"
                   data-testid="provider-api-key-reveal"
-                  title={showKey ? "隐藏密钥" : "显示密钥"}
-                  aria-label={showKey ? "隐藏密钥" : "显示密钥"}
+                  title={showKey ? t("providers.hide_key") : t("providers.show_key")}
+                  aria-label={showKey ? t("providers.hide_key") : t("providers.show_key")}
                   disabled={busy}
                   onClick={() => setShowKey((visible) => !visible)}
                 >
@@ -645,15 +648,15 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
                 </button>
               </div>
               {editing && apiKeyTouched && formApiKey.length === 0 && editing.api_key_ref ? (
-                <p className="provider-key-hint">保存后将清除密钥引用（keychain 条目一并删除）</p>
+                <p className="provider-key-hint">{t("providers.saving_will_clear_the_key")}</p>
               ) : null}
             </div>
 
             <div className="form-row">
               <div className="switch-row">
                 <div className="switch-label">
-                  <div className="n">启用此配置</div>
-                  <div className="d">关闭后该配置的模型不会出现在选择列表中</div>
+                  <div className="n">{t("providers.enable_this_configuration")}</div>
+                  <div className="d">{t("providers.when_disabled_this_configuration_s")}</div>
                 </div>
                 <label className="switch">
                   <input
@@ -671,10 +674,10 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
 
           {editing ? (
             <section className="provider-models">
-              <div className="form-section-title">已启用模型</div>
+              <div className="form-section-title">{t("providers.enabled_models")}</div>
               {editing.models.filter((model) => model.enabled).length === 0 ? (
                 <p className="provider-model-empty empty-state">
-                  还没有启用任何模型，从下方可用模型中选择
+                  {t("providers.no_models_enabled_yet_choose")}
                 </p>
               ) : (
                 <ul className="provider-model-list mlist">
@@ -707,7 +710,7 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
                           disabled={busy}
                           onClick={() => void onToggleModel(model, false)}
                         >
-                          停用
+                          {t("app.action.disable")}
                         </button>
                       </li>
                     ))}
@@ -716,24 +719,24 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
 
               <div className="models-head">
                 <div className="form-section-title" style={{ marginBottom: 0 }}>
-                  可用模型
+                  {t("providers.available_models")}
                 </div>
                 <button
                   type="button"
                   className="btn-fetch"
                   data-testid="provider-models-fetch"
                   disabled={busy}
-                  title="从供应商获取模型列表（归一化 + 幂等写入）"
+                  title={t("providers.fetch_the_model_list_from")}
                   onClick={() => void onFetchModels()}
                 >
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M12 3v12M7 10l5 5 5-5M5 21h14" />
                   </svg>
-                  从供应商获取
+                  {t("providers.fetch_from_provider")}
                 </button>
               </div>
               {editing.models.filter((model) => !model.enabled).length === 0 ? (
-                <p className="provider-model-empty empty-state">没有未启用的模型</p>
+                <p className="provider-model-empty empty-state">{t("providers.no_disabled_models")}</p>
               ) : (
                 <ul className="provider-model-list mlist">
                   {editing.models
@@ -765,7 +768,7 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
                           disabled={busy}
                           onClick={() => void onToggleModel(model, true)}
                         >
-                          启用
+                          {t("app.action.enable")}
                         </button>
                       </li>
                     ))}
@@ -777,7 +780,7 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
                   type="text"
                   className="form-input"
                   data-testid="provider-model-id-input"
-                  placeholder="模型 ID（如 claude-opus-4-6）"
+                  placeholder={t("providers.model_id_e_g_claude")}
                   value={modelIdDraft}
                   disabled={busy}
                   onChange={(event) => setModelIdDraft(event.target.value)}
@@ -786,7 +789,7 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
                   type="text"
                   className="form-input"
                   data-testid="provider-model-name-input"
-                  placeholder="显示名称（可选）"
+                  placeholder={t("providers.display_name_optional")}
                   value={modelNameDraft}
                   disabled={busy}
                   onChange={(event) => setModelNameDraft(event.target.value)}
@@ -796,11 +799,11 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
                   className="btn-plus"
                   data-testid="provider-model-add"
                   disabled={busy}
-                  title="添加模型"
-                  aria-label="添加模型"
+                  title={t("providers.add_model")}
+                  aria-label={t("providers.add_model")}
                   onClick={() => void onAddModel()}
                 >
-                  ＋
+                  {t("app.punct.plus")}
                 </button>
               </div>
               {modelsNotice ? (
@@ -810,7 +813,7 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
               ) : null}
             </section>
           ) : (
-            <p className="provider-models-hint">创建保存后可管理模型</p>
+            <p className="provider-models-hint">{t("providers.models_can_be_managed_after")}</p>
           )}
 
           {testResult ? (
@@ -831,7 +834,7 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
               role="alert"
             >
               {errorCode === "builtin_provider_undeletable"
-                ? "内置供应商不可删除"
+                ? t("providers.built_in_providers_cannot_be")
                 : error}
             </p>
           ) : null}
@@ -844,9 +847,9 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
     <section className="providers-page" data-testid="providers-page">
       <div className="mc-head">
         <div>
-          <div className="mc-ttl">模型配置</div>
+          <div className="mc-ttl">{t("providers.model_configuration")}</div>
           <div className="mc-desc">
-            管理 AI 供应商连接，配置 API Key 和可用模型。启用的供应商与模型会出现在会话输入框的模型选择器中。
+            {t("providers.manage_ai_provider_connections_configure")}
           </div>
         </div>
         <div className="mc-actions">
@@ -857,7 +860,7 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
             disabled={busy}
             onClick={() => openCreate("official")}
           >
-            ＋ 添加供应商
+            {t("providers.add_provider_2")}
           </button>
           <button
             type="button"
@@ -866,16 +869,16 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
             disabled={busy}
             onClick={() => openCreate("custom")}
           >
-            ＋ 添加自定义供应商
+            {t("providers.add_custom_provider_2")}
           </button>
         </div>
       </div>
 
       {providers === null ? (
-        <p className="providers-loading">正在加载供应商…</p>
+        <p className="providers-loading">{t("providers.loading_providers")}</p>
       ) : providers.length === 0 ? (
         <p className="providers-empty empty-state" data-testid="provider-empty">
-          还没有供应商配置，点击右上角添加
+          {t("providers.no_provider_configuration_yet_use")}
         </p>
       ) : (
         <ul className="provider-cards prov-cards">
@@ -900,7 +903,7 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
               </div>
               {confirmDeleteId === provider.id ? (
                 <div className="provider-confirm prov-confirm" data-testid="provider-delete-confirm">
-                  <span className="provider-confirm-text warn">确认删除？</span>
+                  <span className="provider-confirm-text warn">{t("app.action.delete_2")}</span>
                   <button
                     type="button"
                     className="btn-sm cancel"
@@ -908,7 +911,7 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
                     disabled={busy}
                     onClick={() => setConfirmDeleteId(null)}
                   >
-                    取消
+                    {t("app.action.cancel")}
                   </button>
                   <button
                     type="button"
@@ -917,7 +920,7 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
                     disabled={busy}
                     onClick={() => void onConfirmDelete(provider.id)}
                   >
-                    删除
+                    {t("app.action.delete")}
                   </button>
                 </div>
               ) : (
@@ -929,8 +932,8 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
                       data-testid="provider-edit"
                       data-provider-id={provider.id}
                       disabled={busy}
-                      title="编辑"
-                      aria-label={`编辑 ${provider.name}`}
+                      title={t("app.action.edit")}
+                      aria-label={t("providers.edit", { p0: provider.name })}
                       onClick={() => openEdit(provider)}
                     >
                       <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -945,8 +948,8 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
                       data-provider-id={provider.id}
                       data-is-builtin={String(provider.is_builtin)}
                       disabled={busy || provider.is_builtin}
-                      title={provider.is_builtin ? "内置供应商不可删除" : "删除供应商"}
-                      aria-label={`删除 ${provider.name}`}
+                      title={provider.is_builtin ? t("providers.built_in_providers_cannot_be") : t("providers.delete_provider")}
+                      aria-label={t("providers.delete", { p0: provider.name })}
                       onClick={() => setConfirmDeleteId(provider.id)}
                     >
                       <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -963,7 +966,7 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
                       data-enabled={String(provider.enabled)}
                       checked={provider.enabled}
                       disabled={busy}
-                      aria-label={`启用 ${provider.name}`}
+                      aria-label={t("providers.enable", { p0: provider.name })}
                       onChange={(event) => void onToggleProvider(provider.id, event.target.checked)}
                     />
                     <span />
@@ -987,7 +990,7 @@ export function ProvidersPage({ ipc = productionProvidersIpc }: ProvidersPagePro
           data-code={errorCode ?? ""}
           role="alert"
         >
-          {errorCode === "builtin_provider_undeletable" ? "内置供应商不可删除" : error}
+          {errorCode === "builtin_provider_undeletable" ? t("providers.built_in_providers_cannot_be") : error}
         </p>
       ) : null}
     </section>

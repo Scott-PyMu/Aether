@@ -21,10 +21,16 @@
  * M5-03 范围（加密备份开关，D13/ADR-020）：
  * - `settings-backup-encryption`（`backup.encryption.enabled`，缺省 `true`）；
  *   关闭后手动/自动备份产出 P0 `.db` 形态；开启且主密钥不可用时备份暂停并告警。
+ *
+ * M10-06 范围（外观，ADR-036）：
+ * - S-15 `appearance`：`locale-select`（`ui.locale`）/ `theme-select`（`ui.theme`）；
+ *   切换立即生效、不重启、不重载数据；持久化失败显示本地化错误。
  */
 import { APP_VERSION } from "@aether/protocol";
 import { useCallback, useEffect, useState } from "react";
 
+import { useAppearance } from "./appearance";
+import { localizeError, type LocaleSetting } from "./i18n";
 import { PresetsPage } from "./PresetsPage";
 import { presetsIpc as productionPresetsIpc, type PresetsIpc } from "./presets";
 import { ProvidersPage } from "./ProvidersPage";
@@ -44,6 +50,7 @@ import {
 } from "./settings";
 import { describeIpcError, ipcErrorCode } from "./startup";
 import { workspaceIpc, type WorkspaceIpc } from "./workspace";
+import { t } from "./i18n";
 
 export interface SettingsSecurityLevel {
   level: "os" | "degraded";
@@ -116,6 +123,11 @@ export function SettingsPage({
   // M3-08：工作区绑定（root_path 形式；输入可编辑，选择器可回填）。
   const [workspaceRoot, setWorkspaceRoot] = useState("");
   const [workspaceBusy, setWorkspaceBusy] = useState(false);
+  // M10-06/ADR-036：外观（语言/主题）即时生效；持久化失败不恢复旧值但显示错误。
+  const { localeSetting, themeSetting, setLocale, setTheme } = useAppearance();
+  const [appearanceBusy, setAppearanceBusy] = useState(false);
+  const [appearanceNotice, setAppearanceNotice] = useState<string | null>(null);
+  const [appearanceError, setAppearanceError] = useState<string | null>(null);
   const [workspaceResult, setWorkspaceResult] = useState<{
     result: "ok" | "failed";
     text: string;
@@ -194,7 +206,7 @@ export function SettingsPage({
       try {
         const result = await ipc.set(BACKUP_REMINDER_KEY, next);
         setReminderEnabled(result.value === true);
-        setNotice(next ? "已开启 7 天未备份提醒" : "已关闭 7 天未备份提醒");
+        setNotice(next ? t("settings.7_day_backup_reminder_enabled") : t("settings.7_day_backup_reminder_disabled"));
       } catch (failure) {
         setError(describeIpcError(failure));
         setErrorCode(ipcErrorCode(failure));
@@ -209,7 +221,7 @@ export function SettingsPage({
   const saveAutoBackup = useCallback(async () => {
     const retention = Number(autoRetention);
     if (!Number.isInteger(retention) || retention < 1 || retention > 100) {
-      setError("保留份数必须是 1–100 的整数");
+      setError(t("settings.retention_count_must_be_an"));
       setErrorCode("out_of_range");
       return;
     }
@@ -222,7 +234,7 @@ export function SettingsPage({
       await ipc.set(BACKUP_AUTO_FREQUENCY_KEY, autoFrequency);
       await ipc.set(BACKUP_AUTO_RETENTION_KEY, retention);
       setAutoRetention(String(retention));
-      setNotice("自动备份设置已保存（调度器下一周期生效）");
+      setNotice(t("settings.automatic_backup_settings_saved_effective"));
     } catch (failure) {
       setError(describeIpcError(failure));
       setErrorCode(ipcErrorCode(failure));
@@ -243,8 +255,8 @@ export function SettingsPage({
         setEncryptionEnabled(result.value !== false);
         setNotice(
           next
-            ? "已开启加密备份（XChaCha20-Poly1305；主密钥存 OS 凭据库）"
-            : "已关闭加密备份（产物为 P0 明文 .db 形态；请自行评估风险）",
+            ? t("settings.encrypted_backup_enabled_xchacha20_poly1305")
+            : t("settings.encrypted_backup_disabled_artifacts_are"),
         );
       } catch (failure) {
         setError(describeIpcError(failure));
@@ -260,7 +272,7 @@ export function SettingsPage({
   const saveRetention = useCallback(async () => {
     const days = Number(retentionDays);
     if (!Number.isInteger(days) || days < 7 || days > 365) {
-      setError("保留窗口必须是 7–365 天的整数");
+      setError(t("settings.retention_window_must_be_an"));
       setErrorCode("out_of_range");
       return;
     }
@@ -274,8 +286,8 @@ export function SettingsPage({
       setRetentionDays(String(days));
       setNotice(
         retentionEnabled
-          ? "已保存：启用事件保留（仅超窗 message.delta/usage/log 先归档后清理）"
-          : "已保存：关闭事件保留（事件全量保留）",
+          ? t("settings.saved_event_retention_enabled_only")
+          : t("settings.saved_event_retention_disabled_all"),
       );
     } catch (failure) {
       setError(describeIpcError(failure));
@@ -303,7 +315,7 @@ export function SettingsPage({
   const applyWorkspace = useCallback(async () => {
     const root = workspaceRoot.trim();
     if (!root) {
-      setError("请先选择或输入工作区根目录");
+      setError(t("settings.select_or_enter_a_workspace"));
       setErrorCode("invalid_value");
       return;
     }
@@ -316,7 +328,7 @@ export function SettingsPage({
       setWorkspaceRoot(result.root_path);
       setWorkspaceResult({
         result: "ok",
-        text: `工作区已绑定：${result.root_path}（新会话按此目录注入记忆并作为权限基准；已有会话不迁移，保持创建时基准——R15）`,
+        text: t("settings.workspace_bound_new_sessions_inject", { p0: result.root_path }),
       });
     } catch (failure) {
       setError(describeIpcError(failure));
@@ -327,13 +339,47 @@ export function SettingsPage({
     }
   }, [workspace, workspaceRoot]);
 
+  const changeLocale = useCallback(
+    async (value: LocaleSetting) => {
+      setAppearanceBusy(true);
+      setAppearanceNotice(null);
+      setAppearanceError(null);
+      try {
+        await setLocale(value, ipc);
+        setAppearanceNotice(t("settings.appearance.saved"));
+      } catch (failure) {
+        setAppearanceError(localizeError(failure).message);
+      } finally {
+        setAppearanceBusy(false);
+      }
+    },
+    [ipc, setLocale],
+  );
+
+  const changeTheme = useCallback(
+    async (value: "system" | "light" | "dark") => {
+      setAppearanceBusy(true);
+      setAppearanceNotice(null);
+      setAppearanceError(null);
+      try {
+        await setTheme(value, ipc);
+        setAppearanceNotice(t("settings.appearance.saved"));
+      } catch (failure) {
+        setAppearanceError(localizeError(failure).message);
+      } finally {
+        setAppearanceBusy(false);
+      }
+    },
+    [ipc, setTheme],
+  );
+
   const securityLevelValue = securityLevel?.level ?? "unknown";
   const securityLevelText =
     securityLevel === null
-      ? "安全级别：未探测（OS 凭据库自检结果随启动探针提供）"
+      ? t("settings.security_level_not_probed_os")
       : securityLevel.level === "os"
-        ? `安全级别：OS 凭据库（${securityLevel.detail}）`
-        : `安全级别：降级（${securityLevel.detail}）`;
+        ? t("settings.security_level_os_credential_store", { p0: securityLevel.detail })
+        : t("settings.security_level_degraded", { p0: securityLevel.detail });
 
   return (
     <div className="overlay" data-testid="overlay-settings">
@@ -344,12 +390,12 @@ export function SettingsPage({
         aria-modal="true"
       >
         <div className="modal-h">
-          <h3>设置</h3>
+          <h3>{t("settings.settings")}</h3>
           <button
             type="button"
             className="modal-close"
             data-testid="overlay-back"
-            aria-label="关闭设置"
+            aria-label={t("settings.close_settings")}
             onClick={onBack}
           >
             ×
@@ -357,7 +403,7 @@ export function SettingsPage({
         </div>
 
         <div className="settings-body">
-          <nav className="settings-nav settings-subnav" aria-label="设置分类">
+          <nav className="settings-nav settings-subnav" aria-label={t("settings.settings_categories")}>
             <button
               type="button"
               data-testid="settings-tab-general"
@@ -365,7 +411,7 @@ export function SettingsPage({
               className={tab === "general" ? "settings-tab on" : "settings-tab"}
               onClick={() => setTab("general")}
             >
-              基本设置
+              {t("settings.general")}
             </button>
             <button
               type="button"
@@ -374,7 +420,7 @@ export function SettingsPage({
               className={tab === "providers" ? "settings-tab on" : "settings-tab"}
               onClick={() => setTab("providers")}
             >
-              模型与供应商配置
+              {t("settings.model_provider_configuration")}
             </button>
             <button
               type="button"
@@ -383,7 +429,7 @@ export function SettingsPage({
               className={tab === "rules" ? "settings-tab on" : "settings-tab"}
               onClick={() => setTab("rules")}
             >
-              权限规则
+              {t("app.common.permission_rules")}
             </button>
             <button
               type="button"
@@ -392,13 +438,13 @@ export function SettingsPage({
               className={tab === "presets" ? "settings-tab on" : "settings-tab"}
               onClick={() => setTab("presets")}
             >
-              Agent 预设
+              {t("app.common.agent_presets")}
             </button>
             {onOpenAbout ? (
               <>
                 <hr />
                 <button type="button" onClick={onOpenAbout}>
-                  关于 Aether
+                  {t("settings.about_aether")}
                 </button>
               </>
             ) : null}
@@ -421,10 +467,58 @@ export function SettingsPage({
 
         {tab === "general" ? (
           <>
+        <section className="settings-section settings-appearance" data-testid="appearance">
+          <h3>{t("settings.appearance.title")}</h3>
+          <p className="settings-note">{t("settings.appearance.description")}</p>
+          <label className="settings-auto-row">
+            {t("settings.appearance.locale")}
+            <select
+              data-testid="locale-select"
+              data-locale={localeSetting}
+              aria-label={t("a11y.locale_select")}
+              value={localeSetting}
+              disabled={appearanceBusy}
+              onChange={(event) => void changeLocale(event.target.value as LocaleSetting)}
+            >
+              <option value="system">{t("settings.appearance.system")}</option>
+              <option value="zh-CN">{t("settings.appearance.zh_cn")}</option>
+              <option value="en-US">{t("settings.appearance.en_us")}</option>
+            </select>
+          </label>
+          <label className="settings-auto-row">
+            {t("settings.appearance.theme")}
+            <select
+              data-testid="theme-select"
+              data-theme={themeSetting}
+              aria-label={t("a11y.theme_select")}
+              value={themeSetting}
+              disabled={appearanceBusy}
+              onChange={(event) =>
+                void changeTheme(event.target.value as "system" | "light" | "dark")
+              }
+            >
+              <option value="system">{t("settings.appearance.system")}</option>
+              <option value="light">{t("settings.appearance.light")}</option>
+              <option value="dark">{t("settings.appearance.dark")}</option>
+            </select>
+          </label>
+          <p className="settings-note">{t("settings.appearance.system_hint")}</p>
+          {appearanceNotice ? (
+            <p className="settings-notice" data-testid="appearance-notice">
+              {appearanceNotice}
+            </p>
+          ) : null}
+          {appearanceError ? (
+            <p className="settings-error" data-testid="appearance-error" role="alert">
+              {appearanceError}
+            </p>
+          ) : null}
+        </section>
+
         <section className="settings-section">
-          <h3>数据与安全</h3>
+          <h3>{t("settings.data_security")}</h3>
           {dataDir ? (
-            <p data-testid="settings-data-dir">数据目录：{dataDir}</p>
+            <p data-testid="settings-data-dir">{t("app.common.data_directory")}{dataDir}</p>
           ) : null}
           <p
             data-testid="settings-security-level"
@@ -434,12 +528,12 @@ export function SettingsPage({
             {securityLevelText}
           </p>
           <p className="settings-note">
-            安全边界（C6）：权限门仅约束经线协议上报的工具调用；适配器进程内行为不受此门约束。
+            {t("settings.security_boundary_c6_the_permission")}
           </p>
         </section>
 
         <section className="settings-section">
-          <h3>提醒</h3>
+          <h3>{t("settings.reminders")}</h3>
           <label className="settings-toggle">
             <input
               type="checkbox"
@@ -448,7 +542,7 @@ export function SettingsPage({
               disabled={busy || reminderEnabled === null}
               onChange={(event) => void toggleReminder(event.target.checked)}
             />
-            7 天未备份提醒（D13；全局开关）
+            {t("settings.7_day_backup_reminder_d13")}
           </label>
           {notice ? (
             <p className="settings-notice" data-testid="settings-notice">
@@ -458,7 +552,7 @@ export function SettingsPage({
         </section>
 
         <section className="settings-section" data-testid="settings-backup-auto">
-          <h3>自动备份（D13 / ADR-020）</h3>
+          <h3>{t("app.common.automatic_backup_d13_adr_020")}</h3>
           <label className="settings-toggle">
             <input
               type="checkbox"
@@ -467,10 +561,10 @@ export function SettingsPage({
               disabled={busy || !autoLoaded}
               onChange={(event) => setAutoEnabled(event.target.checked)}
             />
-            启用自动备份（缺省开启；错过排期 → 启动后 2 分钟内补备一次）
+            {t("settings.enable_automatic_backup_on_by")}
           </label>
           <label className="settings-auto-row">
-            频率
+            {t("settings.frequency")}
             <select
               data-testid="settings-backup-auto-frequency"
               value={autoFrequency}
@@ -479,12 +573,12 @@ export function SettingsPage({
                 setAutoFrequency(event.target.value === "weekly" ? "weekly" : "daily")
               }
             >
-              <option value="daily">每天（daily）</option>
-              <option value="weekly">每周（weekly）</option>
+              <option value="daily">{t("settings.daily_daily")}</option>
+              <option value="weekly">{t("settings.weekly_weekly")}</option>
             </select>
           </label>
           <label className="settings-auto-row">
-            自动产物保留份数（1–100）
+            {t("settings.automatic_artifact_retention_count_1")}
             <input
               type="number"
               min={1}
@@ -502,7 +596,7 @@ export function SettingsPage({
               disabled={busy || !autoLoaded}
               onClick={() => void saveAutoBackup()}
             >
-              保存自动备份设置
+              {t("settings.save_automatic_backup_settings")}
             </button>
           </div>
           <label className="settings-toggle">
@@ -514,16 +608,15 @@ export function SettingsPage({
               disabled={busy || !autoLoaded}
               onChange={(event) => void toggleEncryption(event.target.checked)}
             />
-            加密备份（XChaCha20-Poly1305；缺省开启；主密钥不可用时备份暂停并告警，不产出明文）
+            {t("settings.encrypted_backup_xchacha20_poly1305_on")}
           </label>
           <p className="settings-note">
-            自动产物按保留份数滚动；手动产物不自动删除（ADR-020）。失败不产生半成品，
-            冷却后自动重试并记录审计。加密关闭后产物为 P0 明文 `.db` 形态。
+            {t("settings.automatic_artifacts_roll_by_retention")}
           </p>
         </section>
 
         <section className="settings-section" data-testid="settings-retention">
-          <h3>事件保留与归档（D13 / ADR-021）</h3>
+          <h3>{t("app.common.event_retention_and_archiving_d13")}</h3>
           <label className="settings-toggle">
             <input
               type="checkbox"
@@ -533,11 +626,10 @@ export function SettingsPage({
               disabled={busy || !retentionLoaded}
               onChange={(event) => setRetentionEnabled(event.target.checked)}
             />
-            启用事件保留（缺省关闭；仅超窗 message.delta/usage/log 先归档后清理，
-            控制事件与审计不清理）
+            {t("settings.enable_event_retention_off_by")}
           </label>
           <label className="settings-auto-row">
-            保留窗口（7–365 天）
+            {t("settings.retention_window_7_365_days")}
             <input
               type="number"
               min={7}
@@ -555,29 +647,26 @@ export function SettingsPage({
               disabled={busy || !retentionLoaded}
               onClick={() => void saveRetention()}
             >
-              保存保留设置
+              {t("settings.save_retention_settings")}
             </button>
           </div>
           <p className="settings-note">
-            容量 ≥2GB 时提示开启；事件增长 &gt;500MB/月或库 ≥5GB 时自动开启
-            （审计 `retention.auto_armed`）。清理前先归档（归档失败跳过该批），
-            归档产物不自动删除；「一键归档」入口在备份与恢复页。
+            {t("settings.prompted_at_capacity_2gb_auto")}
           </p>
         </section>
 
         <section className="settings-section">
-          <h3>工作区（缺省绑定）</h3>
+          <h3>{t("settings.workspace_default_binding")}</h3>
           <p className="settings-note" data-testid="settings-workspace-entry">
-            此入口仅设置缺省工作区（`workspace_set`）：新会话按此目录注入记忆并确定权限基准。
-            既有会话改派与工作区管理在左栏「工作区」树（M7-08）；此处不提供第二个全局绑定入口。
+            {t("settings.this_entry_only_sets_the")}
           </p>
           <label className="settings-workspace-row">
-            工作区根目录
+            {t("settings.workspace_root")}
             <input
               type="text"
               data-testid="workspace-root"
               value={workspaceRoot}
-              placeholder="选择或输入本地目录（如 C:\\Projects\\demo）"
+              placeholder={t("settings.select_or_enter_a_local")}
               disabled={workspaceBusy}
               onChange={(event) => setWorkspaceRoot(event.target.value)}
             />
@@ -589,7 +678,7 @@ export function SettingsPage({
               disabled={workspaceBusy}
               onClick={() => void pickWorkspace()}
             >
-              选择目录
+              {t("settings.choose_directory")}
             </button>
             <button
               type="button"
@@ -597,7 +686,7 @@ export function SettingsPage({
               disabled={workspaceBusy || workspaceRoot.trim().length === 0}
               onClick={() => void applyWorkspace()}
             >
-              绑定工作区
+              {t("settings.bind_workspace")}
             </button>
           </div>
           {workspaceResult ? (
@@ -611,17 +700,16 @@ export function SettingsPage({
             </p>
           ) : null}
           <p data-testid="settings-workspace" className="settings-note">
-            绑定后新会话注入工作区记忆（`AGENTS.md` &gt; `AETHER.md` &gt; `CLAUDE.md`，
-            32KB 上限）并以其为权限基准目录；已有会话不迁移，保持创建时权限基准（R15，D14/ADR-026）。
+            {t("settings.after_binding_new_sessions_inject")}
           </p>
         </section>
 
         <section className="settings-section">
-          <h3>入口</h3>
+          <h3>{t("settings.entry")}</h3>
           <div className="settings-actions">
             {onOpenBackup ? (
               <button type="button" data-testid="settings-open-backup" onClick={onOpenBackup}>
-                备份与恢复
+                {t("app.common.backup_and_restore")}
               </button>
             ) : null}
             {onOpenDiagnostics ? (
@@ -630,12 +718,12 @@ export function SettingsPage({
                 data-testid="settings-open-diagnostics"
                 onClick={onOpenDiagnostics}
               >
-                诊断导出
+                {t("app.common.diagnostics_export")}
               </button>
             ) : null}
             {onOpenAbout ? (
               <button type="button" data-testid="settings-open-about" onClick={onOpenAbout}>
-                关于
+                {t("app.common.about")}
               </button>
             ) : null}
           </div>
@@ -658,7 +746,7 @@ export function SettingsPage({
 
         <div className="settings-foot">
           <span>Aether v{APP_VERSION} · Apache-2.0</span>
-          <span>P0 三运行时：Claude Code / Codex / DeepSeek Harness</span>
+          <span>{t("app.common.p0_runtimes_claude_code_codex")}</span>
         </div>
       </section>
     </div>

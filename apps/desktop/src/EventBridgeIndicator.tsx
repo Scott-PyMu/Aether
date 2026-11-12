@@ -7,11 +7,12 @@
 import { appEventStore } from "./aetherStore";
 import { useAetherEventBridge } from "./eventBridge";
 import type { EventStore } from "./eventStore";
+import { t, tKeyOrRaw } from "./i18n";
 
 const STATUS_TEXT: Record<string, string> = {
-  connecting: "连接中…",
-  listening: "已连接（aether://event）",
-  unavailable: "不可用",
+  connecting: "app.event.connecting",
+  listening: "app.event.connected_aether_event",
+  unavailable: "app.event.unavailable",
 };
 
 export function EventBridgeIndicator({
@@ -22,7 +23,7 @@ export function EventBridgeIndicator({
   const status = useAetherEventBridge(store);
   return (
     <p className="event-bridge" data-testid="event-bridge-status">
-      事件通道：{STATUS_TEXT[status] ?? status}
+      {t("app.event.event_channel")}{tKeyOrRaw(STATUS_TEXT[status] ?? status)}
     </p>
   );
 }

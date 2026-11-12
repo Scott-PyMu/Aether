@@ -46,6 +46,7 @@ import {
   type SettingsIpc,
 } from "./settings";
 import { describeIpcError, ipcErrorCode } from "./startup";
+import { formatDateTime, t } from "./i18n";
 
 export interface BackupPageProps {
   /** IPC 契约（缺省 = 生产 Tauri 实现；测试注入替身）。 */
@@ -69,22 +70,22 @@ function formatTimestamp(ms: number | null): string {
   if (ms === null || !Number.isFinite(ms)) {
     return "—";
   }
-  return new Date(ms).toLocaleString();
+  return formatDateTime(ms);
 }
 
 /** 台账 kind 展示（ADR-020：manual=手动 / auto=自动）。 */
 function kindLabel(kind: string): string {
-  return kind === "auto" ? "自动" : "手动";
+  return kind === "auto" ? t("backup.auto") : t("backup.manual");
 }
 
 const IMPORT_STATUS_LABEL: Record<ImportStatus, string> = {
-  staging: "已受理（准备校验）",
-  validating: "校验中",
-  applying: "应用 staging",
-  awaiting_restart: "待重启完成（维护窗口：只读）",
-  completed: "已完成",
-  failed: "失败",
-  cancelled: "已取消",
+  staging: "backup.accepted_preparing_validation",
+  validating: "backup.validating",
+  applying: "backup.applying_staging",
+  awaiting_restart: "backup.awaiting_restart_maintenance_window_read",
+  completed: "app.common.completed",
+  failed: "app.common.failed",
+  cancelled: "app.common.cancelled",
 };
 
 export function BackupPage({
@@ -166,8 +167,8 @@ export function BackupPage({
       try {
         const created = await ipc.create(label.trim() ? label.trim() : null, targetDir);
         setNotice(
-          `备份完成：${created.backup.path}` +
-            (created.pruned.length > 0 ? `（清理旧备份 ${created.pruned.length} 份）` : ""),
+          t("backup.backup_complete", { p0: created.backup.path }) +
+            (created.pruned.length > 0 ? t("backup.pruned_old_backups", { p0: created.pruned.length }) : ""),
         );
         await refresh();
       } catch (failure) {
@@ -186,7 +187,7 @@ export function BackupPage({
     try {
       const picked = await ipc.pickTargetDir();
       if (picked === null) {
-        setNotice("已取消外部目录选择");
+        setNotice(t("backup.external_directory_selection_cancelled"));
         return;
       }
       await create(picked);
@@ -210,7 +211,7 @@ export function BackupPage({
             : await archive.exportAll(targetDir);
         setArchiveResult({
           result: "ok",
-          message: `归档完成：${response.export.path}（${response.export.rows} 行，${formatBytes(response.export.bytes)}）`,
+          message: t("backup.archive_complete_rows", { p0: response.export.path, p1: response.export.rows, p2: formatBytes(response.export.bytes) }),
         });
       } catch (failure) {
         setArchiveResult({ result: "failed", message: describeIpcError(failure) });
@@ -227,7 +228,7 @@ export function BackupPage({
     try {
       const picked = await archive.pickTargetDir();
       if (picked === null) {
-        setArchiveResult({ result: "failed", message: "已取消外部目录选择" });
+        setArchiveResult({ result: "failed", message: t("backup.external_directory_selection_cancelled") });
         return;
       }
       await archiveAll(picked);
@@ -347,8 +348,8 @@ export function BackupPage({
         result: "requested",
         source: response.source,
         message: response.restart_required
-          ? "恢复请求已登记：应用即将重启，重启后由启动序列完成恢复（修复外部条件后仍失败会保留旧数据）"
-          : "恢复请求已登记",
+          ? t("backup.restore_request_recorded_the_app")
+          : t("backup.restore_request_recorded"),
       });
       setPending(null);
       await refresh();
@@ -368,12 +369,12 @@ export function BackupPage({
   const capacityLevel = capacity?.level ?? "ok";
   const capacityText = useMemo(() => {
     if (capacity === null) {
-      return "容量查询中…";
+      return t("app.common.checking_capacity");
     }
     return (
-      `数据库 ${formatBytes(capacity.total_bytes)}` +
-      `（db ${formatBytes(capacity.db_bytes)} + wal ${formatBytes(capacity.wal_bytes)}）` +
-      `；警告阈值 ${formatBytes(capacity.warn_bytes)} / 强提示 ${formatBytes(capacity.critical_bytes)}`
+      t("backup.database", { p0: formatBytes(capacity.total_bytes) }) +
+      t("backup.db_wal", { p0: formatBytes(capacity.db_bytes), p1: formatBytes(capacity.wal_bytes) }) +
+      t("backup.warning_threshold_critical", { p0: formatBytes(capacity.warn_bytes), p1: formatBytes(capacity.critical_bytes) })
     );
   }, [capacity]);
 
@@ -381,9 +382,9 @@ export function BackupPage({
     <div className="overlay" data-testid="overlay-backup">
       <section className="backup-page" data-testid="backup-page" role="dialog" aria-modal="true">
         <header className="backup-header">
-          <h2>备份与恢复</h2>
+          <h2>{t("app.common.backup_and_restore")}</h2>
           <button type="button" data-testid="overlay-back" onClick={onBack}>
-            返回工作台
+            {t("app.action.back_to_workbench")}
           </button>
         </header>
 
@@ -395,9 +396,9 @@ export function BackupPage({
           role={capacityLevel === "ok" ? undefined : "alert"}
         >
           {capacityLevel === "critical"
-            ? `容量紧张（≥5GB）：${capacityText}`
+            ? t("backup.capacity_critical_5gb", { p0: capacityText })
             : capacityLevel === "warn"
-              ? `容量警告（≥2GB）：${capacityText}`
+              ? t("backup.capacity_warning_2gb", { p0: capacityText })
               : capacityText}
         </p>
 
@@ -410,12 +411,12 @@ export function BackupPage({
           >
             <span>
               {reminder.reason === "never"
-                ? "尚未创建过备份（D13：建议定期手动备份）。"
-                : "距上次备份已超过 7 天（D13：建议尽快备份）。"}
+                ? t("backup.no_backup_has_been_created")
+                : t("backup.more_than_7_days_since")}
             </span>
             <span className="backup-reminder-actions">
               <button type="button" disabled={busy} onClick={() => void create(null)}>
-                立即备份
+                {t("backup.back_up_now")}
               </button>
               <button
                 type="button"
@@ -423,7 +424,7 @@ export function BackupPage({
                 disabled={busy}
                 onClick={() => void dismissReminder()}
               >
-                关闭提醒
+                {t("backup.dismiss_reminder")}
               </button>
             </span>
           </div>
@@ -439,14 +440,14 @@ export function BackupPage({
               data-result={archiveResult?.result ?? ""}
               data-level={capacityLevel}
               disabled={archiveBusy}
-              title="归档全部数据为 JSONL（含 manifest；缺省写入数据目录 archives/）"
+              title={t("backup.archive_all_data_as_jsonl")}
               onClick={() => void archiveAll(null)}
             >
               {capacityLevel === "critical"
-                ? "一键归档（容量紧张，强烈建议）"
+                ? t("backup.one_click_archive_capacity_critical")
                 : capacityLevel === "warn"
-                  ? "一键归档（容量警告）"
-                  : "一键归档"}
+                  ? t("backup.one_click_archive_capacity_warning")
+                  : t("backup.one_click_archive")}
             </button>
             <button
               type="button"
@@ -454,7 +455,7 @@ export function BackupPage({
               disabled={archiveBusy}
               onClick={() => void archiveExternal()}
             >
-              归档到外部目录…
+              {t("backup.archive_to_external_directory")}
             </button>
           </div>
           {archiveResult ? (
@@ -473,17 +474,16 @@ export function BackupPage({
 
         {/* M10-04/ADR-034：JSONL 导入入口/进度/警告/取消/失败恢复（S-06 复用）。 */}
         <section className="import-section" data-testid="import-section">
-          <h3>导入（ADR-034）</h3>
+          <h3>{t("backup.import_adr_034")}</h3>
           <p className="import-hint">
-            选择导出的 JSONL（session-export / archive-export / auto-retention）；
-            真实导入在「待重启」后由应用重启完成原子切换；失败/取消不改变既有数据。
+            {t("backup.select_an_exported_jsonl_session")}
           </p>
           <div className="import-actions">
             <input
               type="text"
               data-testid="import-file"
               value={importSource}
-              placeholder="绝对路径（例如 E:\\exports\\session-….jsonl）"
+              placeholder={t("backup.absolute_path_e_g_e")}
               onChange={(event) => setImportSource(event.target.value)}
             />
             <button
@@ -492,7 +492,7 @@ export function BackupPage({
               disabled={importBusy}
               onClick={() => void pickImportSource()}
             >
-              选择文件…
+              {t("backup.choose_file")}
             </button>
             <button
               type="button"
@@ -501,7 +501,7 @@ export function BackupPage({
               disabled={importBusy || importSource.trim().length === 0}
               onClick={() => void startImport("session", false)}
             >
-              导入会话
+              {t("backup.import_session")}
             </button>
             <button
               type="button"
@@ -509,7 +509,7 @@ export function BackupPage({
               disabled={importBusy || importSource.trim().length === 0}
               onClick={() => void startImport("archive", false)}
             >
-              导入归档
+              {t("backup.import_archive")}
             </button>
             <button
               type="button"
@@ -517,7 +517,7 @@ export function BackupPage({
               disabled={importBusy || importSource.trim().length === 0}
               onClick={() => void startImport("session", true)}
             >
-              仅预览
+              {t("backup.preview_only")}
             </button>
           </div>
           {importJob ? (
@@ -530,8 +530,8 @@ export function BackupPage({
               role={importJob.status === "failed" ? "alert" : "status"}
             >
               <p>
-                状态：{IMPORT_STATUS_LABEL[importJob.status]}（{importJob.mode}；
-                {importJob.dry_run ? "dry-run" : "真实导入"}）；进度 {importJob.progress.rows} 行 /{" "}
+                {t("backup.status")}{IMPORT_STATUS_LABEL[importJob.status]}{t("app.punct.open_paren")}{importJob.mode}{t("app.punct.semicolon")}
+                {importJob.dry_run ? "dry-run" : t("backup.real_import")}{t("backup.progress")} {importJob.progress.rows} {t("backup.rows")}{" "}
                 {formatBytes(importJob.progress.bytes)}
                 {importJob.progress.total_bytes
                   ? ` / ${formatBytes(importJob.progress.total_bytes)}`
@@ -539,9 +539,9 @@ export function BackupPage({
               </p>
               {importJob.summary ? (
                 <p data-testid="import-summary">
-                  会话 {importJob.summary.sessions} / 消息 {importJob.summary.messages} / 事件{" "}
-                  {importJob.summary.events} / 运行 {importJob.summary.runs} / 审计{" "}
-                  {importJob.summary.audits} / 重复 {importJob.summary.duplicates} / 跳过{" "}
+                  {t("app.common.sessions")} {importJob.summary.sessions} {t("backup.messages")} {importJob.summary.messages} {t("backup.events")}{" "}
+                  {importJob.summary.events} {t("backup.runs")} {importJob.summary.runs} {t("backup.audit")}{" "}
+                  {importJob.summary.audits} {t("backup.duplicates")} {importJob.summary.duplicates} {t("backup.skipped")}{" "}
                   {importJob.summary.skipped}
                 </p>
               ) : null}
@@ -550,13 +550,13 @@ export function BackupPage({
                   {importJob.warnings.map((warning, index) => (
                     <li key={`${warning.code}-${index}`} data-code={warning.code}>
                       {warning.code}
-                      {warning.path ? `（${warning.path}）` : ""}：{warning.detail}
+                      {warning.path ? t("backup.text_3", { p0: warning.path }) : ""}{t("app.punct.colon")}{warning.detail}
                     </li>
                   ))}
                 </ul>
               ) : null}
               {importJob.warnings_truncated ? (
-                <p role="status">警告过多，仅显示前 100 条。</p>
+                <p role="status">{t("backup.too_many_warnings_only_the")}</p>
               ) : null}
               {importJob.error ? (
                 <p
@@ -565,7 +565,7 @@ export function BackupPage({
                   data-error-code={importJob.error.code}
                   role="alert"
                 >
-                  {importJob.error.code}：{importJob.error.message}
+                  {importJob.error.code}{t("app.punct.colon")}{importJob.error.message}
                 </p>
               ) : null}
               <div className="import-status-actions">
@@ -576,7 +576,7 @@ export function BackupPage({
                     disabled={importBusy}
                     onClick={() => void cancelImport()}
                   >
-                    取消导入
+                    {t("backup.cancel_import")}
                   </button>
                 ) : null}
                 {importJob.status === "awaiting_restart" ? (
@@ -586,7 +586,7 @@ export function BackupPage({
                     disabled={importBusy}
                     onClick={() => void restartForImport()}
                   >
-                    立即重启完成导入
+                    {t("backup.restart_now_to_complete_import")}
                   </button>
                 ) : null}
               </div>
@@ -612,29 +612,29 @@ export function BackupPage({
             data-level={retention.capacity.level}
             data-auto-armed={String(retention.auto_arm.armed)}
           >
-            <h3>事件保留与归档（D13 / ADR-021）</h3>
+            <h3>{t("app.common.event_retention_and_archiving_d13")}</h3>
             <p>
               {retention.enabled
-                ? `已启用：保留窗口 ${retention.days} 天（超窗 message.delta/usage/log 先归档后清理）`
-                : "未启用：事件全量保留；容量 ≥2GB 时建议在设置中开启"}
+                ? t("backup.enabled_retention_window_days_out", { p0: retention.days })
+                : t("backup.disabled_all_events_are_retained")}
             </p>
             <p>
-              最近清理：
+              {t("backup.last_cleanup")}
               {retention.last_run_at === null
-                ? "暂无"
-                : `${retention.last_cleaned_rows} 条 / 释放 ${formatBytes(retention.last_freed_bytes)}`}
-              ；归档失败累计 {retention.archive_failures_total} 次
+                ? t("backup.none")
+                : t("backup.rows_freed", { p0: retention.last_cleaned_rows, p1: formatBytes(retention.last_freed_bytes) })}
+              {t("backup.archive_failures")} {retention.archive_failures_total} {t("backup.times")}
               {retention.growth.bytes_per_month !== null
-                ? `；月增长约 ${formatBytes(Math.max(0, retention.growth.bytes_per_month))}`
+                ? t("backup.monthly_growth_approx", { p0: formatBytes(Math.max(0, retention.growth.bytes_per_month)) })
                 : ""}
             </p>
             {retention.auto_arm.armed ? (
               <p role="status">
-                已由阈值自动启用（
+                {t("backup.auto_enabled_by_threshold")}
                 {retention.auto_arm.reason === "size"
-                  ? "库 ≥5GB 强提示档"
-                  : "事件增长 >500MB/月"}
-                ）
+                  ? t("backup.database_5gb_critical_tier")
+                  : t("backup.event_growth_500mb_month")}
+                {t("app.punct.close_paren")}
               </p>
             ) : null}
           </section>
@@ -649,28 +649,27 @@ export function BackupPage({
             data-failures={auto.consecutive_failures}
             role={auto.consecutive_failures > 0 ? "alert" : undefined}
           >
-            <h3>自动备份（D13 / ADR-020）</h3>
+            <h3>{t("app.common.automatic_backup_d13_adr_020")}</h3>
             <p>
-              {auto.enabled ? "已启用" : "已停用"}；频率：
-              {auto.frequency === "weekly" ? "每周" : "每天"}；自动产物保留 {auto.retention} 份
-              （手动产物不自动删除）
+              {auto.enabled ? t("app.common.enabled") : t("app.common.disabled")}{t("backup.frequency")}
+              {auto.frequency === "weekly" ? t("backup.weekly") : t("backup.daily")}{t("backup.automatic_artifacts_retained_for")} {auto.retention} {t("backup.copies_manual_artifacts_are_not")}
             </p>
             <p>
-              最近运行：{formatTimestamp(auto.last_run_at)}（
+              {t("backup.last_run")}{formatTimestamp(auto.last_run_at)}{t("app.punct.open_paren")}
               {auto.last_result === "success"
-                ? "成功"
+                ? t("app.common.success")
                 : auto.last_result === "failed"
-                  ? `失败，连续 ${auto.consecutive_failures} 次`
-                  : "暂无"}
-              ）；下次排期：{formatTimestamp(auto.next_run_at)}
+                  ? t("backup.failed_consecutive_times", { p0: auto.consecutive_failures })
+                  : t("backup.none")}
+              {t("backup.next_scheduled")}{formatTimestamp(auto.next_run_at)}
             </p>
           </section>
         ) : null}
 
         <section className="backup-create">
-          <h3>手动备份</h3>
+          <h3>{t("backup.manual_backup")}</h3>
           <label>
-            标签（可选）
+            {t("backup.label_optional")}
             <input
               type="text"
               data-testid="backup-create-label"
@@ -686,7 +685,7 @@ export function BackupPage({
               disabled={busy}
               onClick={() => void create(null)}
             >
-              创建备份
+              {t("backup.create_backup")}
             </button>
             <button
               type="button"
@@ -694,7 +693,7 @@ export function BackupPage({
               disabled={busy}
               onClick={() => void createExternal()}
             >
-              备份到外部目录…
+              {t("backup.back_up_to_external_directory")}
             </button>
           </div>
           {notice ? (
@@ -706,11 +705,11 @@ export function BackupPage({
 
         <section className="backup-list-section">
           <h3>
-            备份清单（自动产物保留 {auto?.retention ?? 10} 份；手动产物不自动删除）
+            {t("backup.backup_list_automatic_artifacts_retained")} {auto?.retention ?? 10} {t("backup.copies_manual_artifacts_are_not_2")}
           </h3>
           {backups.length === 0 ? (
             <p className="backup-empty" data-testid="backup-empty">
-              暂无备份（自动备份默认开启，手动备份随时可创建）
+              {t("backup.no_backups_yet_automatic_backup")}
             </p>
           ) : (
             <ul className="backup-list" data-testid="backup-list">
@@ -727,7 +726,7 @@ export function BackupPage({
                   </span>
                   <span className="backup-meta">
                     {formatBytes(backup.size_bytes)} · {kindLabel(backup.kind)} ·{" "}
-                    {new Date(backup.created_at).toLocaleString()}
+                    {formatDateTime(backup.created_at)}
                   </span>
                   <span className="backup-item-actions">
                     <button
@@ -738,7 +737,7 @@ export function BackupPage({
                       disabled={busy}
                       onClick={() => requestRestore({ source: "internal", id: backup.id })}
                     >
-                      恢复
+                      {t("app.action.restore")}
                     </button>
                   </span>
                 </li>
@@ -748,12 +747,12 @@ export function BackupPage({
 
           <div className="backup-restore-external">
             <label>
-              外部备份文件（.db）
+              {t("backup.external_backup_file_db")}
               <input
                 type="text"
                 data-testid="backup-restore-external"
                 value={externalPath}
-                placeholder="绝对路径（例如 E:\\backup\\aether-….db）"
+                placeholder={t("backup.absolute_path_e_g_e_2")}
                 onChange={(event) => setExternalPath(event.target.value)}
               />
             </label>
@@ -765,7 +764,7 @@ export function BackupPage({
                 requestRestore({ source: "external", path: externalPath.trim() })
               }
             >
-              使用外部文件恢复
+              {t("backup.restore_from_external_file")}
             </button>
           </div>
         </section>
@@ -773,7 +772,7 @@ export function BackupPage({
         {pending ? (
           <section className="backup-restore-confirm-section">
             <p className="backup-restore-confirm-note">
-              恢复将用所选备份替换当前数据库并重启应用；已确认消息以备份时刻为准。
+              {t("backup.restore_will_replace_the_current")}
             </p>
             <button
               type="button"
@@ -782,10 +781,10 @@ export function BackupPage({
               disabled={busy}
               onClick={() => void confirmRestore()}
             >
-              确认恢复
+              {t("backup.confirm_restore")}
             </button>
             <button type="button" disabled={busy} onClick={() => setPending(null)}>
-              取消
+              {t("app.action.cancel")}
             </button>
           </section>
         ) : null}

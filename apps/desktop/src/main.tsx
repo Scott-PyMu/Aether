@@ -2,11 +2,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { t } from "./i18n";
 import "./styles.css";
 
 const container = document.getElementById("root");
 if (container === null) {
-  throw new Error("#root 容器缺失，无法挂载 Aether UI");
+  throw new Error(t("app.root_container_missing_cannot_mount"));
 }
 
 // 前端骨架（M3-01）：TanStack Query 客户端（会话/命令查询随 M3-02 接入）。

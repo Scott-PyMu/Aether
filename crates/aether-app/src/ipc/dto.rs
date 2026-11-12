@@ -52,7 +52,8 @@ pub enum SessionStatus {
 /// `backup.auto.enabled` / `backup.auto.frequency` / `backup.auto.retention` /
 /// `backup.encryption.enabled`（ADR-020 / M5-02、M5-03）、`events.retention.enabled` /
 /// `events.retention.days`（ADR-021 / M5-04）、`ui.layout`（M7-04 布局持久化落点）、
-/// `ui.provider_selection`（ADR-028 v0.9 全局供应商记忆：JSON 对象字符串 ≤64KiB）。
+/// `ui.provider_selection`（ADR-028 v0.9 全局供应商记忆：JSON 对象字符串 ≤64KiB）、
+/// `ui.locale` / `ui.theme`（M10-06 / ADR-036：语言与主题，枚举字符串，缺省 `system`）。
 /// 键名/类型/缺省值/语义/迁移影响见 ADR-018 附录 A-6。
 pub const SETTINGS_KEY_ALLOWLIST: &[&str] = &[
     "backup.reminder",
@@ -64,6 +65,8 @@ pub const SETTINGS_KEY_ALLOWLIST: &[&str] = &[
     "events.retention.days",
     "ui.layout",
     "ui.provider_selection",
+    "ui.locale",
+    "ui.theme",
 ];
 
 #[derive(Debug, Deserialize, specta::Type)]

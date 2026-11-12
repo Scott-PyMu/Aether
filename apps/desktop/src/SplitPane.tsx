@@ -18,6 +18,7 @@ import { projectSession } from "./sessionProjection";
 import { generateUlid } from "./ulid";
 import { useSessionEvents } from "./useSessionEvents";
 import { VirtualList } from "./VirtualList";
+import { t } from "./i18n";
 
 export interface SplitPaneProps {
   store: EventStore;
@@ -135,7 +136,7 @@ export function SplitPane({
       data-testid="split-pane"
       data-session-id={sessionId}
       data-status={session.status}
-      aria-label={`分屏窗格：${session.title}`}
+      aria-label={t("session.split.split_pane", { p0: session.title })}
     >
       <header className="split-pane-header">
         <span className="split-pane-title" data-testid="split-pane-title">
@@ -146,7 +147,7 @@ export function SplitPane({
           data-testid="split-pane-status"
           data-status={session.status}
         >
-          {SESSION_STATUS_LABELS[session.status]}
+          {t(SESSION_STATUS_LABELS[session.status])}
         </span>
       </header>
       <div className="message-stream split-message-stream" data-testid="split-message-stream">
@@ -167,7 +168,7 @@ export function SplitPane({
               data-session-id={sessionId}
               data-key={bubble.key}
             >
-              <span className="message-role">{bubble.role === "user" ? "你" : "助手"}</span>
+              <span className="message-role">{bubble.role === "user" ? t("app.common.you") : t("app.common.assistant")}</span>
               <div className="message-content">
                 {bubble.role === "user" ? (
                   <span className="message-plain">{bubble.text}</span>
@@ -177,7 +178,7 @@ export function SplitPane({
               </div>
               {bubble.streaming ? (
                 <span className="message-streaming" data-testid="split-streaming-indicator">
-                  生成中…
+                  {t("app.common.generating")}
                 </span>
               ) : null}
             </article>
@@ -185,14 +186,14 @@ export function SplitPane({
         />
         {projection.bubbles.length === 0 ? (
           <p className="stream-empty" data-testid="split-message-stream-empty">
-            暂无消息
+            {t("app.common.no_messages")}
           </p>
         ) : null}
       </div>
       <div className="composer split-composer" data-testid="split-composer">
         <textarea
           data-testid="split-composer-input"
-          placeholder="在分屏窗格输入消息（Ctrl+Enter 发送）"
+          placeholder={t("session.split.type_a_message_in_the")}
           value={draft}
           disabled={degraded || session.status === "paused"}
           onChange={(event) => setDraft(event.target.value)}
@@ -210,12 +211,12 @@ export function SplitPane({
             disabled={sendDisabled}
             onClick={() => void onSend()}
           >
-            发送
+            {t("app.action.send")}
           </button>
         </div>
         {session.status === "paused" ? (
           <p className="composer-degraded-hint" role="status">
-            会话已暂停：恢复后发送解除（`session_paused`）。
+            {t("session.split.the_session_is_paused_sending")}
           </p>
         ) : null}
       </div>

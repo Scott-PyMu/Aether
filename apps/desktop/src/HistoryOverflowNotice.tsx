@@ -6,6 +6,7 @@
  */
 import type { EventStore } from "./eventStore";
 import { useSessionEvents } from "./useSessionEvents";
+import { t } from "./i18n";
 
 export function HistoryOverflowNotice({
   store,
@@ -31,11 +32,11 @@ export function HistoryOverflowNotice({
       role="alert"
     >
       <p className="history-overflow-title">
-        历史消息过多，请关闭并重新打开会话。
+        {t("session.history.too_many_historical_messages_close")}
       </p>
       <p className="history-overflow-detail">
-        缺口超过 10k（D4 拒绝自动补发）。可重新加载最近 {reloadLimit}{" "}
-        条消息；无需重启核心或应用。
+        {t("session.history.gap_exceeds_10k_d4_refuses")} {reloadLimit}{" "}
+        {t("session.history.messages_no_core_or_app")}
       </p>
       <button
         type="button"
@@ -47,7 +48,7 @@ export function HistoryOverflowNotice({
           });
         }}
       >
-        重新加载最近 {reloadLimit} 条
+        {t("session.history.reload_the_latest")} {reloadLimit} {t("app.common.items")}
       </button>
       {error ? (
         <p className="history-overflow-error" data-testid="history-reload-error">

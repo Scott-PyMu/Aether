@@ -13,6 +13,7 @@
 import type { SessionSummary } from "./session";
 import { SESSION_STATUS_LABELS } from "./session";
 import { SESSION_GROUP_TITLES, sessionGroupOf } from "./sessionGroups";
+import { t } from "./i18n";
 
 export interface WorkbenchTabsProps {
   /** 打开的会话（按标签顺序；调用方已过滤不存在会话）。 */
@@ -66,17 +67,17 @@ export function WorkbenchTabs({
               <span className="session-tab-title" data-testid="session-tab-title">
                 {session.title}
               </span>
-              <span className="session-tab-status" title={SESSION_STATUS_LABELS[session.status]}>
-                {SESSION_STATUS_LABELS[session.status]}
+              <span className="session-tab-status" title={t(SESSION_STATUS_LABELS[session.status])}>
+                {t(SESSION_STATUS_LABELS[session.status])}
               </span>
               {group !== "other" ? (
                 <span
                   className="session-tab-badge"
                   data-testid="session-tab-badge"
                   data-group={group}
-                  title={`${SESSION_GROUP_TITLES[group]}（后台状态角标；与 M3-12 分组口径一致）`}
+                  title={t("session.tabs.background_status_badge_aligned_with", { p0: t(SESSION_GROUP_TITLES[group]) })}
                 >
-                  {SESSION_GROUP_TITLES[group]}
+                  {t(SESSION_GROUP_TITLES[group])}
                 </span>
               ) : null}
               <button
@@ -84,8 +85,8 @@ export function WorkbenchTabs({
                 className="session-tab-close"
                 data-testid="session-tab-close"
                 data-session-id={session.id}
-                aria-label={`关闭标签：${session.title}`}
-                title="关闭标签（不删除会话）"
+                aria-label={t("session.tabs.close_tab", { p0: session.title })}
+                title={t("session.tabs.close_tab_does_not_delete")}
                 onClick={(event) => {
                   event.stopPropagation();
                   onClose(session.id);
@@ -98,7 +99,7 @@ export function WorkbenchTabs({
         })}
         {sessions.length === 0 ? (
           <span className="workbench-tabs-empty" data-testid="workbench-tabs-empty">
-            未打开会话（从左侧会话列表选择以打开标签）
+            {t("session.tabs.no_open_session_choose_from")}
           </span>
         ) : null}
       </div>
@@ -113,14 +114,14 @@ export function WorkbenchTabs({
         disabled={!splitEnabled}
         title={
           splitSessionId !== null
-            ? "取消分屏（回到单窗格标签视图）"
+            ? t("session.tabs.cancel_split_return_to_single")
             : splitEnabled
-              ? "分屏：在右侧第二窗格显示另一个已打开的会话"
-              : "分屏需要至少两个已打开标签"
+              ? t("session.tabs.split_show_another_open_session")
+              : t("session.tabs.split_requires_at_least_two")
         }
         onClick={onToggleSplit}
       >
-        {splitSessionId !== null ? "取消分屏" : "分屏"}
+        {splitSessionId !== null ? t("session.tabs.cancel_split") : t("session.tabs.split")}
       </button>
     </div>
   );

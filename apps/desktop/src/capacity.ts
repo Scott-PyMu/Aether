@@ -4,27 +4,28 @@
  * 阈值与等级由核心投影（`backup_list.capacity`；参数化注入，前端只做文案）。
  */
 import { formatBytes, type BackupCapacity } from "./backup";
+import { t } from "./i18n";
 
 /** 容量等级中文文案（横幅标题）。 */
 export function capacityLevelLabel(level: BackupCapacity["level"]): string {
   switch (level) {
     case "critical":
-      return "容量紧张";
+      return t("capacity.capacity_critical");
     case "warn":
-      return "容量警告";
+      return t("capacity.capacity_warning");
     default:
-      return "容量正常";
+      return t("capacity.capacity_normal");
   }
 }
 
 /** 容量摘要文案（含阈值提示）。 */
 export function capacitySummary(capacity: BackupCapacity | null): string {
   if (capacity === null) {
-    return "容量查询中…";
+    return t("app.common.checking_capacity");
   }
   return (
-    `数据库 ${formatBytes(capacity.total_bytes)}` +
-    `（db ${formatBytes(capacity.db_bytes)} + wal ${formatBytes(capacity.wal_bytes)}）` +
-    `；警告阈值 ${formatBytes(capacity.warn_bytes)} / 强提示 ${formatBytes(capacity.critical_bytes)}`
+    t("backup.database", { p0: formatBytes(capacity.total_bytes) }) +
+    t("backup.db_wal", { p0: formatBytes(capacity.db_bytes), p1: formatBytes(capacity.wal_bytes) }) +
+    t("backup.warning_threshold_critical", { p0: formatBytes(capacity.warn_bytes), p1: formatBytes(capacity.critical_bytes) })
   );
 }

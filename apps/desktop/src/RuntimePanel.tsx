@@ -16,6 +16,7 @@ import { useCallback, useState } from "react";
 import { RUNTIME_OUTCOME_LABELS, type PermissionIpc } from "./permission";
 import { RUNTIME_REASON_LABELS, RUNTIME_STATUS_LABELS, type RuntimeInfo } from "./session";
 import { describeIpcError, ipcErrorCode } from "./startup";
+import { t, tKeyOrRaw } from "./i18n";
 
 export interface RuntimePanelProps {
   runtimes: RuntimeInfo[];
@@ -43,13 +44,13 @@ export function runtimeActions(runtime: RuntimeInfo): RuntimeActions {
       return {
         retry: false,
         enable: false,
-        remedy: "P0 仅支持官方适配器；不可直接启用（D5 §2.1）。",
+        remedy: t("runtime.p0_supports_official_adapters_only"),
       };
     case "version_mismatch":
       return {
         retry: false,
         enable: false,
-        remedy: "运行时版本不匹配：需升级适配器/应用后重启；不可直接启用（ADR-002/008）。",
+        remedy: t("runtime.runtime_version_mismatch_upgrade_the"),
       };
     default:
       // handshake_timeout / crash_loop / user_disabled / 无 reason：可重新启用（D5/ADR-015）。
@@ -58,8 +59,7 @@ export function runtimeActions(runtime: RuntimeInfo): RuntimeActions {
 }
 
 /** `user_disabled` 边界说明（ADR-015 附录 E-2：会话与数据保留，重新启用后可继续/重放）。 */
-export const RUNTIME_USER_DISABLED_HINT =
-  "已由用户禁用；会话与数据保留，重新启用后可继续或重放";
+export const RUNTIME_USER_DISABLED_HINT = "runtime.disabled_by_the_user_sessions";
 
 interface DisableConfirm {
   runtimeId: string;
@@ -93,12 +93,12 @@ export function RuntimePanel({ runtimes, ipc, onRefresh }: RuntimePanelProps) {
     status_reason?: string | null;
     detail?: string | null;
   }) => {
-    const outcome = RUNTIME_OUTCOME_LABELS[result.outcome] ?? result.outcome;
+    const outcome = tKeyOrRaw(RUNTIME_OUTCOME_LABELS[result.outcome] ?? result.outcome);
     const reason = result.status_reason
-      ? `（${RUNTIME_REASON_LABELS[result.status_reason] ?? result.status_reason}）`
+      ? t("runtime.text", { p0: tKeyOrRaw(RUNTIME_REASON_LABELS[result.status_reason] ?? result.status_reason) })
       : "";
     setNotice(
-      `${result.runtime_id}：${outcome}${reason}${result.detail ? ` - ${result.detail}` : ""}`,
+      t("runtime.text_2", { p0: result.runtime_id, p1: outcome, p2: reason, p3: result.detail ? ` - ${result.detail}` : "" }),
     );
   }, []);
 
@@ -182,10 +182,10 @@ export function RuntimePanel({ runtimes, ipc, onRefresh }: RuntimePanelProps) {
 
   return (
     <section className="runtime-panel" data-testid="runtime-panel">
-      <h2 className="workbench-title">运行时</h2>
+      <h2 className="workbench-title">{t("runtime.runtime")}</h2>
       {runtimes.length === 0 ? (
         <p className="runtime-panel-empty" data-testid="runtime-panel-empty">
-          无已注册运行时
+          {t("runtime.no_registered_runtimes")}
         </p>
       ) : null}
       <ul className="runtime-panel-list">
@@ -206,7 +206,7 @@ export function RuntimePanel({ runtimes, ipc, onRefresh }: RuntimePanelProps) {
               <div className="runtime-panel-head">
                 <span className="runtime-panel-name">{runtime.name}</span>
                 <span className="runtime-panel-status">
-                  {RUNTIME_STATUS_LABELS[runtime.status]}
+                  {t(RUNTIME_STATUS_LABELS[runtime.status])}
                 </span>
                 <button
                   type="button"
@@ -217,26 +217,26 @@ export function RuntimePanel({ runtimes, ipc, onRefresh }: RuntimePanelProps) {
                   data-status={runtime.status}
                   role="switch"
                   aria-checked={runtime.enabled}
-                  aria-label={`${runtime.name} 启用开关`}
+                  aria-label={t("runtime.enable_toggle", { p0: runtime.name })}
                   title={
                     runtime.status === "disabled" && runtime.enabled
-                      ? "运行时不处于可禁用状态；请使用下方恢复操作"
+                      ? t("runtime.the_runtime_is_not_in")
                       : undefined
                   }
                   disabled={toggleLocked}
                   onClick={() => onToggle(runtime)}
                 >
-                  {runtime.enabled ? "已启用" : "已停用"}
+                  {runtime.enabled ? t("app.common.enabled") : t("app.common.disabled")}
                 </button>
               </div>
               {reason ? (
                 <p className="runtime-panel-reason">
-                  {RUNTIME_REASON_LABELS[reason] ?? reason}
+                  {tKeyOrRaw(RUNTIME_REASON_LABELS[reason] ?? reason)}
                 </p>
               ) : null}
               {reason === "user_disabled" ? (
                 <p className="runtime-panel-boundary" data-testid="runtime-user-disabled-hint">
-                  {RUNTIME_USER_DISABLED_HINT}
+                  {t(RUNTIME_USER_DISABLED_HINT)}
                 </p>
               ) : null}
               {runtime.capabilities.length > 0 ? (
@@ -252,7 +252,7 @@ export function RuntimePanel({ runtimes, ipc, onRefresh }: RuntimePanelProps) {
                     disabled={busyId !== null}
                     onClick={() => void onControl(runtime.id, "retry")}
                   >
-                    重试
+                    {t("app.action.retry")}
                   </button>
                 ) : null}
                 {actions.enable ? (
@@ -262,7 +262,7 @@ export function RuntimePanel({ runtimes, ipc, onRefresh }: RuntimePanelProps) {
                     disabled={busyId !== null}
                     onClick={() => void onControl(runtime.id, "enable")}
                   >
-                    重新启用
+                    {t("runtime.re_enable")}
                   </button>
                 ) : null}
               </div>
@@ -281,10 +281,10 @@ export function RuntimePanel({ runtimes, ipc, onRefresh }: RuntimePanelProps) {
           data-testid="runtime-disable-confirm"
           data-count={confirm.count}
           role="alertdialog"
-          aria-label="禁用运行时确认"
+          aria-label={t("runtime.confirm_runtime_disable")}
         >
           <p className="runtime-disable-confirm-text">
-            {`运行时有 ${confirm.count} 个在途会话；禁用将终止在途任务（会话与数据保留）。确认继续？`}
+            {t("runtime.the_runtime_has_in_flight", { p0: confirm.count })}
           </p>
           <div className="runtime-disable-confirm-actions">
             <button
@@ -297,14 +297,14 @@ export function RuntimePanel({ runtimes, ipc, onRefresh }: RuntimePanelProps) {
                 }
               }}
             >
-              确认禁用
+              {t("runtime.confirm_disable")}
             </button>
             <button
               type="button"
               data-testid="runtime-disable-confirm-cancel"
               onClick={() => setConfirm(null)}
             >
-              取消
+              {t("app.action.cancel")}
             </button>
           </div>
         </div>

@@ -12,6 +12,7 @@ import { useEffect, useState } from "react";
 import type { BackupCapacity } from "./backup";
 import { capacityLevelLabel, capacitySummary } from "./capacity";
 import { diagnosticsIpc, type DiagnosticsIpc } from "./diagnostics";
+import { t } from "./i18n";
 
 export interface DiagnosticsEntryProps {
   ipc?: DiagnosticsIpc;
@@ -43,7 +44,7 @@ export function DiagnosticsEntry({ ipc = diagnosticsIpc, onOpen }: DiagnosticsEn
   const level = capacity?.level ?? "ok";
   return (
     <section className="diagnostics-entry" data-testid="right-panel-diagnostics">
-      <h3>诊断</h3>
+      <h3>{t("app.diagnostics.diagnostics")}</h3>
       <p
         className="diagnostics-entry-capacity"
         data-testid="diagnostics-entry-capacity"
@@ -52,11 +53,11 @@ export function DiagnosticsEntry({ ipc = diagnosticsIpc, onOpen }: DiagnosticsEn
         title={capacitySummary(capacity)}
       >
         {capacity === null
-          ? "容量：查询中…"
-          : `${capacityLevelLabel(level)}：${capacitySummary(capacity)}`}
+          ? t("app.diagnostics.capacity_checking")
+          : t("app.diagnostics.text_2", { p0: capacityLevelLabel(level), p1: capacitySummary(capacity) })}
       </p>
       <button type="button" data-testid="diagnostics-entry-open" onClick={onOpen}>
-        导出诊断
+        {t("app.action.export_diagnostics")}
       </button>
     </section>
   );

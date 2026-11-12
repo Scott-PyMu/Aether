@@ -8,6 +8,7 @@
  * - `attachment_add` 返回摘要不包含 `storage_path`（Q10 A）。
  */
 import { client } from "@aether/protocol";
+import { t } from "./i18n";
 
 /** 单文件硬上限（ADR-035 D-035-1：10 MiB）。 */
 export const ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
@@ -128,13 +129,13 @@ export function attachmentErrorMessage(
 ): string {
   switch (businessCode) {
     case "attachment_storage_failed":
-      return "附件文件已丢失或损坏，本次操作未执行。请恢复附件文件，或重新添加图片后发送新消息。";
+      return t("attachment.the_attachment_file_is_missing");
     case "attachment_type_unsupported":
-      return "当前模型或运行时不支持图片输入，本次操作未执行。请切换到支持视觉的模型，或移除附件后重试。";
+      return t("attachment.the_current_model_or_runtime");
     case "attachment_too_large":
-      return "附件超过大小或像素限制，本次操作未执行。请压缩/裁剪图片后重新添加。";
+      return t("attachment.the_attachment_exceeds_the_size");
     case "attachment_limit_exceeded":
-      return "单条消息最多 8 个附件，本次操作未执行。请删除部分附件后重试。";
+      return t("attachment.a_single_message_can_contain");
     default:
       return fallback;
   }
@@ -144,14 +145,14 @@ export function attachmentErrorMessage(
 export function attachmentFailureHint(errorCode: string | null | undefined): string {
   switch (errorCode) {
     case "attachment_too_large":
-      return "超过 10 MiB / 25MP 限制";
+      return t("attachment.exceeds_the_10_mib_25");
     case "attachment_type_unsupported":
-      return "仅支持 PNG/JPEG/WebP/GIF";
+      return t("attachment.only_png_jpeg_webp_gif");
     case "attachment_limit_exceeded":
-      return "单条消息最多 8 个";
+      return t("attachment.at_most_8_per_message");
     case "attachment_storage_failed":
-      return "存储失败，可重试";
+      return t("attachment.storage_failed_retry_is_available");
     default:
-      return "上传失败，可重试";
+      return t("attachment.upload_failed_retry_is_available");
   }
 }

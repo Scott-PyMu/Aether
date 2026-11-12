@@ -115,6 +115,7 @@ import { VirtualList } from "./VirtualList";
 import { WorkbenchTabs } from "./WorkbenchTabs";
 import { workspacesIpc as productionWorkspacesIpc, type WorkspacesIpc } from "./workspace";
 import { WorkspaceTree } from "./WorkspaceTree";
+import { formatTime, t } from "./i18n";
 
 /** 历史消息加载条数（`messages_page` 最近一页；与 EventStore 重载默认一致）。 */
 export const DEFAULT_HISTORY_LIMIT = 500;
@@ -135,17 +136,17 @@ const THINKING_DEPTH_TICKS = [
 
 /** 运行时选择器配色（与原型 agent picker 一致）。 */
 const RUNTIME_ACCENTS: Record<string, string> = {
-  claude: "#D97706",
-  codex: "#16A34A",
-  dsh: "#2F6FD0",
-  deepseek: "#4D6BFE",
+  claude: "var(--brand-claude)",
+  codex: "var(--brand-codex)",
+  dsh: "var(--brand-dsh)",
+  deepseek: "var(--brand-deepseek)",
 };
 
 function runtimeAccentOf(runtime: RuntimeInfo | null | undefined): string {
   if (!runtime) {
-    return "#666666";
+    return "var(--brand-fallback)";
   }
-  return RUNTIME_ACCENTS[runtime.kind] ?? RUNTIME_ACCENTS[runtime.id] ?? "#666666";
+  return RUNTIME_ACCENTS[runtime.kind] ?? RUNTIME_ACCENTS[runtime.id] ?? "var(--brand-fallback)";
 }
 
 function runtimeAbbrOf(runtime: RuntimeInfo | null | undefined): string {
@@ -757,7 +758,7 @@ export function SessionWorkbench({
     if (!renamingSessionId || renameBusy) return;
     const title = renameDraft.trim();
     if (!title) {
-      setManageError({ code: "invalid_value", message: "标题不能为空或纯空白" });
+      setManageError({ code: "invalid_value", message: t("session.title_cannot_be_empty_or") });
       return;
     }
     setRenameBusy(true);
@@ -1093,7 +1094,7 @@ export function SessionWorkbench({
   const onCreateSession = useCallback(async () => {
     if (!autoRoute && !selectedRuntime) {
       setErrorCode(null);
-      setError("请选择运行时或开启自动路由");
+      setError(t("session.select_a_runtime_or_enable"));
       return;
     }
     // M3-03 DoD3（D5）：`disabled` 运行时不可创建会话（选择器已禁用；此处兜底
@@ -1104,11 +1105,11 @@ export function SessionWorkbench({
       if (selected?.status === "disabled") {
         const reason = selected.status_reason ?? "disabled";
         setErrorCode("invalid_value");
-        setError(`运行时 ${selected.name} 已禁用（${reason}），不可创建会话；请先修复并重新启用`);
+        setError(t("session.runtime_is_disabled_sessions_cannot", { p0: selected.name, p1: reason }));
         return;
       }
     }
-    const title = titleDraft.trim() || `会话 ${new Date().toLocaleTimeString()}`;
+    const title = titleDraft.trim() || t("session.session", { p0: formatTime(new Date()) });
     const model = modelDraft.trim();
     // ADR-028 v0.9：三官方运行时（以及自动路由）新建会话 provider + model 必选；
     // 无有效选择时前端先拒绝（后端仍为权威校验方）。
@@ -1116,12 +1117,12 @@ export function SessionWorkbench({
     if (requiresProvider) {
       if (!selectedProviderId) {
         setErrorCode(null);
-        setError("请选择供应商");
+        setError(t("session.select_a_provider"));
         return;
       }
       if (!model) {
         setErrorCode(null);
-        setError("请选择模型");
+        setError(t("session.select_a_model"));
         return;
       }
       const provider = providerCatalog.find((entry) => entry.id === selectedProviderId);
@@ -1131,7 +1132,7 @@ export function SessionWorkbench({
         (!autoRoute && !providerSupportsRuntime(provider, selectedRuntime))
       ) {
         setErrorCode("invalid_value");
-        setError("供应商不可用（已停用/已删除/不支持当前运行时协议）；请重新选择");
+        setError(t("session.provider_unavailable_disabled_deleted_does"));
         return;
       }
     }
@@ -1226,7 +1227,7 @@ export function SessionWorkbench({
     }
     if (uploadingAttachments) {
       setErrorCode("attachment_limit_exceeded");
-      setError("附件仍在上传：请等待上传完成后再发送（不会静默丢弃）");
+      setError(t("session.attachments_are_still_uploading_wait"));
       return;
     }
     sendInFlight.current = true;
@@ -1238,7 +1239,7 @@ export function SessionWorkbench({
       sendInFlight.current = false;
       setSending(false);
       setErrorCode("invalid_value");
-      setError("供应商已停用/删除：当前会话只读（可中断在途任务），请重选供应商或新建会话");
+      setError(t("session.provider_disabled_deleted_the_current"));
       return;
     }
     const selection: { provider_id?: string; model?: string } = {};
@@ -1274,7 +1275,7 @@ export function SessionWorkbench({
       setThinkingWarning(thinkingWarningOf(ack.warnings));
       setMultimodalWarning(
         ack.warnings?.some((warning) => warning.code === MULTIMODAL_MODEL_UNVERIFIED)
-          ? "模型未声明 vision 能力：附件已按运行时能力发送（未经模型能力验证）"
+          ? t("session.the_model_does_not_declare")
           : null,
       );
       setDraft("");
@@ -1376,13 +1377,13 @@ export function SessionWorkbench({
       }
       if (!runtimeSupportsMultimodal(activeSessionRuntime?.capabilities)) {
         setErrorCode("attachment_type_unsupported");
-        setError("当前运行时未声明 multimodal：附件入口不可用（不会静默丢弃）");
+        setError(t("session.the_current_runtime_does_not_3"));
         return;
       }
       const key = `${trimmed}#${Date.now()}#${Math.random().toString(36).slice(2)}`;
       if (pendingAttachmentCount.current >= ATTACHMENT_MAX_PER_MESSAGE) {
         setErrorCode("attachment_limit_exceeded");
-        setError(`单条消息附件上限 ${ATTACHMENT_MAX_PER_MESSAGE} 个`);
+        setError(t("session.attachment_limit_per_message", { p0: ATTACHMENT_MAX_PER_MESSAGE }));
         return;
       }
       pendingAttachmentCount.current += 1;
@@ -1459,7 +1460,7 @@ export function SessionWorkbench({
     }
     if (!runtimeSupportsMultimodal(activeSessionRuntime?.capabilities)) {
       setErrorCode("attachment_type_unsupported");
-      setError("当前运行时未声明 multimodal：附件入口不可用（不会静默丢弃）");
+      setError(t("session.the_current_runtime_does_not_3"));
       return;
     }
     try {
@@ -1526,8 +1527,8 @@ export function SessionWorkbench({
               setErrorCode(rejection);
               setError(
                 rejection === "attachment_too_large"
-                  ? "附件超过 10 MiB 上限（ADR-035）"
-                  : "附件类型不受支持（仅 PNG/JPEG/WebP/GIF）",
+                  ? t("session.attachment_exceeds_the_10_mib")
+                  : t("session.attachment_type_unsupported_png_jpeg"),
               );
               continue;
             }
@@ -1622,7 +1623,7 @@ export function SessionWorkbench({
       const response = await archiveIpcProp.exportSession(activeSessionId);
       setExportResult({
         result: "ok",
-        message: `已导出：${response.export.path}（${response.export.rows} 行，sha256 ${response.export.sha256.slice(0, 12)}…）`,
+        message: t("session.exported_rows_sha256", { p0: response.export.path, p1: response.export.rows, p2: response.export.sha256.slice(0, 12) }),
       });
     } catch (failure) {
       setExportResult({ result: "failed", message: describeIpcError(failure) });
@@ -1643,7 +1644,7 @@ export function SessionWorkbench({
       ) {
         setErrorCode("invalid_value");
         setErrorBusinessCode(null);
-        setError("供应商失效或模型失效/缺失：请先补选后再重试");
+        setError(t("session.provider_invalid_or_model_invalid"));
         return;
       }
       setRetryingRunId(runId);
@@ -1684,8 +1685,8 @@ export function SessionWorkbench({
   const interruptible =
     projection.activeRunId !== null || activeSession?.status === "running";
   const runStatusText = projection.activeRunId
-    ? "run 运行中"
-    : (projection.runs.at(-1)?.status ?? "无进行中 run");
+    ? t("session.run_in_progress")
+    : (projection.runs.at(-1)?.status ?? t("session.no_run_in_progress"));
 
   return (
     <section
@@ -1705,7 +1706,7 @@ export function SessionWorkbench({
         <div className="side-inner">
           <div className="side-top">
             <div className="mode-row">
-              <div className="mode" role="tablist" aria-label="工作模式">
+              <div className="mode" role="tablist" aria-label={t("session.work_mode")}>
                 <button
                   type="button"
                   role="tab"
@@ -1714,7 +1715,7 @@ export function SessionWorkbench({
                   data-testid="mode-agent"
                   onClick={() => setMode("agent")}
                 >
-                  ◈ Agent
+                  {t("session.mode.agent")}
                 </button>
                 <button
                   type="button"
@@ -1724,14 +1725,14 @@ export function SessionWorkbench({
                   data-testid="mode-chat"
                   onClick={() => setMode("chat")}
                 >
-                  ▢ Chat
+                  {t("session.mode.chat")}
                 </button>
               </div>
               <button
                 type="button"
                 className="side-collapse"
-                title="折叠侧栏"
-                aria-label="折叠侧栏"
+                title={t("session.collapse_sidebar")}
+                aria-label={t("session.collapse_sidebar")}
                 data-testid="side-collapse"
                 onClick={() => setSideCollapsed(true)}
               >
@@ -1748,7 +1749,7 @@ export function SessionWorkbench({
               aria-expanded={createOpen}
               onClick={() => setCreateOpen((open) => !open)}
             >
-              ＋ 新建会话
+              {t("session.new_session")}
             </button>
           </div>
 
@@ -1765,7 +1766,7 @@ export function SessionWorkbench({
               void refreshSessionsRef.current();
             }}
           />
-          <h2 className="workbench-title">会话</h2>
+          <h2 className="workbench-title">{t("app.common.sessions")}</h2>
           {/* M7-07/ADR-025 §2.1-2：会话搜索（Ctrl+K；锚点 `session-search` /
               `session-search-result`）。空查询显示常规分组列表。 */}
           <div className="session-search">
@@ -1777,8 +1778,8 @@ export function SessionWorkbench({
               ref={searchInputRef}
               type="search"
               data-testid="session-search"
-              aria-label="搜索会话"
-              placeholder="搜索会话（Ctrl+K）"
+              aria-label={t("session.search_sessions")}
+              placeholder={t("session.search_sessions_ctrl_k")}
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
             />
@@ -1788,13 +1789,13 @@ export function SessionWorkbench({
                 data-testid="session-search-clear"
                 onClick={() => setSearchQuery("")}
               >
-                清除
+                {t("session.clear")}
               </button>
             ) : null}
           </div>
           {searchBusy ? (
             <div className="session-search-loading" data-testid="session-search-loading">
-              搜索中…
+              {t("session.searching")}
             </div>
           ) : null}
           {manageError ? (
@@ -1825,14 +1826,14 @@ export function SessionWorkbench({
                     <span className="session-item-title">{hit.title}</span>
                     <span className="session-search-snippet">{hit.snippet}</span>
                     <span className="session-search-source">
-                      {hit.source === "title" ? "标题命中" : "正文命中"}
+                      {hit.source === "title" ? t("session.title_match") : t("session.body_match")}
                     </span>
                   </button>
                 </li>
               ))}
               {searchHits.length === 0 ? (
                 <li className="session-empty" data-testid="session-search-empty">
-                  无匹配会话
+                  {t("session.no_matching_sessions")}
                 </li>
               ) : null}
             </ul>
@@ -1846,7 +1847,7 @@ export function SessionWorkbench({
                   data-group={group}
                 >
                   <span className="session-group-title" data-testid="session-group-title">
-                    {SESSION_GROUP_TITLES[group]}
+                    {t(SESSION_GROUP_TITLES[group])}
                   </span>
                   <ul className="session-group-items">
                     {groupedSessions.map((session) => (
@@ -1855,7 +1856,7 @@ export function SessionWorkbench({
                           <div className="session-rename-form" data-testid="session-rename-form">
                             <input
                               data-testid="session-rename-input"
-                              aria-label="会话新标题"
+                              aria-label={t("session.new_session_title")}
                               value={renameDraft}
                               autoFocus
                               onChange={(event) => setRenameDraft(event.target.value)}
@@ -1875,14 +1876,14 @@ export function SessionWorkbench({
                               disabled={renameBusy}
                               onClick={() => void submitRename()}
                             >
-                              保存
+                              {t("app.action.save")}
                             </button>
                             <button
                               type="button"
                               data-testid="session-rename-cancel"
                               onClick={() => setRenamingSessionId(null)}
                             >
-                              取消
+                              {t("app.action.cancel")}
                             </button>
                           </div>
                         ) : (
@@ -1899,7 +1900,7 @@ export function SessionWorkbench({
                           >
                             <span className="session-item-title">{session.title}</span>
                             <span className="session-item-status" data-testid="session-item-status">
-                              {SESSION_STATUS_LABELS[session.status]}
+                              {t(SESSION_STATUS_LABELS[session.status])}
                             </span>
                             {session.model ? (
                               <span className="session-item-model" data-testid="session-item-model">
@@ -1919,7 +1920,7 @@ export function SessionWorkbench({
                               setRenameDraft(session.title);
                             }}
                           >
-                            改名
+                            {t("app.action.rename")}
                           </button>
                           <button
                             type="button"
@@ -1929,7 +1930,7 @@ export function SessionWorkbench({
                             disabled={session.has_children === true}
                             title={
                               session.has_children
-                                ? "请先删除子会话"
+                                ? t("session.delete_child_sessions_first")
                                 : undefined
                             }
                             onClick={() => {
@@ -1937,7 +1938,7 @@ export function SessionWorkbench({
                               setDeletingSessionId(session.id);
                             }}
                           >
-                            删除
+                            {t("app.action.delete")}
                           </button>
                         </div>
                         {deletingSessionId === session.id ? (
@@ -1946,7 +1947,7 @@ export function SessionWorkbench({
                             data-testid="session-delete-confirm-box"
                           >
                             <span className="session-delete-warning">
-                              删除后不可恢复：消息/运行/引用/审批记录将级联删除。
+                              {t("session.deletion_cannot_be_undone_messages")}
                             </span>
                             <button
                               type="button"
@@ -1954,14 +1955,14 @@ export function SessionWorkbench({
                               disabled={deleteBusy}
                               onClick={() => void confirmDelete()}
                             >
-                              确认删除
+                              {t("app.action.confirm_delete")}
                             </button>
                             <button
                               type="button"
                               data-testid="session-delete-cancel"
                               onClick={() => setDeletingSessionId(null)}
                             >
-                              取消
+                              {t("app.action.cancel")}
                             </button>
                           </div>
                         ) : null}
@@ -1972,7 +1973,7 @@ export function SessionWorkbench({
               ))}
               {sessions.length === 0 ? (
                 <li className="session-empty" data-testid="session-list-empty">
-                  暂无会话
+                  {t("session.no_sessions")}
                 </li>
               ) : null}
             </ul>
@@ -1984,12 +1985,12 @@ export function SessionWorkbench({
             data-open={String(createOpen)}
           >
             <p className="session-create-runtime">
-              Agent：{autoRoute ? "自动路由" : selectedRuntimeInfo?.name ?? "未选择（在输入区 Agent 选择器切换）"}
+              {t("app.label.agent")}{autoRoute ? t("session.automatic_routing") : selectedRuntimeInfo?.name ?? t("session.not_selected_switch_in_the")}
             </p>
             <input
               type="text"
               data-testid="session-title-input"
-              placeholder="会话标题"
+              placeholder={t("session.session_title")}
               value={titleDraft}
               onChange={(event) => setTitleDraft(event.target.value)}
             />
@@ -2005,15 +2006,15 @@ export function SessionWorkbench({
                       (provider) => provider.id === selectedProviderId,
                     ),
                 )}
-                aria-label="供应商"
+                aria-label={t("session.provider")}
                 value={selectedProviderId ?? ""}
                 disabled={availableCreateProviders.length === 0}
                 onChange={(event) => onSelectCreateProvider(event.target.value)}
               >
                 <option value="">
                   {availableCreateProviders.length === 0
-                    ? "无可用供应商（请先在设置中配置并启用）"
-                    : "选择供应商"}
+                    ? t("session.no_available_providers_configure_and")
+                    : t("session.select_provider")}
                 </option>
                 {availableCreateProviders.map((provider) => (
                   <option key={provider.id} value={provider.id}>
@@ -2030,7 +2031,7 @@ export function SessionWorkbench({
                 data-field="provider"
                 role="status"
               >
-                请选择供应商
+                {t("session.select_a_provider")}
               </p>
             ) : createModelMissing ? (
               <p
@@ -2040,13 +2041,13 @@ export function SessionWorkbench({
                 data-field="model"
                 role="status"
               >
-                请选择模型
+                {t("session.select_a_model")}
               </p>
             ) : null}
             <input
               type="text"
               data-testid="session-model-input"
-              placeholder={createRequiresProvider ? "模型（必选）" : "会话级模型（可选，覆盖全局默认）"}
+              placeholder={createRequiresProvider ? t("session.model_required") : t("session.session_level_model_optional_overrides")}
               value={modelDraft}
               onChange={(event) => onModelDraftChange(event.target.value)}
             />
@@ -2054,16 +2055,16 @@ export function SessionWorkbench({
                 「预设块 → 工作区约定块」完成；失败不阻断会话创建以外的路径）。 */}
             <select
               data-testid="session-preset-select"
-              aria-label="Agent 预设"
+              aria-label={t("app.common.agent_presets")}
               value={activePresetId ?? ""}
               onChange={(event) =>
                 onActivePresetChange?.(event.target.value === "" ? null : event.target.value)
               }
             >
-              <option value="">不使用预设</option>
+              <option value="">{t("session.no_preset")}</option>
               {presets.map((preset) => (
                 <option key={preset.id} value={preset.id}>
-                  {preset.is_builtin ? `${preset.name}（内置）` : preset.name}
+                  {preset.is_builtin ? t("session.built_in", { p0: preset.name }) : preset.name}
                 </option>
               ))}
             </select>
@@ -2073,7 +2074,7 @@ export function SessionWorkbench({
               disabled={createProviderMissing || createModelMissing}
               onClick={onCreateSession}
             >
-              新建会话
+              {t("session.new_session_2")}
             </button>
           </div>
             </div>
@@ -2089,8 +2090,8 @@ export function SessionWorkbench({
               aria-expanded={userMenuOpen}
               onClick={() => setUserMenuOpen((open) => !open)}
             >
-              <span className="avatar">用</span>
-              <span className="nm">用户</span>
+              <span className="avatar">{t("session.use")}</span>
+              <span className="nm">{t("session.user")}</span>
               <span className="ge">⚙</span>
             </button>
             <div
@@ -2106,7 +2107,7 @@ export function SessionWorkbench({
                     onOpenSettings();
                   }}
                 >
-                  ⚙ &nbsp;设置
+                  {t("session.settings")}
                 </button>
               ) : null}
               {onOpenBackup ? (
@@ -2118,7 +2119,7 @@ export function SessionWorkbench({
                     onOpenBackup();
                   }}
                 >
-                  ⛁ &nbsp;备份与恢复
+                  {t("session.backup_restore")}
                 </button>
               ) : null}
               {onOpenDiagnostics ? (
@@ -2130,7 +2131,7 @@ export function SessionWorkbench({
                     onOpenDiagnostics();
                   }}
                 >
-                  ⤓ &nbsp;诊断
+                  {t("session.diagnostics")}
                 </button>
               ) : null}
               {onOpenAudit ? (
@@ -2142,7 +2143,7 @@ export function SessionWorkbench({
                     onOpenAudit();
                   }}
                 >
-                  ☷ &nbsp;审计
+                  {t("session.audit")}
                 </button>
               ) : null}
               {onOpenWorkflows ? (
@@ -2154,7 +2155,7 @@ export function SessionWorkbench({
                     onOpenWorkflows();
                   }}
                 >
-                  ⌘ &nbsp;工作流
+                  {t("session.workflows")}
                 </button>
               ) : null}
               {onOpenAbout ? (
@@ -2166,7 +2167,7 @@ export function SessionWorkbench({
                     onOpenAbout();
                   }}
                 >
-                  ◈ &nbsp;关于
+                  {t("session.about")}
                 </button>
               ) : null}
               {appVersion || protocolVersion || dataDir ? (
@@ -2174,16 +2175,16 @@ export function SessionWorkbench({
                   <hr />
                   <div className="user-meta">
                     {appVersion ? (
-                      <span data-testid="app-version">版本 {appVersion}</span>
+                      <span data-testid="app-version">{t("app.common.version")} {appVersion}</span>
                     ) : null}
                     {protocolVersion ? (
                       <span data-testid="protocol-version">
-                        线协议 v{protocolVersion.major}.{protocolVersion.minor}
+                        {t("app.common.wire_protocol_v")}{protocolVersion.major}.{protocolVersion.minor}
                       </span>
                     ) : null}
                     {dataDir ? (
                       <span data-testid="app-data-dir" title={dataDir}>
-                        数据目录：{dataDir}
+                        {t("app.common.data_directory")}{dataDir}
                       </span>
                     ) : null}
                   </div>
@@ -2198,8 +2199,8 @@ export function SessionWorkbench({
         <button
           type="button"
           className="side-reopen show"
-          title="展开侧栏"
-          aria-label="展开侧栏"
+          title={t("session.expand_sidebar")}
+          aria-label={t("session.expand_sidebar")}
           data-testid="side-reopen"
           onClick={() => setSideCollapsed(false)}
         >
@@ -2245,12 +2246,12 @@ export function SessionWorkbench({
         <div className="chat-ph" data-testid="chat-placeholder">
           <div className="chat-card">
             <div className="em">◫</div>
-            <h3>多 Agent 聊天室</h3>
-            <p>同时与多个 Agent 对话、@mention 路由、多运行时协作。</p>
+            <h3>{t("session.multi_agent_chat")}</h3>
+            <p>{t("session.talk_to_multiple_agents_route")}</p>
             <p>
-              当前阶段：<b className="chat-phase">P2 路线图</b> · 尚未开放
+              {t("session.current_stage")}<b className="chat-phase">{t("session.p2_roadmap")}</b> {t("session.not_yet_available")}
             </p>
-            <div className="tag">P0 占位 · 切换回 Agent 继续工作</div>
+            <div className="tag">{t("session.p0_placeholder_switch_back_to")}</div>
           </div>
         </div>
 
@@ -2262,7 +2263,7 @@ export function SessionWorkbench({
           >
           {!activeSession ? (
             <p className="workbench-hint" data-testid="no-session-hint">
-              请选择或新建会话
+              {t("session.select_or_create_a_session")}
             </p>
           ) : null}
 
@@ -2280,8 +2281,8 @@ export function SessionWorkbench({
                 }
                 data-model-state={activeModelState}
               >
-                供应商：{activeSession.provider_name ?? activeSession.provider_id ?? "未选择"} · 模型：
-                {activeSession.model ?? "未选择"}
+                {t("session.provider_2")}{activeSession.provider_name ?? activeSession.provider_id ?? t("session.not_selected")} {t("session.model")}
+                {activeSession.model ?? t("session.not_selected")}
               </span>
               {activeProviderState === "invalid" ? (
                 <p
@@ -2296,7 +2297,7 @@ export function SessionWorkbench({
                   }
                   role="alert"
                 >
-                  供应商已停用/删除：当前会话只读（可查看历史、可中断在途任务）；禁止发送/重试/恢复及补选。
+                  {t("session.provider_disabled_deleted_the_current_2")}
                 </p>
               ) : null}
               {activeProviderState !== "invalid" && !activeSession.provider_id ? (
@@ -2307,13 +2308,13 @@ export function SessionWorkbench({
                     data-provider-id={reselectProviderId ?? ""}
                     data-busy={selectionRunInFlight ? "run_in_flight" : undefined}
                     data-disabled={String(selectionRunInFlight)}
-                    aria-label="补选供应商"
+                    aria-label={t("session.reselect_provider")}
                     value={reselectProviderId ?? ""}
                     disabled={selectionRunInFlight || reselectOptions.length === 0}
                     onChange={(event) => onSelectReselectProvider(event.target.value)}
                   >
                     <option value="">
-                      {reselectOptions.length === 0 ? "无可用供应商" : "补选供应商"}
+                      {reselectOptions.length === 0 ? t("session.no_available_providers") : t("session.reselect_provider")}
                     </option>
                     {reselectOptions.map((provider) => (
                       <option key={provider.id} value={provider.id}>
@@ -2329,7 +2330,7 @@ export function SessionWorkbench({
                       data-field="provider"
                       role="status"
                     >
-                      请选择供应商
+                      {t("session.select_a_provider")}
                     </p>
                   ) : null}
                 </>
@@ -2342,13 +2343,13 @@ export function SessionWorkbench({
                     data-testid="session-model-reselect"
                     data-model-state={activeModelState}
                     data-busy={selectionRunInFlight ? "run_in_flight" : undefined}
-                    aria-label="补选模型"
+                    aria-label={t("session.reselect_model")}
                     value={reselectModelId ?? ""}
                     disabled={selectionRunInFlight || activeProviderModels.length === 0}
                     onChange={(event) => setReselectModelId(event.target.value || null)}
                   >
                     <option value="">
-                      {activeProviderModels.length === 0 ? "无可用模型" : "补选模型"}
+                      {activeProviderModels.length === 0 ? t("session.no_available_models") : t("session.reselect_model")}
                     </option>
                     {activeProviderModels.map((model) => (
                       <option key={model.id} value={model.model_id}>
@@ -2364,7 +2365,7 @@ export function SessionWorkbench({
                       data-field="model"
                       role="status"
                     >
-                      请选择模型
+                      {t("session.select_a_model")}
                     </p>
                   ) : null}
                 </>
@@ -2373,7 +2374,7 @@ export function SessionWorkbench({
               !activeSession.provider_id &&
               reselectProviderId ? (
                 <p className="provider-required-notice" data-state="invalid" data-field="provider">
-                  当前任务仍在运行，暂不能补选供应商/模型，请等当前任务结束后重试。
+                  {t("session.the_current_task_is_still")}
                 </p>
               ) : null}
             </div>
@@ -2428,7 +2429,7 @@ export function SessionWorkbench({
                     data-key={bubble.key}
                   >
                     <span className="message-role">
-                      {bubble.role === "user" ? "你" : "助手"}
+                      {bubble.role === "user" ? t("app.common.you") : t("app.common.assistant")}
                     </span>
                     <div className="message-content">
                       {bubble.role === "user" ? (
@@ -2458,11 +2459,11 @@ export function SessionWorkbench({
                       </div>
                     ) : null}
                     {bubble.role === "user" ? (
-                      <span className="message-meta">已发送</span>
+                      <span className="message-meta">{t("session.sent")}</span>
                     ) : null}
                     {bubble.streaming ? (
                       <span className="message-streaming" data-testid="streaming-indicator">
-                        生成中…
+                        {t("app.common.generating")}
                       </span>
                     ) : null}
                     {retryable && bubble.runId ? (
@@ -2479,12 +2480,10 @@ export function SessionWorkbench({
                           title={errorDetail.length > 0 ? errorDetail : undefined}
                         >
                           {runView?.status === "failed"
-                            ? `运行失败：${runView.errorCode ?? "run_failed"}${
-                                errorDetailShort ? ` · ${errorDetailShort}` : ""
-                              }`
+                            ? t("session.run_failed", { p0: runView.errorCode ?? "run_failed", p1: errorDetailShort ? ` · ${errorDetailShort}` : "" })
                             : interruptedByDegraded
-                              ? "已中断（存储降级）"
-                              : "已中断"}
+                              ? t("session.interrupted_storage_degraded")
+                              : t("session.interrupted")}
                         </span>
                         <button
                           type="button"
@@ -2501,7 +2500,7 @@ export function SessionWorkbench({
                           }
                           onClick={() => void onRetryRun(bubble.runId as string)}
                         >
-                          重试
+                          {t("app.action.retry")}
                         </button>
                       </div>
                     ) : null}
@@ -2522,7 +2521,7 @@ export function SessionWorkbench({
             />
             {projection.bubbles.length === 0 ? (
               <p className="stream-empty" data-testid="message-stream-empty">
-                暂无消息
+                {t("app.common.no_messages")}
               </p>
             ) : null}
           </div>
@@ -2536,8 +2535,8 @@ export function SessionWorkbench({
                   data-tool-name={tool.name}
                   data-tool-status={tool.status}
                 >
-                  {tool.name}：{tool.status}
-                  {tool.errorCode ? `（${tool.errorCode}）` : ""}
+                  {tool.name}{t("app.punct.colon")}{tool.status}
+                  {tool.errorCode ? t("session.text", { p0: tool.errorCode }) : ""}
                 </li>
               ))}
             </ul>
@@ -2551,8 +2550,8 @@ export function SessionWorkbench({
               role="status"
             >
               {backpressureScope === "run"
-                ? "存储写队列高水位（L2）：新任务暂被拒绝，队列回落至 ≤1024 后自动恢复。"
-                : `适配器 ${isolatedRuntime?.id ?? ""} 背压隔离中（storage_backpressure）：重启后自动解除。`}
+                ? t("session.storage_write_queue_high_water")
+                : t("session.adapter_is_isolated_by_backpressure", { p0: isolatedRuntime?.id ?? "" })}
             </p>
           ) : null}
 
@@ -2577,14 +2576,14 @@ export function SessionWorkbench({
               data-limit={queueNotice.limit}
               role="status"
             >
-              排队中：第 {queueNotice.position} 位（并发上限 {queueNotice.limit}）
+              {t("session.queued_position")} {queueNotice.position} {t("session.concurrency_limit")} {queueNotice.limit}{t("app.punct.close_paren")}
             </p>
           ) : null}
 
           {/* M7-03/ADR-017：paused 门禁提示（状态条提示 + 常驻语义声明；UI-UX §5/§2.4）。 */}
           {activeSession?.status === "paused" ? (
             <p className="session-paused-notice" data-testid="paused-notice" role="status">
-              {PAUSED_STATUS_HINT}；{PAUSE_SEMANTICS_NOTICE}
+              {t(PAUSED_STATUS_HINT)}{t("app.punct.semicolon")}{t(PAUSE_SEMANTICS_NOTICE)}
             </p>
           ) : null}
 
@@ -2605,6 +2604,7 @@ export function SessionWorkbench({
           <div
             className="composer input-box"
             data-testid="composer"
+            data-session-active={String(activeSessionId !== null)}
             ref={composerRef}
             onDragOver={onComposerDragOver}
             onDrop={onComposerDrop}
@@ -2623,8 +2623,8 @@ export function SessionWorkbench({
               {pendingAttachments.length === 0 ? (
                 <span className="composer-attachments-hint">
                   {runtimeSupportsMultimodal(activeSessionRuntime?.capabilities)
-                    ? "附件：拖入/粘贴图片，或点击图片按钮（PNG/JPEG/WebP/GIF，≤10 MiB）"
-                    : "当前运行时未声明 multimodal：附件入口不可用"}
+                    ? t("session.attachments_drag_paste_images_or")
+                    : t("session.the_current_runtime_does_not_4")}
                 </span>
               ) : (
                 <ul className="composer-attachment-list">
@@ -2683,7 +2683,7 @@ export function SessionWorkbench({
                           disabled={sending}
                           onClick={() => retryAttachment(item)}
                         >
-                          重试
+                          {t("app.action.retry")}
                         </button>
                       ) : null}
                       <button
@@ -2691,7 +2691,7 @@ export function SessionWorkbench({
                         data-action="remove"
                         disabled={sending}
                         onClick={() => removeAttachment(item)}
-                        aria-label={`移除附件 ${attachmentDisplayName(item.sourcePath)}`}
+                        aria-label={t("session.remove_attachment", { p0: attachmentDisplayName(item.sourcePath) })}
                       >
                         ×
                       </button>
@@ -2709,7 +2709,7 @@ export function SessionWorkbench({
             >
               {pendingReferences.length === 0 ? (
                 <span className="composer-references-hint">
-                  引用：拖入文件，或在空输入框按 @ 选择
+                  {t("session.references_drag_files_in_or")}
                 </span>
               ) : (
                 <ul className="composer-reference-list">
@@ -2730,7 +2730,7 @@ export function SessionWorkbench({
                         data-path={reference.path}
                         disabled={sending}
                         onClick={() => removeReference(reference.path)}
-                        aria-label={`移除引用 ${reference.path}`}
+                        aria-label={t("session.remove_reference", { p0: reference.path })}
                       >
                         ×
                       </button>
@@ -2741,7 +2741,7 @@ export function SessionWorkbench({
             </div>
             <textarea
               data-testid="composer-input"
-              placeholder="输入消息…（@ 引用文件；Ctrl+Enter 发送）"
+              placeholder={t("session.type_a_message_to_reference")}
               value={draft}
               // M7-03/ADR-017：paused 态发送被拒（session_paused，草稿保留；UI-UX §3.3）。
               disabled={!activeSessionId || degraded || activeSession?.status === "paused"}
@@ -2770,8 +2770,8 @@ export function SessionWorkbench({
                   data-testid="thinking-toggle"
                   data-value={thinkingDepth}
                   data-enabled={thinkingSupported}
-                  title={thinkingSupported ? "思考深度" : THINKING_DEPTH_UNSUPPORTED_HINT}
-                  aria-label="思考深度"
+                  title={thinkingSupported ? t("session.thinking_depth") : t(THINKING_DEPTH_UNSUPPORTED_HINT)}
+                  aria-label={t("session.thinking_depth")}
                   aria-expanded={thinkingOpen}
                   onClick={() => setThinkingOpen((open) => !open)}
                 >
@@ -2780,7 +2780,7 @@ export function SessionWorkbench({
                     <path d="M14.5 2A2.5 2.5 0 0012 4.5v15a2.5 2.5 0 004.96.44 2.5 2.5 0 002.96-3.08 3 3 0 00.34-5.58 2.5 2.5 0 00-1.32-4.24 2.5 2.5 0 00-1.98-3A2.5 2.5 0 0014.5 2z" />
                   </svg>
                   <span className="ic-label" data-testid="thinking-current">
-                    {THINKING_DEPTH_LABELS[thinkingDepth]}
+                    {t(THINKING_DEPTH_LABELS[thinkingDepth] ?? 'session.high')}
                   </span>
                 </button>
                 {!thinkingSupported ? (
@@ -2790,7 +2790,7 @@ export function SessionWorkbench({
                     data-enabled="false"
                     role="note"
                   >
-                    {THINKING_DEPTH_UNSUPPORTED_HINT}
+                    {t(THINKING_DEPTH_UNSUPPORTED_HINT)}
                   </p>
                 ) : null}
                 {thinkingOpen ? (
@@ -2800,9 +2800,9 @@ export function SessionWorkbench({
                     data-enabled={thinkingSupported}
                   >
                     <div className="thinking-head">
-                      <span>思考深度</span>
+                      <span>{t("session.thinking_depth")}</span>
                       <span className="thinking-value">
-                        {THINKING_DEPTH_LABELS[thinkingDepth]}
+                        {t(THINKING_DEPTH_LABELS[thinkingDepth] ?? 'session.high')}
                       </span>
                     </div>
                     <div className="thinking-range">
@@ -2813,7 +2813,7 @@ export function SessionWorkbench({
                         }}
                         aria-hidden="true"
                       >
-                        {THINKING_DEPTH_LABELS[thinkingDepth]}
+                        {t(THINKING_DEPTH_LABELS[thinkingDepth] ?? 'session.high')}
                       </div>
                       <input
                         type="range"
@@ -2825,8 +2825,8 @@ export function SessionWorkbench({
                         data-value={thinkingDepth}
                         data-enabled={thinkingSupported}
                         disabled={!thinkingSupported}
-                        aria-label="思考深度"
-                        aria-valuetext={THINKING_DEPTH_LABELS[thinkingDepth]}
+                        aria-label={t("session.thinking_depth")}
+                        aria-valuetext={t(THINKING_DEPTH_LABELS[thinkingDepth] ?? 'session.high')}
                         style={{
                           background: `linear-gradient(to right, var(--ac) ${thinkingPercent}%, var(--bd2) ${thinkingPercent}%)`,
                         }}
@@ -2843,7 +2843,7 @@ export function SessionWorkbench({
                           disabled={!thinkingSupported}
                           onClick={() => setThinkingDepth(value)}
                         >
-                          {THINKING_DEPTH_LABELS[value]}
+                          {t(THINKING_DEPTH_LABELS[value] ?? 'session.high')}
                         </button>
                       ))}
                     </div>
@@ -2865,10 +2865,10 @@ export function SessionWorkbench({
                 data-testid="composer-attach"
                 title={
                   runtimeSupportsMultimodal(activeSessionRuntime?.capabilities)
-                    ? "添加图片附件（PNG/JPEG/WebP/GIF，≤10 MiB）"
-                    : "当前运行时未声明 multimodal：附件入口不可用"
+                    ? t("session.add_image_attachment_png_jpeg")
+                    : t("session.the_current_runtime_does_not_4")
                 }
-                aria-label="添加图片附件"
+                aria-label={t("session.add_image_attachment")}
                 disabled={
                   !activeSessionId ||
                   degraded ||
@@ -2888,7 +2888,7 @@ export function SessionWorkbench({
                   className="picker-btn"
                   data-testid="agent-picker-toggle"
                   aria-expanded={agentPickerOpen}
-                  title="选择 Agent 运行时"
+                  title={t("session.select_agent_runtime")}
                   onClick={() => setAgentPickerOpen((open) => !open)}
                 >
                   <span
@@ -2898,7 +2898,7 @@ export function SessionWorkbench({
                     {autoRoute ? "A" : runtimeAbbrOf(selectedRuntimeInfo)}
                   </span>
                   <span className="agent-picker-label">
-                    {autoRoute ? "自动路由" : selectedRuntimeInfo?.name ?? "选择 Agent"}
+                    {autoRoute ? t("session.automatic_routing") : selectedRuntimeInfo?.name ?? t("session.select_agent")}
                   </span>
                   <span className="ar">▾</span>
                 </button>
@@ -2906,7 +2906,7 @@ export function SessionWorkbench({
                   className={agentPickerOpen ? "dropdown agent-dd show" : "dropdown agent-dd"}
                   data-testid="agent-picker-menu"
                 >
-                  <div className="agent-dd-head">Agent 运行时</div>
+                  <div className="agent-dd-head">{t("session.agent_runtime")}</div>
                   <button
                     type="button"
                     role="switch"
@@ -2916,7 +2916,7 @@ export function SessionWorkbench({
                     data-auto={String(autoRoute)}
                     onClick={() => setAutoRoute((value) => !value)}
                   >
-                    <span>自动路由（按固定优先级）</span>
+                    <span>{t("session.automatic_routing_fixed_priority")}</span>
                     {autoRoute ? <span className="agent-check">✓</span> : null}
                   </button>
                   <div
@@ -2954,7 +2954,7 @@ export function SessionWorkbench({
                         </span>
                         <span className="runtime-name">{runtime.name}</span>
                         <span className="runtime-status">
-                          {RUNTIME_STATUS_LABELS[runtime.status]}
+                          {t(RUNTIME_STATUS_LABELS[runtime.status])}
                         </span>
                         {runtime.status_reason ? (
                           <span className="runtime-reason" data-testid="runtime-reason">
@@ -2982,13 +2982,13 @@ export function SessionWorkbench({
                     ))}
                     {runtimes.length === 0 ? (
                       <p className="runtime-empty" data-testid="runtime-list-empty">
-                        无可用运行时（适配器注册随打包里程碑落地）
+                        {t("session.no_available_runtimes_adapter_registration")}
                       </p>
                     ) : null}
                   </div>
                   <hr />
                   <details className="agent-runtime-details">
-                    <summary>运行时状态</summary>
+                    <summary>{t("session.runtime_status")}</summary>
                     <RuntimePanel
                       runtimes={runtimes}
                       ipc={permissionIpc}
@@ -3011,8 +3011,8 @@ export function SessionWorkbench({
                 type="button"
                 className="send"
                 data-testid="composer-send"
-                aria-label="发送"
-                title="发送"
+                aria-label={t("app.action.send")}
+                title={t("app.action.send")}
                 disabled={
                   !activeSessionId ||
                   degraded ||
@@ -3066,7 +3066,7 @@ export function SessionWorkbench({
                 data-testid="composer-degraded-hint"
                 role="alert"
               >
-                存储降级（只读）：发送已禁用；修复磁盘/目录/权限后重启应用。
+                {t("session.storage_degraded_read_only_sending")}
               </p>
             ) : null}
           </div>
@@ -3110,7 +3110,7 @@ export function SessionWorkbench({
       >
         <div className="right-inner">
           <div className="r-head">
-            <div className="r-tabs" role="tablist" aria-label="右栏分区">
+            <div className="r-tabs" role="tablist" aria-label={t("session.right_pane_sections")}>
               <button
                 type="button"
                 role="tab"
@@ -3122,7 +3122,7 @@ export function SessionWorkbench({
                 <svg viewBox="0 0 24 24">
                   <path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
                 </svg>
-                文件
+                {t("session.files")}
               </button>
               <button
                 type="button"
@@ -3136,7 +3136,7 @@ export function SessionWorkbench({
                   <path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8z" />
                   <path d="M14 3v5h5" />
                 </svg>
-                改动
+                {t("session.changes")}
               </button>
             </div>
           </div>
@@ -3152,7 +3152,7 @@ export function SessionWorkbench({
 
           <div className="r-pane" hidden={rightTab !== "changes"}>
             <div className="r-body">
-              <p className="r-empty">改动视图（P1）</p>
+              <p className="r-empty">{t("session.changes_view_p1")}</p>
             </div>
           </div>
         </div>
@@ -3164,8 +3164,8 @@ export function SessionWorkbench({
         className="panel-toggle"
         data-testid="right-panel-toggle"
         aria-expanded={rightOpen}
-        aria-label={rightOpen ? "折叠右侧面板" : "展开右侧面板"}
-        title={rightOpen ? "折叠右侧面板" : "展开右侧面板"}
+        aria-label={rightOpen ? t("session.collapse_right_panel") : t("session.expand_right_panel")}
+        title={rightOpen ? t("session.collapse_right_panel") : t("session.expand_right_panel")}
         onClick={() => setRightOpen((open) => !open)}
       >
         <svg viewBox="0 0 24 24">

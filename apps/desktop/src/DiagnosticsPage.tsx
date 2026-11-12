@@ -14,6 +14,7 @@ import type { BackupCapacity } from "./backup";
 import { capacityLevelLabel, capacitySummary } from "./capacity";
 import { diagnosticsIpc, type DiagnosticsIpc } from "./diagnostics";
 import { describeIpcError, ipcErrorCode } from "./startup";
+import { t } from "./i18n";
 
 export interface DiagnosticsPageProps {
   /** IPC 契约（缺省 = 生产 Tauri 实现；测试注入替身）。 */
@@ -72,9 +73,9 @@ export function DiagnosticsPage({ ipc = diagnosticsIpc, onBack }: DiagnosticsPag
       setOutcome({
         result: "ok",
         message:
-          `诊断包已导出：${result.path}` +
-          `（${result.bytes} 字节；日志 ${result.log_lines} 行；任务 dump ${result.task_dumps} 条；` +
-          `脱敏守门 ${result.scanned_clean ? "0 命中" : "未通过"}）`,
+          t("app.diagnostics.diagnostics_bundle_exported", { p0: result.path }) +
+          t("app.diagnostics.bytes_log_lines_task_dumps", { p0: result.bytes, p1: result.log_lines, p2: result.task_dumps }) +
+          t("app.diagnostics.redaction_gate", { p0: result.scanned_clean ? t("app.diagnostics.0_hits") : t("app.diagnostics.failed") }),
       });
       await refreshCapacity();
     } catch (failure) {
@@ -98,9 +99,9 @@ export function DiagnosticsPage({ ipc = diagnosticsIpc, onBack }: DiagnosticsPag
         aria-modal="true"
       >
         <header className="diagnostics-header">
-          <h2>诊断导出</h2>
+          <h2>{t("app.common.diagnostics_export")}</h2>
           <button type="button" data-testid="overlay-back" onClick={onBack}>
-            返回工作台
+            {t("app.action.back_to_workbench")}
           </button>
         </header>
 
@@ -112,21 +113,21 @@ export function DiagnosticsPage({ ipc = diagnosticsIpc, onBack }: DiagnosticsPag
           role={capacityLevel === "ok" ? undefined : "alert"}
         >
           {capacityLevel === "critical"
-            ? `${capacityLevelLabel(capacityLevel)}（≥${capacity ? "5GB" : "阈值"}）：${capacityText}`
+            ? t("app.diagnostics.text", { p0: capacityLevelLabel(capacityLevel), p1: capacity ? "5GB" : t("app.diagnostics.threshold"), p2: capacityText })
             : capacityLevel === "warn"
-              ? `${capacityLevelLabel(capacityLevel)}：${capacityText}`
+              ? t("app.diagnostics.text_3", { p0: capacityLevelLabel(capacityLevel), p1: capacityText })
               : capacityText}
         </p>
 
         <section className="diagnostics-target-section">
           <label>
-            导出目录（外部路径；经系统目录选择器选择）
+            {t("app.diagnostics.export_directory_external_path_chosen")}
             <input
               type="text"
               data-testid="diagnostics-target"
               value={target}
               readOnly
-              placeholder="点击「选择目录…」"
+              placeholder={t("app.diagnostics.click_choose_directory")}
             />
           </label>
           <div className="diagnostics-actions">
@@ -136,7 +137,7 @@ export function DiagnosticsPage({ ipc = diagnosticsIpc, onBack }: DiagnosticsPag
               disabled={busy}
               onClick={() => void pickTarget()}
             >
-              选择目录…
+              {t("app.action.choose_directory")}
             </button>
             <button
               type="button"
@@ -144,13 +145,11 @@ export function DiagnosticsPage({ ipc = diagnosticsIpc, onBack }: DiagnosticsPag
               disabled={busy || target.trim().length === 0}
               onClick={() => void exportBundle()}
             >
-              导出诊断包
+              {t("app.action.export_diagnostics_bundle")}
             </button>
           </div>
           <p className="diagnostics-note">
-            诊断包含版本 / 健康快照 / 安全级别 / 容量 / 库摘要 / 设置（脱敏）/
-            运行期日志汇聚产物 / 任务 dump；核心将两轮密钥模式扫描（`sk-`/`eyJ`/PEM），
-            任一次命中即拒绝写出（D10）。
+            {t("app.diagnostics.the_bundle_includes_version_health")}
           </p>
         </section>
 

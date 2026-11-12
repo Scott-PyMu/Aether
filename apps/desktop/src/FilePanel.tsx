@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { artifactsIpc as productionArtifactsIpc, type ArtifactsIpc, type ArtifactEntry, type RefKind } from "./artifacts";
 import { describeIpcError, ipcErrorCode } from "./startup";
+import { t } from "./i18n";
 
 type FileSubTab = "session" | "project";
 
@@ -138,14 +139,14 @@ export function FilePanel({
         <input
           type="search"
           className="r-search-input"
-          aria-label="搜索引用"
-          placeholder="搜索文件..."
+          aria-label={t("session.files.search_references")}
+          placeholder={t("session.files.search_files")}
           value={search}
           onChange={(event) => setSearch(event.target.value)}
         />
       </div>
 
-      <div className="r-subtabs" role="tablist" aria-label="文件引用分类">
+      <div className="r-subtabs" role="tablist" aria-label={t("session.files.file_reference_categories")}>
         <button
           type="button"
           role="tab"
@@ -155,7 +156,7 @@ export function FilePanel({
           className={tab === "session" ? "r-subtab on" : "r-subtab"}
           onClick={() => setTab("session")}
         >
-          会话文件
+          {t("session.files.session_files")}
         </button>
         <button
           type="button"
@@ -166,27 +167,27 @@ export function FilePanel({
           className={tab === "project" ? "r-subtab on" : "r-subtab"}
           onClick={() => setTab("project")}
         >
-          项目文件
+          {t("session.files.project_files")}
         </button>
       </div>
 
       <p className="r-hint">
-        支持拖拽文件或文件夹到输入框，实现引用；读取仍走权限门
+        {t("session.files.drag_files_or_folders_into")}
       </p>
       {tab === "project" ? (
         <p className="file-panel-workspace">
-          {workspaceRoot ? `工作区：${workspaceRoot}` : "未绑定工作区"}
+          {workspaceRoot ? t("session.files.workspace", { p0: workspaceRoot }) : t("session.files.no_workspace_bound")}
         </p>
       ) : null}
 
       <div className="r-body">
         {!sessionId ? (
           <p className="r-empty" data-testid="file-panel-empty">
-            请选择会话
+            {t("app.common.select_a_session")}
           </p>
         ) : visible.length === 0 ? (
           <p className="r-empty" data-testid="file-panel-empty">
-            目录为空
+            {t("session.files.directory_is_empty")}
           </p>
         ) : (
           <ul className="file-panel-list">
@@ -205,17 +206,17 @@ export function FilePanel({
                 <span className="ref-meta">
                   {artifact.kind === "file" && artifact.size_bytes !== null
                     ? `${artifact.size_bytes} B`
-                    : "目录"}
+                    : t("session.files.directory")}
                 </span>
                 <button
                   type="button"
                   className="ref-remove"
                   data-testid="ref-remove"
                   disabled={busy}
-                  aria-label={`移除引用 ${artifact.path}`}
+                  aria-label={t("session.files.remove_reference", { p0: artifact.path })}
                   onClick={() => void onRemove(artifact.id)}
                 >
-                  移除
+                  {t("session.files.remove")}
                 </button>
               </li>
             ))}
@@ -231,7 +232,7 @@ export function FilePanel({
           disabled={!sessionId || busy}
           onClick={() => void onAdd("file")}
         >
-          添加文件
+          {t("session.files.add_file")}
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M21 11l-9 9a6 6 0 01-8.5-8.5l9-9a4 4 0 015.5 5.5l-9 9a2 2 0 01-2.8-2.8l8-8" />
           </svg>
@@ -243,7 +244,7 @@ export function FilePanel({
           disabled={!sessionId || busy}
           onClick={() => void onAdd("directory")}
         >
-          附加文件夹
+          {t("session.files.attach_folder")}
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
           </svg>
@@ -257,7 +258,7 @@ export function FilePanel({
           data-code={errorCode ?? ""}
           role="alert"
         >
-          {errorCode === "artifact_path_rejected" ? `引用路径不可用：${error}` : error}
+          {errorCode === "artifact_path_rejected" ? t("session.files.reference_path_unavailable", { p0: error }) : error}
         </p>
       ) : null}
     </section>

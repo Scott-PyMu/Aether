@@ -93,10 +93,10 @@ export type RuleResource = (typeof RULE_RESOURCES)[number];
 
 /** 资源展示文案（规则表单选项）。 */
 export const RULE_RESOURCE_LABELS: Record<RuleResource, string> = {
-  "fs.read": "文件读取（fs.read）",
-  "fs.write": "文件写入（fs.write）",
-  exec: "命令执行（exec）",
-  net: "网络访问（net）",
+  "fs.read": "rules.file_read_fs_read",
+  "fs.write": "rules.file_write_fs_write",
+  exec: "rules.command_execution_exec",
+  net: "rules.network_access_net",
 };
 
 /** `resource` → `action` 推导（ADR-019 附录 A-1：action 与 resource 匹配）。 */
@@ -132,10 +132,10 @@ export function ruleTargetKindsForResource(resource: string): string[] {
 
 /** `target_kind` 展示文案。 */
 export const RULE_TARGET_KIND_LABELS: Record<string, string> = {
-  path: "路径（path）",
-  command: "命令名（command）",
-  host: "主机名（host）",
-  any: "全部（any）",
+  path: "rules.path_path",
+  command: "rules.command_name_command",
+  host: "rules.host_name_host",
+  any: "rules.any_any",
 };
 
 /** 规则决议（规则不产生 `ask`）。 */
@@ -143,12 +143,12 @@ export const RULE_DECISIONS = ["allow", "deny"] as const;
 
 /** 规则决议展示文案。 */
 export const RULE_DECISION_LABELS: Record<string, string> = {
-  allow: "允许（allow）",
-  deny: "拒绝（deny）",
+  allow: "rules.allow_allow",
+  deny: "rules.deny_deny",
 };
 
 /** 规则不存在错误码（ADR-018 附录 A-2；UI-UX §5 文案「规则不存在，已刷新列表」）。 */
 export const RULE_NOT_FOUND_CODE = "rule_not_found";
 
 /** `rule_not_found` 展示文案（UI-UX §5 文案表登记值）。 */
-export const RULE_NOT_FOUND_MESSAGE = "规则不存在，已刷新列表";
+export const RULE_NOT_FOUND_MESSAGE = "rules.rule_not_found_list_refreshed";

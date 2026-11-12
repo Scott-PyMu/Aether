@@ -136,16 +136,16 @@ export const subagentIpc: SubagentIpc = {
 };
 
 export const SUBAGENT_INJECTION_LABELS: Record<SubagentInjectionState, string> = {
-  pending: "待处理",
-  injected: "已回注",
-  folded: "已折叠",
-  rejected: "已拒绝",
-  superseded: "已被替代",
+  pending: "subagent.pending",
+  injected: "subagent.injected",
+  folded: "subagent.folded",
+  rejected: "app.common.denied",
+  superseded: "subagent.superseded",
 };
 
 export const SUBAGENT_VERDICT_LABELS: Record<string, string> = {
-  approve: "通过",
-  reject: "拒绝",
-  needs_changes: "需修改",
-  info: "信息",
+  approve: "subagent.pass",
+  reject: "app.common.deny",
+  needs_changes: "subagent.needs_changes",
+  info: "subagent.info",
 };

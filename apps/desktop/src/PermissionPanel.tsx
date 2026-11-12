@@ -19,6 +19,7 @@ import {
 import { useStorageHealth } from "./healthBus";
 import { projectPermissions, targetsEquivalent } from "./permissionProjection";
 import { describeIpcError, ipcErrorCode } from "./startup";
+import { t } from "./i18n";
 
 /** 已决议卡片的保留展示数量（弱化只读态；UI-UX §4.3）。 */
 export const RESOLVED_HISTORY_LIMIT = 3;
@@ -147,7 +148,7 @@ export function PermissionPanel({
   return (
     <section className="permission-panel" data-testid="permission-panel">
       <h2 className="workbench-title">
-        权限待办
+        {t("permission.panel.pending_permissions")}
         <span
           className="permission-queue-count"
           data-testid="permission-queue-count"
@@ -159,7 +160,7 @@ export function PermissionPanel({
 
       {active === null && resolved.length === 0 ? (
         <p className="permission-empty" data-testid="permission-empty">
-          {sessionId === null ? "请选择会话" : "暂无待审批"}
+          {sessionId === null ? t("app.common.select_a_session") : t("permission.panel.no_pending_approvals")}
         </p>
       ) : null}
 
@@ -174,24 +175,24 @@ export function PermissionPanel({
           aria-labelledby="permission-card-title"
         >
           <h3 className="permission-card-title" id="permission-card-title">
-            权限请求
+            {t("permission.panel.permission_request")}
           </h3>
           <p className="permission-action">
             {active.resource} · {active.action}
           </p>
           <dl className="permission-targets">
-            <dt>原始请求</dt>
+            <dt>{t("permission.panel.original_request")}</dt>
             <dd data-testid="permission-target-raw">
-              {active.target ?? "（无目标）"}
+              {active.target ?? t("permission.panel.no_target")}
             </dd>
-            <dt>规范化结果</dt>
+            <dt>{t("permission.panel.normalized_result")}</dt>
             <dd
               data-testid="permission-target-canonical"
               data-equal={equal === null ? undefined : String(equal)}
             >
-              {active.canonicalTarget ?? "（不可用）"}
-              {equal === false ? "（与原文不一致，请核对）" : null}
-              {equal === true ? "（规范化后一致）" : null}
+              {active.canonicalTarget ?? t("permission.panel.unavailable")}
+              {equal === false ? t("permission.panel.differs_from_the_original_please") : null}
+              {equal === true ? t("permission.panel.matches_after_normalization") : null}
             </dd>
           </dl>
           <p
@@ -201,8 +202,8 @@ export function PermissionPanel({
             data-expired={String(expired)}
           >
             {expired
-              ? "已超时，等待核心自动拒绝（300s）"
-              : `剩余 ${Math.ceil(remaining / 1000)}s 后自动拒绝`}
+              ? t("permission.panel.timed_out_waiting_for_the")
+              : t("permission.panel.auto_deny_in_s", { p0: Math.ceil(remaining / 1000) })}
           </p>
           <div className="permission-actions">
             <button
@@ -211,7 +212,7 @@ export function PermissionPanel({
               disabled={busy}
               onClick={() => void onResolve(active.requestId, "once")}
             >
-              仅本次允许
+              {t("permission.panel.allow_once")}
             </button>
             <button
               type="button"
@@ -219,7 +220,7 @@ export function PermissionPanel({
               disabled={busy}
               onClick={() => void onResolve(active.requestId, "session")}
             >
-              本会话允许
+              {t("permission.panel.allow_for_this_session")}
             </button>
             {/* M6-01/ADR-019：`always` 持久授权（绑定 canonical target；重启重建）。 */}
             <button
@@ -228,7 +229,7 @@ export function PermissionPanel({
               disabled={busy}
               onClick={() => void onResolve(active.requestId, "always")}
             >
-              记住（始终允许）
+              {t("permission.panel.remember_always_allow")}
             </button>
             <button
               type="button"
@@ -236,17 +237,17 @@ export function PermissionPanel({
               disabled={busy}
               onClick={() => void onResolve(active.requestId, "deny")}
             >
-              拒绝
+              {t("app.common.deny")}
             </button>
           </div>
           {queue.length > 1 ? (
             <p className="permission-queue-note" data-testid="permission-queue-note">
-              还有 {queue.length - 1} 条排队
+              {t("permission.panel.and")} {queue.length - 1} {t("permission.panel.more_queued")}
             </p>
           ) : null}
           {/* D9 边界声明（C6）：不得表述为「已隔离适配器内部行为」。 */}
           <p className="permission-boundary">
-            权限门仅约束经线协议上报的工具调用；适配器进程内行为不受此门约束。
+            {t("permission.panel.the_permission_gate_only_constrains")}
           </p>
         </article>
       ) : null}
@@ -264,14 +265,14 @@ export function PermissionPanel({
               <span>{item.resource} · {item.action}</span>
               <span className="permission-resolved-result">
                 {item.status === "timeout"
-                  ? "已超时自动拒绝（300s）"
+                  ? t("permission.panel.auto_denied_after_timeout_300s")
                   : item.decision === "allow"
                     ? item.scope === "always"
-                      ? "已允许（始终）"
+                      ? t("permission.panel.allowed_always")
                       : item.scope === "session"
-                        ? "已允许（本会话）"
-                        : "已允许（本次）"
-                    : "已拒绝"}
+                        ? t("permission.panel.allowed_this_session")
+                        : t("permission.panel.allowed_once")
+                    : t("app.common.denied")}
               </span>
             </li>
           ))}

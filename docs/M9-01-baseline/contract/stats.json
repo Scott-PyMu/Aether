@@ -9,8 +9,8 @@
     "reserved": 2
   },
   "frontend": {
-    "source_files": 61,
-    "test_files": 52,
+    "source_files": 64,
+    "test_files": 55,
     "invoke_call_sites": 0,
     "invoke_files": 0
   },
@@ -20,9 +20,9 @@
     "matches_dod_reference": true
   },
   "core": {
-    "lines": 2700,
+    "lines": 2764,
     "files": 8,
-    "rust_test_files": 100
+    "rust_test_files": 101
   },
   "method": {
     "commands": "crates/aether-app/src/ipc/dispatch.rs › pub const COMMANDS: &[&str]",

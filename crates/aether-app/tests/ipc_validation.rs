@@ -1658,6 +1658,27 @@ fn valid_requests_reach_backend_exactly_once() {
             json!({ "key": "backup.reminder", "value": true }),
             "settings_set",
         ),
+        // M10-06/ADR-036：语言/主题键已登记（合法形态到达后端）。
+        (
+            "settings_get",
+            json!({ "key": "ui.locale" }),
+            "settings_get",
+        ),
+        (
+            "settings_set",
+            json!({ "key": "ui.locale", "value": "zh-CN" }),
+            "settings_set",
+        ),
+        (
+            "settings_get",
+            json!({ "key": "ui.theme" }),
+            "settings_get",
+        ),
+        (
+            "settings_set",
+            json!({ "key": "ui.theme", "value": "light" }),
+            "settings_set",
+        ),
         // ADR-007 决策 1：health 无参数（缺省载荷与空对象两种合法调用方式）。
         ("health", Value::Null, "health"),
         ("health", json!({}), "health"),
@@ -1805,6 +1826,10 @@ fn valid_requests_reach_backend_exactly_once() {
         "provider_models_fetch",
         "export_diagnostics",
         "export_diagnostics",
+        "settings_get",
+        "settings_set",
+        "settings_get",
+        "settings_set",
         "settings_get",
         "settings_set",
         "health",

@@ -23,6 +23,7 @@ import {
   type WorkspacesIpc,
   type WorkspacesListResult,
 } from "./workspace";
+import { t } from "./i18n";
 
 export interface WorkspaceTreeProps {
   /** 工作区管理 IPC（测试注入替身；缺省 = 生产 Tauri 实现）。 */
@@ -41,11 +42,11 @@ export interface WorkspaceTreeProps {
 export const UNASSIGNED_WORKSPACE_KEY = "";
 
 /** 提示文案（ADR-026 §2.1-1/2：R15 基准固定）。 */
-export const WORKSPACE_BASELINE_NOTICE = "权限基准不变，如需变更请新建会话";
+export const WORKSPACE_BASELINE_NOTICE = "workspace.the_permission_baseline_is_unchanged";
 
 const EMPTY_LIST: WorkspacesListResult = {
   workspaces: [],
-  unassigned: { name: "默认（数据目录）", root_path: null, active_sessions: 0, total_sessions: 0 },
+  unassigned: { name: "workspace.default_data_directory", root_path: null, active_sessions: 0, total_sessions: 0 },
 };
 
 export function WorkspaceTree({
@@ -262,7 +263,7 @@ export function WorkspaceTree({
             data-testid="workspace-item-count"
             data-active={String(active)}
             data-total={String(total)}
-            title="在途会话 / 全部会话"
+            title={t("workspace.in_flight_sessions_all_sessions")}
           >
             {active}/{total}
           </span>
@@ -277,14 +278,14 @@ export function WorkspaceTree({
               disabled={!assignable}
               title={
                 activeSession === undefined
-                  ? "先打开一个会话，再改派工作区"
+                  ? t("workspace.open_a_session_first_then")
                   : activeSession.workspace_id === options.workspaceId
-                    ? "会话已在该工作区"
-                    : WORKSPACE_BASELINE_NOTICE
+                    ? t("workspace.the_session_is_already_in")
+                    : t(WORKSPACE_BASELINE_NOTICE)
               }
               onClick={() => void handleAssign(key)}
             >
-              改派当前会话
+              {t("workspace.reassign_current_session")}
             </button>
             <button
               type="button"
@@ -295,7 +296,7 @@ export function WorkspaceTree({
                 setRenameDraft(name);
               }}
             >
-              改名
+              {t("app.action.rename")}
             </button>
             <button
               type="button"
@@ -303,7 +304,7 @@ export function WorkspaceTree({
               data-workspace-id={key}
               onClick={() => setDeleteTarget(key)}
             >
-              删除
+              {t("app.action.delete")}
             </button>
           </div>
         ) : null}
@@ -322,40 +323,40 @@ export function WorkspaceTree({
               disabled={busy || renameDraft.trim() === ""}
               onClick={() => void handleRename(key)}
             >
-              保存
+              {t("app.action.save")}
             </button>
             <button
               type="button"
               data-testid="workspace-rename-cancel"
               onClick={() => setRenameTarget(null)}
             >
-              取消
+              {t("app.action.cancel")}
             </button>
           </div>
         ) : null}
         {deleteTarget === key ? (
           <div className="workspace-delete-confirm" data-testid="workspace-delete-confirm-box">
-            <p>删除工作区将解除绑定（不删除磁盘文件），不可恢复。</p>
+            <p>{t("workspace.deleting_a_workspace_unbinds_it")}</p>
             <button
               type="button"
               data-testid="workspace-delete-confirm"
               disabled={busy}
               onClick={() => void handleDelete(key)}
             >
-              确认删除
+              {t("app.action.confirm_delete")}
             </button>
             <button
               type="button"
               data-testid="workspace-delete-cancel"
               onClick={() => setDeleteTarget(null)}
             >
-              取消
+              {t("app.action.cancel")}
             </button>
           </div>
         ) : null}
         {isCollapsed ? null : nodeSessions.length === 0 ? (
           <p className="workspace-session-empty" data-testid="workspace-session-empty">
-            （无会话）
+            {t("workspace.no_sessions")}
           </p>
         ) : (
           <ul className="workspace-session-list sess">
@@ -385,12 +386,12 @@ export function WorkspaceTree({
   };
 
   return (
-    <section className="workspace-tree" data-testid="workspace-tree" aria-label="工作区">
+    <section className="workspace-tree" data-testid="workspace-tree" aria-label={t("workspace.workspaces")}>
       <div className="workspace-tree-header">
-        <h2 className="workbench-title">工作区</h2>
+        <h2 className="workbench-title">{t("workspace.workspaces")}</h2>
       </div>
       <p className="workspace-tree-notice" data-testid="workspace-assign-notice">
-        {WORKSPACE_BASELINE_NOTICE}
+        {t(WORKSPACE_BASELINE_NOTICE)}
       </p>
       {error ? (
         <p
@@ -409,15 +410,13 @@ export function WorkspaceTree({
           data-result={assignResult.result}
         >
           {assignResult.result === "ok"
-            ? `已改派（工作区 ${assignResult.workspaceId}）；${WORKSPACE_BASELINE_NOTICE}${
-                assignResult.baselineRoot ? `（当前基准：${assignResult.baselineRoot}）` : ""
-              }`
-            : "改派失败（见错误提示）"}
+            ? t("workspace.reassigned_workspace", { p0: assignResult.workspaceId, p1: t(WORKSPACE_BASELINE_NOTICE), p2: assignResult.baselineRoot ? t("workspace.current_baseline", { p0: assignResult.baselineRoot }) : "" })
+            : t("workspace.reassignment_failed_see_error_message")}
         </p>
       ) : null}
       {loading ? (
         <p className="workspace-tree-loading" data-testid="workspace-tree-loading">
-          加载工作区…
+          {t("workspace.loading_workspaces")}
         </p>
       ) : (
         <ul className="workspace-tree-list">
@@ -433,7 +432,7 @@ export function WorkspaceTree({
           )}
           {renderWorkspaceNode(
             UNASSIGNED_WORKSPACE_KEY,
-            list.unassigned.name,
+            t(list.unassigned.name),
             list.unassigned.root_path,
             list.unassigned.active_sessions,
             list.unassigned.total_sessions,
@@ -443,7 +442,7 @@ export function WorkspaceTree({
       )}
       {!loading && list.workspaces.length === 0 && list.unassigned.total_sessions === 0 ? (
         <p className="workspace-tree-empty" data-testid="workspace-tree-empty">
-          暂无工作区；点击「＋ 新建工作区」添加。
+          {t("workspace.no_workspaces_click_new_workspace")}
         </p>
       ) : null}
       <button
@@ -456,13 +455,13 @@ export function WorkspaceTree({
           setError(null);
         }}
       >
-        ＋ 新建工作区
+        {t("workspace.new_workspace")}
       </button>
       {createOpen ? (
         <div className="workspace-create-form" data-testid="workspace-create-form">
           <input
             data-testid="workspace-name-input"
-            placeholder="工作区名称（≤64 字符）"
+            placeholder={t("workspace.workspace_name_64_characters")}
             maxLength={64}
             value={createName}
             onChange={(event) => setCreateName(event.target.value)}
@@ -470,7 +469,7 @@ export function WorkspaceTree({
           <div className="workspace-root-row">
             <input
               data-testid="workspace-root-input"
-              placeholder="工作区根目录（绝对路径）"
+              placeholder={t("workspace.workspace_root_absolute_path")}
               value={createRoot}
               onChange={(event) => setCreateRoot(event.target.value)}
             />
@@ -479,7 +478,7 @@ export function WorkspaceTree({
               data-testid="workspace-root-pick"
               onClick={() => void handlePickRoot()}
             >
-              选择…
+              {t("workspace.choose")}
             </button>
           </div>
           <div className="workspace-create-actions">
@@ -489,18 +488,18 @@ export function WorkspaceTree({
               disabled={busy || createName.trim() === "" || createRoot.trim() === ""}
               onClick={() => void handleCreate()}
             >
-              创建工作区
+              {t("workspace.create_workspace")}
             </button>
             <button
               type="button"
               data-testid="workspace-create-cancel"
               onClick={() => setCreateOpen(false)}
             >
-              取消
+              {t("app.action.cancel")}
             </button>
           </div>
           <p className="workspace-create-hint">
-            设置页的「工作区绑定」= 缺省工作区（仅新会话生效）；此处用于管理与改派既有会话。
+            {t("workspace.workspace_binding_in_settings_default")}
           </p>
         </div>
       ) : null}

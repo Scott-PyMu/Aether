@@ -71,23 +71,21 @@ export const THINKING_DEPTH_CAPABILITY = "thinking_depth";
  * 未声明或连接未就绪 → 置灰 + `pause_unsupported`）。 */
 export const PAUSE_RESUME_CAPABILITY = "pause_resume";
 /** 暂停能力置灰 tooltip（UI-UX §5 文案；`pause_unsupported` 行）。 */
-export const PAUSE_UNSUPPORTED_HINT = "当前运行时不支持暂停/恢复（需原生会话恢复能力）";
+export const PAUSE_UNSUPPORTED_HINT = "session.the_current_runtime_does_not";
 /** 暂停/恢复语义常驻声明（UI-UX §2.4；ADR-017 附录 A-8）。 */
-export const PAUSE_SEMANTICS_NOTICE =
-  "暂停 = 中断当前回复并冻结会话；恢复 = 重放被中断的输入（原生会话上下文保留，Mode R）；暂停不承诺保留未完成的生成内容";
+export const PAUSE_SEMANTICS_NOTICE = "session.pause_interrupt_the_current_reply";
 /** `paused` 状态行文案（UI-UX §5；ADR-017 附录 A-8）。 */
-export const PAUSED_STATUS_HINT =
-  "已暂停：当前回复已中断；恢复后将重放该输入（原生上下文保留）";
+export const PAUSED_STATUS_HINT = "session.paused_the_current_reply_was";
 /** 档位显示文案（ADR-010 与原型一致：关闭/低/高/极高/最大）。 */
 export const THINKING_DEPTH_LABELS: Record<number, string> = {
-  0: "关闭",
-  1: "低",
-  2: "高",
-  3: "极高",
-  4: "最高",
+  0: "session.off",
+  1: "session.low",
+  2: "session.high",
+  3: "session.very_high",
+  4: "session.maximum",
 };
 /** 能力置灰 tooltip（UI-UX §2.4/§5 文案）。 */
-export const THINKING_DEPTH_UNSUPPORTED_HINT = "当前运行时不支持思考深度";
+export const THINKING_DEPTH_UNSUPPORTED_HINT = "session.the_current_runtime_does_not_2";
 /** 警告码：运行时未声明能力、按缺省 2 应用（ADR-006 附录 B「警告码」子表首项）。 */
 export const THINKING_DEPTH_UNSUPPORTED_CODE = "thinking_depth_unsupported";
 
@@ -419,23 +417,23 @@ export const sessionIpc: SessionIpc = {
 
 /** 会话状态展示文案。 */
 export const SESSION_STATUS_LABELS: Record<SessionStatus, string> = {
-  creating: "创建中",
-  idle: "空闲",
-  running: "运行中",
-  paused: "已暂停",
-  waiting_permission: "等待审批",
-  completed: "已完成",
-  failed: "失败",
-  cancelled: "已取消",
+  creating: "session.creating",
+  idle: "session.idle",
+  running: "app.common.running",
+  paused: "session.paused",
+  waiting_permission: "app.common.awaiting_approval",
+  completed: "app.common.completed",
+  failed: "app.common.failed",
+  cancelled: "app.common.cancelled",
 };
 
 /** 运行时状态展示文案。 */
 export const RUNTIME_STATUS_LABELS: Record<RuntimeStatus, string> = {
-  cold: "未启动",
-  starting: "启动中",
-  ready: "就绪",
-  degraded: "降级",
-  disabled: "已禁用",
+  cold: "session.not_started",
+  starting: "session.starting",
+  ready: "session.ready",
+  degraded: "app.common.degraded",
+  disabled: "app.common.disabled_2",
 };
 
 /**
@@ -445,12 +443,12 @@ export const RUNTIME_STATUS_LABELS: Record<RuntimeStatus, string> = {
  * 未知 reason 原样展示（不隐藏诊断信息）。
  */
 export const RUNTIME_REASON_LABELS: Record<string, string> = {
-  start_failed: "启动失败",
-  handshake_timeout: "握手超时",
-  crash_loop: "崩溃循环",
-  version_mismatch: "版本不匹配",
-  untrusted: "未受信任（非官方清单）",
-  storage_backpressure: "存储背压隔离",
+  start_failed: "app.common.start_failed",
+  handshake_timeout: "session.handshake_timeout",
+  crash_loop: "session.crash_loop",
+  version_mismatch: "session.version_mismatch",
+  untrusted: "session.untrusted_not_on_the_official",
+  storage_backpressure: "session.storage_backpressure_isolated",
   // ADR-015 附录 E-2/E-3：用户显式禁用（非故障；灰点语义由 RuntimePanel 承接）。
-  user_disabled: "已由用户手动禁用（非故障）",
+  user_disabled: "session.manually_disabled_by_the_user",
 };

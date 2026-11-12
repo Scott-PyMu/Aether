@@ -24,6 +24,7 @@ import {
   type PresetsIpc,
 } from "./presets";
 import { describeIpcError, ipcErrorCode } from "./startup";
+import { t } from "./i18n";
 
 export interface PresetsPageProps {
   /** 预设命令面（测试/E2E 注入替身；缺省 = 生产 Tauri 实现）。 */
@@ -90,13 +91,13 @@ export function PresetsPage({
     async (failure: unknown) => {
       const code = ipcErrorCode(failure);
       if (code === PRESET_NOT_FOUND_CODE) {
-        setError(PRESET_NOT_FOUND_MESSAGE);
+        setError(t(PRESET_NOT_FOUND_MESSAGE));
         setErrorCode(PRESET_NOT_FOUND_CODE);
         await refresh();
         return;
       }
       if (code === BUILTIN_PRESET_UNDELETABLE_CODE) {
-        setError(BUILTIN_PRESET_UNDELETABLE_MESSAGE);
+        setError(t(BUILTIN_PRESET_UNDELETABLE_MESSAGE));
         setErrorCode(BUILTIN_PRESET_UNDELETABLE_CODE);
         await refresh();
         return;
@@ -119,17 +120,17 @@ export function PresetsPage({
     }
     const name = editName.trim();
     if (!name) {
-      setError("请填写预设名称");
+      setError(t("presets.enter_a_preset_name"));
       setErrorCode("missing_field");
       return;
     }
     if (presetNameTooLong(name)) {
-      setError("预设名称最长 64 字符");
+      setError(t("presets.preset_name_can_be_at"));
       setErrorCode("too_large");
       return;
     }
     if (presetPromptTooLarge(editPrompt)) {
-      setError("系统提示词最大 32KiB");
+      setError(t("presets.system_prompt_can_be_at"));
       setErrorCode("too_large");
       return;
     }
@@ -139,7 +140,7 @@ export function PresetsPage({
     try {
       await ipc.updatePreset({ preset_id: editingId, name, system_prompt: editPrompt });
       setEditingId(null);
-      setNotice("预设已保存（对新会话生效）");
+      setNotice(t("presets.preset_saved_applies_to_new"));
       onChanged?.();
       await refresh();
     } catch (failure) {
@@ -152,17 +153,17 @@ export function PresetsPage({
   const onAdd = useCallback(async () => {
     const name = newName.trim();
     if (!name) {
-      setError("请填写预设名称");
+      setError(t("presets.enter_a_preset_name"));
       setErrorCode("missing_field");
       return;
     }
     if (presetNameTooLong(name)) {
-      setError("预设名称最长 64 字符");
+      setError(t("presets.preset_name_can_be_at"));
       setErrorCode("too_large");
       return;
     }
     if (presetPromptTooLarge(newPrompt)) {
-      setError("系统提示词最大 32KiB");
+      setError(t("presets.system_prompt_can_be_at"));
       setErrorCode("too_large");
       return;
     }
@@ -173,7 +174,7 @@ export function PresetsPage({
       const created = await ipc.addPreset({ name, system_prompt: newPrompt });
       setNewName("");
       setNewPrompt("");
-      setNotice(`已新增预设「${created.name}」（新建会话可选）`);
+      setNotice(t("presets.preset_added_selectable_for_new", { p0: created.name }));
       onChanged?.();
       await refresh();
     } catch (failure) {
@@ -194,7 +195,7 @@ export function PresetsPage({
         if (activePresetId === presetId) {
           onActivePresetChange?.(null);
         }
-        setNotice("预设已删除（既有会话提示词保持原样）");
+        setNotice(t("presets.preset_deleted_existing_session_prompts"));
         onChanged?.();
         await refresh();
       } catch (failure) {
@@ -217,14 +218,13 @@ export function PresetsPage({
 
   return (
     <section className="presets-page" data-testid="presets-page">
-      <h3>Agent 预设</h3>
+      <h3>{t("app.common.agent_presets")}</h3>
       <p className="settings-note">
-        每个预设对应一套系统提示词；与工作区记忆注入按「预设块 → 工作区约定块」合成
-        （互不覆盖）。保存后对新会话生效，既有会话不受影响。
+        {t("presets.each_preset_maps_to_a")}
       </p>
 
       {presets === null ? (
-        <p data-testid="presets-loading">正在读取预设…</p>
+        <p data-testid="presets-loading">{t("presets.loading_presets")}</p>
       ) : (
         <ul className="preset-list" data-testid="preset-list">
           {presets.map((preset) => (
@@ -242,12 +242,12 @@ export function PresetsPage({
                 </span>
                 {preset.is_builtin ? (
                   <span className="preset-builtin" data-testid="preset-builtin">
-                    内置
+                    {t("presets.built_in")}
                   </span>
                 ) : null}
                 {preset.id === activePresetId ? (
                   <span className="preset-in-use" data-testid="preset-in-use">
-                    使用中
+                    {t("presets.in_use")}
                   </span>
                 ) : null}
                 <span className="preset-preview" data-testid="preset-preview">
@@ -265,7 +265,7 @@ export function PresetsPage({
                       onActivePresetChange(preset.id === activePresetId ? null : preset.id)
                     }
                   >
-                    {preset.id === activePresetId ? "取消使用" : "使用"}
+                    {preset.id === activePresetId ? t("presets.stop_using") : t("presets.use")}
                   </button>
                 ) : null}
                 <button
@@ -275,7 +275,7 @@ export function PresetsPage({
                   disabled={busy}
                   onClick={() => onStartEdit(preset)}
                 >
-                  编辑
+                  {t("app.action.edit")}
                 </button>
                 <button
                   type="button"
@@ -283,22 +283,22 @@ export function PresetsPage({
                   data-preset-id={preset.id}
                   // 内置预设删除入口置灰（服务端同口径硬拒绝；不以 UI 隐藏代替）。
                   disabled={busy || preset.is_builtin}
-                  title={preset.is_builtin ? BUILTIN_PRESET_UNDELETABLE_MESSAGE : undefined}
+                  title={preset.is_builtin ? t(BUILTIN_PRESET_UNDELETABLE_MESSAGE) : undefined}
                   onClick={() => setConfirmDeleteId(preset.id)}
                 >
-                  删除
+                  {t("app.action.delete")}
                 </button>
               </div>
               {confirmDeleteId === preset.id ? (
                 <div className="preset-delete-confirm" data-testid="preset-delete-confirm">
-                  <span>删除后不可恢复；既有会话的系统提示词保持原样。</span>
+                  <span>{t("presets.deletion_cannot_be_undone_existing")}</span>
                   <button
                     type="button"
                     data-testid="preset-delete-confirm-button"
                     disabled={busy}
                     onClick={() => void onConfirmDelete(preset.id)}
                   >
-                    确认删除
+                    {t("app.action.confirm_delete")}
                   </button>
                   <button
                     type="button"
@@ -306,14 +306,14 @@ export function PresetsPage({
                     disabled={busy}
                     onClick={() => setConfirmDeleteId(null)}
                   >
-                    取消
+                    {t("app.action.cancel")}
                   </button>
                 </div>
               ) : null}
               {editingId === preset.id ? (
                 <div className="preset-edit" data-testid="preset-edit-form" data-preset-id={preset.id}>
                   <label className="preset-edit-row">
-                    名称
+                    {t("app.common.name")}
                     <input
                       type="text"
                       data-testid="preset-edit-name"
@@ -324,7 +324,7 @@ export function PresetsPage({
                     />
                   </label>
                   <label className="preset-edit-row">
-                    系统提示词
+                    {t("presets.system_prompt")}
                     <textarea
                       data-testid="preset-edit-prompt"
                       value={editPrompt}
@@ -340,7 +340,7 @@ export function PresetsPage({
                       disabled={busy}
                       onClick={() => void onSaveEdit()}
                     >
-                      保存
+                      {t("app.action.save")}
                     </button>
                     <button
                       type="button"
@@ -348,7 +348,7 @@ export function PresetsPage({
                       disabled={busy}
                       onClick={() => setEditingId(null)}
                     >
-                      取消
+                      {t("app.action.cancel")}
                     </button>
                   </div>
                 </div>
@@ -357,16 +357,16 @@ export function PresetsPage({
           ))}
           {presets.length === 0 ? (
             <li className="preset-empty" data-testid="preset-empty">
-              暂无预设
+              {t("presets.no_presets")}
             </li>
           ) : null}
         </ul>
       )}
 
       <section className="preset-add" data-testid="preset-add">
-        <h4>新增预设</h4>
+        <h4>{t("presets.add_preset")}</h4>
         <label className="preset-edit-row">
-          名称（≤64 字符）
+          {t("presets.name_64_characters")}
           <input
             type="text"
             data-testid="preset-add-name"
@@ -377,7 +377,7 @@ export function PresetsPage({
           />
         </label>
         <label className="preset-edit-row">
-          系统提示词（≤32KiB）
+          {t("presets.system_prompt_32kib")}
           <textarea
             data-testid="preset-add-prompt"
             value={newPrompt}
@@ -393,7 +393,7 @@ export function PresetsPage({
             disabled={busy}
             onClick={() => void onAdd()}
           >
-            新增预设
+            {t("presets.add_preset")}
           </button>
         </div>
       </section>

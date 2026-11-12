@@ -19,6 +19,7 @@
  */
 import type { AetherEvent } from "@aether/protocol";
 import { createStore, type StoreApi } from "zustand/vanilla";
+import { t } from "./i18n";
 
 /** 批处理窗口（D8：16ms 合并 flush，上限 60 次/秒）。 */
 export const EVENT_BATCH_INTERVAL_MS = 16;
@@ -37,7 +38,7 @@ export class ReadbackGapTooLargeError extends Error {
   readonly code = "readback_gap_too_large";
 
   constructor(readonly gap?: number) {
-    super("补读缺口超过 10k 上限（D4）：拒绝自动补发，请重开会话");
+    super(t("session.events.backfill_gap_exceeds_the_10k"));
     this.name = "ReadbackGapTooLargeError";
   }
 }
@@ -47,7 +48,7 @@ export class BackfillUnavailableError extends Error {
   readonly code = "backfill_unavailable";
 
   constructor() {
-    super("补读通道未接线（M3-02 会话命令装配）");
+    super(t("session.events.backfill_channel_not_wired_m3"));
     this.name = "BackfillUnavailableError";
   }
 }

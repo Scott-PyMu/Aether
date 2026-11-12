@@ -2,12 +2,12 @@
 /**
  * `pnpm verify:m9-01-baseline`（P2 计划 M9-01 DoD-9；ADR-029 §9.4-1）。
  *
- * 校验口径（基线存在性/哈希/条目数=63，外加冻结面的可执行护栏）：
+ * 校验口径（基线存在性/哈希/条目数，外加冻结面的可执行护栏）：
  *  1. `docs/M9-01-baseline/manifest.json` 存在且 schema/版本/必填字段齐备；
- *  2. `commands[63]` 与当前 `collect_commands!` 声明**逐项一致**（顺序 + 名称）；
- *  3. `entries` 恰 63 条、路径唯一、文件存在、sha256 匹配；命令与条目一一对应；
- *  4. 计数自洽：63 = 59 daemon + 4 shell；61 可达 + 2 保留；ipc=32、business=9、
- *     事件信封 9 字段、设置 9 键、迁移 9 个；
+ *  2. `commands` 与当前 `collect_commands!` 声明**逐项一致**（顺序 + 名称）；
+ *  3. `entries` 路径唯一、文件存在、sha256 匹配；命令与条目一一对应；
+ *  4. 计数自洽：86 = 82 daemon + 4 shell；84 可达 + 2 保留；ipc=32、business=35、
+ *     事件信封 9 字段、设置 11 键（M10-06/ADR-036）、迁移 12 个（M10-05/0012）；
  *  5. 辅助产物（contract/freeze）存在且哈希匹配，`contract_digest` 与当前源码重算一致
  *     （源码契约漂移即失败，防止「改了实现却没重录基线」）；
  *  6. 冻结面护栏：Electron 精确 patch（任何 package.json 的 electron 声明必须精确等于
@@ -193,7 +193,8 @@ const expectedCounts = {
   ipc_error_codes: 32,
   business_codes: 35,
   event_envelope_fields: 9,
-  settings_keys: 9,
+  // M10-06/ADR-036：设置键 9 → 11（`ui.locale`/`ui.theme`）。
+  settings_keys: 11,
   migrations: 12,
 };
 for (const [key, value] of Object.entries(expectedCounts)) {

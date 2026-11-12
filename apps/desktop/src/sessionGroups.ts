@@ -24,10 +24,10 @@ export const SESSION_GROUP_ORDER: readonly SessionGroupId[] = [
 
 /** 分组标题文案（断言不依赖文案；UI-UX §2.2）。 */
 export const SESSION_GROUP_TITLES: Record<SessionGroupId, string> = {
-  running: "运行中",
-  waiting_permission: "等待审批",
-  failed: "失败",
-  other: "其他",
+  running: "app.common.running",
+  waiting_permission: "app.common.awaiting_approval",
+  failed: "app.common.failed",
+  other: "session.group.other",
 };
 
 /** 会话状态 → 分组（running/creating 并入「运行中」）。 */

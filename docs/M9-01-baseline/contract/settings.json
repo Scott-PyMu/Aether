@@ -10,7 +10,9 @@
     "events.retention.enabled",
     "events.retention.days",
     "ui.layout",
-    "ui.provider_selection"
+    "ui.provider_selection",
+    "ui.locale",
+    "ui.theme"
   ],
   "rule": "未登记键一律 invalid_enum（默认拒绝，ADR-018 A-6）"
 }

@@ -15,6 +15,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { auditIpc, type AuditFilters, type AuditIpc, type AuditRow } from "./audit";
 import { describeIpcError, ipcErrorCode } from "./startup";
+import { t } from "./i18n";
 
 export interface AuditPageProps {
   /** IPC 契约（缺省 = 生产 Tauri 实现；测试注入替身）。 */
@@ -126,8 +127,8 @@ export function AuditPage({ ipc = auditIpc, onBack }: AuditPageProps) {
       setOutcome({
         result: "ok",
         message:
-          `审计已导出：${report.path}` +
-          `（${report.rows} 行；${report.bytes} 字节；sha256=${report.sha256.slice(0, 12)}…）`,
+          t("audit.audit_exported", { p0: report.path }) +
+          t("audit.rows_bytes_sha256", { p0: report.rows, p1: report.bytes, p2: report.sha256.slice(0, 12) }),
       });
     } catch (failure) {
       setError(describeIpcError(failure));
@@ -150,15 +151,14 @@ export function AuditPage({ ipc = auditIpc, onBack }: AuditPageProps) {
         aria-modal="true"
       >
         <header className="audit-header">
-          <h2>审计</h2>
+          <h2>{t("audit.audit")}</h2>
           <button type="button" data-testid="overlay-back" onClick={onBack}>
-            返回工作台
+            {t("app.action.back_to_workbench")}
           </button>
         </header>
 
         <p className="audit-note">
-          审计覆盖经线协议上报的 Agent 操作（工具调用聚合为 `tool.call`）与会话/权限/
-          运行器状态；不覆盖适配器进程内行为（D9 信任级边界）。
+          {t("audit.audit_covers_agent_operations_reported")}
         </p>
 
         <form
@@ -170,50 +170,50 @@ export function AuditPage({ ipc = auditIpc, onBack }: AuditPageProps) {
           }}
         >
           <label>
-            会话 id
+            {t("audit.session_id")}
             <input
               type="text"
               data-testid="audit-filter-session"
               value={sessionId}
-              placeholder="26 位 ULID（缺省不筛选）"
+              placeholder={t("audit.26_character_ulid_no_filter")}
               onChange={(event) => setSessionId(event.target.value)}
             />
           </label>
           <label>
-            actor
+            {t("audit.actor_label")}
             <select
               data-testid="audit-filter-actor"
               value={actor}
               onChange={(event) => setActor(event.target.value)}
             >
-              <option value="">全部</option>
-              <option value="user">user</option>
-              <option value="agent">agent</option>
-              <option value="system">system</option>
+              <option value="">{t("audit.all")}</option>
+              <option value="user">{t("audit.actor_user")}</option>
+              <option value="agent">{t("audit.actor_agent")}</option>
+              <option value="system">{t("audit.actor_system")}</option>
             </select>
           </label>
           <label>
-            action
+            {t("audit.action_label")}
             <input
               type="text"
               data-testid="audit-filter-action"
               value={action}
-              placeholder="如 tool.call / session.created"
+              placeholder={t("audit.e_g_tool_call_session")}
               onChange={(event) => setAction(event.target.value)}
             />
           </label>
           <label>
-            resource
+            {t("audit.resource_label")}
             <input
               type="text"
               data-testid="audit-filter-resource"
               value={resource}
-              placeholder="如 mock.echo / runtime:mock"
+              placeholder={t("audit.e_g_mock_echo_runtime")}
               onChange={(event) => setResource(event.target.value)}
             />
           </label>
           <label>
-            起始时间
+            {t("audit.start_time")}
             <input
               type="datetime-local"
               data-testid="audit-filter-from"
@@ -222,7 +222,7 @@ export function AuditPage({ ipc = auditIpc, onBack }: AuditPageProps) {
             />
           </label>
           <label>
-            截止时间
+            {t("audit.end_time")}
             <input
               type="datetime-local"
               data-testid="audit-filter-to"
@@ -231,24 +231,24 @@ export function AuditPage({ ipc = auditIpc, onBack }: AuditPageProps) {
             />
           </label>
           <button type="submit" data-testid="audit-query" disabled={busy}>
-            查询
+            {t("audit.query")}
           </button>
         </form>
 
         <p className="audit-summary" data-testid="audit-summary">
-          当前第 {rows.length === 0 ? 0 : offset + 1}–{offset + rows.length} 条
-          {hasMore ? "（还有更多）" : "（已到末页）"}
+          {t("audit.page")} {rows.length === 0 ? 0 : offset + 1}–{offset + rows.length} {t("app.common.items")}
+          {hasMore ? t("audit.more_available") : t("audit.last_page")}
         </p>
 
         <table className="audit-rows" data-testid="audit-rows">
           <thead>
             <tr>
-              <th>时间</th>
-              <th>actor</th>
-              <th>action</th>
-              <th>resource</th>
-              <th>result</th>
-              <th>detail</th>
+              <th>{t("audit.time")}</th>
+              <th>{t("audit.actor_label")}</th>
+              <th>{t("audit.action_label")}</th>
+              <th>{t("audit.resource_label")}</th>
+              <th>{t("audit.result_label")}</th>
+              <th>{t("audit.detail_label")}</th>
             </tr>
           </thead>
           <tbody>
@@ -272,7 +272,7 @@ export function AuditPage({ ipc = auditIpc, onBack }: AuditPageProps) {
             disabled={busy || !hasPrev}
             onClick={() => void load(collectFilters(), Math.max(0, offset - AUDIT_PAGE_SIZE))}
           >
-            上一页
+            {t("audit.previous")}
           </button>
           <button
             type="button"
@@ -280,19 +280,19 @@ export function AuditPage({ ipc = auditIpc, onBack }: AuditPageProps) {
             disabled={busy || !hasNext}
             onClick={() => void load(collectFilters(), offset + AUDIT_PAGE_SIZE)}
           >
-            下一页
+            {t("audit.next")}
           </button>
         </div>
 
         <section className="audit-target-section">
           <label>
-            导出目录（外部路径；经系统目录选择器选择；缺省 = 应用 `archives/`）
+            {t("audit.export_directory_external_path_chosen")}
             <input
               type="text"
               data-testid="audit-target"
               value={target}
               readOnly
-              placeholder="点击「选择目录…」或直接导出"
+              placeholder={t("audit.click_choose_directory_or_export")}
             />
           </label>
           <div className="audit-actions">
@@ -302,7 +302,7 @@ export function AuditPage({ ipc = auditIpc, onBack }: AuditPageProps) {
               disabled={busy}
               onClick={() => void pickTarget()}
             >
-              选择目录…
+              {t("app.action.choose_directory")}
             </button>
             <button
               type="button"
@@ -310,11 +310,11 @@ export function AuditPage({ ipc = auditIpc, onBack }: AuditPageProps) {
               disabled={busy}
               onClick={() => void exportAudit()}
             >
-              导出审计 JSONL
+              {t("audit.export_audit_jsonl")}
             </button>
           </div>
           <p className="audit-note">
-            导出为 JSONL + manifest（行数/sha256；原子写，中断不留半成品）；过滤条件与查询一致。
+            {t("audit.export_as_jsonl_manifest_row")}
           </p>
         </section>
 

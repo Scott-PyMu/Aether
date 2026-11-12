@@ -11,6 +11,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { EventStore } from "./eventStore";
+import { t as translate } from "./i18n";
 import { SessionWorkbench } from "./SessionWorkbench";
 import {
   PAUSE_SEMANTICS_NOTICE,
@@ -168,8 +169,8 @@ describe("M7-03 暂停/恢复入口（session-pause-toggle）", () => {
     expect((screen.getByTestId("composer-input") as HTMLTextAreaElement).disabled).toBe(true);
     expect((screen.getByTestId("composer-send") as HTMLButtonElement).disabled).toBe(true);
     const notice = screen.getByTestId("paused-notice");
-    expect(notice.textContent).toContain(PAUSED_STATUS_HINT);
-    expect(notice.textContent).toContain(PAUSE_SEMANTICS_NOTICE);
+    expect(notice.textContent).toContain(translate(PAUSED_STATUS_HINT));
+    expect(notice.textContent).toContain(translate(PAUSE_SEMANTICS_NOTICE));
 
     fireEvent.click(toggle);
     await waitFor(() => expect(resumeSession).toHaveBeenCalledWith(SESSION));
@@ -187,7 +188,7 @@ describe("M7-03 暂停/恢复入口（session-pause-toggle）", () => {
     const toggle = screen.getByTestId("session-pause-toggle");
     expect(toggle.getAttribute("data-disabled")).toBe("true");
     expect((toggle as HTMLButtonElement).disabled).toBe(true);
-    expect(toggle.getAttribute("title")).toBe(PAUSE_UNSUPPORTED_HINT);
+    expect(toggle.getAttribute("title")).toBe(translate(PAUSE_UNSUPPORTED_HINT));
     fireEvent.click(toggle);
     expect(pauseSession).not.toHaveBeenCalled();
   });

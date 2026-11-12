@@ -28,6 +28,7 @@ import {
   type RulesIpc,
 } from "./rules";
 import { describeIpcError, ipcErrorCode } from "./startup";
+import { t, tKeyOrRaw } from "./i18n";
 
 export interface RulesPageProps {
   /** 规则命令面（测试/E2E 注入替身；缺省 = 生产 Tauri 实现）。 */
@@ -78,7 +79,7 @@ export function RulesPage({ ipc = productionRulesIpc }: RulesPageProps) {
   const handleRuleError = useCallback(
     async (failure: unknown) => {
       if (ipcErrorCode(failure) === RULE_NOT_FOUND_CODE) {
-        setError(RULE_NOT_FOUND_MESSAGE);
+        setError(t(RULE_NOT_FOUND_MESSAGE));
         setErrorCode(RULE_NOT_FOUND_CODE);
         await refresh();
         return;
@@ -113,7 +114,7 @@ export function RulesPage({ ipc = productionRulesIpc }: RulesPageProps) {
       try {
         await ipc.deleteRule(ruleId);
         setConfirmDeleteId(null);
-        setNotice("规则已删除");
+        setNotice(t("rules.rule_deleted"));
         await refresh();
       } catch (failure) {
         setConfirmDeleteId(null);
@@ -128,13 +129,13 @@ export function RulesPage({ ipc = productionRulesIpc }: RulesPageProps) {
   const onAdd = useCallback(async () => {
     const trimmedName = name.trim();
     if (!trimmedName) {
-      setError("请填写规则名称");
+      setError(t("rules.enter_a_rule_name"));
       setErrorCode("missing_field");
       return;
     }
     const trimmedTarget = target.trim();
     if (targetKind !== "any" && !trimmedTarget) {
-      setError("请填写规则目标（`any` 档可留空）");
+      setError(t("rules.enter_a_rule_target_can"));
       setErrorCode("missing_field");
       return;
     }
@@ -144,7 +145,7 @@ export function RulesPage({ ipc = productionRulesIpc }: RulesPageProps) {
       priorityValue !== undefined &&
       (!Number.isInteger(priorityValue) || priorityValue < 0 || priorityValue > 100)
     ) {
-      setError("优先级必须是 0–100 的整数");
+      setError(t("rules.priority_must_be_an_integer"));
       setErrorCode("out_of_range");
       return;
     }
@@ -165,7 +166,7 @@ export function RulesPage({ ipc = productionRulesIpc }: RulesPageProps) {
       setName("");
       setTarget("");
       setPriority("0");
-      setNotice("规则已创建");
+      setNotice(t("rules.rule_created"));
       await refresh();
     } catch (failure) {
       reportError(failure);
@@ -187,18 +188,17 @@ export function RulesPage({ ipc = productionRulesIpc }: RulesPageProps) {
   return (
     <section className="rules-page" data-testid="rules-page">
       <div className="rules-head">
-        <h3>权限规则</h3>
+        <h3>{t("app.common.permission_rules")}</h3>
         <p className="rules-desc">
-          规则在档位矩阵之上叠加：`deny` 收紧恒允许、`allow` 免逐次审批；规则不得越过档位硬边界
-          （`read_only` 写、低档 `exec`/`net` 不因规则放宽）。
+          {t("rules.rules_layer_on_top_of")}
         </p>
       </div>
 
       {rules === null ? (
-        <p className="rules-loading">正在加载规则…</p>
+        <p className="rules-loading">{t("rules.loading_rules")}</p>
       ) : rules.length === 0 ? (
         <p className="rules-empty" data-testid="rules-empty">
-          暂无规则
+          {t("rules.no_rules")}
         </p>
       ) : (
         <ul className="rules-list">
@@ -215,18 +215,18 @@ export function RulesPage({ ipc = productionRulesIpc }: RulesPageProps) {
               </span>
               <span className="rule-summary" data-testid="rule-summary">
                 {rule.resource}:{rule.action} · {rule.target_kind}
-                {rule.target ? ` · ${rule.target}` : ""} · {rule.decision} · 优先级 {rule.priority}
+                {rule.target ? ` · ${rule.target}` : ""} · {rule.decision} {t("rules.priority")} {rule.priority}
               </span>
               {confirmDeleteId === rule.id ? (
                 <div className="rule-confirm" data-testid="rule-delete-confirm">
-                  <span className="rule-confirm-text">确认删除？</span>
+                  <span className="rule-confirm-text">{t("app.action.delete_2")}</span>
                   <button
                     type="button"
                     data-testid="rule-delete-cancel"
                     disabled={busy}
                     onClick={() => setConfirmDeleteId(null)}
                   >
-                    取消
+                    {t("app.action.cancel")}
                   </button>
                   <button
                     type="button"
@@ -234,7 +234,7 @@ export function RulesPage({ ipc = productionRulesIpc }: RulesPageProps) {
                     disabled={busy}
                     onClick={() => void onConfirmDelete(rule.id)}
                   >
-                    删除
+                    {t("app.action.delete")}
                   </button>
                 </div>
               ) : (
@@ -244,11 +244,11 @@ export function RulesPage({ ipc = productionRulesIpc }: RulesPageProps) {
                     data-testid="rule-toggle"
                     data-rule-id={rule.id}
                     data-enabled={String(rule.enabled)}
-                    title={rule.enabled ? "停用规则" : "启用规则"}
+                    title={rule.enabled ? t("rules.disable_rule") : t("rules.enable_rule")}
                     disabled={busy}
                     onClick={() => void onToggle(rule)}
                   >
-                    {rule.enabled ? "停用" : "启用"}
+                    {rule.enabled ? t("app.action.disable") : t("app.action.enable")}
                   </button>
                   <button
                     type="button"
@@ -257,7 +257,7 @@ export function RulesPage({ ipc = productionRulesIpc }: RulesPageProps) {
                     disabled={busy}
                     onClick={() => setConfirmDeleteId(rule.id)}
                   >
-                    删除
+                    {t("app.action.delete")}
                   </button>
                 </div>
               )}
@@ -267,20 +267,20 @@ export function RulesPage({ ipc = productionRulesIpc }: RulesPageProps) {
       )}
 
       <div className="rule-add-form" data-testid="rule-add-form">
-        <h4>新增规则</h4>
+        <h4>{t("rules.add_rule")}</h4>
         <label className="rule-field">
-          名称
+          {t("app.common.name")}
           <input
             type="text"
             data-testid="rule-name-input"
-            placeholder="规则名称（≤64 字符）"
+            placeholder={t("rules.rule_name_64_characters")}
             value={name}
             disabled={busy}
             onChange={(event) => setName(event.target.value)}
           />
         </label>
         <label className="rule-field">
-          资源
+          {t("rules.resource")}
           <select
             data-testid="rule-resource-select"
             value={resource}
@@ -289,13 +289,13 @@ export function RulesPage({ ipc = productionRulesIpc }: RulesPageProps) {
           >
             {RULE_RESOURCES.map((value) => (
               <option key={value} value={value}>
-                {RULE_RESOURCE_LABELS[value]}
+                {t(RULE_RESOURCE_LABELS[value])}
               </option>
             ))}
           </select>
         </label>
         <label className="rule-field">
-          目标类型
+          {t("rules.target_type")}
           <select
             data-testid="rule-target-kind-select"
             value={targetKind}
@@ -304,24 +304,24 @@ export function RulesPage({ ipc = productionRulesIpc }: RulesPageProps) {
           >
             {targetKinds.map((kind) => (
               <option key={kind} value={kind}>
-                {RULE_TARGET_KIND_LABELS[kind] ?? kind}
+                {tKeyOrRaw(RULE_TARGET_KIND_LABELS[kind] ?? kind)}
               </option>
             ))}
           </select>
         </label>
         <label className="rule-field">
-          目标
+          {t("rules.target")}
           <input
             type="text"
             data-testid="rule-target-input"
-            placeholder={targetDisabled ? "目标类型为 any 时无需目标" : "路径 / 命令名 / 主机名"}
+            placeholder={targetDisabled ? t("rules.no_target_is_needed_when") : t("rules.path_command_name_host_name")}
             value={target}
             disabled={busy || targetDisabled}
             onChange={(event) => setTarget(event.target.value)}
           />
         </label>
         <label className="rule-field">
-          决议
+          {t("rules.decision")}
           <select
             data-testid="rule-decision-select"
             value={decision}
@@ -330,13 +330,13 @@ export function RulesPage({ ipc = productionRulesIpc }: RulesPageProps) {
           >
             {RULE_DECISIONS.map((value) => (
               <option key={value} value={value}>
-                {RULE_DECISION_LABELS[value] ?? value}
+                {tKeyOrRaw(RULE_DECISION_LABELS[value] ?? value)}
               </option>
             ))}
           </select>
         </label>
         <label className="rule-field">
-          优先级（0–100）
+          {t("rules.priority_0_100")}
           <input
             type="number"
             min={0}
@@ -354,7 +354,7 @@ export function RulesPage({ ipc = productionRulesIpc }: RulesPageProps) {
             disabled={busy}
             onClick={() => void onAdd()}
           >
-            添加规则
+            {t("rules.add_rule_2")}
           </button>
         </div>
       </div>

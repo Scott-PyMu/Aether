@@ -15,6 +15,7 @@ import type { AetherEvent } from "@aether/protocol";
 
 import type { MessageRow } from "./session";
 import type { MessageContentPart } from "./session";
+import { t } from "./i18n";
 
 export interface ChatBubble {
   key: string;
@@ -199,7 +200,7 @@ export function projectSession(
       case "run.failed": {
         const error = asRecord(payload.error);
         const code = asString(error.code) ?? "run_failed";
-        const message = asString(error.message) ?? "run 失败";
+        const message = asString(error.message) ?? t("session.projection.run_failed");
         if (runId) {
           runs.set(runId, {
             runId,
@@ -274,7 +275,7 @@ export function projectSession(
       case "error": {
         lastError = {
           code: asString(payload.code) ?? "error",
-          message: asString(payload.message) ?? "核心错误",
+          message: asString(payload.message) ?? t("session.projection.core_error"),
         };
         break;
       }

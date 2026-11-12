@@ -7,6 +7,7 @@
  * - 诊断导出入口。
  */
 import { APP_VERSION, PROTOCOL_VERSION } from "@aether/protocol";
+import { t } from "./i18n";
 
 export interface AboutPageProps {
   /** 数据目录（M9 起由 S-12 承接；主 UI 可选展示）。 */
@@ -32,12 +33,12 @@ export function AboutPage({
         aria-modal="true"
       >
         <div className="modal-h">
-          <h3>关于</h3>
+          <h3>{t("app.common.about")}</h3>
           <button
             type="button"
             className="modal-close"
             data-testid="overlay-back"
-            aria-label="关闭关于"
+            aria-label={t("app.about.close_about")}
             onClick={onBack}
           >
             ×
@@ -48,33 +49,31 @@ export function AboutPage({
             <div className="about-logo">A</div>
             <div className="about-name">Aether</div>
             <div className="about-ver">
-              统一多 Agent 编排平台
+              {t("app.about.unified_multi_agent_orchestration_platform")}
               <br />
-              <span data-testid="about-version">版本 {APP_VERSION}</span>
+              <span data-testid="about-version">{t("app.common.version")} {APP_VERSION}</span>
               <br />
               <span data-testid="about-protocol">
-                线协议 v{PROTOCOL_VERSION.major}.{PROTOCOL_VERSION.minor}（Aether 线协议）
+                {t("app.common.wire_protocol_v")}{PROTOCOL_VERSION.major}.{PROTOCOL_VERSION.minor}{t("app.about.aether_wire_protocol")}
               </span>
               <br />
-              Apache-2.0 · 净室实现
+              {t("app.about.apache_2_0_clean_room")}
             </div>
-            <div className="about-tag">P0 三运行时：Claude Code / Codex / DeepSeek Harness</div>
+            <div className="about-tag">{t("app.common.p0_runtimes_claude_code_codex")}</div>
 
             {dataDir ? (
               <p className="about-data-dir" data-testid="about-data-dir">
-                数据目录：{dataDir}
+                {t("app.common.data_directory")}{dataDir}
               </p>
             ) : null}
 
             <p className="about-boundary" data-testid="about-security-boundary">
-              安全边界：MVP 为信任级模型（非沙箱）——应用本体、官方适配器与 Runtime CLI
-              均视为可信一等公民；权限门防误操作与非计划行为，不防蓄意攻击；P3 起才允许
-              第三方适配器（OS 沙箱 + 显式信任确认）。
+              {t("app.about.security_boundary_the_mvp_uses")}
             </p>
 
             {mockOnly ? (
               <p className="about-beta-marker" data-testid="about-beta-marker" role="alert">
-                Mock-only beta：不含真实模型调用（真实适配器接入为 P1 前置）。
+                {t("app.about.mock_only_beta_no_real")}
               </p>
             ) : null}
 
@@ -90,21 +89,21 @@ export function AboutPage({
                     <path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8z" />
                     <path d="M14 3v5h5" />
                   </svg>
-                  导出诊断包
+                  {t("app.action.export_diagnostics_bundle")}
                 </button>
               ) : null}
               <div className="about-link">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
                 </svg>
-                第三方依赖清单（SBOM）
+                {t("app.about.third_party_dependency_list_sbom")}
               </div>
               <div className="about-link">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <circle cx="12" cy="12" r="9" />
                   <path d="M12 8v4l3 2" />
                 </svg>
-                构建信息：commit / 时间 / 工具链
+                {t("app.about.build_info_commit_time_toolchain")}
               </div>
             </div>
           </div>

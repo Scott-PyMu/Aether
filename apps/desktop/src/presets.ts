@@ -75,9 +75,9 @@ export const PRESET_NOT_FOUND_CODE = "preset_not_found";
 export const BUILTIN_PRESET_UNDELETABLE_CODE = "builtin_preset_undeletable";
 
 /** `preset_not_found` 展示文案（UI-UX §5 文案表登记值）。 */
-export const PRESET_NOT_FOUND_MESSAGE = "预设不存在，已刷新列表";
+export const PRESET_NOT_FOUND_MESSAGE = "presets.preset_not_found_list_refreshed";
 /** `builtin_preset_undeletable` 展示文案（UI-UX §5 文案表登记值）。 */
-export const BUILTIN_PRESET_UNDELETABLE_MESSAGE = "内置预设不可删除";
+export const BUILTIN_PRESET_UNDELETABLE_MESSAGE = "presets.built_in_presets_cannot_be";
 
 /**
  * 预设提示词与记忆注入的合成分隔标记前缀（ADR-026 附录 A-4）。

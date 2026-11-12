@@ -6,6 +6,8 @@
  */
 import { aetherErrorCode, client, tryAetherError } from "@aether/protocol";
 
+import { localizeError } from "./i18n";
+
 export type StartupPhase = "ready" | "blocked_sync_dir" | "blocked_error";
 
 export type DataDirSource = "env_override" | "pointer" | "default" | "migrated";
@@ -85,9 +87,25 @@ export async function exitApp(): Promise<void> {
   await client.appExit({ confirm: true });
 }
 
-/** 将 IPC 结构化错误转为可展示文本（`message` 优先，兜底 String(error)）。 */
+/**
+ * 将 IPC 结构化错误转为可展示文本（M10-06/ADR-036）。
+ *
+ * - 已登记 `business_code`：按当前语言本地化（`session_busy` 例外：ADR-028 v0.9
+ *   要求补选场景直接展示后端上下文文案，避免丢失“当前任务仍在运行”的上下文）；
+ * - 无 `business_code`（或未登记）：保留后端 `message` 作为诊断兜底（P1 的
+ *   `invalid_value`/`path_rejected` 等把具体原因放在 message 中，不可丢弃）。
+ */
 export function describeIpcError(error: unknown): string {
-  return tryAetherError(error)?.message ?? String(error);
+  const structured = tryAetherError(error);
+  const localized = localizeError(error);
+  if (
+    structured?.business_code &&
+    structured.business_code !== "session_busy" &&
+    localized.known
+  ) {
+    return localized.message;
+  }
+  return structured?.message ?? String(error);
 }
 
 /**

@@ -2,6 +2,7 @@ import { APP_VERSION, PROTOCOL_VERSION } from "@aether/protocol";
 import { useCallback, useEffect, useState } from "react";
 
 import { AboutPage } from "./AboutPage";
+import { initAppearance, useAppearance } from "./appearance";
 import { AuditPage } from "./AuditPage";
 import { BackupPage } from "./BackupPage";
 import { DiagnosticsPage } from "./DiagnosticsPage";
@@ -33,6 +34,8 @@ type AppView =
 export function App() {
   const [startup, setStartup] = useState<StartupSnapshot | null>(null);
   const [view, setView] = useState<AppView>("workbench");
+  /** M10-06/ADR-036：订阅外观状态；语言/主题切换触发整棵 UI 重渲染（不重载数据）。 */
+  const { locale: activeLocale, theme: activeTheme } = useAppearance();
   /**
    * M7-09/ADR-026：新建会话入口当前选中的 Agent 预设（提升到 `App` 以便设置页
    * 「使用中」标记与工作台新建入口共享同一选择；`null` = 不使用预设）。
@@ -40,6 +43,10 @@ export function App() {
   const [activePresetId, setActivePresetId] = useState<string | null>(null);
   /** M7-09/ADR-026：预设清单版本（设置页增改删后递增 → 工作台重新拉取清单）。 */
   const [presetsVersion, setPresetsVersion] = useState(0);
+
+  useEffect(() => {
+    void initAppearance();
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -62,7 +69,7 @@ export function App() {
   }, []);
 
   return (
-    <main className="app">
+    <main className="app" data-locale={activeLocale} data-theme={activeTheme}>
       <div className="app-main">
         <SessionWorkbench
           onOpenDiagnostics={() => setView("diagnostics")}

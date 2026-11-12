@@ -11,6 +11,8 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { t as translate } from "./i18n";
+
 import { PresetsPage } from "./PresetsPage";
 import {
   BUILTIN_PRESET_UNDELETABLE_MESSAGE,
@@ -198,7 +200,7 @@ describe("M7-09 预设管理页（presets-page）", () => {
     fireEvent.click(screen.getByTestId("preset-delete-confirm-button"));
     const notFound = await screen.findByTestId("presets-error", {}, WAIT);
     expect(notFound.getAttribute("data-code")).toBe("preset_not_found");
-    expect(notFound.textContent).toContain(PRESET_NOT_FOUND_MESSAGE);
+    expect(notFound.textContent).toContain(translate(PRESET_NOT_FOUND_MESSAGE));
     await waitFor(() => {
       expect(ipc.listPresets).toHaveBeenCalledTimes(2);
     }, WAIT);
@@ -208,7 +210,7 @@ describe("M7-09 预设管理页（presets-page）", () => {
     await waitFor(() => {
       const error = screen.getByTestId("presets-error");
       expect(error.getAttribute("data-code")).toBe("builtin_preset_undeletable");
-      expect(error.textContent).toContain(BUILTIN_PRESET_UNDELETABLE_MESSAGE);
+      expect(error.textContent).toContain(translate(BUILTIN_PRESET_UNDELETABLE_MESSAGE));
     }, WAIT);
   });
 

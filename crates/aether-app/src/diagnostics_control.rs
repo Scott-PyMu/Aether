@@ -62,6 +62,12 @@ pub const UI_LAYOUT_MAX_BYTES: usize = 64 * 1024;
 pub const UI_PROVIDER_SELECTION_KEY: &str = "ui.provider_selection";
 /// `ui.provider_selection` 的最大字节数（登记口径 ≤64KiB）。
 pub const UI_PROVIDER_SELECTION_MAX_BYTES: usize = 64 * 1024;
+/// 设置键：界面语言（M10-06 / ADR-036；`system`/`zh-CN`/`en-US`，缺省 `system`）。
+pub const UI_LOCALE_KEY: &str = "ui.locale";
+/// 设置键：界面主题（M10-06 / ADR-036；`system`/`light`/`dark`，缺省 `system`）。
+pub const UI_THEME_KEY: &str = "ui.theme";
+/// 枚举字符串设置键的最大字节数（ADR-036：≤32 字节）。
+pub const UI_ENUM_SETTING_MAX_BYTES: usize = 32;
 /// 未备份提醒阈值（D13：7 天）。
 pub const BACKUP_REMINDER_THRESHOLD_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 /// 诊断包文件名前缀（`aether-diagnostics-<ts>.json`）。
@@ -245,6 +251,12 @@ impl DiagnosticsControlBackend {
             }
             UI_PROVIDER_SELECTION_KEY => {
                 validate_json_object_setting(key, value, UI_PROVIDER_SELECTION_MAX_BYTES)?;
+            }
+            UI_LOCALE_KEY => {
+                validate_enum_setting(key, value, &["system", "zh-CN", "en-US"])?;
+            }
+            UI_THEME_KEY => {
+                validate_enum_setting(key, value, &["system", "light", "dark"])?;
             }
             _ => {}
         }
@@ -511,6 +523,7 @@ pub(crate) fn default_setting_value(key: &str) -> Value {
         BACKUP_AUTO_RETENTION_KEY => Value::from(10),
         EVENTS_RETENTION_DAYS_KEY => Value::from(30),
         UI_LAYOUT_KEY | UI_PROVIDER_SELECTION_KEY => Value::String("{}".to_owned()),
+        UI_LOCALE_KEY | UI_THEME_KEY => Value::String("system".to_owned()),
         _ => Value::Null,
     }
 }
@@ -553,6 +566,24 @@ fn validate_setting_int_range(
             IpcErrorCode::OutOfRange,
             "value",
             format!("设置键 {key} 的值必须在 {min}–{max} 之间"),
+        ));
+    }
+    Ok(())
+}
+
+/// 枚举字符串校验（M10-06/ADR-036：`ui.locale`/`ui.theme`；≤32 字节 + 白名单）。
+fn validate_enum_setting(key: &str, value: &Value, allowed: &[&str]) -> Result<(), IpcError> {
+    let valid = value
+        .as_str()
+        .is_some_and(|text| text.len() <= UI_ENUM_SETTING_MAX_BYTES && allowed.contains(&text));
+    if !valid {
+        return Err(IpcError::at_field(
+            IpcErrorCode::InvalidEnum,
+            "value",
+            format!(
+                "设置键 {key} 的值必须是 {:?} 之一（≤{UI_ENUM_SETTING_MAX_BYTES} 字节）",
+                allowed
+            ),
         ));
     }
     Ok(())
@@ -813,7 +844,8 @@ mod tests {
 
     #[test]
     fn p1_settings_keys_are_registered_with_defaults() {
-        // ADR-018 附录 A-6 + ADR-028 v0.9：9 个登记键均有非 Null 缺省值，且类型与登记一致。
+        // ADR-018 附录 A-6 + ADR-028 v0.9 + ADR-036：11 个登记键均有非 Null 缺省值，
+        // 且类型与登记一致。
         for key in crate::ipc::dto::SETTINGS_KEY_ALLOWLIST {
             let default = default_setting_value(key);
             assert!(!default.is_null(), "登记键 {key} 缺少缺省值");
@@ -824,8 +856,8 @@ mod tests {
         }
         assert_eq!(
             crate::ipc::dto::SETTINGS_KEY_ALLOWLIST.len(),
-            9,
-            "ADR-028 v0.9 后设置键共 9 个（`ui.provider_selection` 新增）"
+            11,
+            "M10-06/ADR-036 后设置键共 11 个（`ui.locale`/`ui.theme` 新增）"
         );
     }
 
@@ -866,5 +898,24 @@ mod tests {
         assert_eq!(error.code, IpcErrorCode::InvalidValue);
         let error = validate(UI_PROVIDER_SELECTION_KEY, &json!("{")).expect_err("非法 JSON");
         assert_eq!(error.code, IpcErrorCode::InvalidValue);
+
+        // M10-06/ADR-036：语言/主题枚举（缺省 system；未知值/超长 → invalid_enum）。
+        assert_eq!(default_setting_value(UI_LOCALE_KEY), json!("system"));
+        assert_eq!(default_setting_value(UI_THEME_KEY), json!("system"));
+        for locale in ["system", "zh-CN", "en-US"] {
+            assert!(validate(UI_LOCALE_KEY, &json!(locale)).is_ok());
+        }
+        let error = validate(UI_LOCALE_KEY, &json!("fr-FR")).expect_err("未知语言");
+        assert_eq!(error.code, IpcErrorCode::InvalidEnum);
+        let error = validate(UI_LOCALE_KEY, &json!(42)).expect_err("非字符串");
+        assert_eq!(error.code, IpcErrorCode::InvalidEnum);
+        let error = validate(UI_LOCALE_KEY, &json!("zh-CN-extra-long-locale-tag"))
+            .expect_err("超过 32 字节");
+        assert_eq!(error.code, IpcErrorCode::InvalidEnum);
+        for theme in ["system", "light", "dark"] {
+            assert!(validate(UI_THEME_KEY, &json!(theme)).is_ok());
+        }
+        let error = validate(UI_THEME_KEY, &json!("sepia")).expect_err("未知主题");
+        assert_eq!(error.code, IpcErrorCode::InvalidEnum);
     }
 }

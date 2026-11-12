@@ -15,7 +15,9 @@
  * - `ui.layout`：工作台多视图布局（JSON 对象字符串 ≤64KiB，缺省 `"{}"`；
  *   标签页/分屏/聚焦窗格；损坏回退默认布局）——M7-04/ADR-018 附录 A-6；
  * - `ui.provider_selection`：全局供应商选择记忆（JSON 对象字符串 ≤64KiB，缺省 `"{}"`；
- *   runtime → provider_id；跨工作区）——ADR-028 v0.9。
+ *   runtime → provider_id；跨工作区）——ADR-028 v0.9；
+ * - `ui.locale` / `ui.theme`：界面语言（`system|zh-CN|en-US`）/主题
+ *   （`system|light|dark`），缺省 `system`——M10-06/ADR-036。
  *
  * 未登记键由核心返回 `invalid_enum`（默认拒绝）。工作区绑定键归 M3-08。
  */
@@ -39,6 +41,10 @@ export const EVENTS_RETENTION_DAYS_KEY = "events.retention.days";
 export const UI_LAYOUT_KEY = "ui.layout";
 /** 全局供应商选择记忆（ADR-028 v0.9；JSON 对象字符串，缺省 `{}`；跨工作区）。 */
 export const UI_PROVIDER_SELECTION_KEY = "ui.provider_selection";
+/** 界面语言设置键（M10-06/ADR-036；`system`/`zh-CN`/`en-US`，缺省 `system`）。 */
+export const UI_LOCALE_KEY = "ui.locale";
+/** 界面主题设置键（M10-06/ADR-036；`system`/`light`/`dark`，缺省 `system`）。 */
+export const UI_THEME_KEY = "ui.theme";
 
 /** 未备份提醒状态（`backup_list.reminder` 投影；核心时钟计算，可注入）。 */
 export interface BackupReminder {

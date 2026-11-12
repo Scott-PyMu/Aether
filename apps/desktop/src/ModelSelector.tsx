@@ -22,6 +22,7 @@ import {
   type ProvidersIpc,
 } from "./providers";
 import { describeIpcError } from "./startup";
+import { t } from "./i18n";
 
 export interface ModelSelectorProps {
   /** 供应商 IPC（测试/E2E 注入替身；缺省 = 生产 Tauri 实现）。 */
@@ -134,7 +135,7 @@ export function ModelSelector({
     ? `${selectedProvider?.name ?? ""} · ${selectedModel.display_name}`
     : value !== null
       ? value
-      : "选择模型";
+      : t("provider.models.select_model");
 
   const keyword = search.trim().toLowerCase();
   const filtered: ModelGroup[] = groups
@@ -160,8 +161,8 @@ export function ModelSelector({
         disabled={disabled}
         title={
           sessionModel
-            ? `当前会话模型：${sessionModel}（只读）；此处选择作用于新建会话`
-            : "模型选择（作用于新建会话；运行期只读）"
+            ? t("provider.models.current_session_model_read_only", { p0: sessionModel })
+            : t("provider.models.model_selection_applies_to_new")
         }
         onClick={() => void toggle()}
       >
@@ -191,7 +192,7 @@ export function ModelSelector({
               type="search"
               className="model-selector-search"
               data-testid="model-selector-search"
-              placeholder="搜索模型..."
+              placeholder={t("provider.models.search_models")}
               value={search}
               onChange={(event) => setSearch(event.target.value)}
             />
@@ -201,8 +202,8 @@ export function ModelSelector({
           {filtered.length === 0 ? (
             <p className="model-selector-empty model-empty" data-testid="model-selector-empty">
               {keyword.length > 0
-                ? "没有匹配的模型"
-                : "没有可用的模型；请先在「设置 → 模型与供应商配置」中启用供应商和模型（也可在新建表单手动输入模型 ID）"}
+                ? t("provider.models.no_matching_models")
+                : t("provider.models.no_available_models_enable_providers")}
             </p>
           ) : (
             filtered.map((group) => (

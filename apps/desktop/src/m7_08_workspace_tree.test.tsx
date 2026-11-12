@@ -12,6 +12,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { t as translate } from "./i18n";
 import type { SessionSummary } from "./session";
 import type { WorkspacesIpc, WorkspacesListResult } from "./workspace";
 import {
@@ -115,7 +116,7 @@ function fakeIpc(overrides: Partial<WorkspacesIpc> = {}): WorkspacesIpc {
       baseline_unchanged: true,
       baseline_root: "C:\\ws\\a",
       memory_injection_switched: true,
-      notice: WORKSPACE_BASELINE_NOTICE,
+      notice: translate(WORKSPACE_BASELINE_NOTICE),
     }),
     pickDirectory: vi.fn().mockResolvedValue("C:\\ws\\c"),
     ...overrides,
@@ -176,7 +177,7 @@ describe("WorkspaceTree（M7-08）", () => {
     expect(within(defaultGroup).queryByTestId("workspace-delete")).toBeNull();
     // 常驻提示 + 无全局绑定入口（「设为默认」/「绑定工作区」）。
     expect(screen.getByTestId("workspace-assign-notice").textContent).toBe(
-      WORKSPACE_BASELINE_NOTICE,
+      translate(WORKSPACE_BASELINE_NOTICE),
     );
     expect(screen.queryByText(/设为默认/)).toBeNull();
     expect(screen.queryByText(/绑定工作区/)).toBeNull();
@@ -317,7 +318,7 @@ describe("WorkspaceTree（M7-08）", () => {
     }, WAIT);
     const result = await screen.findByTestId("workspace-assign-result", {}, WAIT);
     expect(result.getAttribute("data-result")).toBe("ok");
-    expect(result.textContent).toContain(WORKSPACE_BASELINE_NOTICE);
+    expect(result.textContent).toContain(translate(WORKSPACE_BASELINE_NOTICE));
     expect(result.textContent).toContain("C:\\ws\\a");
     expect(onAssigned).toHaveBeenCalledTimes(1);
     // 已在该工作区的节点改派按钮禁用。

@@ -16,6 +16,7 @@ import {
   type SubagentNode,
 } from "./subagents";
 import { useSessionEvents } from "./useSessionEvents";
+import { t, tKeyOrRaw } from "./i18n";
 
 export interface SubagentPanelProps {
   parentSessionId: string;
@@ -131,7 +132,7 @@ export function SubagentPanel({
       await ipc.spawn({
         parent_session_id: parentSessionId,
         role: "review",
-        purpose: "独立审查当前会话的变更与风险，输出结构化 findings。",
+        purpose: t("subagent.independently_review_the_current_session"),
         template: "adversarial_review",
       });
       await reload();
@@ -145,14 +146,14 @@ export function SubagentPanel({
   return (
     <section className="subagent-panel" data-testid="subagent-tree" data-parent-session-id={parentSessionId}>
       <header className="subagent-header">
-        <span>子 Agent</span>
+        <span>{t("subagent.subagents")}</span>
         <button
           type="button"
           data-action="spawn-review"
           disabled={spawnBusy}
           onClick={() => void spawnReview()}
         >
-          派生审查
+          {t("subagent.spawn_review")}
         </button>
       </header>
       {error ? (
@@ -161,7 +162,7 @@ export function SubagentPanel({
         </p>
       ) : null}
       {nodes.length === 0 ? (
-        <p className="subagent-empty">暂无子 Agent</p>
+        <p className="subagent-empty">{t("subagent.no_subagents")}</p>
       ) : (
         <ul className="subagent-list">
           {nodes.map((node) => {
@@ -187,7 +188,7 @@ export function SubagentPanel({
                   <span className="subagent-title">{node.title}</span>
                   <span className="subagent-meta">
                     {node.role} · {node.status}
-                    {node.verdict ? ` · ${SUBAGENT_VERDICT_LABELS[node.verdict] ?? node.verdict}` : ""}
+                    {node.verdict ? ` · ${tKeyOrRaw(SUBAGENT_VERDICT_LABELS[node.verdict] ?? node.verdict)}` : ""}
                   </span>
                 </button>
                 <div className="subagent-result" data-testid="subagent-result">
@@ -196,7 +197,7 @@ export function SubagentPanel({
                     data-state={node.injection_state}
                     data-delivery-mode={node.delivery_mode}
                   >
-                    {SUBAGENT_INJECTION_LABELS[node.injection_state]}
+                    {t(SUBAGENT_INJECTION_LABELS[node.injection_state])}
                   </span>
                   {node.result_summary ? (
                     <p className="subagent-summary">
@@ -212,7 +213,7 @@ export function SubagentPanel({
                       disabled={!pending || busyChild === node.child_session_id}
                       onClick={() => void resolve(node.child_session_id, "accept")}
                     >
-                      接受
+                      {t("subagent.accept")}
                     </button>
                     <button
                       type="button"
@@ -221,7 +222,7 @@ export function SubagentPanel({
                       disabled={!pending || busyChild === node.child_session_id}
                       onClick={() => void resolve(node.child_session_id, "reject")}
                     >
-                      拒绝
+                      {t("app.common.deny")}
                     </button>
                     <button
                       type="button"
@@ -230,7 +231,7 @@ export function SubagentPanel({
                       disabled={busyChild === node.child_session_id}
                       onClick={() => void resolve(node.child_session_id, "rerun")}
                     >
-                      重跑
+                      {t("subagent.rerun")}
                     </button>
                     {ACTIVE_STATUSES.has(node.status) ? (
                       <button
@@ -240,7 +241,7 @@ export function SubagentPanel({
                         disabled={busyChild === node.child_session_id}
                         onClick={() => void cancel(node.child_session_id)}
                       >
-                        取消
+                        {t("app.action.cancel")}
                       </button>
                     ) : null}
                     <button
@@ -250,7 +251,7 @@ export function SubagentPanel({
                       disabled={!node.has_more_details || busyChild === node.child_session_id}
                       onClick={() => void loadDetails(node.child_session_id)}
                     >
-                      详情
+                      {t("subagent.details")}
                     </button>
                   </div>
                   {detail ? (

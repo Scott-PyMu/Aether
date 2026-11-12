@@ -11,6 +11,7 @@ import { useCallback, useState } from "react";
 import { requestAppRestart } from "./health";
 import { describeIpcError } from "./startup";
 import { useHealthPolling } from "./useHealthPolling";
+import { t } from "./i18n";
 
 export interface HealthMonitorProps {
   /** M3-05：降级横幅「导出诊断」入口（打开 S-07 诊断导出页）。 */
@@ -41,10 +42,10 @@ export function HealthMonitor({ onOpenDiagnostics }: HealthMonitorProps = {}) {
         data-testid="core-unresponsive"
         role="alert"
       >
-        <p className="health-title">核心未响应</p>
+        <p className="health-title">{t("health.core_not_responding")}</p>
         <p className="health-detail">
-          连续 15s 未收到健康响应（UI 每 5s 轮询 health）。
-          {error ? ` 最近错误：${error}` : ""}
+          {t("health.no_health_response_for_15s")}
+          {error ? t("health.last_error", { p0: error }) : ""}
         </p>
         <button
           type="button"
@@ -52,7 +53,7 @@ export function HealthMonitor({ onOpenDiagnostics }: HealthMonitorProps = {}) {
           onClick={onRestart}
           disabled={restartPending}
         >
-          重启核心
+          {t("health.restart_core")}
         </button>
         {restartError ? (
           <p className="health-error" data-testid="core-restart-error">
@@ -71,15 +72,15 @@ export function HealthMonitor({ onOpenDiagnostics }: HealthMonitorProps = {}) {
         data-testid="storage-degraded"
         role="alert"
       >
-        <p className="health-title">存储降级（只读）</p>
+        <p className="health-title">{t("health.storage_degraded_read_only")}</p>
         <p className="health-detail">
-          触发源：{trigger}；写入与新任务已停止；运行中的任务已中断（可重试）。
+          {t("health.trigger")}{trigger}{t("health.writes_and_new_tasks_are")}
           {report?.detail ? ` ${report.detail}` : ""}
         </p>
         {/* M3-06：恢复引导仅提供 app_restart（修复外部条件 + 重启核心 + 启动自检）；
             不提供任何「一键恢复/热恢复」按钮（D4/ADR-004）。 */}
         <p className="health-recovery-hint" data-testid="storage-degraded-hint">
-          恢复方式：修复磁盘/目录/权限后重启应用（P0 无热恢复）。
+          {t("health.recovery_fix_the_disk_directory")}
         </p>
         <button
           type="button"
@@ -87,7 +88,7 @@ export function HealthMonitor({ onOpenDiagnostics }: HealthMonitorProps = {}) {
           onClick={onRestart}
           disabled={restartPending}
         >
-          重启应用
+          {t("health.restart_app")}
         </button>
         {/* M3-05：降级期诊断导出入口（D4：读/备份/导出可用）。 */}
         {onOpenDiagnostics ? (
@@ -96,7 +97,7 @@ export function HealthMonitor({ onOpenDiagnostics }: HealthMonitorProps = {}) {
             data-testid="storage-degraded-diagnostics"
             onClick={onOpenDiagnostics}
           >
-            导出诊断
+            {t("app.action.export_diagnostics")}
           </button>
         ) : null}
         {restartError ? (
@@ -111,7 +112,7 @@ export function HealthMonitor({ onOpenDiagnostics }: HealthMonitorProps = {}) {
   if (status === "normal" && errorCode !== "core_not_ready") {
     return (
       <p className="health-normal" data-testid="health-normal">
-        核心正常（storage_state=normal）
+        {t("health.core_healthy_storage_state_normal")}
       </p>
     );
   }
@@ -121,9 +122,9 @@ export function HealthMonitor({ onOpenDiagnostics }: HealthMonitorProps = {}) {
   if (errorCode === "core_not_ready") {
     return (
       <section className="health-starting" data-testid="core-not-ready-banner" role="status">
-        <p className="health-title">核心启动中…</p>
+        <p className="health-title">{t("health.core_starting")}</p>
         <p className="health-detail">
-          启动序列尚未完成（存储/管线注入前）或核心正在重启；功能暂不可用。
+          {t("health.the_startup_sequence_has_not")}
         </p>
       </section>
     );
@@ -131,7 +132,7 @@ export function HealthMonitor({ onOpenDiagnostics }: HealthMonitorProps = {}) {
 
   return (
     <p className="health-loading" data-testid="health-loading">
-      正在获取核心健康状态…
+      {t("health.fetching_core_health")}
     </p>
   );
 }

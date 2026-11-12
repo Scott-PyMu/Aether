@@ -2,7 +2,7 @@
   "schema": "aether.m10.doc-freeze.v1",
   "task": "M10-00",
   "frozen_at": "2026-11-05",
-  "amended_at": "2026-11-11",
+  "amended_at": "2026-11-12",
   "amendments": [
     {
       "task": "M10-01",
@@ -33,6 +33,18 @@
       "adr": "ADR-035",
       "field": "docs/P2-架构迁移-实施计划与验收标准.md",
       "reason": "M10-05 执行状态与登记计数（命令 86/82/4、业务码 35、迁移 0012、附件/能力门/UtilityProcess）写入 P2 计划；设计语义未变。"
+    },
+    {
+      "task": "M10-06",
+      "adr": "ADR-036",
+      "field": "docs/P2-架构迁移-实施计划与验收标准.md",
+      "reason": "M10-06 执行状态（任务进度可更新；结构不变）"
+    },
+    {
+      "task": "M10-08",
+      "adr": "ADR-038",
+      "field": "docs/P2-架构迁移-实施计划与验收标准.md",
+      "reason": "M10-08 启动体验补充口径（>1.5s 另立优化 ADR；不改变 30s 分库阈值）"
     }
   ],
   "design_version": "v1.32",
@@ -53,7 +65,7 @@
     },
     {
       "path": "docs/P2-架构迁移-实施计划与验收标准.md",
-      "sha256": "b12628411c156e57429ec9b3cc6920dec1bc84efff9dbae6572195c075c3f305"
+      "sha256": "91dcec2bfae4500c5a4a410b5b0f98ba8a9d905b193f04c81b4e6689a66ffba7"
     },
     {
       "path": "docs/UI-UX-设计规格.md",

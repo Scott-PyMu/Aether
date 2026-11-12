@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark" data-theme-source="system">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Aether i18n/theme visual harness</title>
+    <link rel="stylesheet" href="../../../apps/desktop/src/styles.css" />
+    <style>
+      html, body { height: 100%; }
+      body { margin: 0; background: var(--color-bg); color: var(--color-text); }
+      .harness { display: grid; grid-template-columns: 260px 1fr; height: 100vh; }
+      .harness-side { background: var(--color-side); border-right: 1px solid var(--color-border); padding: var(--space-4); }
+      .harness-main { display: flex; flex-direction: column; min-width: 0; }
+      .harness-top { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-5); border-bottom: 1px solid var(--color-border); background: var(--color-surface); }
+      .harness-brand { font-weight: 600; color: var(--color-text); }
+      .harness-badge { color: var(--color-text-muted); font-size: 12px; }
+      .harness-list { display: grid; gap: var(--space-2); margin-top: var(--space-4); }
+      .harness-item { padding: var(--space-3); border-radius: var(--radius-md); background: var(--color-surface); border: 1px solid var(--color-border); color: var(--color-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .harness-item[data-active="true"] { border-color: var(--color-accent); background: var(--color-hover); }
+      .harness-chat { flex: 1; overflow: hidden; padding: var(--space-5); display: grid; align-content: start; gap: var(--space-3); }
+      .harness-bubble { max-width: 680px; padding: var(--space-3) var(--space-4); border-radius: var(--radius-lg); background: var(--color-surface); border: 1px solid var(--color-border); box-shadow: var(--shadow-1); }
+      .harness-bubble[data-role="user"] { margin-left: auto; background: var(--color-hover); }
+      .harness-muted { color: var(--color-text-muted); font-size: 12px; }
+      .harness-error { color: var(--color-danger-text); border-left: 3px solid var(--color-danger); padding-left: var(--space-3); }
+      .harness-warn { color: var(--color-warning); }
+      .harness-ok { color: var(--color-success); }
+      .harness-composer { display: flex; gap: var(--space-3); padding: var(--space-4); border-top: 1px solid var(--color-border); background: var(--color-surface); }
+      .harness-input { flex: 1; min-width: 0; padding: var(--space-3); border-radius: var(--radius-md); border: 1px solid var(--color-border); background: var(--color-bg); color: var(--color-text); }
+      .harness-button { padding: var(--space-2) var(--space-4); border-radius: var(--radius-md); background: var(--color-accent); color: var(--color-on-accent); border: 1px solid var(--color-accent); }
+      .harness-button.secondary { background: var(--color-button-neutral); color: var(--color-text); border-color: var(--color-button-neutral-border); }
+      .harness-card { margin-top: var(--space-4); padding: var(--space-4); border: 1px solid var(--color-permission-border); background: var(--color-permission-bg); border-radius: var(--radius-md); }
+      .harness-long { max-width: 700px; overflow-wrap: anywhere; }
+      .harness-select { padding: var(--space-2); border-radius: var(--radius-sm); border: 1px solid var(--color-border); background: var(--color-dropdown-bg); color: var(--color-text); }
+    </style>
+  </head>
+  <body>
+    <div class="harness" data-testid="appearance">
+      <aside class="harness-side">
+        <div class="harness-brand" data-i18n="app.common.about"></div>
+        <div class="harness-list" data-testid="session-list">
+          <div class="harness-item" data-active="true" data-i18n="session.session_title"></div>
+          <div class="harness-item" data-i18n="session.new_session"></div>
+          <div class="harness-item" data-i18n="settings.appearance.title"></div>
+          <div class="harness-item" data-i18n="audit.actor_label"></div>
+        </div>
+        <div class="harness-card">
+          <div class="harness-muted" data-i18n="settings.appearance.locale"></div>
+          <select class="harness-select" data-testid="locale-select"></select>
+          <div class="harness-muted" data-i18n="settings.appearance.theme"></div>
+          <select class="harness-select" data-testid="theme-select"></select>
+        </div>
+      </aside>
+      <main class="harness-main">
+        <header class="harness-top">
+          <span class="harness-brand" data-i18n="session.session_title"></span>
+          <span class="harness-badge" data-i18n="session.idle"></span>
+          <span class="harness-badge" data-i18n="app.topbar.pending_approvals"></span>
+        </header>
+        <section class="harness-chat" data-testid="message-list">
+          <div class="harness-bubble" data-role="user" data-i18n="app.common.you"></div>
+          <div class="harness-bubble" data-i18n="app.common.assistant"></div>
+          <div class="harness-bubble harness-error" data-i18n="error.business.attachment_too_large.message"></div>
+          <div class="harness-bubble harness-warn" data-i18n="warning.multimodal_model_unverified.message"></div>
+          <div class="harness-bubble harness-ok" data-i18n="attachment.storage_failed_retry_is_available"></div>
+          <div class="harness-bubble harness-long" data-i18n="settings.automatic_artifacts_roll_by_retention"></div>
+          <div class="harness-bubble harness-long" data-i18n="settings.workspace_bound_new_sessions_inject"></div>
+          <div class="harness-bubble harness-muted" data-i18n="session.attachments_drag_paste_images_or"></div>
+        </section>
+        <footer class="harness-composer">
+          <input class="harness-input" data-i18n-placeholder="session.type_a_message_to_reference" />
+          <button class="harness-button" data-i18n="app.action.send"></button>
+          <button class="harness-button secondary" data-i18n="app.action.cancel"></button>
+        </footer>
+      </main>
+    </div>
+    <script>
+      let dictionary = {};
+      window.applyHarness = (theme, locale, dict) => {
+        dictionary = dict || {};
+        document.documentElement.dataset.theme = theme;
+        document.documentElement.dataset.themeSource = "explicit";
+        document.documentElement.lang = locale;
+        document.body.dataset.locale = locale;
+        for (const node of document.querySelectorAll("[data-i18n]")) {
+          const key = node.getAttribute("data-i18n");
+          node.textContent = (dictionary[key] || `⟦${key}⟧`)
+            .replace(/\{p0\}/g, "C:\\ws\\aether-demo")
+            .replace(/\{p1\}/g, "run-01")
+            .replace(/\{p2\}/g, "")
+            .replace(/\{p3\}/g, "");
+        }
+        for (const node of document.querySelectorAll("[data-i18n-placeholder]")) {
+          const key = node.getAttribute("data-i18n-placeholder");
+          node.setAttribute("placeholder", dictionary[key] || `⟦${key}⟧`);
+        }
+        const localeSelect = document.querySelector('[data-testid="locale-select"]');
+        const themeSelect = document.querySelector('[data-testid="theme-select"]');
+        localeSelect.innerHTML = ["system", "zh-CN", "en-US"]
+          .map((value) => `<option value="${value}">${value}</option>`)
+          .join("");
+        localeSelect.value = locale;
+        localeSelect.dataset.locale = locale;
+        themeSelect.innerHTML = ["system", "light", "dark"]
+          .map((value) => `<option value="${value}">${value}</option>`)
+          .join("");
+        themeSelect.value = theme;
+        themeSelect.dataset.theme = theme;
+      };
+      window.harnessMetrics = () => {
+        const style = getComputedStyle(document.documentElement);
+        const selectors = {
+          bg: "body",
+          surface: ".harness-top",
+          text: ".harness-brand",
+          border: ".harness-item",
+          accent: ".harness-button",
+          danger: ".harness-error",
+          warning: ".harness-warn",
+          success: ".harness-ok",
+        };
+        const colors = {};
+        for (const [name, selector] of Object.entries(selectors)) {
+          const node = document.querySelector(selector);
+          const computed = getComputedStyle(node);
+          colors[name] = name === "danger" || name === "warning" || name === "success" || name === "text" || name === "accent"
+            ? computed.color
+            : computed.backgroundColor;
+        }
+        const longNodes = [...document.querySelectorAll(".harness-long")];
+        return {
+          locale: document.documentElement.lang,
+          theme: document.documentElement.dataset.theme,
+          viewport: { width: window.innerWidth, height: window.innerHeight },
+          scrollWidth: document.documentElement.scrollWidth,
+          overflowX: document.documentElement.scrollWidth > window.innerWidth,
+          longTextOverflow: longNodes.some((node) => node.scrollWidth > node.clientWidth + 1),
+          colors,
+          tokens: {
+            bg: style.getPropertyValue("--color-bg").trim(),
+            surface: style.getPropertyValue("--color-surface").trim(),
+            text: style.getPropertyValue("--color-text").trim(),
+            border: style.getPropertyValue("--color-border").trim(),
+            accentText: style.getPropertyValue("--color-accent-text").trim(),
+          },
+          textLengths: {
+            long: longNodes.map((node) => node.textContent.length),
+            buttons: [...document.querySelectorAll(".harness-button")].map((node) => node.getBoundingClientRect().width),
+          },
+        };
+      };
+    </script>
+  </body>
+</html>

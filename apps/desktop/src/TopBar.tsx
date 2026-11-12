@@ -20,6 +20,7 @@ import {
   type RuntimeInfo,
   type SessionSummary,
 } from "./session";
+import { t, tKeyOrRaw } from "./i18n";
 
 export interface TopBarProps {
   session: SessionSummary | null;
@@ -56,19 +57,19 @@ function StorageIndicator() {
           ? "unresponsive"
           : "normal";
   const labels: Record<string, string> = {
-    persist_degraded: "降级",
-    loading: "查询中",
-    unresponsive: "未响应",
-    normal: "正常",
+    persist_degraded: t("app.common.degraded"),
+    loading: t("app.topbar.querying"),
+    unresponsive: t("app.topbar.not_responding"),
+    normal: t("app.topbar.normal"),
   };
   return (
     <span
       className={`storage-indicator storage-${state}`}
       data-testid="storage-indicator"
       data-status={state}
-      title={state === "persist_degraded" ? "存储降级（只读）；详见降级横幅" : `存储${labels[state]}`}
+      title={state === "persist_degraded" ? t("app.topbar.storage_degraded_read_only_see") : t("app.topbar.storage", { p0: labels[state] })}
     >
-      存储：{labels[state]}
+      {t("app.topbar.storage_2")}{labels[state]}
     </span>
   );
 }
@@ -112,8 +113,8 @@ export function TopBar({
                 className="ttl topbar-session-title session-actions-toggle"
                 data-testid="session-actions-toggle"
                 aria-expanded={actionsOpen}
-                aria-label="会话操作"
-                title="会话操作（运行状态 / 中断 / 暂停 / 导出）"
+                aria-label={t("app.topbar.session_actions")}
+                title={t("app.topbar.session_actions_run_state_interrupt")}
                 onClick={(event) => {
                   event.stopPropagation();
                   setActionsOpen((open) => !open);
@@ -127,13 +128,13 @@ export function TopBar({
                 onClick={(event) => event.stopPropagation()}
               >
                 <div className="session-actions-head">
-                  <span className="session-actions-title">会话操作</span>
+                  <span className="session-actions-title">{t("app.topbar.session_actions")}</span>
                   <span
                     className="topbar-session-status"
                     data-testid="session-status"
                     data-status={session.status}
                   >
-                    {SESSION_STATUS_LABELS[session.status]}
+                    {t(SESSION_STATUS_LABELS[session.status])}
                   </span>
                 </div>
                 <div className="session-status-bar" data-testid="status-bar">
@@ -147,7 +148,7 @@ export function TopBar({
                     disabled={!interruptible}
                     onClick={onInterrupt}
                   >
-                    中断
+                    {t("app.topbar.interrupt")}
                   </button>
                   {/* M7-03/ADR-017：暂停/恢复（锚点 `session-pause-toggle`；能力未声明或
                       连接未就绪置灰 + tooltip `pause_unsupported` 文案）。 */}
@@ -163,13 +164,13 @@ export function TopBar({
                       title={
                         pauseSupported
                           ? session.status === "paused"
-                            ? "恢复：重放被中断的输入（原生会话上下文保留，Mode R）"
-                            : PAUSE_SEMANTICS_NOTICE
-                          : PAUSE_UNSUPPORTED_HINT
+                            ? t("app.topbar.resume_replay_the_interrupted_input")
+                            : t(PAUSE_SEMANTICS_NOTICE)
+                          : t(PAUSE_UNSUPPORTED_HINT)
                       }
                       onClick={onTogglePause}
                     >
-                      {session.status === "paused" ? "恢复" : "暂停"}
+                      {session.status === "paused" ? t("app.action.restore") : t("app.topbar.pause")}
                     </button>
                   ) : null}
                   {onExportSession ? (
@@ -179,15 +180,15 @@ export function TopBar({
                       data-testid="session-export"
                       data-result={exportResult ?? ""}
                       disabled={exportBusy}
-                      title="导出该会话为 JSONL 归档（缺省写入数据目录 archives/）"
+                      title={t("app.topbar.export_this_session_as_a")}
                       onClick={onExportSession}
                     >
-                      导出
+                      {t("app.topbar.export")}
                     </button>
                   ) : null}
                   {lastAck ? (
                     <span className="last-ack" data-testid="last-ack" data-run-id={lastAck.runId}>
-                      {lastAck.duplicate ? "幂等命中" : "已受理"} {lastAck.runId.slice(-6)}
+                      {lastAck.duplicate ? t("app.topbar.idempotent_hit") : t("app.topbar.accepted")} {lastAck.runId.slice(-6)}
                     </span>
                   ) : null}
                 </div>
@@ -195,7 +196,7 @@ export function TopBar({
             </div>
           </>
         ) : (
-          <span className="ttl topbar-session-title muted">新 Agent 会话</span>
+          <span className="ttl topbar-session-title muted">{t("app.topbar.new_agent_session")}</span>
         )}
       </div>
 
@@ -211,11 +212,11 @@ export function TopBar({
                 data-runtime-id={runtime.id}
                 data-status={runtime.status}
                 title={
-                  `${runtime.name}：${RUNTIME_STATUS_LABELS[runtime.status]}` +
-                  (reason ? `（${RUNTIME_REASON_LABELS[reason] ?? reason}）` : "")
+                  t("app.topbar.text", { p0: runtime.name, p1: t(RUNTIME_STATUS_LABELS[runtime.status]) }) +
+                  (reason ? t("app.topbar.text_2", { p0: tKeyOrRaw(RUNTIME_REASON_LABELS[reason] ?? reason) }) : "")
                 }
               >
-                {runtime.name}·{RUNTIME_STATUS_LABELS[runtime.status]}
+                {runtime.name}·{t(RUNTIME_STATUS_LABELS[runtime.status])}
               </span>
             );
           })}
@@ -225,9 +226,9 @@ export function TopBar({
           className="pending-permission-badge"
           data-testid="pending-permission-badge"
           data-count={pendingCount}
-          title="待审批计数（事件增量维护 + 面板校准）"
+          title={t("app.topbar.pending_approval_count_maintained_from")}
         >
-          待审批：{pendingCount}
+          {t("app.topbar.pending_approvals")}{pendingCount}
         </span>
       </div>
     </header>

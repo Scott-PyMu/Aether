@@ -1,0 +1,84 @@
+{
+  "generatedAt": "2026-11-12T02:13:18.082Z",
+  "electron": "C:\\Users\\Lenovo\\AppData\\Local\\Temp\\aether-electron45-fixed\\electron.exe",
+  "results": [
+    {
+      "name": "zh-CN-dark-workbench",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "themeSource": "explicit",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "overflowX": false,
+      "title": "Aether",
+      "screenshotBytes": 51302
+    },
+    {
+      "name": "zh-CN-dark-settings",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "themeSource": "explicit",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "overflowX": false,
+      "title": "Aether",
+      "screenshotBytes": 75240
+    },
+    {
+      "name": "zh-CN-light-settings",
+      "locale": "zh-CN",
+      "theme": "light",
+      "themeSource": "explicit",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "overflowX": false,
+      "title": "Aether",
+      "screenshotBytes": 103116
+    },
+    {
+      "name": "en-US-light-settings",
+      "locale": "en-US",
+      "theme": "light",
+      "themeSource": "explicit",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "overflowX": false,
+      "title": "Aether",
+      "screenshotBytes": 106251
+    },
+    {
+      "name": "en-US-light-workbench",
+      "locale": "en-US",
+      "theme": "light",
+      "themeSource": "explicit",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "overflowX": false,
+      "title": "Aether",
+      "screenshotBytes": 56029
+    },
+    {
+      "name": "en-US-dark-workbench",
+      "locale": "en-US",
+      "theme": "dark",
+      "themeSource": "explicit",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "overflowX": false,
+      "title": "Aether",
+      "screenshotBytes": 52019
+    }
+  ]
+}

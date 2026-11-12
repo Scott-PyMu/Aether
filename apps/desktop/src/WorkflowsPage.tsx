@@ -17,6 +17,7 @@ import {
   type WorkflowRunDetail,
   type WorkflowSummary,
 } from "./workflows";
+import { t } from "./i18n";
 
 export interface WorkflowsPageProps {
   /** IPC 契约（缺省 = 生产实现；测试注入替身）。 */
@@ -66,21 +67,21 @@ function validateLocally(text: string): ValidationState {
     return {
       valid: false,
       code: "invalid_json",
-      message: error instanceof Error ? error.message : "JSON 解析失败",
+      message: error instanceof Error ? error.message : t("workflow.json_parse_failed"),
     };
   }
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    return { valid: false, code: "invalid_shape", message: "定义必须是 JSON 对象" };
+    return { valid: false, code: "invalid_shape", message: t("workflow.definition_must_be_a_json") };
   }
   const object = value as Record<string, unknown>;
   if (object.schema_version !== 1) {
-    return { valid: false, code: "schema_version", message: "schema_version 必须为 1" };
+    return { valid: false, code: "schema_version", message: t("workflow.schema_version_must_be_1") };
   }
   if (!Array.isArray(object.nodes) || object.nodes.length === 0) {
-    return { valid: false, code: "invalid_value", message: "nodes 必须是非空数组" };
+    return { valid: false, code: "invalid_value", message: t("workflow.nodes_must_be_a_non") };
   }
   if (!Array.isArray(object.edges)) {
-    return { valid: false, code: "invalid_value", message: "edges 必须是数组" };
+    return { valid: false, code: "invalid_value", message: t("workflow.edges_must_be_an_array") };
   }
   return { valid: true, code: null, message: null };
 }
@@ -88,21 +89,21 @@ function validateLocally(text: string): ValidationState {
 function statusLabel(status: string): string {
   switch (status) {
     case "queued":
-      return "排队中";
+      return t("workflow.queued");
     case "running":
-      return "运行中";
+      return t("app.common.running");
     case "succeeded":
-      return "成功";
+      return t("app.common.success");
     case "failed":
-      return "失败";
+      return t("app.common.failed");
     case "cancelled":
-      return "已取消";
+      return t("app.common.cancelled");
     case "interrupted":
-      return "已中断（等待人工重试）";
+      return t("workflow.interrupted_awaiting_manual_retry");
     case "skipped":
-      return "已跳过";
+      return t("workflow.skipped");
     case "timeout":
-      return "超时";
+      return t("app.common.timeout");
     default:
       return status;
   }
@@ -231,7 +232,7 @@ export function WorkflowsPage({
   const importDefinition = useCallback(async () => {
     resetError();
     if (!importPath.trim()) {
-      setValidation({ valid: false, code: "invalid_value", message: "请填写导入路径" });
+      setValidation({ valid: false, code: "invalid_value", message: t("workflow.enter_an_import_path") });
       return;
     }
     setBusy(true);
@@ -252,18 +253,18 @@ export function WorkflowsPage({
   const startRun = useCallback(async () => {
     resetError();
     if (!selected) {
-      setValidation({ valid: false, code: "invalid_value", message: "请先选择工作流" });
+      setValidation({ valid: false, code: "invalid_value", message: t("workflow.select_a_workflow_first") });
       return;
     }
     if (!runSessionId.trim()) {
-      setValidation({ valid: false, code: "invalid_value", message: "请填写锚点会话 id" });
+      setValidation({ valid: false, code: "invalid_value", message: t("workflow.enter_the_anchor_session_id") });
       return;
     }
     let input: unknown = null;
     try {
       input = runInput.trim() ? JSON.parse(runInput) : null;
     } catch {
-      setValidation({ valid: false, code: "invalid_json", message: "运行输入不是合法 JSON" });
+      setValidation({ valid: false, code: "invalid_json", message: t("workflow.run_input_is_not_valid") });
       return;
     }
     setBusy(true);
@@ -332,9 +333,9 @@ export function WorkflowsPage({
         aria-modal="true"
       >
         <header className="workflow-header">
-          <h2>工作流编排</h2>
+          <h2>{t("workflow.workflow_orchestration")}</h2>
           <button type="button" data-testid="overlay-back" onClick={onBack}>
-            返回工作台
+            {t("app.action.back_to_workbench")}
           </button>
         </header>
 
@@ -347,7 +348,7 @@ export function WorkflowsPage({
         <div className="workflow-layout">
           <aside className="workflow-list" data-testid="workflow-list">
             <button type="button" disabled={busy} onClick={() => void load()}>
-              刷新列表
+              {t("workflow.refresh_list")}
             </button>
             <ul>
               {items.map((item) => (
@@ -360,18 +361,18 @@ export function WorkflowsPage({
                     aria-pressed={selected?.workflow_id === item.workflow_id}
                     onClick={() => void selectWorkflow(item.workflow_id)}
                   >
-                    {item.name}（v{item.version}
-                    {item.is_template ? "，模板" : ""}）
+                    {item.name}{t("app.punct.open_paren_v")}{item.version}
+                    {item.is_template ? t("workflow.template") : ""}{t("app.punct.close_paren")}
                   </button>
                 </li>
               ))}
             </ul>
-            {items.length === 0 ? <p>暂无工作流。粘贴 JSON 定义后保存。</p> : null}
+            {items.length === 0 ? <p>{t("workflow.no_workflows_paste_a_json")}</p> : null}
           </aside>
 
           <div className="workflow-editor-panel">
             <label>
-              导入 JSON 路径
+              {t("workflow.import_json_path")}
               <input
                 type="text"
                 value={importPath}
@@ -385,7 +386,7 @@ export function WorkflowsPage({
               disabled={busy}
               onClick={() => void importDefinition()}
             >
-              导入
+              {t("workflow.import")}
             </button>
             <textarea
               className="workflow-editor"
@@ -407,10 +408,10 @@ export function WorkflowsPage({
                 disabled={busy}
                 onClick={() => validate()}
               >
-                校验
+                {t("workflow.validate")}
               </button>
               <button type="button" disabled={busy} onClick={() => void save()}>
-                {selected ? "保存新版本" : "创建"}
+                {selected ? t("workflow.save_new_version") : t("app.action.create")}
               </button>
               {validation && !validation.valid ? (
                 <span role="alert">{validation.message}</span>
@@ -418,16 +419,16 @@ export function WorkflowsPage({
             </div>
             <div className="workflow-run-actions">
               <label>
-                锚点会话 id
+                {t("workflow.anchor_session_id")}
                 <input
                   type="text"
                   value={runSessionId}
                   onChange={(event) => setRunSessionId(event.target.value)}
-                  placeholder="26 位 ULID"
+                  placeholder={t("workflow.26_character_ulid")}
                 />
               </label>
               <label>
-                运行输入（JSON）
+                {t("workflow.run_input_json")}
                 <textarea
                   value={runInput}
                   onChange={(event) => setRunInput(event.target.value)}
@@ -435,7 +436,7 @@ export function WorkflowsPage({
                 />
               </label>
               <button type="button" disabled={busy || !selected} onClick={() => void startRun()}>
-                运行
+                {t("workflow.run")}
               </button>
             </div>
           </div>
@@ -446,14 +447,14 @@ export function WorkflowsPage({
             data-run-id={run?.workflow_run_id ?? ""}
             data-status={run?.status ?? ""}
           >
-            <h3>运行状态</h3>
+            <h3>{t("workflow.run_status")}</h3>
             {!run ? (
-              <p>尚未运行。</p>
+              <p>{t("workflow.not_run_yet")}</p>
             ) : (
               <>
                 <p>
                   {run.workflow_run_id} — {statusLabel(run.status)}
-                  {run.error ? `（${run.error}）` : ""}
+                  {run.error ? t("workflow.text", { p0: run.error }) : ""}
                 </p>
                 <button
                   type="button"
@@ -461,7 +462,7 @@ export function WorkflowsPage({
                   disabled={busy || !active}
                   onClick={() => void cancelRun()}
                 >
-                  取消运行
+                  {t("workflow.cancel_run")}
                 </button>
                 <ul className="workflow-node-list">
                   {nodes.map((node) => (
@@ -473,7 +474,7 @@ export function WorkflowsPage({
                       data-status={node.status}
                     >
                       <span>
-                        {node.node_id}（{node.type} / #{node.attempt}）— {statusLabel(node.status)}
+                        {node.node_id}{t("app.punct.open_paren")}{node.type} / #{node.attempt}{t("app.punct.close_paren_dash")} {statusLabel(node.status)}
                       </span>
                       {node.error ? <span className="workflow-node-error">{node.error}</span> : null}
                       {RETRYABLE_STATUSES.has(node.status) ? (
@@ -483,7 +484,7 @@ export function WorkflowsPage({
                           disabled={busy || active}
                           onClick={() => void retryNode(node)}
                         >
-                          重试节点
+                          {t("workflow.retry_node")}
                         </button>
                       ) : null}
                     </li>

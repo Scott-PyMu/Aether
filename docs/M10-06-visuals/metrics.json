@@ -1,0 +1,206 @@
+{
+  "generatedAt": "2026-11-11T15:44:26.649Z",
+  "browser": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+  "results": [
+    {
+      "name": "zh-CN-light-1280x800",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "scrollWidth": 1280,
+      "overflowX": false,
+      "longTextOverflow": false,
+      "colors": {
+        "bg": "rgb(247, 248, 250)",
+        "surface": "rgb(255, 255, 255)",
+        "text": "rgb(26, 28, 30)",
+        "border": "rgb(238, 241, 245)",
+        "accent": "rgb(255, 255, 255)",
+        "danger": "rgb(180, 35, 24)",
+        "warning": "rgb(138, 82, 0)",
+        "success": "rgb(46, 125, 50)"
+      },
+      "tokens": {
+        "bg": "#f7f8fa",
+        "surface": "#ffffff",
+        "text": "#1a1c1e",
+        "border": "#d8dce2",
+        "accentText": "#8f2f1f"
+      },
+      "textLengths": {
+        "long": [
+          90,
+          65
+        ],
+        "buttons": [
+          52,
+          52
+        ]
+      },
+      "screenshotBytes": 53585
+    },
+    {
+      "name": "zh-CN-dark-1280x800",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "scrollWidth": 1280,
+      "overflowX": false,
+      "longTextOverflow": false,
+      "colors": {
+        "bg": "rgb(23, 23, 23)",
+        "surface": "rgb(28, 28, 28)",
+        "text": "rgb(229, 229, 229)",
+        "border": "rgb(36, 36, 36)",
+        "accent": "rgb(255, 255, 255)",
+        "danger": "rgb(232, 167, 167)",
+        "warning": "rgb(217, 119, 6)",
+        "success": "rgb(22, 163, 74)"
+      },
+      "tokens": {
+        "bg": "#171717",
+        "surface": "#1c1c1c",
+        "text": "#e5e5e5",
+        "border": "#242424",
+        "accentText": "#e58a76"
+      },
+      "textLengths": {
+        "long": [
+          90,
+          65
+        ],
+        "buttons": [
+          52,
+          52
+        ]
+      },
+      "screenshotBytes": 46460
+    },
+    {
+      "name": "en-US-light-1280x800",
+      "locale": "en-US",
+      "theme": "light",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "scrollWidth": 1280,
+      "overflowX": false,
+      "longTextOverflow": false,
+      "colors": {
+        "bg": "rgb(247, 248, 250)",
+        "surface": "rgb(255, 255, 255)",
+        "text": "rgb(26, 28, 30)",
+        "border": "rgb(238, 241, 245)",
+        "accent": "rgb(255, 255, 255)",
+        "danger": "rgb(180, 35, 24)",
+        "warning": "rgb(138, 82, 0)",
+        "success": "rgb(46, 125, 50)"
+      },
+      "tokens": {
+        "bg": "#f7f8fa",
+        "surface": "#ffffff",
+        "text": "#1a1c1e",
+        "border": "#d8dce2",
+        "accentText": "#8f2f1f"
+      },
+      "textLengths": {
+        "long": [
+          232,
+          199
+        ],
+        "buttons": [
+          57.21875,
+          67.25
+        ]
+      },
+      "screenshotBytes": 53395
+    },
+    {
+      "name": "en-US-dark-1280x800",
+      "locale": "en-US",
+      "theme": "dark",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "scrollWidth": 1280,
+      "overflowX": false,
+      "longTextOverflow": false,
+      "colors": {
+        "bg": "rgb(23, 23, 23)",
+        "surface": "rgb(28, 28, 28)",
+        "text": "rgb(229, 229, 229)",
+        "border": "rgb(36, 36, 36)",
+        "accent": "rgb(255, 255, 255)",
+        "danger": "rgb(232, 167, 167)",
+        "warning": "rgb(217, 119, 6)",
+        "success": "rgb(22, 163, 74)"
+      },
+      "tokens": {
+        "bg": "#171717",
+        "surface": "#1c1c1c",
+        "text": "#e5e5e5",
+        "border": "#242424",
+        "accentText": "#e58a76"
+      },
+      "textLengths": {
+        "long": [
+          232,
+          199
+        ],
+        "buttons": [
+          57.21875,
+          67.25
+        ]
+      },
+      "screenshotBytes": 45454
+    },
+    {
+      "name": "en-US-light-960x640",
+      "locale": "en-US",
+      "theme": "light",
+      "viewport": {
+        "width": 960,
+        "height": 640
+      },
+      "scrollWidth": 960,
+      "overflowX": false,
+      "longTextOverflow": false,
+      "colors": {
+        "bg": "rgb(247, 248, 250)",
+        "surface": "rgb(255, 255, 255)",
+        "text": "rgb(26, 28, 30)",
+        "border": "rgb(238, 241, 245)",
+        "accent": "rgb(255, 255, 255)",
+        "danger": "rgb(180, 35, 24)",
+        "warning": "rgb(138, 82, 0)",
+        "success": "rgb(46, 125, 50)"
+      },
+      "tokens": {
+        "bg": "#f7f8fa",
+        "surface": "#ffffff",
+        "text": "#1a1c1e",
+        "border": "#d8dce2",
+        "accentText": "#8f2f1f"
+      },
+      "textLengths": {
+        "long": [
+          232,
+          199
+        ],
+        "buttons": [
+          57.21875,
+          67.25
+        ]
+      },
+      "screenshotBytes": 51268
+    }
+  ]
+}

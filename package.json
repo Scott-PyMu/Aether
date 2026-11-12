@@ -146,6 +146,10 @@
     "smoke": "node scripts/test/m9-11/smoke-installer.mjs",
     "ci:local": "node scripts/test/ci-local.mjs",
     "verify:m10-05": "node scripts/test/m10-05/verify-m10-05.mjs",
+    "verify:m10-06": "node scripts/test/m10-06/verify-m10-06.mjs",
+    "verify:i18n": "node scripts/test/m10-06/verify-m10-06.mjs",
+    "verify:m10-06:visual": "node scripts/test/m10-06/visual-regression.mjs",
+    "verify:m10-06:electron": "node scripts/test/m10-06/electron-visual.mjs",
     "stage:native-runtime": "node scripts/ci/stage-native-runtime.mjs"
   },
   "devDependencies": {

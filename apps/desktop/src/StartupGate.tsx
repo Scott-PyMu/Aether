@@ -15,6 +15,7 @@ import {
   pickMigrationTarget,
   type StartupSnapshot,
 } from "./startup";
+import { t } from "./i18n";
 
 interface StartupGateProps {
   snapshot: StartupSnapshot;
@@ -79,7 +80,7 @@ export function StartupGate({ snapshot, onSnapshot }: StartupGateProps) {
 
   return (
     <main className="startup-gate" data-testid="startup-gate">
-      <h1 className="startup-gate-title">数据目录检测未通过</h1>
+      <h1 className="startup-gate-title">{t("startup.data_directory_check_failed")}</h1>
       {isHardError ? (
         <p className="startup-gate-message" data-testid="startup-message">
           {snapshot.message}
@@ -87,11 +88,10 @@ export function StartupGate({ snapshot, onSnapshot }: StartupGateProps) {
       ) : (
         <>
           <p className="startup-gate-message">
-            数据目录位于同步盘 / 云目录（OneDrive、Dropbox、iCloud、网络盘等）。
-            为保证数据库完整性，应用已拒绝启动；迁移数据到本地目录后才能进入主界面。
+            {t("startup.the_data_directory_is_on")}
           </p>
           <p className="startup-gate-dir" data-testid="startup-data-dir">
-            当前数据目录：{snapshot.data_dir}
+            {t("startup.current_data_directory")}{snapshot.data_dir}
           </p>
           <ul className="startup-gate-reasons" data-testid="startup-reasons">
             {(snapshot.detection?.reasons ?? []).map((reason) => (
@@ -106,7 +106,7 @@ export function StartupGate({ snapshot, onSnapshot }: StartupGateProps) {
           {pending ? (
             <div className="startup-gate-pending" data-testid="startup-pending">
               <p className="startup-gate-message">
-                检测到未完成的迁移（副本已就绪，阶段：{pending.phase}）：
+                {t("startup.unfinished_migration_detected_copy_is")}{pending.phase}{t("app.punct.close_paren_colon")}
               </p>
               <p className="startup-gate-dir" data-testid="startup-pending-target">
                 {pending.target}
@@ -117,17 +117,17 @@ export function StartupGate({ snapshot, onSnapshot }: StartupGateProps) {
                 onClick={finishPending}
                 disabled={busy}
               >
-                {busy ? "正在迁移…" : "完成迁移（继续锁定该目录）"}
+                {busy ? t("startup.migrating") : t("startup.complete_migration_continue_locking_this")}
               </button>
             </div>
           ) : null}
           <label className="startup-gate-field">
-            <span>迁移目标目录（本地磁盘，必须为空目录）</span>
+            <span>{t("startup.migration_target_directory_local_disk")}</span>
             <input
               data-testid="startup-target"
               value={target}
               onChange={(event) => setTarget(event.target.value)}
-              placeholder="例如 D:\\AetherData"
+              placeholder={t("startup.e_g_d_aetherdata")}
               spellCheck={false}
             />
           </label>
@@ -138,7 +138,7 @@ export function StartupGate({ snapshot, onSnapshot }: StartupGateProps) {
               onClick={pick}
               disabled={busy}
             >
-              选择目录…
+              {t("app.action.choose_directory")}
             </button>
             <button
               type="button"
@@ -146,7 +146,7 @@ export function StartupGate({ snapshot, onSnapshot }: StartupGateProps) {
               onClick={migrate}
               disabled={busy || target.trim().length === 0}
             >
-              {busy ? "正在迁移…" : "迁移到本地目录"}
+              {busy ? t("startup.migrating") : t("startup.migrate_to_local_directory")}
             </button>
           </div>
         </>
@@ -162,7 +162,7 @@ export function StartupGate({ snapshot, onSnapshot }: StartupGateProps) {
         data-testid="startup-exit"
         onClick={exit}
       >
-        退出
+        {t("startup.quit")}
       </button>
     </main>
   );

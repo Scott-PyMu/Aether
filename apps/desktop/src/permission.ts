@@ -109,9 +109,9 @@ export const permissionIpc: PermissionIpc = {
 
 /** `runtime_retry`/`runtime_enable`/`runtime_disable` 结果 outcome 展示文案。 */
 export const RUNTIME_OUTCOME_LABELS: Record<string, string> = {
-  ready: "已就绪",
-  already_running: "已在运行",
-  failed: "启动失败",
-  rejected: "被拒绝",
-  disabled: "已禁用",
+  ready: "permission.ready",
+  already_running: "permission.running",
+  failed: "app.common.start_failed",
+  rejected: "permission.denied",
+  disabled: "app.common.disabled_2",
 };

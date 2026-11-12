@@ -10,6 +10,7 @@
  *   出现；与新建表单手动输入共存（同一草稿字段），运行期只读。
  */
 import { client } from "@aether/protocol";
+import { t } from "./i18n";
 
 /** 供应商类型（ADR-010 决策 3：创建后不可改）。 */
 export type ProviderType = "anthropic" | "openai" | "deepseek" | "google" | "custom";
@@ -195,28 +196,28 @@ export const OFFICIAL_PROVIDER_PRESETS: Record<
     name: "Anthropic",
     baseUrl: "https://api.anthropic.com",
     preview: "https://api.anthropic.com/v1/messages",
-    color: "#D97757",
+    color: "var(--brand-anthropic)",
     abbr: "A",
   },
   openai: {
     name: "OpenAI",
     baseUrl: "https://api.openai.com",
     preview: "https://api.openai.com/v1/chat/completions",
-    color: "#10A37F",
+    color: "var(--brand-openai)",
     abbr: "O",
   },
   deepseek: {
     name: "DeepSeek",
     baseUrl: "https://api.deepseek.com",
     preview: "https://api.deepseek.com/v1/chat/completions",
-    color: "#4D6BFE",
+    color: "var(--brand-deepseek)",
     abbr: "D",
   },
   google: {
     name: "Google Gemini",
     baseUrl: "https://generativelanguage.googleapis.com",
     preview: "https://generativelanguage.googleapis.com/v1beta/models",
-    color: "#4285F4",
+    color: "var(--brand-google)",
     abbr: "G",
   },
 };
@@ -241,15 +242,15 @@ export function providerAbbr(provider: Pick<ProviderEntry, "name" | "type">): st
 
 /** 卡片颜色（UI 侧常量；自定义为中性灰）。 */
 export function providerColor(type: ProviderType): string {
-  return presetFor(type)?.color ?? "#666666";
+  return presetFor(type)?.color ?? "var(--brand-fallback)";
 }
 
 /** 供应商描述：`{名称} · N 个模型已启用`（原型 providerDesc 口径）。 */
 export function providerDesc(provider: ProviderEntry): string {
   const enabledCount = provider.models.filter((model) => model.enabled).length;
   return enabledCount > 0
-    ? `${provider.name} · ${enabledCount} 个模型已启用`
-    : `${provider.name} · 暂无已启用模型`;
+    ? t("providers.models_enabled", { p0: provider.name, p1: enabledCount })
+    : t("providers.no_models_enabled", { p0: provider.name });
 }
 
 /** 模型选择器分组（仅启用供应商的启用模型；ADR-010 决策 3 派生口径）。 */
@@ -474,5 +475,4 @@ export function endpointPreview(
 }
 
 /** 端点风险提示（ADR-028 v0.9：不做 HTTPS/主机/可信保证，UI 必须提示）。 */
-export const PROVIDER_ENDPOINT_RISK_NOTICE =
-  "端点由用户填写，API Key 将发送至该地址；应用不做 HTTPS 强制、主机白名单或可信保证，请自行确认端点可信性。";
+export const PROVIDER_ENDPOINT_RISK_NOTICE = "providers.the_endpoint_is_provided_by";
