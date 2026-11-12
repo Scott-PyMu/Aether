@@ -170,16 +170,16 @@ check(
   ),
 );
 check(
-  "RpcRequest oneOf = 82",
-  (openapi.components?.schemas?.RpcRequest?.oneOf ?? []).length === 82,
+  "RpcRequest oneOf = 83",
+  (openapi.components?.schemas?.RpcRequest?.oneOf ?? []).length === 83,
   `实际 ${(openapi.components?.schemas?.RpcRequest?.oneOf ?? []).length}`,
 );
-check("schema 数 = 105", Object.keys(openapi.components?.schemas ?? {}).length === 105);
+check("schema 数 = 106", Object.keys(openapi.components?.schemas ?? {}).length === 106);
 
 // 3) 契约计数不变（M10-03 +0）
 const manifest = readJson("packages/protocol/src/command-manifest.json");
-check("command-manifest total = 86", manifest.counts.total === 87);
-check("daemon 命令 = 82", manifest.counts.daemon === 83);
+check("command-manifest total = 87", manifest.counts.total === 87);
+check("daemon 命令 = 83", manifest.counts.daemon === 83);
 check("shell 命令仍 4", manifest.counts.shell === 4);
 
 const errorCodes = readJson("packages/protocol/src/error_codes.json");
@@ -218,4 +218,4 @@ if (failures.length > 0) {
   console.error(`[m10-03] ${failures.length} 项失败（${passed}/${checks.length} 通过）`);
   process.exit(1);
 }
-console.log(`[m10-03] OK：${checks.length}/${checks.length} 项通过（ADR-033 v1.1；82 daemon 命令；OpenAPI diff=0）`);
+console.log(`[m10-03] OK：${checks.length}/${checks.length} 项通过（ADR-033 v1.1；83 daemon 命令；OpenAPI diff=0）`);
