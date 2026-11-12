@@ -2566,17 +2566,23 @@ export function SessionWorkbench({
             </p>
           ) : null}
 
-          {/* M7-02/ADR-022：闸门排队位置（最近发送 ack 的 `queue` 快照；run 派发
-              （`run.started`）后隐藏）。`data-position` / `data-limit` 供断言。 */}
+          {/* M7-02/ADR-022 + M10-07/ADR-037：闸门排队位置与等待原因（最近发送 ack 的
+              `queue` 快照；run 派发（`run.started`）后隐藏）。`data-position` /
+              `data-limit` / `data-wait-reason` 供断言。 */}
           {queueNotice ? (
             <p
               className="queue-position"
               data-testid="queue-position"
               data-position={queueNotice.position}
               data-limit={queueNotice.limit}
+              data-wait-reason="concurrency_gate"
               role="status"
             >
               {t("session.queued_position")} {queueNotice.position} {t("session.concurrency_limit")} {queueNotice.limit}{t("app.punct.close_paren")}
+              {" · "}
+              {t("session.queue_wait_reason", {
+                p0: t("session.wait_reason.concurrency_gate"),
+              })}
             </p>
           ) : null}
 

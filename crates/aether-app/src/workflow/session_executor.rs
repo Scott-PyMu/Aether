@@ -109,6 +109,7 @@ impl SessionAgentExecutor {
         prompt: &str,
         references: Vec<ReferenceEntry>,
         timeout_ms: i64,
+        priority: i64,
         cancel: &Arc<std::sync::atomic::AtomicBool>,
     ) -> Result<String, AgentError> {
         let backend = Arc::clone(&self.backend);
@@ -122,6 +123,9 @@ impl SessionAgentExecutor {
             model: None,
             subagent_context: None,
             attachments: None,
+            priority: Some(priority),
+            timeout_ms: Some(timeout_ms),
+            max_attempts: None,
         };
         let response = tokio::task::spawn_blocking(move || backend.session_send(&request))
             .await
@@ -224,6 +228,7 @@ impl AgentExecutor for SessionAgentExecutor {
                     &prompt,
                     references,
                     request.timeout_ms,
+                    request.priority,
                     &request.cancel,
                 )
                 .await?;

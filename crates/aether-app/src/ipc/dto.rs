@@ -335,6 +335,15 @@ pub struct SessionSendRequest {
     /// 不支持时返回 `attachment_type_unsupported`，不创建 run）。
     #[serde(default)]
     pub attachments: Option<Vec<String>>,
+    /// M10-07/ADR-037：调用方优先级（−100…100；缺省 0；只影响排队顺序）。
+    #[serde(default)]
+    pub priority: Option<i64>,
+    /// M10-07/ADR-037：run 超时（1s–24h；缺省 30min）。
+    #[serde(default)]
+    pub timeout_ms: Option<i64>,
+    /// M10-07/ADR-037：最大尝试次数（1–5；缺省 1 = 自动重试关闭）。
+    #[serde(default)]
+    pub max_attempts: Option<i64>,
 }
 
 /// `session.send.subagent_context` 请求体（D6；ADR-032 v1.2）。
@@ -360,15 +369,24 @@ pub struct ReferenceEntry {
 pub const MAX_SESSION_REFERENCES: usize = 32;
 
 impl SessionSendRequest {
+    /// M10-07/ADR-037：归一调度选项（缺省 priority=0 / timeout=30min / max_attempts=1）。
+    pub fn schedule_options(&self) -> aether_control::RunScheduleOptions {
+        aether_control::RunScheduleOptions {
+            priority: self.priority.unwrap_or(0) as i32,
+            timeout_ms: self
+                .timeout_ms
+                .unwrap_or(aether_control::DEFAULT_RUN_TIMEOUT_MS),
+            max_attempts: u32::try_from(self.max_attempts.unwrap_or(1)).unwrap_or(1),
+        }
+    }
+
     /// 请求的思考深度覆盖（已校验）；`None` = 缺省（应用会话级值）。
     pub fn thinking_depth_value(&self) -> Result<Option<u8>, IpcError> {
         thinking_depth_value(self.thinking_depth)
     }
 
     /// M10-02/ADR-032：解析 `subagent_context`（版本 >0、块 ≤16KiB、mode 枚举）。
-    pub fn subagent_context_value(
-        &self,
-    ) -> Result<Option<aether_core::SubagentContext>, IpcError> {
+    pub fn subagent_context_value(&self) -> Result<Option<aether_core::SubagentContext>, IpcError> {
         let Some(input) = &self.subagent_context else {
             return Ok(None);
         };
@@ -409,7 +427,8 @@ impl SessionSendRequest {
     ///
     /// 返回的顺序与请求一致；`kind` 使用请求声明的值（探测到的文件/目录形态仅作
     /// 可访问性校验，不覆盖用户声明语义）。
-    pub fn resolved_references(&self) -> Result<Vec<aether_core::MessageReference>, IpcError> {        let mut resolved = Vec::with_capacity(self.references.len());
+    pub fn resolved_references(&self) -> Result<Vec<aether_core::MessageReference>, IpcError> {
+        let mut resolved = Vec::with_capacity(self.references.len());
         for entry in &self.references {
             let artifact = path::validate_artifact_path(&entry.path)?;
             let kind = aether_core::ReferenceKind::from_code(&entry.kind).ok_or_else(|| {
@@ -446,6 +465,31 @@ impl CommandRequest for SessionSendRequest {
         if let Some(provider_id) = &self.provider_id {
             if !is_ulid(provider_id) {
                 return Err(IpcError::invalid_format("provider_id", "必须是 26 位 ULID"));
+            }
+        }
+        // M10-07/ADR-037：调度选项（越界 → out_of_range；不落库、不调用后端）。
+        if let Some(priority) = self.priority {
+            if !(-100..=100).contains(&priority) {
+                return Err(IpcError::out_of_range(
+                    "priority",
+                    "必须在 -100..=100 之间（ADR-037）",
+                ));
+            }
+        }
+        if let Some(timeout_ms) = self.timeout_ms {
+            if !(1_000..=86_400_000).contains(&timeout_ms) {
+                return Err(IpcError::out_of_range(
+                    "timeout_ms",
+                    "必须在 1000..=86400000 ms 之间（ADR-037：1s–24h）",
+                ));
+            }
+        }
+        if let Some(max_attempts) = self.max_attempts {
+            if !(1..=5).contains(&max_attempts) {
+                return Err(IpcError::out_of_range(
+                    "max_attempts",
+                    "必须在 1..=5 之间（ADR-037）",
+                ));
             }
         }
         if let Some(model) = &self.model {
@@ -1348,6 +1392,50 @@ impl CommandRequest for BackupListRequest {}
 pub struct HealthRequest {}
 
 impl CommandRequest for HealthRequest {}
+
+/// `queue_list`（M10-07/ADR-037 D-037-5）：队列位置/等待原因/优先级可观测。
+#[derive(Debug, Default, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct QueueListRequest {
+    /// 仅返回该会话的排队项（缺省 = 全量）。
+    #[serde(default)]
+    pub session_id: Option<String>,
+    /// 单页条数（1–100；缺省 100）。
+    #[serde(default)]
+    pub limit: Option<i64>,
+    /// 偏移（≥0；缺省 0）。
+    #[serde(default)]
+    pub offset: Option<i64>,
+}
+
+impl QueueListRequest {
+    pub fn limit_value(&self) -> Result<usize, IpcError> {
+        let limit = usize::try_from(self.limit.unwrap_or(100))
+            .map_err(|_| IpcError::out_of_range("limit", "必须是 1..=100"))?;
+        if !(1..=100).contains(&limit) {
+            return Err(IpcError::out_of_range("limit", "必须是 1..=100"));
+        }
+        Ok(limit)
+    }
+
+    pub fn offset_value(&self) -> Result<usize, IpcError> {
+        usize::try_from(self.offset.unwrap_or(0))
+            .map_err(|_| IpcError::out_of_range("offset", "必须 >= 0"))
+    }
+}
+
+impl CommandRequest for QueueListRequest {
+    fn validate(&self) -> Result<(), IpcError> {
+        if let Some(session_id) = &self.session_id {
+            if !is_ulid(session_id) {
+                return Err(IpcError::invalid_format("session_id", "必须是 26 位 ULID"));
+            }
+        }
+        self.limit_value()?;
+        self.offset_value()?;
+        Ok(())
+    }
+}
 
 /// 备份来源（ADR-004 `backup_restore`）：内部备份 id 枚举 或 外部 `.db` 路径。
 #[derive(Debug, Clone, Deserialize, specta::Type)]
@@ -2257,11 +2345,7 @@ fn validate_workflow_name(name: &str) -> Result<(), IpcError> {
 
 fn validate_workflow_description(description: Option<&str>) -> Result<(), IpcError> {
     if let Some(description) = description {
-        ensure_max_chars(
-            description,
-            "description",
-            WORKFLOW_DESCRIPTION_MAX_CHARS,
-        )?;
+        ensure_max_chars(description, "description", WORKFLOW_DESCRIPTION_MAX_CHARS)?;
         reject_control_chars(description, "description", true)?;
     }
     Ok(())
@@ -2340,10 +2424,7 @@ pub struct WorkflowIdRequest {
 impl CommandRequest for WorkflowIdRequest {
     fn validate(&self) -> Result<(), IpcError> {
         if !is_ulid(&self.workflow_id) {
-            return Err(IpcError::invalid_format(
-                "workflow_id",
-                "必须是 26 位 ULID",
-            ));
+            return Err(IpcError::invalid_format("workflow_id", "必须是 26 位 ULID"));
         }
         Ok(())
     }
@@ -2368,16 +2449,10 @@ pub struct WorkflowUpdateRequest {
 impl CommandRequest for WorkflowUpdateRequest {
     fn validate(&self) -> Result<(), IpcError> {
         if !is_ulid(&self.workflow_id) {
-            return Err(IpcError::invalid_format(
-                "workflow_id",
-                "必须是 26 位 ULID",
-            ));
+            return Err(IpcError::invalid_format("workflow_id", "必须是 26 位 ULID"));
         }
         if self.expected_version < 1 {
-            return Err(IpcError::out_of_range(
-                "expected_version",
-                "必须 >= 1",
-            ));
+            return Err(IpcError::out_of_range("expected_version", "必须 >= 1"));
         }
         if let Some(name) = &self.name {
             validate_workflow_name(name)?;
@@ -2401,10 +2476,7 @@ pub struct WorkflowDeleteRequest {
 impl CommandRequest for WorkflowDeleteRequest {
     fn validate(&self) -> Result<(), IpcError> {
         if !is_ulid(&self.workflow_id) {
-            return Err(IpcError::invalid_format(
-                "workflow_id",
-                "必须是 26 位 ULID",
-            ));
+            return Err(IpcError::invalid_format("workflow_id", "必须是 26 位 ULID"));
         }
         Ok(())
     }
@@ -2453,10 +2525,7 @@ pub struct WorkflowRunRequest {
 impl CommandRequest for WorkflowRunRequest {
     fn validate(&self) -> Result<(), IpcError> {
         if !is_ulid(&self.workflow_id) {
-            return Err(IpcError::invalid_format(
-                "workflow_id",
-                "必须是 26 位 ULID",
-            ));
+            return Err(IpcError::invalid_format("workflow_id", "必须是 26 位 ULID"));
         }
         if !is_ulid(&self.session_id) {
             return Err(IpcError::invalid_format("session_id", "必须是 26 位 ULID"));
@@ -2529,18 +2598,12 @@ impl CommandRequest for WorkflowRunListRequest {
     fn validate(&self) -> Result<(), IpcError> {
         if let Some(workflow_id) = &self.workflow_id {
             if !is_ulid(workflow_id) {
-                return Err(IpcError::invalid_format(
-                    "workflow_id",
-                    "必须是 26 位 ULID",
-                ));
+                return Err(IpcError::invalid_format("workflow_id", "必须是 26 位 ULID"));
             }
         }
         if let Some(session_id) = &self.session_id {
             if !is_ulid(session_id) {
-                return Err(IpcError::invalid_format(
-                    "session_id",
-                    "必须是 26 位 ULID",
-                ));
+                return Err(IpcError::invalid_format("session_id", "必须是 26 位 ULID"));
             }
         }
         if let Some(status) = &self.status {
@@ -2600,9 +2663,7 @@ impl CommandRequest for WorkflowNodeRetryRequest {
             ));
         }
         if self.node_id.is_empty() || self.node_id.len() > 64 {
-            return Err(IpcError::invalid_value(
-                "node_id 必须为 1..=64 字符",
-            ));
+            return Err(IpcError::invalid_value("node_id 必须为 1..=64 字符"));
         }
         Ok(())
     }

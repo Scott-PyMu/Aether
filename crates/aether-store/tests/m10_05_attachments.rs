@@ -255,6 +255,7 @@ fn begin_run_binds_attachment_and_remove_reports_path() {
             message: message.clone(),
             run,
             attachment_ids: vec!["01J000000000000000000000A1".to_owned()],
+            schedule: Default::default(),
         }))
         .unwrap();
     assert!(matches!(
@@ -297,6 +298,7 @@ fn begin_run_binds_attachment_and_remove_reports_path() {
                 finished_at: None,
             },
             attachment_ids: vec!["01J00000000000000000000NOPE".to_owned()],
+            schedule: Default::default(),
         }))
         .unwrap_err();
     assert!(missing.to_string().contains("附件不可绑定"));

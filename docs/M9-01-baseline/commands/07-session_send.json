@@ -19,7 +19,10 @@
       "provider_id",
       "model",
       "subagent_context",
-      "attachments"
+      "attachments",
+      "priority",
+      "timeout_ms",
+      "max_attempts"
     ],
     "field_types": {
       "session_id": "String",
@@ -30,7 +33,10 @@
       "provider_id": "Option<String>",
       "model": "Option<String>",
       "subagent_context": "Option<SubagentContextInput>",
-      "attachments": "Option<Vec<String>>"
+      "attachments": "Option<Vec<String>>",
+      "priority": "Option<i64>",
+      "timeout_ms": "Option<i64>",
+      "max_attempts": "Option<i64>"
     }
   },
   "accepted_shape": {

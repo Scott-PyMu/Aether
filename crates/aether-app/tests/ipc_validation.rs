@@ -17,26 +17,24 @@ use aether_app::ipc::backend::IpcBackend;
 use aether_app::ipc::dto::{
     AppRestartRequest, ArchiveExportRequest, ArtifactAddRequest, ArtifactRemoveRequest,
     ArtifactsListRequest, AttachmentAddRequest, AttachmentListRequest, AttachmentRemoveRequest,
-    AuditExportRequest, AuditQueryRequest, BackupCreateRequest,
-    BackupRestoreRequest, ExportDiagnosticsRequest, MessagesPageRequest, PermissionResolveRequest,
-    PermissionsPendingRequest, PresetAddRequest, PresetDeleteRequest, PresetUpdateRequest,
-    PresetsListRequest, ProviderCreateRequest, ProviderDeleteRequest, ProviderModelAddRequest,
-    ProviderModelToggleRequest, ProviderModelsFetchRequest, ProviderTestRequest, ProviderToggleRequest,
-    ProviderUpdateRequest, ProvidersListRequest,
-    RunRetryRequest, RuntimeDisableRequest, RuntimeEnableRequest, RuntimeRetryRequest,
-    SessionCreateRequest, SessionExportRequest, SessionIdRequest, SessionListRequest,
-    SessionSendRequest, SessionWorkspaceAssignRequest, SessionDeleteRequest, SessionRenameRequest,
-    SessionSearchRequest, SettingsGetRequest, SettingsSetRequest,
+    AuditExportRequest, AuditQueryRequest, BackupCreateRequest, BackupRestoreRequest,
+    ExportDiagnosticsRequest, ImportCancelRequest, ImportRequest, ImportStatusRequest,
+    MessagesPageRequest, PermissionResolveRequest, PermissionsPendingRequest, PresetAddRequest,
+    PresetDeleteRequest, PresetUpdateRequest, PresetsListRequest, ProviderCreateRequest,
+    ProviderDeleteRequest, ProviderModelAddRequest, ProviderModelToggleRequest,
+    ProviderModelsFetchRequest, ProviderTestRequest, ProviderToggleRequest, ProviderUpdateRequest,
+    ProvidersListRequest, RunRetryRequest, RuntimeDisableRequest, RuntimeEnableRequest,
+    RuntimeRetryRequest, SessionCreateRequest, SessionDeleteRequest, SessionExportRequest,
+    SessionIdRequest, SessionListRequest, SessionRenameRequest, SessionSearchRequest,
+    SessionSendRequest, SessionWorkspaceAssignRequest, SettingsGetRequest, SettingsSetRequest,
     WorkspaceCreateRequest, WorkspaceDeleteRequest, WorkspaceSetRequest, WorkspaceUpdateRequest,
-    WorkspacesListRequest, ImportCancelRequest, ImportRequest, ImportStatusRequest,
+    WorkspacesListRequest,
 };
 use aether_app::ipc::error::IpcError;
 use aether_app::ipc::path::{
     is_within, validate_external_file, validate_user_path, validate_workspace_root, ArtifactPath,
 };
-use aether_app::ipc::validate::{
-    parse_strict, CommandRequest, MAX_MESSAGE_BYTES, MAX_TITLE_CHARS,
-};
+use aether_app::ipc::validate::{parse_strict, CommandRequest, MAX_MESSAGE_BYTES, MAX_TITLE_CHARS};
 use aether_app::ipc::{IpcState, COMMANDS};
 use serde_json::{json, Value};
 
@@ -552,8 +550,82 @@ fn malformed_samples_return_structured_errors_and_do_not_reach_backend() {
             "artifact_path_rejected",
             None,
         ),
+        // M10-07/ADR-037：调度选项范围（priority −100…100 / timeout 1s–24h /
+        // max_attempts 1–5；越界 → out_of_range，不落库）。
+        (
+            "session_send",
+            json!({ "session_id": ULID, "text": "hi", "client_msg_id": CLIENT_MSG_ID, "priority": 101 }),
+            "out_of_range",
+            Some("priority"),
+        ),
+        (
+            "session_send",
+            json!({ "session_id": ULID, "text": "hi", "client_msg_id": CLIENT_MSG_ID, "priority": -101 }),
+            "out_of_range",
+            Some("priority"),
+        ),
+        (
+            "session_send",
+            json!({ "session_id": ULID, "text": "hi", "client_msg_id": CLIENT_MSG_ID, "timeout_ms": 999 }),
+            "out_of_range",
+            Some("timeout_ms"),
+        ),
+        (
+            "session_send",
+            json!({ "session_id": ULID, "text": "hi", "client_msg_id": CLIENT_MSG_ID, "timeout_ms": 86_400_001 }),
+            "out_of_range",
+            Some("timeout_ms"),
+        ),
+        (
+            "session_send",
+            json!({ "session_id": ULID, "text": "hi", "client_msg_id": CLIENT_MSG_ID, "max_attempts": 0 }),
+            "out_of_range",
+            Some("max_attempts"),
+        ),
+        (
+            "session_send",
+            json!({ "session_id": ULID, "text": "hi", "client_msg_id": CLIENT_MSG_ID, "max_attempts": 6 }),
+            "out_of_range",
+            Some("max_attempts"),
+        ),
+        // M10-07/ADR-037：`queue_list` 严格解析。
+        (
+            "queue_list",
+            json!({ "session_id": "not-a-ulid" }),
+            "invalid_format",
+            Some("session_id"),
+        ),
+        (
+            "queue_list",
+            json!({ "limit": 0 }),
+            "out_of_range",
+            Some("limit"),
+        ),
+        (
+            "queue_list",
+            json!({ "limit": 101 }),
+            "out_of_range",
+            Some("limit"),
+        ),
+        (
+            "queue_list",
+            json!({ "offset": -1 }),
+            "out_of_range",
+            Some("offset"),
+        ),
+        (
+            "queue_list",
+            json!({ "extra": true }),
+            "unknown_field",
+            Some("extra"),
+        ),
         // M7-06/ADR-024：连通性测试与模型获取命令矩阵（`{ provider_id }` 严格解析）。
-        ("provider_test", json!({}), "missing_field", Some("provider_id")),
+        (
+            "provider_test",
+            json!({}),
+            "missing_field",
+            Some("provider_id"),
+        ),
         (
             "provider_test",
             json!({ "provider_id": "not-a-ulid" }),
@@ -738,7 +810,12 @@ fn malformed_samples_return_structured_errors_and_do_not_reach_backend() {
             "unknown_field",
             Some("unexpected"),
         ),
-        ("session_pause", json!({}), "missing_field", Some("session_id")),
+        (
+            "session_pause",
+            json!({}),
+            "missing_field",
+            Some("session_id"),
+        ),
         (
             "session_pause",
             json!({ "session_id": 42 }),
@@ -757,7 +834,12 @@ fn malformed_samples_return_structured_errors_and_do_not_reach_backend() {
             "unknown_field",
             Some("unexpected"),
         ),
-        ("session_resume", json!({}), "missing_field", Some("session_id")),
+        (
+            "session_resume",
+            json!({}),
+            "missing_field",
+            Some("session_id"),
+        ),
         (
             "session_resume",
             json!({ "session_id": ["not", "a", "string"] }),
@@ -1448,7 +1530,11 @@ fn valid_requests_reach_backend_exactly_once() {
             json!({ "session_id": ULID, "title": "新标题" }),
             "session_rename",
         ),
-        ("session_delete", json!({ "session_id": ULID }), "session_delete"),
+        (
+            "session_delete",
+            json!({ "session_id": ULID }),
+            "session_delete",
+        ),
         (
             "session_create",
             json!({ "runtime_id": "mock", "title": "会话", "model": "deepseek/deepseek-chat" }),
@@ -1476,8 +1562,16 @@ fn valid_requests_reach_backend_exactly_once() {
             "session_interrupt",
         ),
         // M7-03/ADR-017：暂停/恢复合法形态到达后端。
-        ("session_pause", json!({ "session_id": ULID }), "session_pause"),
-        ("session_resume", json!({ "session_id": ULID }), "session_resume"),
+        (
+            "session_pause",
+            json!({ "session_id": ULID }),
+            "session_pause",
+        ),
+        (
+            "session_resume",
+            json!({ "session_id": ULID }),
+            "session_resume",
+        ),
         (
             "session_dispose",
             json!({ "session_id": ULID }),
@@ -1669,11 +1763,7 @@ fn valid_requests_reach_backend_exactly_once() {
             json!({ "key": "ui.locale", "value": "zh-CN" }),
             "settings_set",
         ),
-        (
-            "settings_get",
-            json!({ "key": "ui.theme" }),
-            "settings_get",
-        ),
+        ("settings_get", json!({ "key": "ui.theme" }), "settings_get"),
         (
             "settings_set",
             json!({ "key": "ui.theme", "value": "light" }),
@@ -1743,11 +1833,7 @@ fn valid_requests_reach_backend_exactly_once() {
             json!({ "job_id": ULID, "include_warnings": true }),
             "import_status",
         ),
-        (
-            "import_cancel",
-            json!({ "job_id": ULID }),
-            "import_cancel",
-        ),
+        ("import_cancel", json!({ "job_id": ULID }), "import_cancel"),
     ];
 
     for (command, payload, expected) in samples {
@@ -2262,7 +2348,12 @@ fn preset_commands_validation_matrix() {
             Some("limit"),
         ),
         // preset_add：缺字段 / 未知字段 / 类型 / 空名 / 超长 / 提示词超限。
-        ("preset_add", json!({ "name": "n" }), "missing_field", Some("system_prompt")),
+        (
+            "preset_add",
+            json!({ "name": "n" }),
+            "missing_field",
+            Some("system_prompt"),
+        ),
         (
             "preset_add",
             json!({ "system_prompt": "p" }),
@@ -2385,7 +2476,10 @@ fn preset_commands_validation_matrix() {
     ];
     for (command, payload) in &valid {
         let result = invoke(&fixture.state, command, payload.clone());
-        assert!(result.is_ok(), "合法样本必须到达后端：{command} {payload} → {result:?}");
+        assert!(
+            result.is_ok(),
+            "合法样本必须到达后端：{command} {payload} → {result:?}"
+        );
     }
     assert_eq!(
         fixture.backend.calls().len(),
@@ -2467,12 +2561,14 @@ fn commands_manifest_matches_frozen_baseline() {
         "app_exit",
     ];
     // M9 的 63 条顺序/语义不变；M10-01 追加 11 条编排命令 + M10-02 追加 5 条子 Agent
-    // + M10-04 追加 4 条导入 + M10-05 追加 3 条附件 → 86（82 daemon + 4 shell）。
-    assert_eq!(COMMANDS.len(), 86, "命令面 86 条（82 daemon + 4 shell）");
+    // + M10-04 追加 4 条导入 + M10-05 追加 3 条附件 + M10-07 追加 1 条队列查询
+    // → 87（83 daemon + 4 shell）。
+    assert_eq!(COMMANDS.len(), 87, "命令面 87 条（83 daemon + 4 shell）");
     assert_eq!(COMMANDS[63], "workflow_create", "M10 增量从第 64 条开始");
     assert_eq!(COMMANDS[74], "subagent_spawn", "M10-02 增量从第 75 条开始");
     assert_eq!(COMMANDS[79], "session_import", "M10-04 增量从第 80 条开始");
     assert_eq!(COMMANDS[83], "attachment_add", "M10-05 增量从第 84 条开始");
+    assert_eq!(COMMANDS[86], "queue_list", "M10-07 增量从第 87 条开始");
     assert_eq!(
         &COMMANDS[..63],
         BASELINE,
@@ -2487,7 +2583,10 @@ fn commands_manifest_matches_frozen_baseline() {
         assert!(COMMANDS.contains(&shell), "缺少壳命令 {shell}");
     }
     for reserved in ["startup_get", "startup_migrate"] {
-        assert!(COMMANDS.contains(&reserved), "保留命令 {reserved} 不得移出 63");
+        assert!(
+            COMMANDS.contains(&reserved),
+            "保留命令 {reserved} 不得移出 63"
+        );
     }
 }
 

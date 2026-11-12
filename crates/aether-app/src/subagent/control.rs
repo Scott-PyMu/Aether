@@ -486,6 +486,13 @@ impl SubagentControlBackend {
         }
 
         let prompt = build_prompt(&template, &mode, &request.purpose, depth, &context_texts);
+        // M10-07/ADR-037：子 Agent 内部节点继承父会话当前 run 的优先级。
+        let inherited_priority = self
+            .reads
+            .active_run_priority(&parent_id)
+            .await
+            .ok()
+            .flatten();
         let send = SessionSendRequest {
             session_id: child_id.clone(),
             text: prompt,
@@ -496,6 +503,9 @@ impl SubagentControlBackend {
             model: None,
             subagent_context: None,
             attachments: None,
+            priority: inherited_priority.map(i64::from),
+            timeout_ms: None,
+            max_attempts: None,
         };
         let sent = match self.inner_send(send).await {
             Ok(value) => value,
@@ -902,6 +912,9 @@ impl SubagentControlBackend {
                         mode: Some(mode.as_str().to_owned()),
                     }),
                     attachments: None,
+                    priority: None,
+                    timeout_ms: None,
+                    max_attempts: None,
                 };
                 match self.inner_send(span).await {
                     Ok(response) => {
@@ -1095,6 +1108,9 @@ impl SubagentControlBackend {
             model: None,
             subagent_context: None,
             attachments: None,
+            priority: None,
+            timeout_ms: None,
+            max_attempts: None,
         };
         let sent = match self.inner_send(send).await {
             Ok(value) => value,
@@ -1646,6 +1662,7 @@ impl IpcBackend for SubagentControlBackend {
         session_resume: SessionIdRequest,
         session_dispose: SessionIdRequest,
         messages_page: MessagesPageRequest,
+        queue_list: QueueListRequest,
         permissions_pending: PermissionsPendingRequest,
         permission_resolve: PermissionResolveRequest,
         session_permission_mode_set: SessionPermissionModeSetRequest,
@@ -1831,8 +1848,9 @@ impl IpcBackend for SubagentControlBackend {
                     let inner_child = Arc::clone(&inner);
                     let child_id = child.id.as_str().to_owned();
                     let _ = tokio::task::spawn_blocking(move || {
-                        inner_child
-                            .session_interrupt(&SessionIdRequest { session_id: child_id })
+                        inner_child.session_interrupt(&SessionIdRequest {
+                            session_id: child_id,
+                        })
                     })
                     .await;
                 }

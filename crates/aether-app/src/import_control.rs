@@ -19,8 +19,8 @@ use std::time::{Duration, Instant};
 
 use aether_control::SharedClock;
 use aether_store::import::{
-    self, ImportBootReport, ImportFailure, ImportFailureInfo, ImportJob, ImportJobStatus, ImportMode,
-    ImportProgress, ARCHIVE_IMPORT_SOURCES, AUDIT_ACTION_IMPORT_CANCELLED,
+    self, ImportBootReport, ImportFailure, ImportFailureInfo, ImportJob, ImportJobStatus,
+    ImportMode, ImportProgress, ARCHIVE_IMPORT_SOURCES, AUDIT_ACTION_IMPORT_CANCELLED,
     AUDIT_ACTION_IMPORT_FAILED, AUDIT_ACTION_IMPORT_STARTED, SESSION_IMPORT_SOURCES,
 };
 use aether_store::{AuditLogRecord, StoreCommand, WriteQueue};
@@ -32,25 +32,23 @@ use crate::ipc::business::BusinessCode;
 use crate::ipc::dto::{
     AppRestartRequest, ArchiveExportRequest, ArtifactAddRequest, ArtifactRemoveRequest,
     ArtifactsListRequest, AttachmentAddRequest, AttachmentListRequest, AttachmentRemoveRequest,
-    AuditExportRequest, AuditQueryRequest, BackupCreateRequest,
-    BackupRestoreRequest, ExportDiagnosticsRequest,
-    ImportCancelRequest, ImportRequest, ImportStatusRequest, MessagesPageRequest,
-    PermissionResolveRequest, PermissionsPendingRequest, PresetAddRequest, PresetDeleteRequest,
-    PresetUpdateRequest, PresetsListRequest, ProviderCreateRequest, ProviderDeleteRequest,
-    ProviderModelAddRequest, ProviderModelToggleRequest, ProviderModelsFetchRequest,
-    ProviderTestRequest, ProviderToggleRequest, ProviderUpdateRequest, ProvidersListRequest,
-    RuleAddRequest, RuleDeleteRequest, RuleToggleRequest, RuleUpdateRequest,
-    RunRetryRequest, RuntimeDisableRequest, RuntimeEnableRequest,
+    AuditExportRequest, AuditQueryRequest, BackupCreateRequest, BackupRestoreRequest,
+    ExportDiagnosticsRequest, ImportCancelRequest, ImportRequest, ImportStatusRequest,
+    MessagesPageRequest, PermissionResolveRequest, PermissionsPendingRequest, PresetAddRequest,
+    PresetDeleteRequest, PresetUpdateRequest, PresetsListRequest, ProviderCreateRequest,
+    ProviderDeleteRequest, ProviderModelAddRequest, ProviderModelToggleRequest,
+    ProviderModelsFetchRequest, ProviderTestRequest, ProviderToggleRequest, ProviderUpdateRequest,
+    ProvidersListRequest, QueueListRequest, RuleAddRequest, RuleDeleteRequest, RuleToggleRequest,
+    RuleUpdateRequest, RunRetryRequest, RuntimeDisableRequest, RuntimeEnableRequest,
     RuntimeRetryRequest, SessionCreateRequest, SessionDeleteRequest, SessionExportRequest,
     SessionIdRequest, SessionListRequest, SessionPermissionModeSetRequest, SessionRenameRequest,
     SessionSearchRequest, SessionSendRequest, SessionWorkspaceAssignRequest, SettingsGetRequest,
-    SettingsSetRequest,
-    SubagentCancelRequest, SubagentListRequest, SubagentResolveRequest, SubagentResultGetRequest,
-    SubagentSpawnRequest, WorkspaceCreateRequest, WorkspaceDeleteRequest, WorkspaceSetRequest,
-    WorkspaceUpdateRequest, WorkspacesListRequest, WorkflowCreateRequest, WorkflowDeleteRequest,
+    SettingsSetRequest, SubagentCancelRequest, SubagentListRequest, SubagentResolveRequest,
+    SubagentResultGetRequest, SubagentSpawnRequest, WorkflowCreateRequest, WorkflowDeleteRequest,
     WorkflowIdRequest, WorkflowImportRequest, WorkflowListRequest, WorkflowNodeRetryRequest,
     WorkflowRunCancelRequest, WorkflowRunGetRequest, WorkflowRunListRequest, WorkflowRunRequest,
-    WorkflowUpdateRequest,
+    WorkflowUpdateRequest, WorkspaceCreateRequest, WorkspaceDeleteRequest, WorkspaceSetRequest,
+    WorkspaceUpdateRequest, WorkspacesListRequest,
 };
 use crate::ipc::error::IpcError;
 use crate::ipc::path::ArtifactPath;
@@ -182,11 +180,9 @@ impl ImportControlBackend {
 
     fn ensure_space(&self, source_bytes: u64) -> Result<(), IpcError> {
         let db = self.db_path();
-        let required = aether_store::backup::required_space_bytes(source_bytes, 0)
-            .saturating_add(aether_store::backup::required_space_bytes(
-                file_len(&db),
-                file_len(&wal_path(&db)),
-            ));
+        let required = aether_store::backup::required_space_bytes(source_bytes, 0).saturating_add(
+            aether_store::backup::required_space_bytes(file_len(&db), file_len(&wal_path(&db))),
+        );
         let available = self
             .space
             .available_bytes(&self.data_dir)
@@ -277,8 +273,7 @@ impl ImportControlBackend {
         let this = self.clone();
         let source = source_path.to_path_buf();
         self.handle.spawn(async move {
-            this.run_job(shared, cancel, source, expected_sources)
-                .await;
+            this.run_job(shared, cancel, source, expected_sources).await;
         });
         Ok(json!({"job_id": job_id, "status": "staging"}))
     }
@@ -320,12 +315,9 @@ impl ImportControlBackend {
                     let _ = import::write_job(&data_dir, &job);
                 }
             };
-            import::validate_source(
-                &source_for_scan,
-                expected_sources,
-                &mut progress,
-                &|| can.load(Ordering::SeqCst),
-            )
+            import::validate_source(&source_for_scan, expected_sources, &mut progress, &|| {
+                can.load(Ordering::SeqCst)
+            })
         })
         .await;
 
@@ -342,8 +334,7 @@ impl ImportControlBackend {
                 return;
             }
             Err(error) => {
-                let failure =
-                    ImportFailure::internal(format!("导入校验任务异常退出：{error}"));
+                let failure = ImportFailure::internal(format!("导入校验任务异常退出：{error}"));
                 self.finish_failed(&shared, &job_id, failure, dry_run).await;
                 return;
             }
@@ -416,8 +407,7 @@ impl ImportControlBackend {
                     }
                 }
                 Err(error) => {
-                    let failure =
-                        ImportFailure::internal(format!("导入预览任务异常退出：{error}"));
+                    let failure = ImportFailure::internal(format!("导入预览任务异常退出：{error}"));
                     self.finish_failed(&shared, &job_id, failure, true).await;
                 }
             }
@@ -505,12 +495,7 @@ impl ImportControlBackend {
         self.finish_active(job_id);
     }
 
-    async fn finish_cancelled(
-        &self,
-        shared: &Arc<Mutex<ImportJob>>,
-        job_id: &str,
-        dry_run: bool,
-    ) {
+    async fn finish_cancelled(&self, shared: &Arc<Mutex<ImportJob>>, job_id: &str, dry_run: bool) {
         {
             let Ok(mut job) = shared.lock() else {
                 return;
@@ -537,7 +522,12 @@ impl ImportControlBackend {
         resource: Option<String>,
         run: impl FnOnce() -> Result<Value, IpcError>,
     ) -> Result<Value, IpcError> {
-        self.audit(AUDIT_ACTION_EXPORT_STARTED, "started", resource.clone(), json!({"action": action}));
+        self.audit(
+            AUDIT_ACTION_EXPORT_STARTED,
+            "started",
+            resource.clone(),
+            json!({"action": action}),
+        );
         match run() {
             Ok(value) => {
                 let detail = value
@@ -631,6 +621,7 @@ impl IpcBackend for ImportControlBackend {
         session_resume: SessionIdRequest,
         session_dispose: SessionIdRequest,
         messages_page: MessagesPageRequest,
+        queue_list: QueueListRequest,
         permissions_pending: PermissionsPendingRequest,
         permission_resolve: PermissionResolveRequest,
         session_permission_mode_set: SessionPermissionModeSetRequest,
@@ -775,11 +766,9 @@ impl IpcBackend for ImportControlBackend {
         request: &SessionExportRequest,
         canonical_target_dir: Option<&Path>,
     ) -> Result<Value, IpcError> {
-        self.with_export_audit(
-            "session_export",
-            Some(request.session_id.clone()),
-            || self.inner.session_export(request, canonical_target_dir),
-        )
+        self.with_export_audit("session_export", Some(request.session_id.clone()), || {
+            self.inner.session_export(request, canonical_target_dir)
+        })
     }
 
     fn archive_export(
@@ -807,7 +796,12 @@ impl IpcBackend for ImportControlBackend {
         request: &ImportRequest,
         canonical_source_path: &Path,
     ) -> Result<Value, IpcError> {
-        self.start_import("session", request, canonical_source_path, &SESSION_IMPORT_SOURCES)
+        self.start_import(
+            "session",
+            request,
+            canonical_source_path,
+            &SESSION_IMPORT_SOURCES,
+        )
     }
 
     fn archive_import(
@@ -815,7 +809,12 @@ impl IpcBackend for ImportControlBackend {
         request: &ImportRequest,
         canonical_source_path: &Path,
     ) -> Result<Value, IpcError> {
-        self.start_import("archive", request, canonical_source_path, &ARCHIVE_IMPORT_SOURCES)
+        self.start_import(
+            "archive",
+            request,
+            canonical_source_path,
+            &ARCHIVE_IMPORT_SOURCES,
+        )
     }
 
     fn import_status(&self, request: &ImportStatusRequest) -> Result<Value, IpcError> {

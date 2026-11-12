@@ -272,6 +272,9 @@ fn session_send_with_attachment_on_unsupported_runtime_is_not_silently_dropped()
             model: None,
             subagent_context: None,
             attachments: Some(vec![id]),
+            priority: None,
+            timeout_ms: None,
+            max_attempts: None,
         })
         .unwrap_err();
     assert_eq!(
@@ -392,6 +395,9 @@ fn session_send_rejects_foreign_attachment() {
             model: None,
             subagent_context: None,
             attachments: Some(vec!["01J8ZQ5R0N7W9Y8X6V4T2S0K1Z".to_owned()]),
+            priority: None,
+            timeout_ms: None,
+            max_attempts: None,
         })
         .unwrap_err();
     // 运行时能力门先于归属校验（mock 未声明 multimodal）；换成 claude-code 会话时

@@ -249,32 +249,47 @@ async fn restart_reconciles_unfinished_runs_and_sessions() {
     );
 
     let report = manager2.reconcile_interrupted_runs().await.unwrap();
+    // M10-07/ADR-037 D-037-4：running → failed（不自动重放）；queued 保留并重新入队。
     assert_eq!(
-        report.runs_failed.len(),
-        2,
-        "queued + running 均应收口：{:?}",
+        report.runs_failed,
+        vec![running.run_id.clone()],
+        "仅 running run 收口为 failed：{:?}",
         report.runs_failed
+    );
+    assert_eq!(
+        report.runs_requeued,
+        vec![queued.run_id.clone()],
+        "queued run 必须保留并重新入队：{:?}",
+        report.runs_requeued
     );
     assert_eq!(report.sessions_reset, vec![session.id.clone()]);
 
-    for run_id in [&running.run_id, &queued.run_id] {
-        let run = manager2.run(run_id).await.unwrap().expect("run 行");
-        assert_eq!(
-            run.status,
-            RunStatus::Failed,
-            "未收口 run 必须收口为 failed"
-        );
-        assert_eq!(
-            run.error.as_deref(),
-            Some(aether_control::RUN_INTERRUPTED_CODE)
-        );
-    }
+    let running_row = manager2
+        .run(&running.run_id)
+        .await
+        .unwrap()
+        .expect("run 行");
+    assert_eq!(running_row.status, RunStatus::Failed);
+    assert_eq!(
+        running_row.error.as_deref(),
+        Some(aether_control::RUN_INTERRUPTED_CODE)
+    );
+    // 重新入队的 queued run 按闸门推进（有空槽即执行）；不得被误收口为 failed。
+    assert!(
+        wait_run_status(&manager2, &queued.run_id, RunStatus::Succeeded).await,
+        "重新入队的 queued run 应继续执行并成功（当前 {:?}）",
+        manager2
+            .run(&queued.run_id)
+            .await
+            .unwrap()
+            .map(|run| run.status)
+    );
     assert!(
         wait_session_status(&manager2, &session.id, SessionStatus::Idle).await,
         "在途会话必须回 idle"
     );
 
-    // 事件经管线落库（先日志后广播）：run.failed ×2 + session.status_changed。
+    // 事件经管线落库（先日志后广播）：running run 的 run.failed + session.status_changed。
     let frame = core.pipeline.readback(&session.id, 0).await.unwrap();
     let failed_events = frame
         .events
@@ -293,7 +308,10 @@ async fn restart_reconciles_unfinished_runs_and_sessions() {
                 && event.run_id.as_ref() == Some(&queued.run_id)
         })
         .count();
-    assert_eq!(queued_failed, 1, "queued run 的 run.failed 事件必须落库");
+    assert_eq!(
+        queued_failed, 0,
+        "queued run 重新入队后不得被误收口为 run.failed"
+    );
     let status_events = frame
         .events
         .iter()

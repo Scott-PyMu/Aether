@@ -32,10 +32,10 @@ use crate::ipc::backend::IpcBackend;
 use crate::ipc::dto::{
     AppRestartRequest, ArchiveExportRequest, AuditExportRequest, AuditQueryRequest,
     BackupCreateRequest, BackupRestoreRequest, ExportDiagnosticsRequest, MessagesPageRequest,
-    PermissionResolveRequest, PermissionsPendingRequest, RunRetryRequest, RuntimeEnableRequest,
-    RuntimeRetryRequest, SessionCreateRequest, SessionExportRequest, SessionIdRequest,
-    SessionListRequest, SessionSendRequest, SettingsGetRequest, SettingsSetRequest,
-    WorkspaceSetRequest,
+    PermissionResolveRequest, PermissionsPendingRequest, QueueListRequest, RunRetryRequest,
+    RuntimeEnableRequest, RuntimeRetryRequest, SessionCreateRequest, SessionExportRequest,
+    SessionIdRequest, SessionListRequest, SessionSendRequest, SettingsGetRequest,
+    SettingsSetRequest, WorkspaceSetRequest,
 };
 use crate::ipc::error::{IpcError, IpcErrorCode};
 use crate::logging::LogSink;
@@ -727,6 +727,10 @@ impl IpcBackend for DiagnosticsControlBackend {
 
     fn health(&self) -> Result<Value, IpcError> {
         self.inner.health()
+    }
+
+    fn queue_list(&self, request: &QueueListRequest) -> Result<Value, IpcError> {
+        self.inner.queue_list(request)
     }
 
     fn session_list(&self, request: &SessionListRequest) -> Result<Value, IpcError> {

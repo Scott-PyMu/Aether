@@ -33,18 +33,18 @@ use serde_json::{json, Value};
 
 use crate::backup_control::{file_len, wal_path, NativeSpaceProbe, SpaceProbe};
 use crate::ipc::backend::IpcBackend;
+use crate::ipc::cursor;
 use crate::ipc::dto::{
     AppRestartRequest, ArchiveExportRequest, ArtifactAddRequest, ArtifactRemoveRequest,
     ArtifactsListRequest, AuditExportRequest, AuditQueryRequest, BackupCreateRequest,
     BackupRestoreRequest, ExportDiagnosticsRequest, MessagesPageRequest, PermissionResolveRequest,
-    PermissionsPendingRequest, ProviderCreateRequest, ProviderDeleteRequest, ProviderModelAddRequest,
-    ProviderModelToggleRequest, ProviderModelsFetchRequest, ProviderTestRequest,
-    ProviderToggleRequest, ProviderUpdateRequest, ProvidersListRequest,
-    RunRetryRequest, RuntimeEnableRequest, RuntimeRetryRequest, SessionCreateRequest,
-    SessionExportRequest, SessionIdRequest, SessionListRequest, SessionSendRequest,
-    SettingsGetRequest, SettingsSetRequest, WorkspaceSetRequest,
+    PermissionsPendingRequest, ProviderCreateRequest, ProviderDeleteRequest,
+    ProviderModelAddRequest, ProviderModelToggleRequest, ProviderModelsFetchRequest,
+    ProviderTestRequest, ProviderToggleRequest, ProviderUpdateRequest, ProvidersListRequest,
+    QueueListRequest, RunRetryRequest, RuntimeEnableRequest, RuntimeRetryRequest,
+    SessionCreateRequest, SessionExportRequest, SessionIdRequest, SessionListRequest,
+    SessionSendRequest, SettingsGetRequest, SettingsSetRequest, WorkspaceSetRequest,
 };
-use crate::ipc::cursor;
 use crate::ipc::error::{IpcError, IpcErrorCode};
 use crate::ipc::path::ArtifactPath;
 use crate::retention::{RetentionDeps, RetentionTask, RetentionThresholds};
@@ -541,6 +541,10 @@ impl IpcBackend for ArchiveControlBackend {
 
     fn health(&self) -> Result<Value, IpcError> {
         self.inner.health()
+    }
+
+    fn queue_list(&self, request: &QueueListRequest) -> Result<Value, IpcError> {
+        self.inner.queue_list(request)
     }
 
     fn session_list(&self, request: &SessionListRequest) -> Result<Value, IpcError> {

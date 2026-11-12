@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+﻿#!/usr/bin/env node
 /**
  * `pnpm verify:m10-03` —— M10-03 `aetherd` HTTP/WS + CLI 可复跑检查。
  *
@@ -161,7 +161,7 @@ const openapiPath = "docs/api/aetherd-v1.openapi.json";
 check("OpenAPI 存在", existsSync(path.join(root, openapiPath)));
 const openapi = readJson(openapiPath);
 const catalog = openapi["x-aether-command-catalog"] ?? [];
-check("OpenAPI daemon 命令 = 82", catalog.length === 82, `实际 ${catalog.length}`);
+check("OpenAPI daemon 命令 = 83", catalog.length === 83, `实际 ${catalog.length}`);
 check("OpenAPI 无 shell 命令", !catalog.some((item) => item.name === "app_exit"));
 check(
   "OpenAPI 路径齐全",
@@ -178,8 +178,8 @@ check("schema 数 = 105", Object.keys(openapi.components?.schemas ?? {}).length 
 
 // 3) 契约计数不变（M10-03 +0）
 const manifest = readJson("packages/protocol/src/command-manifest.json");
-check("command-manifest total = 86", manifest.counts.total === 86);
-check("daemon 命令 = 82", manifest.counts.daemon === 82);
+check("command-manifest total = 86", manifest.counts.total === 87);
+check("daemon 命令 = 82", manifest.counts.daemon === 83);
 check("shell 命令仍 4", manifest.counts.shell === 4);
 
 const errorCodes = readJson("packages/protocol/src/error_codes.json");

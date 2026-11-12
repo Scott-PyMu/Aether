@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+﻿#!/usr/bin/env node
 /**
  * `pnpm verify:m10-04` —— 导入/导出完整（ADR-034）可复跑检查。
  *
@@ -83,12 +83,12 @@ const dispatch = read("crates/aether-app/src/ipc/dispatch.rs");
 for (const command of ["session_import", "archive_import", "import_status", "import_cancel"]) {
   check(`命令面含 ${command}`, dispatch.includes(`"${command}"`));
 }
-check("COMMANDS = 86", /COMMANDS\.len\(\),\s*86/.test(dispatch));
+check("COMMANDS = 87", /COMMANDS\.len\(\),\s*87/.test(dispatch));
 const manifest = readJson("packages/protocol/src/command-manifest.json");
-check("manifest total=86", manifest.counts?.total === 86);
-check("manifest daemon=82", manifest.counts?.daemon === 82);
+check("manifest total=86", manifest.counts?.total === 87);
+check("manifest daemon=82", manifest.counts?.daemon === 83);
 check("manifest shell=4", manifest.counts?.shell === 4);
-check("manifest ui=81", manifest.counts?.ui === 81);
+check("manifest ui=85", manifest.counts?.ui === 85);
 check(
   "manifest import 分组=4",
   (manifest.groups ?? []).some((group) => group.group === "import" && group.count === 4),
@@ -206,7 +206,7 @@ check(
 
 // 6) 生成物一致性（不运行协议生成器，避免未提交 diff；运行静态生成器 check）
 for (const [script, expected] of [
-  ["scripts/ci/command-manifest.mjs", "86/82/4"],
+  ["scripts/ci/command-manifest.mjs", "87/83/4"],
   ["scripts/ci/path-commands.mjs", "路径命令"],
   ["scripts/ci/error-codes.mjs", "ipc=32"],
 ]) {

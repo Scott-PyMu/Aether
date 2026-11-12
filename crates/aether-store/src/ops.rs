@@ -25,6 +25,48 @@ use crate::write_queue::ReadPool;
 /// `DeleteEventsByIds` 单条 `DELETE ... IN (...)` 的参数个数上限（语句变量有界）。
 const DELETE_EVENTS_CHUNK: usize = 1_000;
 
+/// run 调度元数据（M10-07/ADR-037 D-037-5：`runs` 5 列）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunSchedule {
+    /// 调用方优先级（−100…100；缺省 0）。
+    pub priority: i32,
+    /// 入队时刻（等待时长起点；`None` = 使用 `started_at`）。
+    pub queued_at: Option<i64>,
+    /// 已重试次数（自动重试链；旧 attempt 行保留）。
+    pub retry_count: u32,
+    /// 最大尝试次数（1–5；缺省 1 = 自动重试关闭）。
+    pub max_attempts: u32,
+    /// 等待原因（ADR-037 附录 B；缺省 `concurrency_gate`）。
+    pub wait_reason: Option<String>,
+}
+
+impl Default for RunSchedule {
+    fn default() -> Self {
+        Self {
+            priority: 0,
+            queued_at: None,
+            retry_count: 0,
+            max_attempts: 1,
+            wait_reason: None,
+        }
+    }
+}
+
+/// 带调度元数据的 run 行（重启重建/队列诊断）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScheduledRun {
+    pub run: Run,
+    pub schedule: RunSchedule,
+}
+
+/// run 版本摘要（同一输入消息的 attempt 链；M10-07 自动重试去重）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunAttemptRef {
+    pub run_id: RunId,
+    pub status: RunStatus,
+    pub retry_count: u32,
+}
+
 /// 权限行（`permissions` 表；ID 为 ULID 文本，本层不做 ULID 形状校验）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PermissionRecord {
@@ -238,7 +280,10 @@ pub(crate) fn audit_filter_sql(query: &AuditQuery) -> (String, Vec<rusqlite::typ
         values.push(value);
     };
     if let Some(session_id) = &query.session_id {
-        push("session_id = ?", rusqlite::types::Value::Text(session_id.clone()));
+        push(
+            "session_id = ?",
+            rusqlite::types::Value::Text(session_id.clone()),
+        );
     }
     if let Some(actor) = &query.actor {
         push("actor = ?", rusqlite::types::Value::Text(actor.clone()));
@@ -247,7 +292,10 @@ pub(crate) fn audit_filter_sql(query: &AuditQuery) -> (String, Vec<rusqlite::typ
         push("action = ?", rusqlite::types::Value::Text(action.clone()));
     }
     if let Some(resource) = &query.resource {
-        push("resource = ?", rusqlite::types::Value::Text(resource.clone()));
+        push(
+            "resource = ?",
+            rusqlite::types::Value::Text(resource.clone()),
+        );
     }
     if let Some(from_ts) = query.from_ts {
         push("ts >= ?", rusqlite::types::Value::Integer(from_ts));
@@ -277,7 +325,6 @@ pub(crate) fn read_audit_row(row: &Row<'_>) -> rusqlite::Result<AuditLogRecord> 
         ts: row.get(8)?,
     })
 }
-
 
 /// 领域写命令（经单写队列执行；每个命令一个事务）。
 #[derive(Debug, Clone, PartialEq)]
@@ -338,8 +385,14 @@ pub enum StoreCommand {
         permission_mode: PermissionMode,
         updated_at: i64,
     },
-    /// 插入 run 行。
+    /// 插入 run 行（调度元数据经 [`StoreCommand::UpdateRunSchedule`] 紧接写入；
+    /// 崩溃窗口内以列默认值（priority=0/queued_at=started_at/retry_count=0）降级）。
     InsertRun { run: Run },
+    /// 写入 run 调度元数据（M10-07/ADR-037；插入后的同流程更新，幂等）。
+    UpdateRunSchedule {
+        run_id: RunId,
+        schedule: RunSchedule,
+    },
     /// 改写 run 生效思考深度（ADR-010 能力门：runtime 未声明能力 → 落缺省 2；M3-10）。
     UpdateRunThinkingDepth { run_id: RunId, thinking_depth: u8 },
     /// 启动排队中的 run（`queued → running`，记录 `started_at`）。
@@ -361,6 +414,8 @@ pub enum StoreCommand {
         message: Message,
         run: Run,
         attachment_ids: Vec<String>,
+        /// M10-07/ADR-037：优先级/等待/重试元数据（同事务写入）。
+        schedule: RunSchedule,
     },
     /// 插入消息（助手/工具/系统消息；`client_msg_id` 为 `NULL`，`seq=0` 时自动分配）。
     InsertMessage { message: Message },
@@ -772,11 +827,7 @@ pub(crate) fn apply_command(
                 .execute(
                     "UPDATE sessions SET parent_session_id = ?2, updated_at = ?3 \
                      WHERE id = ?1 AND parent_session_id IS NULL",
-                    params![
-                        session_id.as_str(),
-                        parent_session_id.as_str(),
-                        updated_at
-                    ],
+                    params![session_id.as_str(), parent_session_id.as_str(), updated_at],
                 )
                 .map_err(txn_failed)?;
             transaction.commit().map_err(txn_failed)?;
@@ -831,7 +882,26 @@ pub(crate) fn apply_command(
         }
         StoreCommand::InsertRun { run } => {
             let transaction = connection.transaction().map_err(txn_failed)?;
-            let affected = insert_run(&transaction, run)?;
+            let affected = insert_run(&transaction, run, &RunSchedule::default())?;
+            transaction.commit().map_err(txn_failed)?;
+            Ok(StoreOutcome::Applied { affected })
+        }
+        StoreCommand::UpdateRunSchedule { run_id, schedule } => {
+            let transaction = connection.transaction().map_err(txn_failed)?;
+            let affected = transaction
+                .execute(
+                    "UPDATE runs SET priority = ?2, queued_at = ?3, retry_count = ?4, \
+                     max_attempts = ?5, wait_reason = ?6 WHERE id = ?1",
+                    params![
+                        run_id.as_str(),
+                        i64::from(schedule.priority),
+                        schedule.queued_at,
+                        i64::from(schedule.retry_count),
+                        i64::from(schedule.max_attempts),
+                        schedule.wait_reason,
+                    ],
+                )
+                .map_err(txn_failed)?;
             transaction.commit().map_err(txn_failed)?;
             Ok(StoreOutcome::Applied { affected })
         }
@@ -880,6 +950,7 @@ pub(crate) fn apply_command(
             message,
             run,
             attachment_ids,
+            schedule,
         } => {
             let transaction = connection.transaction().map_err(txn_failed)?;
             let existing: Option<(String, Option<String>)> = transaction
@@ -914,7 +985,7 @@ pub(crate) fn apply_command(
                 });
             }
             insert_message(&transaction, message)?;
-            insert_run(&transaction, run)?;
+            insert_run(&transaction, run, schedule)?;
             // M10-05/ADR-035：附件绑定与新消息同一事务；任一附件缺失/不属于会话 →
             // 整体回滚（不产生「消息已发送但附件被静默丢弃」的半成品）。
             for attachment_id in attachment_ids {
@@ -941,9 +1012,7 @@ pub(crate) fn apply_command(
                         .map_err(txn_failed)?;
                     if exists.is_none() {
                         return Err(StoreError::Internal {
-                            reason: format!(
-                                "附件不可绑定（缺失/不属于会话）：{attachment_id}"
-                            ),
+                            reason: format!("附件不可绑定（缺失/不属于会话）：{attachment_id}"),
                         });
                     }
                 }
@@ -1726,12 +1795,8 @@ pub(crate) fn apply_command(
             transaction.commit().map_err(txn_failed)?;
             Ok(StoreOutcome::Applied { affected })
         }
-        StoreCommand::Workflow { command } => {
-            crate::workflow::apply_command(connection, command)
-        }
-        StoreCommand::Subagent { command } => {
-            crate::subagent::apply_command(connection, command)
-        }
+        StoreCommand::Workflow { command } => crate::workflow::apply_command(connection, command),
+        StoreCommand::Subagent { command } => crate::subagent::apply_command(connection, command),
     }
 }
 
@@ -1771,11 +1836,16 @@ fn insert_message(connection: &Connection, message: &Message) -> Result<usize, S
         .map_err(txn_failed)
 }
 
-fn insert_run(connection: &Connection, run: &Run) -> Result<usize, StoreError> {
+fn insert_run(
+    connection: &Connection,
+    run: &Run,
+    schedule: &RunSchedule,
+) -> Result<usize, StoreError> {
     connection
         .execute(
-            "INSERT INTO runs (id, session_id, status, input_message_id, thinking_depth, error, started_at, finished_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO runs (id, session_id, status, input_message_id, thinking_depth, error, started_at, finished_at, \
+             priority, queued_at, retry_count, max_attempts, wait_reason) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 run.id.as_str(),
                 run.session_id.as_str(),
@@ -1785,6 +1855,11 @@ fn insert_run(connection: &Connection, run: &Run) -> Result<usize, StoreError> {
                 run.error,
                 run.started_at,
                 run.finished_at,
+                i64::from(schedule.priority),
+                schedule.queued_at.unwrap_or(run.started_at),
+                i64::from(schedule.retry_count),
+                i64::from(schedule.max_attempts),
+                schedule.wait_reason,
             ],
         )
         .map_err(txn_failed)
@@ -2050,10 +2125,7 @@ impl ReadPool {
 
     /// 会话是否存在在途 run（`queued` / `running`；M7-08 改派前置检查：ADR-026
     /// §2.1-1「在途 run 或 waiting_permission → session_busy」）。
-    pub async fn session_has_active_run(
-        &self,
-        session_id: &SessionId,
-    ) -> Result<bool, StoreError> {
+    pub async fn session_has_active_run(&self, session_id: &SessionId) -> Result<bool, StoreError> {
         let session = session_id.as_str().to_owned();
         self.with_connection(move |connection| {
             let count: i64 = connection
@@ -2069,7 +2141,8 @@ impl ReadPool {
     }
 
     /// 按 id 读取 run（不存在为 `None`）。
-    pub async fn run(&self, run_id: &RunId) -> Result<Option<Run>, StoreError> {        let run = run_id.as_str().to_owned();
+    pub async fn run(&self, run_id: &RunId) -> Result<Option<Run>, StoreError> {
+        let run = run_id.as_str().to_owned();
         self.with_connection(move |connection| {
             connection
                 .query_row(
@@ -2118,6 +2191,120 @@ impl ReadPool {
                 runs.push(row?);
             }
             Ok(runs)
+        })
+        .await
+    }
+
+    /// 未收口 run + 调度元数据（M10-07/ADR-037 D-037-4：daemon 重启后 `queued`
+    /// run 按原 `queued_at/priority` 重新入队；`running` run 收口为 failed）。
+    pub async fn unfinished_runs_scheduled(&self) -> Result<Vec<ScheduledRun>, StoreError> {
+        self.with_connection(move |connection| {
+            let mut statement = connection.prepare(
+                "SELECT id, session_id, status, input_message_id, thinking_depth, error, started_at, finished_at, \
+                        priority, COALESCE(queued_at, started_at), retry_count, max_attempts, wait_reason \
+                 FROM runs WHERE status IN ('queued', 'running') \
+                 ORDER BY COALESCE(queued_at, started_at) ASC, rowid ASC",
+            )?;
+            let rows = statement.query_map([], |row| {
+                Ok(ScheduledRun {
+                    run: read_run_row(row)?,
+                    schedule: read_run_schedule_columns(row, 8)?,
+                })
+            })?;
+            let mut runs = Vec::new();
+            for row in rows {
+                runs.push(row?);
+            }
+            Ok(runs)
+        })
+        .await
+    }
+
+    /// 读取单个 run 的调度元数据（`queue_list` 诊断/自动重试判定）。
+    pub async fn run_schedule(&self, run_id: &RunId) -> Result<Option<RunSchedule>, StoreError> {
+        let run = run_id.as_str().to_owned();
+        self.with_connection(move |connection| {
+            connection
+                .query_row(
+                    "SELECT priority, COALESCE(queued_at, started_at), retry_count, max_attempts, wait_reason \
+                     FROM runs WHERE id = ?1",
+                    [run.as_str()],
+                    |row| Ok(RunSchedule {
+                        priority: i32::try_from(row.get::<_, i64>(0)?).unwrap_or(0),
+                        queued_at: row.get(1)?,
+                        retry_count: u32::try_from(row.get::<_, i64>(2)?).unwrap_or(0),
+                        max_attempts: row
+                            .get::<_, Option<i64>>(3)?
+                            .map(|value| u32::try_from(value).unwrap_or(1).clamp(1, 5))
+                            .unwrap_or(1),
+                        wait_reason: row.get(4)?,
+                    }),
+                )
+                .optional()
+                .map_err(StoreError::from)
+        })
+        .await
+    }
+
+    /// 同一输入消息的 attempt 链（按 `retry_count` 降序；M10-07 自动重试去重）。
+    pub async fn runs_for_input_message(
+        &self,
+        input_message_id: &MessageId,
+    ) -> Result<Vec<RunAttemptRef>, StoreError> {
+        let message = input_message_id.as_str().to_owned();
+        self.with_connection(move |connection| {
+            let mut statement = connection.prepare(
+                "SELECT id, status, retry_count FROM runs WHERE input_message_id = ?1 \
+                 ORDER BY retry_count DESC, started_at DESC, rowid DESC",
+            )?;
+            let rows = statement.query_map([message.as_str()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })?;
+            let mut runs = Vec::new();
+            for row in rows {
+                let (id, status, retry_count) = row?;
+                let run_id =
+                    RunId::new(id.clone()).map_err(|error| StoreError::InvalidStoredEvent {
+                        id: id.clone(),
+                        reason: format!("runs.id 非法：{error}"),
+                    })?;
+                let status =
+                    RunStatus::from_str(&status).map_err(|_| StoreError::InvalidStoredEvent {
+                        id: id.clone(),
+                        reason: format!("runs.status 非法：{status}"),
+                    })?;
+                runs.push(RunAttemptRef {
+                    run_id,
+                    status,
+                    retry_count: u32::try_from(retry_count).unwrap_or(0),
+                });
+            }
+            Ok(runs)
+        })
+        .await
+    }
+
+    /// 会话当前在途 run 的优先级（子 Agent/内部节点继承；无在途 → `None`）。
+    pub async fn active_run_priority(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Option<i32>, StoreError> {
+        let session = session_id.as_str().to_owned();
+        self.with_connection(move |connection| {
+            let priority: Option<i64> = connection
+                .query_row(
+                    "SELECT priority FROM runs WHERE session_id = ?1 \
+                     AND status IN ('queued','running') ORDER BY started_at DESC, rowid DESC LIMIT 1",
+                    [session.as_str()],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(StoreError::from)?;
+            Ok(priority.map(|value| i32::try_from(value).unwrap_or(0)))
         })
         .await
     }
@@ -2486,10 +2673,7 @@ impl ReadPool {
     /// 等值过滤（会话/actor/action/resource）+ 闭区间时间 + `offset`/`limit` 分页；
     /// 稳定排序 `ts DESC, id DESC`；不执行 `COUNT(*)`，以「多取一行」判定
     /// `has_more`（1e6 行下已过滤分页查询 P95 ≤300ms；见任务证据）。
-    pub async fn audit_query(
-        &self,
-        query: AuditQuery,
-    ) -> Result<AuditQueryResult, StoreError> {
+    pub async fn audit_query(&self, query: AuditQuery) -> Result<AuditQueryResult, StoreError> {
         self.with_connection(move |connection| {
             let (where_sql, values) = audit_filter_sql(&query);
             let limit = query
@@ -2509,15 +2693,10 @@ impl ReadPool {
                  FROM audit_log{where_sql} ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?"
             ))?;
             let rows = statement.query_map(
-                rusqlite::params_from_iter(
-                    values
-                        .iter()
-                        .cloned()
-                        .chain([
-                            rusqlite::types::Value::Integer(limit_sql),
-                            rusqlite::types::Value::Integer(offset_sql),
-                        ]),
-                ),
+                rusqlite::params_from_iter(values.iter().cloned().chain([
+                    rusqlite::types::Value::Integer(limit_sql),
+                    rusqlite::types::Value::Integer(offset_sql),
+                ])),
                 read_audit_row,
             )?;
             let mut records = Vec::new();
@@ -2932,6 +3111,21 @@ fn read_run_row(row: &Row<'_>) -> rusqlite::Result<Run> {
     })
 }
 
+/// 调度元数据列（`priority, queued_at, retry_count, max_attempts, wait_reason`；
+/// 偏移由调用方指定，便于与 `read_run_row` 拼接）。
+fn read_run_schedule_columns(row: &Row<'_>, offset: usize) -> rusqlite::Result<RunSchedule> {
+    Ok(RunSchedule {
+        priority: i32::try_from(row.get::<_, i64>(offset)?).unwrap_or(0),
+        queued_at: row.get(offset + 1)?,
+        retry_count: u32::try_from(row.get::<_, i64>(offset + 2)?).unwrap_or(0),
+        max_attempts: row
+            .get::<_, Option<i64>>(offset + 3)?
+            .map(|value| u32::try_from(value).unwrap_or(1).clamp(1, 5))
+            .unwrap_or(1),
+        wait_reason: row.get(offset + 4)?,
+    })
+}
+
 pub(crate) fn read_message_row(row: &Row<'_>) -> rusqlite::Result<Message> {
     let role: String = row.get(4)?;
     let role = role
@@ -3208,6 +3402,7 @@ mod tests {
                 message: message.clone(),
                 run: run_record_value.clone(),
                 attachment_ids: Vec::new(),
+                schedule: Default::default(),
             },
         )
         .unwrap();
@@ -3235,6 +3430,7 @@ mod tests {
                     "01J000000000000000000000M2",
                 ),
                 attachment_ids: Vec::new(),
+                schedule: Default::default(),
             },
         )
         .unwrap();
@@ -3273,6 +3469,7 @@ mod tests {
                     message: user_message(message_id, "01J0000000000000000000000A", client),
                     run: run_record(&run_id, "01J0000000000000000000000A", message_id),
                     attachment_ids: Vec::new(),
+                    schedule: Default::default(),
                 },
             )
             .unwrap();

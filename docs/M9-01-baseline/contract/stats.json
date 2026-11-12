@@ -2,10 +2,10 @@
   "schema": "aether.m9-01.stats.v1",
   "unit_note": "行数按「以 \\n 分隔的行数」计（含空行，末尾换行不额外计一行）；调用点按正则匹配次数计。",
   "commands": {
-    "total": 86,
-    "daemon": 82,
+    "total": 87,
+    "daemon": 83,
     "shell": 4,
-    "reachable": 84,
+    "reachable": 85,
     "reserved": 2
   },
   "frontend": {
@@ -22,7 +22,7 @@
   "core": {
     "lines": 2764,
     "files": 8,
-    "rust_test_files": 101
+    "rust_test_files": 102
   },
   "method": {
     "commands": "crates/aether-app/src/ipc/dispatch.rs › pub const COMMANDS: &[&str]",

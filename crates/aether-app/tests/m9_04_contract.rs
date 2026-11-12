@@ -220,8 +220,8 @@ fn m9_04_baseline_reject_matrix_covers_all_63_commands() {
     files.sort();
     assert_eq!(
         files.len(),
-        86,
-        "基线条目必须 86 条（M9 63 + M10-01 11 + M10-02 5 + M10-04 4 + M10-05 3）"
+        87,
+        "基线条目必须 87 条（M9 63 + M10-01 11 + M10-02 5 + M10-04 4 + M10-05 3 + M10-07 1）"
     );
     let mut seen = Vec::new();
     let mut rejects = 0usize;
@@ -259,8 +259,8 @@ fn m9_04_baseline_reject_matrix_covers_all_63_commands() {
             semantic += 1;
         }
     }
-    assert_eq!(seen.len(), 86);
-    // M10-05 起 COMMANDS 为 86（M9 的 63 条顺序不变）；基线覆盖全部 86 条。
+    assert_eq!(seen.len(), 87);
+    // M10-07 起 COMMANDS 为 87（M9 的 63 条顺序不变）；基线覆盖全部 87 条。
     for command in COMMANDS {
         assert!(
             seen.iter().any(|name| name == command),

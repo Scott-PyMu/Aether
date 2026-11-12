@@ -6,10 +6,7 @@
 //!   （ADR-029 §4.3）；
 //! - `types.ts`：由本文件的 `export_protocol_types`（`--ignored`）生成，禁止手改
 //!   （AGENTS §2.8）；校验入口 `pnpm --filter @aether/protocol check`。
-#![cfg_attr(
-    test,
-    allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)
-)]
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 use std::borrow::Cow;
 use std::fs;
@@ -89,6 +86,7 @@ fn register_all(types: &mut Types) {
         BackupSource,
         ExportDiagnosticsRequest,
         HealthRequest,
+        QueueListRequest,
         ImportCancelRequest,
         ImportMode,
         ImportRequest,
@@ -228,7 +226,10 @@ fn aether_event_matches_core_envelope_nine_fields() {
     let event = AetherEvent::from_envelope(&envelope).expect("转换 AetherEvent");
     let event_json = serde_json::to_value(&event).expect("AetherEvent 序列化");
 
-    assert_eq!(core_json, event_json, "AetherEvent 必须与 EventEnvelope 同构");
+    assert_eq!(
+        core_json, event_json,
+        "AetherEvent 必须与 EventEnvelope 同构"
+    );
     let object = event_json.as_object().expect("事件 JSON 对象");
     assert_eq!(object.len(), 9, "事件信封必须恰好 9 字段");
     assert_eq!(AETHER_EVENT_FIELDS.len(), 9);

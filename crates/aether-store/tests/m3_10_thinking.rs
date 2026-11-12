@@ -57,7 +57,8 @@ fn dod1_migration_0003_columns_idempotent_and_historical_null() {
     // M7-01 合入 0006 runtimes.enabled、M7-09 合入 0007 presets、M7-07 合入 0008 FTS5、
     // ADR-028 合入 0009 provider endpoints）。
     let applied = applied_migrations(connection).unwrap();
-    let expected_versions: Vec<i64> = (1..=i64::try_from(EMBEDDED_MIGRATIONS.len()).unwrap()).collect();
+    let expected_versions: Vec<i64> =
+        (1..=i64::try_from(EMBEDDED_MIGRATIONS.len()).unwrap()).collect();
     assert_eq!(
         applied.iter().map(|item| item.version).collect::<Vec<_>>(),
         expected_versions,
@@ -233,6 +234,7 @@ async fn dod1_roundtrip_and_update_commands() {
             message: message(MESSAGE, SESSION, "01J8ZQ5R0N7W9Y8X6V4T2S0KCM"),
             run: run(RUN_ACTIVE, SESSION, MESSAGE, Some(4)),
             attachment_ids: Vec::new(),
+            schedule: Default::default(),
         })
         .await
         .unwrap();

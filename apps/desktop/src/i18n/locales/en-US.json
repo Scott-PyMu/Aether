@@ -481,6 +481,8 @@
   "session.adapter_is_isolated_by_backpressure": "Adapter {p0} is isolated by backpressure (storage_backpressure): cleared automatically after restart.",
   "session.queued_position": "Queued: position",
   "session.concurrency_limit": "(concurrency limit",
+  "session.queue_wait_reason": "Waiting reason: {p0}",
+  "session.wait_reason.concurrency_gate": "concurrency gate",
   "session.attachments_drag_paste_images_or": "Attachments: drag/paste images, or click the image button (PNG/JPEG/WebP/GIF, ≤10 MiB)",
   "session.the_current_runtime_does_not_4": "The current runtime does not declare multimodal: the attachment entry is unavailable",
   "session.remove_attachment": "Remove attachment {p0}",

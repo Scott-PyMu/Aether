@@ -46,9 +46,9 @@ use crate::ipc::backend::IpcBackend;
 use crate::ipc::dto::{
     AppRestartRequest, BackupCreateRequest, BackupRestoreRequest, BackupSource,
     ExportDiagnosticsRequest, MessagesPageRequest, PermissionResolveRequest,
-    PermissionsPendingRequest, RunRetryRequest, RuntimeEnableRequest, RuntimeRetryRequest,
-    SessionCreateRequest, SessionIdRequest, SessionListRequest, SessionSendRequest,
-    SettingsGetRequest, SettingsSetRequest, WorkspaceSetRequest,
+    PermissionsPendingRequest, QueueListRequest, RunRetryRequest, RuntimeEnableRequest,
+    RuntimeRetryRequest, SessionCreateRequest, SessionIdRequest, SessionListRequest,
+    SessionSendRequest, SettingsGetRequest, SettingsSetRequest, WorkspaceSetRequest,
 };
 use crate::ipc::error::IpcError;
 
@@ -666,6 +666,10 @@ impl IpcBackend for BackupControlBackend {
 
     fn health(&self) -> Result<Value, IpcError> {
         self.inner.health()
+    }
+
+    fn queue_list(&self, request: &QueueListRequest) -> Result<Value, IpcError> {
+        self.inner.queue_list(request)
     }
 
     fn runtimes_list(&self) -> Result<Value, IpcError> {

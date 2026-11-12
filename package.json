@@ -150,6 +150,8 @@
     "verify:i18n": "node scripts/test/m10-06/verify-m10-06.mjs",
     "verify:m10-06:visual": "node scripts/test/m10-06/visual-regression.mjs",
     "verify:m10-06:electron": "node scripts/test/m10-06/electron-visual.mjs",
+    "verify:m10-07": "node scripts/test/m10-07/verify-m10-07.mjs",
+    "verify:scheduler": "node scripts/test/m10-07/verify-m10-07.mjs",
     "stage:native-runtime": "node scripts/ci/stage-native-runtime.mjs"
   },
   "devDependencies": {

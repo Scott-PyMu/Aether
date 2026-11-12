@@ -26,10 +26,10 @@ const DISPATCH_SRC = "crates/aether-app/src/ipc/dispatch.rs";
 const HANDLERS_SRC = "crates/aether-app/src/ipc/handlers.rs";
 const ADR_SRC = "docs/adr/ADR-029-electron-shell-rust-daemon.md";
 const TARGET = "packages/protocol/src/command-manifest.json";
-const EXPECTED_TOTAL = 86;
-const EXPECTED_DAEMON = 82;
+const EXPECTED_TOTAL = 87;
+const EXPECTED_DAEMON = 83;
 const EXPECTED_SHELL = 4;
-const EXPECTED_UI = 84;
+const EXPECTED_UI = 85;
 export const RESERVED_COMMANDS = ["startup_get", "startup_migrate"];
 /** M10-01/ADR-031 新增命令（ADR-029 §16.1 只冻结 M9 的 63 条；本表登记增量分组）。 */
 export const M10_WORKFLOW_COMMANDS = [
@@ -60,6 +60,8 @@ export const M10_ATTACHMENT_COMMANDS = [
   "attachment_list",
   "attachment_remove",
 ];
+/** M10-07/ADR-037 队列可观测命令（同一增量分组口径）。 */
+export const M10_SCHEDULER_COMMANDS = ["queue_list"];
 export const M10_IMPORT_COMMANDS = [
   "session_import",
   "archive_import",
@@ -207,6 +209,15 @@ export function buildCommandManifest() {
     }
     groupOf.set(command, "import");
   }
+  for (const command of M10_SCHEDULER_COMMANDS) {
+    if (!commands.includes(command)) {
+      throw new Error(`[command-manifest] M10 命令 ${command} 不在 COMMANDS 清单内`);
+    }
+    if (groupOf.has(command)) {
+      throw new Error(`[command-manifest] M10 命令 ${command} 与 ADR §16.1 分组重复`);
+    }
+    groupOf.set(command, "scheduler");
+  }
   for (const command of commands) {
     if (!groupOf.has(command)) {
       throw new Error(`[command-manifest] 命令 ${command} 未在分组表中登记`);
@@ -235,10 +246,10 @@ export function buildCommandManifest() {
   const shellCount = entries.filter((entry) => entry.route === "shell").length;
   const ui = entries.filter((entry) => entry.exposure === "ui").length;
   if (daemon !== EXPECTED_DAEMON || shellCount !== EXPECTED_SHELL) {
-    throw new Error(`[command-manifest] 路由计数 ${daemon}/${shellCount} ≠ 82/4`);
+    throw new Error(`[command-manifest] 路由计数 ${daemon}/${shellCount} ≠ 83/4`);
   }
   if (ui !== EXPECTED_UI) {
-    throw new Error(`[command-manifest] UI 暴露 ${ui} ≠ 84`);
+    throw new Error(`[command-manifest] UI 暴露 ${ui} ≠ 85`);
   }
 
   return {
@@ -262,6 +273,7 @@ export function buildCommandManifest() {
       { group: "subagent", count: M10_SUBAGENT_COMMANDS.length },
       { group: "import", count: M10_IMPORT_COMMANDS.length },
       { group: "attachment", count: M10_ATTACHMENT_COMMANDS.length },
+      { group: "scheduler", count: M10_SCHEDULER_COMMANDS.length },
     ],
     commands: entries,
   };
@@ -277,7 +289,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const targetPath = path.join(root, TARGET);
   if (MODE === "generate") {
     writeFileSync(targetPath, rendered, "utf8");
-    console.log(`[command-manifest] 生成完成：${TARGET}（86/82/4；UI 84）`);
+    console.log(`[command-manifest] 生成完成：${TARGET}（87/83/4；UI 85）`);
     process.exit(0);
   }
   let current;
@@ -291,5 +303,5 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     console.error(`[command-manifest] 阻断：${TARGET} 与重新生成结果不一致（diff=0 要求）。`);
     process.exit(1);
   }
-  console.log("[command-manifest] 通过：86/82/4；UI 84；M9 分组与 ADR §16.1 一致；diff=0");
+  console.log("[command-manifest] 通过：87/83/4；UI 85；M9 分组与 ADR §16.1 一致；diff=0");
 }

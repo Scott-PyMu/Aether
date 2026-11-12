@@ -297,8 +297,11 @@ describe("M7-02 闸门排队位置（ADR-022 附录 A-5）", () => {
     const notice = await screen.findByTestId("queue-position");
     expect(notice.getAttribute("data-position")).toBe("3");
     expect(notice.getAttribute("data-limit")).toBe("4");
+    // M10-07/ADR-037：等待原因（并发闸门）可观测。
+    expect(notice.getAttribute("data-wait-reason")).toBe("concurrency_gate");
     expect(notice.textContent).toContain("第 3 位");
     expect(notice.textContent).toContain("并发上限 4");
+    expect(notice.textContent).toContain("等待原因：并发闸门");
 
     // run 派发（run.started）→ 排队位置隐藏（不再排队）。
     act(() => {

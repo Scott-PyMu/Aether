@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+﻿#!/usr/bin/env node
 /**
  * `pnpm verify:m10-05` —— 多模态输入（ADR-035 v1.1）可复跑检查。
  *
@@ -107,14 +107,14 @@ const dispatch = read("crates/aether-app/src/ipc/dispatch.rs");
 for (const command of ["attachment_add", "attachment_list", "attachment_remove"]) {
   check(`命令面含 ${command}`, dispatch.includes(`"${command}"`));
 }
-check("COMMANDS = 86", /COMMANDS\.len\(\),\s*86/.test(dispatch));
-check("daemon = 82", /daemon\.len\(\),\s*82/.test(dispatch));
+check("COMMANDS = 87", /COMMANDS\.len\(\),\s*87/.test(dispatch));
+check("daemon = 83", /daemon\.len\(\),\s*83/.test(dispatch));
 
 const manifest = readJson("packages/protocol/src/command-manifest.json");
-check("command-manifest 86 条", manifest.counts?.total === 86, String(manifest.counts?.total));
-check("command-manifest daemon=82", manifest.counts?.daemon === 82);
+check("command-manifest 86 条", manifest.counts?.total === 87, String(manifest.counts?.total));
+check("command-manifest daemon=82", manifest.counts?.daemon === 83);
 check("command-manifest shell=4", manifest.counts?.shell === 4);
-check("command-manifest ui=84", manifest.counts?.ui === 84);
+check("command-manifest ui=85", manifest.counts?.ui === 85);
 check(
   "attachment 分组 = 3",
   manifest.groups?.some((group) => group.group === "attachment" && group.count === 3),

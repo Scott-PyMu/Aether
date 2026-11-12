@@ -114,6 +114,8 @@ pub const COMMANDS: &[&str] = &[
     "attachment_add",
     "attachment_list",
     "attachment_remove",
+    // M10-07/ADR-037：调度器队列可观测 +1。
+    "queue_list",
 ];
 
 /// 维护窗口允许的命令（M10-04/ADR-034 D-034-2/D-034-4）。
@@ -156,6 +158,7 @@ pub const MAINTENANCE_ALLOWED_COMMANDS: &[&str] = &[
     "import_status",
     "import_cancel",
     "attachment_list",
+    "queue_list",
     "backup_restore",
 ];
 
@@ -166,10 +169,10 @@ pub const MAINTENANCE_ALLOWED_COMMANDS: &[&str] = &[
 pub fn dispatch(state: &IpcState, method: &str, params: Value) -> Result<Value, IpcError> {
     if let Some(reason) = state.maintenance_reason() {
         if !MAINTENANCE_ALLOWED_COMMANDS.contains(&method) {
-            return Err(
-                IpcError::core_not_ready(format!("导入维护中：{reason}；当前命令为只读窗口外操作，已拒绝"))
-                    .with_business_code(super::business::BusinessCode::StorageBackpressure),
-            );
+            return Err(IpcError::core_not_ready(format!(
+                "导入维护中：{reason}；当前命令为只读窗口外操作，已拒绝"
+            ))
+            .with_business_code(super::business::BusinessCode::StorageBackpressure));
         }
     }
     let payload = match method {
@@ -259,6 +262,7 @@ pub fn dispatch(state: &IpcState, method: &str, params: Value) -> Result<Value, 
         "attachment_add" => handlers::attachment_add(state, params),
         "attachment_list" => handlers::attachment_list(state, params),
         "attachment_remove" => handlers::attachment_remove(state, params),
+        "queue_list" => handlers::queue_list(state, params),
         other => return Err(unknown_method(other)),
     }?;
     Ok(payload.into_value())
@@ -301,11 +305,11 @@ mod tests {
         assert_eq!(SHELL_COMMANDS.len(), 4, "壳本地命令 4 条");
         assert_eq!(
             COMMANDS.len(),
-            86,
-            "命令面 86 条（M9 63 + M10-01 11 + M10-02 5 + M10-04 4 + M10-05 3）"
+            87,
+            "命令面 87 条（M9 63 + M10-01 11 + M10-02 5 + M10-04 4 + M10-05 3 + M10-07 1）"
         );
         let daemon = daemon_commands();
-        assert_eq!(daemon.len(), 82, "daemon 路由 82 条");
+        assert_eq!(daemon.len(), 83, "daemon 路由 83 条");
         for method in SHELL_COMMANDS {
             assert!(COMMANDS.contains(method), "壳命令 {method} 必须在 63 内");
             assert!(is_shell_local(method));

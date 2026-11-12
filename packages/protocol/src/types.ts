@@ -466,6 +466,16 @@ export type ProviderUpdateRequest = {
 /**  `providers_list`（ADR-010）：无参数命令；`null`/缺省/空对象合法，任何成员拒绝。 */
 export type ProvidersListRequest = Record<string, never>;
 
+/**  `queue_list`（M10-07/ADR-037 D-037-5）：队列位置/等待原因/优先级可观测。 */
+export type QueueListRequest = {
+	/**  仅返回该会话的排队项（缺省 = 全量）。 */
+	session_id?: string | null,
+	/**  单页条数（1–100；缺省 100）。 */
+	limit?: number | null,
+	/**  偏移（≥0；缺省 0）。 */
+	offset?: number | null,
+};
+
 /**  `ref_pick`（ADR-010 决策 1）：引用选择器 kind（文件 / 目录）。 */
 export type RefPickKind = "file" | "directory";
 
@@ -674,6 +684,12 @@ export type SessionSendRequest = {
 	 *  不支持时返回 `attachment_type_unsupported`，不创建 run）。
 	 */
 	attachments?: string[] | null,
+	/**  M10-07/ADR-037：调用方优先级（−100…100；缺省 0；只影响排队顺序）。 */
+	priority?: number | null,
+	/**  M10-07/ADR-037：run 超时（1s–24h；缺省 30min）。 */
+	timeout_ms?: number | null,
+	/**  M10-07/ADR-037：最大尝试次数（1–5；缺省 1 = 自动重试关闭）。 */
+	max_attempts?: number | null,
 };
 
 /**  会话状态过滤（与附录 C `sessions.status` CHECK 枚举一一对应）。 */

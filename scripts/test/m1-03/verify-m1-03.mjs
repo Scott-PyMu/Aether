@@ -43,8 +43,8 @@ const D5_RUNTIME_STATES = ["cold", "starting", "ready", "degraded", "disabled"];
 // 附录 C 显式 `CREATE INDEX` 数量（idx_events_session_seq 已由 0002 删除并收敛为 UNIQUE 索引；
 // M6-01 落库 permission_rules 后 5 → 6；M6-03 审计三索引后 6 → 9；
 // M10-01 编排运行视图 + tasks 两索引后 9 → 12（attempt UNIQUE 由表级约束承载）；
-// M10-02 子 Agent 树/注入索引后 12 → 14。
-const EXPECTED_EXPLICIT_INDEXES = 14;
+// M10-02 子 Agent 树/注入索引后 12 → 14；M10-07 调度器队列索引后 14 → 16。
+const EXPECTED_EXPLICIT_INDEXES = 16;
 
 // ===== SQL 解析工具 =====
 
@@ -136,7 +136,7 @@ function splitTopLevel(body) {
 function splitColumns(list) {
   return list
     .split(",")
-    .map((column) => column.trim())
+    .map((column) => column.trim().replace(/\s+(?:ASC|DESC)\s*$/i, "").trim())
     .filter(Boolean);
 }
 

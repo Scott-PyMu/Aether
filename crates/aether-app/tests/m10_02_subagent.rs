@@ -209,6 +209,7 @@ impl IpcBackend for FakeBackend {
                     message,
                     run,
                     attachment_ids: Vec::new(),
+                    schedule: Default::default(),
                 })
                 .await
                 .map_err(|error| IpcError::internal(error.to_string()))?;
@@ -606,12 +607,7 @@ impl Harness {
     }
 
     /// 结果落库与注入状态更新存在短暂窗口；按最终注入态收敛，避免 Linux CI 时序抖动。
-    async fn wait_injection_state(
-        &self,
-        parent: &SessionId,
-        child: &str,
-        expected: &str,
-    ) -> Value {
+    async fn wait_injection_state(&self, parent: &SessionId, child: &str, expected: &str) -> Value {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             let list = self.list(parent).await;
@@ -674,9 +670,7 @@ async fn spawn_isolates_child_and_auto_injects_compact_envelope() {
         .to_owned();
     assert_eq!(spawned["depth"], 1);
     let _ = h.wait_result(&parent, &child).await;
-    let node = h
-        .wait_injection_state(&parent, &child, "injected")
-        .await;
+    let node = h.wait_injection_state(&parent, &child, "injected").await;
     assert_eq!(node["verdict"], "approve");
     assert_eq!(node["injection_state"], "injected");
 

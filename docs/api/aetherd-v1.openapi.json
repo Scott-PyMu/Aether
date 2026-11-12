@@ -1320,6 +1320,47 @@
         "maxProperties": 0,
         "additionalProperties": false
       },
+      "QueueListRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "minimum": 1,
+            "maximum": 500
+          },
+          "offset": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "minimum": 0
+          }
+        },
+        "maxProperties": 0
+      },
       "RefPickKind": {
         "type": "string",
         "enum": [
@@ -1922,6 +1963,38 @@
                 "items": {
                   "type": "string"
                 }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "minimum": -100,
+            "maximum": 100
+          },
+          "timeout_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_attempts": {
+            "anyOf": [
+              {
+                "type": "number"
               },
               {
                 "type": "null"
@@ -5722,6 +5795,36 @@
                 "$ref": "#/components/schemas/AttachmentRemoveRequest"
               }
             }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "jsonrpc",
+              "id",
+              "method"
+            ],
+            "properties": {
+              "jsonrpc": {
+                "const": "2.0"
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "method": {
+                "const": "queue_list"
+              },
+              "params": {
+                "$ref": "#/components/schemas/QueueListRequest"
+              }
+            }
           }
         ]
       },
@@ -6522,6 +6625,14 @@
       "route": "daemon",
       "params_style": "strict",
       "params_dto": "AttachmentRemoveRequest",
+      "request_schema": "#/components/schemas/RpcRequest"
+    },
+    {
+      "name": "queue_list",
+      "timeout_ms": 30000,
+      "route": "daemon",
+      "params_style": "strict",
+      "params_dto": "QueueListRequest",
       "request_schema": "#/components/schemas/RpcRequest"
     }
   ]

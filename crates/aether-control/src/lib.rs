@@ -31,6 +31,7 @@ pub mod permission;
 pub mod pipeline;
 pub mod resource_patrol;
 pub mod routing;
+pub mod scheduler;
 pub mod sequencer;
 pub mod source;
 pub mod storage_state;
@@ -58,18 +59,24 @@ pub use delta::{DeltaBuffer, DELTA_FLUSH_BYTES, DELTA_FLUSH_INTERVAL};
 pub use error::{JournalError, NormalizeError, PipelineError, SourceError};
 pub use gate::{
     max_concurrent_for_free_ram, ConcurrencyGateCell, ConcurrencyGateSnapshot, FixedFreeRam,
-    FreeRamSource, GateQueue, GateWaiter, SysinfoFreeRam, CONCURRENCY_GATE_MAX,
-    CONCURRENCY_GATE_MIN, CONCURRENCY_GATE_RAM_PER_SLOT_GB, GATE_RAM_SAMPLE_INTERVAL,
+    FreeRamSource, GateQueue, GateWaiter, PriorityBucket, QueueSnapshotEntry, SysinfoFreeRam,
+    WaitReason, CONCURRENCY_GATE_MAX, CONCURRENCY_GATE_MIN, CONCURRENCY_GATE_RAM_PER_SLOT_GB,
+    DEFAULT_RUN_TIMEOUT_MS, GATE_RAM_SAMPLE_INTERVAL, MAX_ATTEMPTS_LIMIT, MAX_QUEUED_GLOBAL,
+    MAX_RUN_TIMEOUT_MS, MIN_RUN_TIMEOUT_MS, QUEUE_PRIORITY_MAX, QUEUE_PRIORITY_MIN,
+    RETRY_BACKOFF_JITTER_PERCENT, RETRY_BACKOFF_MS, STARVATION_GUARD_MS, STARVATION_GUARD_PENALTY,
+    TIMEOUT_SETTLE_GRACE_MS, WAIT_BOOST_MAX, WAIT_BOOST_STEP_MS,
 };
 pub use journal::{
     JournalFuture, JournalMetrics, JournalReceipt, JournalWriter, PressureLevel, StoreJournal,
 };
 pub use lifecycle::{
     run_is_retryable, ExecutorFuture, ExecutorOutcome, InterruptReport, LifecycleConfig,
-    LifecycleError, PauseMarker, PauseNotifier, PauseReport, PauseStats, QueuePosition,
-    ReconcileReport, ResumeReport, RetryAck, RunExecutor, RunRequest, SendAck,
-    SessionCreateOptions, SessionManager, MAX_WAITING_RUNS_PER_SESSION, RUN_INTERRUPTED_CODE,
-    RUN_STREAM_TIMEOUT_CODE, RUN_STREAM_TIMEOUT_MS, RUN_TASK_PANIC_CODE, WATCHDOG_TICK,
+    LifecycleError, PauseMarker, PauseNotifier, PauseReport, PauseStats, QueueEntry,
+    QueueListReport, QueuePosition, ReconcileReport, ResumeReport, RetryAck, RunExecutor,
+    RunRequest, RunScheduleOptions, SendAck, SessionCreateOptions, SessionManager,
+    MAX_WAITING_RUNS_PER_SESSION, QUEUE_LIST_MAX_LIMIT, RUN_INTERRUPTED_CODE,
+    RUN_STREAM_TIMEOUT_CODE, RUN_STREAM_TIMEOUT_MS, RUN_TASK_PANIC_CODE, RUN_TIMEOUT_CODE,
+    WATCHDOG_TICK,
 };
 pub use memory::{
     compose_memory_injection, compose_system_prompt, evaluate_memory_tool,
@@ -96,8 +103,13 @@ pub use resource_patrol::{
 };
 pub use routing::{
     route_priority, route_runtime, RouteCandidate, RouteCandidateTrace, RouteDecision,
-    RouteFailure, ROUTE_PRIORITY_CLAUDE_CODE, ROUTE_PRIORITY_CODEX, ROUTE_PRIORITY_DEFAULT,
-    ROUTE_PRIORITY_DEEPSEEK_HARNESS,
+    RouteFailure, ROUTE_PRIORITY_CLAUDE_CODE, ROUTE_PRIORITY_CODEX,
+    ROUTE_PRIORITY_DEEPSEEK_HARNESS, ROUTE_PRIORITY_DEFAULT,
+};
+pub use scheduler::{
+    backoff_delay_ms, backoff_with_jitter_ms, is_auto_retryable, jitter_percent,
+    manual_retry_blocked, validate_max_attempts, validate_priority, validate_timeout_ms,
+    AUTO_RETRYABLE_CODES, MANUAL_RETRY_BLOCKED_CODES,
 };
 pub use sequencer::SessionSequencer;
 pub use source::{EventSource, SourceFuture, StoreEventSource};

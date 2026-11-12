@@ -43,8 +43,7 @@ use aether_core::{
     MessageRole, MessageSummary, Run, RunCancelledPayload, RunCompletedPayload, RunFailedPayload,
     RunId, RunStartedPayload, Runtime, RuntimeId, Session, SessionClosedPayload,
     SessionCreatedPayload, SessionId, SessionStatus, SessionStatusChangedPayload, SessionSummary,
-    SessionUpdatedPayload, TokenUsage, WorkspaceId,
-    ENVELOPE_FIELDS, EVENT_ENVELOPE_VERSION,
+    SessionUpdatedPayload, TokenUsage, WorkspaceId, ENVELOPE_FIELDS, EVENT_ENVELOPE_VERSION,
 };
 use aether_store::{
     AuditLogRecord, ReadPool, SessionQuery, StoreCommand, StoreError, StoreOutcome, WriteQueue,
@@ -60,16 +59,24 @@ use crate::clock::SharedClock;
 use crate::error::PipelineError;
 use crate::gate::{
     max_concurrent_for_free_ram, ConcurrencyGateCell, ConcurrencyGateSnapshot, FreeRamSource,
-    GateQueue, CONCURRENCY_GATE_MAX, GATE_RAM_SAMPLE_INTERVAL,
+    GateQueue, GateWaiter, PriorityBucket, WaitReason, CONCURRENCY_GATE_MAX,
+    DEFAULT_RUN_TIMEOUT_MS, GATE_RAM_SAMPLE_INTERVAL, MAX_QUEUED_GLOBAL, STARVATION_GUARD_MS,
+    STARVATION_GUARD_PENALTY, TIMEOUT_SETTLE_GRACE_MS,
 };
 use crate::pipeline::{EventPipeline, RunInterrupt, SubmitOutcome};
-use crate::routing::RouteDecision;
+use crate::routing::{route_priority, RouteDecision};
+use crate::scheduler::{
+    backoff_with_jitter_ms, is_auto_retryable, manual_retry_blocked, validate_max_attempts,
+    validate_priority, validate_timeout_ms,
+};
 use crate::ulid;
 
 /// 断流超时（D8/M2-01 DoD5：120s 无事件 → run failed 且可重试）。
 pub const RUN_STREAM_TIMEOUT_MS: i64 = 120_000;
 /// 断流超时错误码（`run.failed.error.code`）。
 pub const RUN_STREAM_TIMEOUT_CODE: &str = "run_stream_timeout";
+/// run 超时错误码（M10-07/ADR-037：`runs.status='timeout'` + `run.failed`）。
+pub const RUN_TIMEOUT_CODE: &str = "run_timeout";
 /// 核心重启中断错误码（M3-06 重启状态重建）：未收口 run 在启动收口时写入
 /// `run.failed.error.code`（可重试；`run_retry` 准入口径为终态）。
 pub const RUN_INTERRUPTED_CODE: &str = "run_interrupted";
@@ -194,14 +201,84 @@ pub trait RunExecutor: Send + Sync + 'static {
 
 /// 闸门排队位置（M7-02/ADR-022 附录 A-5：`session_send` 响应可选 `queue`）。
 ///
-/// `position` 仅指**全局 FIFO** 内位置（从 1 计；不含未进全局队列的会话等待槽 run）。
+/// `position` 仅指**全局队列**内位置（从 1 计；不含未进全局队列的会话等待槽 run）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QueuePosition {
-    /// 全局 FIFO 内位置（1 起）。
+    /// 全局队列内位置（1 起；M10-07 起按优先级分数排序）。
     pub position: usize,
     /// 当前闸门上限（`clamp(floor(free_ram_gb / 1.5), 2, 10)`）。
     pub limit: usize,
 }
+
+/// 单次 run 的调度选项（M10-07/ADR-037 D-037-1/D-037-2）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RunScheduleOptions {
+    /// 调用方优先级（−100…100；缺省 0）。
+    pub priority: i32,
+    /// run 超时（1s–24h；缺省 30min）。
+    pub timeout_ms: i64,
+    /// 最大尝试次数（1–5；缺省 1 = 自动重试关闭）。
+    pub max_attempts: u32,
+}
+
+impl Default for RunScheduleOptions {
+    fn default() -> Self {
+        Self {
+            priority: 0,
+            timeout_ms: DEFAULT_RUN_TIMEOUT_MS,
+            max_attempts: 1,
+        }
+    }
+}
+
+impl RunScheduleOptions {
+    /// 校验并归一（越界 → `invalid_value` 语义；命令层应先行校验）。
+    pub fn validate(self) -> Result<Self, LifecycleError> {
+        validate_priority(self.priority).map_err(|reason| LifecycleError::InvalidOption {
+            field: "priority",
+            reason,
+        })?;
+        validate_timeout_ms(self.timeout_ms).map_err(|reason| LifecycleError::InvalidOption {
+            field: "timeout_ms",
+            reason,
+        })?;
+        validate_max_attempts(self.max_attempts).map_err(|reason| {
+            LifecycleError::InvalidOption {
+                field: "max_attempts",
+                reason,
+            }
+        })?;
+        Ok(self)
+    }
+}
+
+/// 队列条目（`queue_list`；M10-07/ADR-037 D-037-1）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueueEntry {
+    pub run_id: RunId,
+    pub session_id: SessionId,
+    /// 1 起；按 score/queued_at/run_id 排序后的位置（全局队列 + 会话等待槽合并视图）。
+    pub position: usize,
+    /// 调用方优先级。
+    pub priority: i32,
+    /// `base_priority + runtime_weight + wait_boost`（升序，小者先）。
+    pub score: i32,
+    pub queued_at: i64,
+    pub wait_ms: i64,
+    /// ADR-037 附录 B 等待原因（`concurrency_gate` 等）。
+    pub wait_reason: String,
+}
+
+/// 队列查询结果（`queue_list`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueueListReport {
+    pub items: Vec<QueueEntry>,
+    pub total: usize,
+    pub gate: ConcurrencyGateSnapshot,
+}
+
+/// `queue_list` 单页上限（命令层校验；与既有分页口径一致）。
+pub const QUEUE_LIST_MAX_LIMIT: usize = 100;
 
 /// ack 快路径结果（消息与 run 行已提交；模型执行异步进行）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -303,6 +380,8 @@ pub struct RetryAck {
 pub struct ReconcileReport {
     /// 被收口为 `failed`（`run_interrupted`，可重试）的 run。
     pub runs_failed: Vec<RunId>,
+    /// M10-07/ADR-037：重启后保留并重新入队的 `queued` run（不丢队列）。
+    pub runs_requeued: Vec<RunId>,
     /// 被收回 `idle` 的会话。
     pub sessions_reset: Vec<SessionId>,
 }
@@ -369,6 +448,16 @@ pub enum LifecycleError {
         kind: crate::attachments::AttachmentResolveErrorKind,
         message: String,
     },
+    /// 调度选项非法（M10-07/ADR-037：priority/timeout_ms/max_attempts 越界）。
+    InvalidOption {
+        field: &'static str,
+        reason: String,
+    },
+    /// 不可重试分类（M10-07/ADR-037 D-037-5：`invalid_value` + `data.retryable=false`）。
+    RetryNotAllowed {
+        run_id: RunId,
+        reason: String,
+    },
     /// 存储层错误。
     Storage {
         code: String,
@@ -401,6 +490,8 @@ impl LifecycleError {
             Self::StorageBackpressure { .. } => "storage_backpressure",
             Self::AdapterIsolated { .. } => "storage_backpressure",
             Self::AttachmentRejected { .. } => "attachment_rejected",
+            Self::InvalidOption { .. } => "invalid_value",
+            Self::RetryNotAllowed { .. } => "invalid_value",
             Self::Storage { .. } => "storage_error",
             Self::Pipeline { .. } => "pipeline_error",
             Self::Internal { .. } => "internal",
@@ -458,6 +549,13 @@ impl std::fmt::Display for LifecycleError {
             Self::AttachmentRejected { kind, message } => {
                 write!(f, "附件重放失败（{kind:?}）：{message}")
             }
+            Self::InvalidOption { field, reason } => {
+                write!(f, "调度选项非法（invalid_value）：{field}；{reason}")
+            }
+            Self::RetryNotAllowed { run_id, reason } => write!(
+                f,
+                "run 不可重试（invalid_value，retryable=false）：{run_id}；{reason}"
+            ),
             Self::Pipeline { code, message } => write!(f, "事件管线错误（{code}）：{message}"),
             Self::Internal { reason } => write!(f, "生命周期内部错误：{reason}"),
         }
@@ -536,8 +634,22 @@ struct ActiveRun {
     last_activity_ms: i64,
     cancel: RunCancelToken,
     /// `true` = 已派发执行（占全局闸门槽位）；`false` = 闸门排队（占「当前 run 位」，
-    /// 在全局 FIFO 中等待；ADR-022 附录 A-6）。
+    /// 在全局队列中等待；ADR-022 附录 A-6）。
     dispatched: bool,
+    /// M10-07/ADR-037：调用方优先级。
+    priority: i32,
+    /// M10-07/ADR-037：run 超时（1s–24h）。
+    timeout_ms: i64,
+    /// M10-07/ADR-037：最大尝试次数（1–5；1 = 自动重试关闭）。
+    max_attempts: u32,
+    /// M10-07/ADR-037：自动重试链计数（旧 attempt 行保留）。
+    retry_count: u32,
+    /// M10-07/ADR-037：等待时长起点。
+    queued_at: i64,
+    /// 派发时刻（超时计时起点；未派发 = `None`）。
+    dispatched_at_ms: Option<i64>,
+    /// 超时已请求收口（先 interrupt，5s 未收口 → 标 timeout）。
+    timeout_requested_at_ms: Option<i64>,
 }
 
 struct QueuedRun {
@@ -550,6 +662,26 @@ struct QueuedRun {
     references: Vec<MessageReference>,
     attachments: Vec<aether_core::OutboundAttachment>,
     subagent_context: Option<aether_core::SubagentContext>,
+    /// M10-07/ADR-037：调度元数据（提升到 active 时继承）。
+    priority: i32,
+    timeout_ms: i64,
+    max_attempts: u32,
+    retry_count: u32,
+    queued_at: i64,
+}
+
+/// 自动重试待执行项（内存态；daemon 重启不重放，旧 run 保留终态可人工重试）。
+struct PendingRetry {
+    run_id: RunId,
+    session_id: SessionId,
+    input_message_id: MessageId,
+    priority: i32,
+    timeout_ms: i64,
+    max_attempts: u32,
+    retry_count: u32,
+    attempt: u32,
+    due_at_ms: i64,
+    backoff_ms: i64,
 }
 
 struct SessionState {
@@ -622,6 +754,8 @@ struct ManagerInner {
     pause_notifier: Mutex<Option<Arc<dyn PauseNotifier>>>,
     /// 暂停/恢复累计计数（M7-03 DoD6 诊断统计；进程生命周期内）。
     pause_counters: PauseCounters,
+    /// 自动重试待执行项（M10-07/ADR-037；同步互斥，临界区无 I/O）。
+    pending_retries: Mutex<Vec<PendingRetry>>,
 }
 
 /// 暂停/恢复累计计数（诊断；无锁原子）。
@@ -674,6 +808,7 @@ impl SessionManager {
                     pauses: AtomicU64::new(0),
                     resumes: AtomicU64::new(0),
                 },
+                pending_retries: Mutex::new(Vec::new()),
             }),
         }
     }
@@ -733,7 +868,7 @@ impl SessionManager {
     /// 闸门快照（诊断/测试；`health.concurrency_gate` 经快照单元读取）。
     pub async fn concurrency_gate(&self) -> ConcurrencyGateSnapshot {
         let state = lock_state(&self.inner).await;
-        gate_snapshot(&state)
+        gate_snapshot(&state, self.inner.clock.now_ms())
     }
 
     /// 生命周期配置。
@@ -883,6 +1018,7 @@ impl SessionManager {
                         "enabled": trace.enabled,
                         "status": trace.status.as_str(),
                         "priority": trace.priority,
+                        "active_runs": trace.active_runs,
                         "eligible": trace.eligible,
                         "detail": trace.detail,
                     })).collect::<Vec<_>>(),
@@ -1018,6 +1154,28 @@ impl SessionManager {
                 status: run.status,
             });
         }
+        // M10-07/ADR-037 D-037-5：可重试分类校验（不可重试 → invalid_value +
+        // `data.retryable=false`；`cancelled` 状态保持既有可重试语义）。
+        if manual_retry_blocked(run.status, run.error.as_deref()) {
+            return Err(LifecycleError::RetryNotAllowed {
+                run_id: run_id.clone(),
+                reason: format!(
+                    "错误分类不可重试（{}）",
+                    run.error.as_deref().unwrap_or("unknown")
+                ),
+            });
+        }
+        // 人工重试优先：清除同一 run 的待执行自动重试（同一 run 仅一个在途 attempt）。
+        remove_pending_retry_run(&self.inner, run_id);
+        let previous_schedule = self
+            .inner
+            .reads
+            .run_schedule(run_id)
+            .await?
+            .unwrap_or_default();
+        let retry_count = previous_schedule.retry_count.saturating_add(1);
+        let priority = previous_schedule.priority;
+        let max_attempts = previous_schedule.max_attempts.max(1);
         let input_message_id =
             run.input_message_id
                 .clone()
@@ -1070,6 +1228,13 @@ impl SessionManager {
                     session_id: run.session_id.clone(),
                 });
             }
+            // M10-07/ADR-037 D-037-1：全局队列上限 64（拒绝先于持久化）。
+            if session.active.is_none() && !gate_has_slot(&state) && state.gate.queue.is_full() {
+                return Err(LifecycleError::StorageBackpressure {
+                    depth: state.gate.queue.len(),
+                    threshold: MAX_QUEUED_GLOBAL,
+                });
+            }
             self.check_backpressure(&session.runtime_id)?;
         }
 
@@ -1102,6 +1267,19 @@ impl SessionManager {
                 run: retry_run.clone(),
             })
             .await?;
+        self.inner
+            .write
+            .execute(StoreCommand::UpdateRunSchedule {
+                run_id: retry_run.id.clone(),
+                schedule: aether_store::RunSchedule {
+                    priority,
+                    queued_at: Some(now),
+                    retry_count,
+                    max_attempts,
+                    wait_reason: Some(WaitReason::ConcurrencyGate.as_str().to_owned()),
+                },
+            })
+            .await?;
 
         let (queued, gate_dispatched) = {
             let has_slot = gate_has_slot(&state);
@@ -1116,7 +1294,7 @@ impl SessionManager {
                 session.active = Some(ActiveRun {
                     run_id: retry_run.id.clone(),
                     input_message_id: input_message_id.clone(),
-                    runtime_id,
+                    runtime_id: runtime_id.clone(),
                     text: input_message.content.clone(),
                     thinking_depth,
                     thinking_override: false,
@@ -1129,14 +1307,31 @@ impl SessionManager {
                     cancel,
                     // M7-02/ADR-022：闸门前置于 run 启动（`run_retry` 同 `session_send`）。
                     dispatched: has_slot,
+                    priority,
+                    timeout_ms: DEFAULT_RUN_TIMEOUT_MS,
+                    max_attempts,
+                    retry_count,
+                    queued_at: now,
+                    dispatched_at_ms: has_slot.then_some(now),
+                    timeout_requested_at_ms: None,
                 });
                 if has_slot {
                     (false, true)
                 } else {
-                    state.gate.queue.enqueue(
+                    let waiter = GateWaiter::new(
                         run.session_id.clone(),
                         retry_run.id.clone(),
+                        priority,
+                        runtime_weight(&runtime_id),
+                        now,
+                        WaitReason::ConcurrencyGate,
                     );
+                    if !state.gate.queue.enqueue(waiter) {
+                        return Err(LifecycleError::StorageBackpressure {
+                            depth: state.gate.queue.len(),
+                            threshold: MAX_QUEUED_GLOBAL,
+                        });
+                    }
                     (false, false)
                 }
             } else {
@@ -1150,6 +1345,11 @@ impl SessionManager {
                     references: Vec::new(),
                     attachments: replay_attachments,
                     subagent_context: None,
+                    priority,
+                    timeout_ms: DEFAULT_RUN_TIMEOUT_MS,
+                    max_attempts,
+                    retry_count,
+                    queued_at: now,
                 });
                 (true, false)
             }
@@ -1299,7 +1499,10 @@ impl SessionManager {
             audit_detail,
         )
         .await?;
-        self.inner.pause_counters.pauses.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .pause_counters
+            .pauses
+            .fetch_add(1, Ordering::Relaxed);
         Ok(PauseReport {
             session_id: session_id.clone(),
             from,
@@ -1369,7 +1572,10 @@ impl SessionManager {
                 }),
             )
             .await?;
-            self.inner.pause_counters.resumes.fetch_add(1, Ordering::Relaxed);
+            self.inner
+                .pause_counters
+                .resumes
+                .fetch_add(1, Ordering::Relaxed);
             return Ok(ResumeReport {
                 session_id: session_id.clone(),
                 from: SessionStatus::Paused,
@@ -1395,16 +1601,22 @@ impl SessionManager {
         let replay_attachments = self
             .resolve_replay_attachments(session_id, &input_message)
             .await?;
-        let session_row = self
-            .inner
-            .reads
-            .session(session_id)
-            .await?
-            .ok_or_else(|| LifecycleError::SessionNotFound {
+        let session_row = self.inner.reads.session(session_id).await?.ok_or_else(|| {
+            LifecycleError::SessionNotFound {
                 session_id: session_id.clone(),
-            })?;
+            }
+        })?;
         // ADR-010 重放口径：按会话级值恢复（run 启动时重新执行能力门判定）。
         let thinking_depth = session_row.thinking_depth;
+        let previous_schedule = self
+            .inner
+            .reads
+            .run_schedule(&marker.run_id)
+            .await?
+            .unwrap_or_default();
+        let priority = previous_schedule.priority;
+        let max_attempts = previous_schedule.max_attempts.max(1);
+        let retry_count = previous_schedule.retry_count.saturating_add(1);
         let now = self.inner.clock.now_ms();
         let replay_run = Run {
             id: RunId::new(ulid::generate()).map_err(internal_from)?,
@@ -1422,6 +1634,19 @@ impl SessionManager {
                 run: replay_run.clone(),
             })
             .await?;
+        self.inner
+            .write
+            .execute(StoreCommand::UpdateRunSchedule {
+                run_id: replay_run.id.clone(),
+                schedule: aether_store::RunSchedule {
+                    priority,
+                    queued_at: Some(now),
+                    retry_count,
+                    max_attempts,
+                    wait_reason: Some(WaitReason::ConcurrencyGate.as_str().to_owned()),
+                },
+            })
+            .await?;
         // 新 run 先于保留的 queued run 设为 active（D8 串行：等待槽后续按闸门提升）。
         let replay_dispatched = {
             let has_slot = gate_has_slot(&state);
@@ -1435,11 +1660,12 @@ impl SessionManager {
                     session_id: session_id.clone(),
                 });
             }
+            let runtime_id = session.runtime_id.clone();
             let cancel = RunCancelToken::child_of(&session.cancel);
             session.active = Some(ActiveRun {
                 run_id: replay_run.id.clone(),
                 input_message_id: marker.input_message_id.clone(),
-                runtime_id: session.runtime_id.clone(),
+                runtime_id: runtime_id.clone(),
                 text: input_message.content.clone(),
                 thinking_depth,
                 thinking_override: false,
@@ -1451,12 +1677,23 @@ impl SessionManager {
                 last_activity_ms: now,
                 cancel,
                 dispatched: has_slot,
+                priority,
+                timeout_ms: DEFAULT_RUN_TIMEOUT_MS,
+                max_attempts,
+                retry_count,
+                queued_at: now,
+                dispatched_at_ms: has_slot.then_some(now),
+                timeout_requested_at_ms: None,
             });
             if !has_slot {
-                state
-                    .gate
-                    .queue
-                    .enqueue(session_id.clone(), replay_run.id.clone());
+                state.gate.queue.enqueue(GateWaiter::new(
+                    session_id.clone(),
+                    replay_run.id.clone(),
+                    priority,
+                    runtime_weight(&runtime_id),
+                    now,
+                    WaitReason::ConcurrencyGate,
+                ));
             }
             has_slot
         };
@@ -1491,7 +1728,10 @@ impl SessionManager {
             }),
         )
         .await?;
-        self.inner.pause_counters.resumes.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .pause_counters
+            .resumes
+            .fetch_add(1, Ordering::Relaxed);
         Ok(ResumeReport {
             session_id: session_id.clone(),
             from: SessionStatus::Paused,
@@ -1519,21 +1759,27 @@ impl SessionManager {
         })
     }
 
-    /// 重启状态重建（M3-06；D5「运行中崩溃 → 在途 run 标 failed，可重试」口径）：
+    /// 重启状态重建（M3-06；D5 口径 + M10-07/ADR-037 D-037-4）：
     /// 核心重启后（存储/管线就绪、会话管理器构造完成）调用一次：
-    /// 1. `queued`/`running` run → `failed`（错误码 [`RUN_INTERRUPTED_CODE`]，
-    ///    `recoverable=true`）+ `run.failed` 事件（先日志后广播，经管线）；
+    /// 1. `running` run → `failed`（错误码 [`RUN_INTERRUPTED_CODE`]，`recoverable=true`）
+    ///    + `run.failed` 事件；**`queued` run 保留并按原 `queued_at/priority` 重新入队**
+    ///      （不自动重放 running run，避免重复副作用）；
     /// 2. 非终态、非空闲会话（`creating`/`running`/`waiting_permission`）→
     ///    `idle` + `session.status_changed` 事件；
-    ///    **`paused` 保留不收口**（M7-03/ADR-017 §2.1-6：不自动恢复、不自动清理）。
+    ///    **`paused` 保留不收口**（M7-03/ADR-017 §2.1-6：不自动恢复、不自动清理）；
+    /// 3. 重建队列后按闸门推进可派发 run（不超卖）。
     ///
-    /// 语义：崩溃前**未确认**的 run 不伪造完成；收口为失败后经 `run_retry` 重放
+    /// 语义：崩溃前**未确认**的 run 不伪造完成；收口为失败后可经 `run_retry` 重放
     /// （Mode R/N 由执行器按 ADR-005 决定）。逐条尽力收口：单条失败仅记录诊断，
     /// 不阻断其余条目。
     pub async fn reconcile_interrupted_runs(&self) -> Result<ReconcileReport, LifecycleError> {
-        let runs = self.inner.reads.unfinished_runs().await?;
+        let now = self.inner.clock.now_ms();
+        let runs = self.inner.reads.unfinished_runs_scheduled().await?;
         let mut report = ReconcileReport::default();
-        for run in runs {
+        let mut queued_by_session: HashMap<SessionId, Vec<aether_store::ScheduledRun>> =
+            HashMap::new();
+        for scheduled in runs {
+            let run = scheduled.run.clone();
             let session = match self.inner.reads.session(&run.session_id).await? {
                 Some(session) => session,
                 None => {
@@ -1545,6 +1791,14 @@ impl SessionManager {
                     continue;
                 }
             };
+            if run.status == aether_core::RunStatus::Queued {
+                // M10-07：排队 run 保留，重启后重建队列（不丢、不重复）。
+                queued_by_session
+                    .entry(run.session_id.clone())
+                    .or_default()
+                    .push(scheduled);
+                continue;
+            }
             let error = ErrorInfo {
                 code: RUN_INTERRUPTED_CODE.to_owned(),
                 message: "核心重启中断：run 未收到终态（未确认），已按失败收口，可重试（M3-06）"
@@ -1640,6 +1894,240 @@ impl SessionManager {
             }
             report.sessions_reset.push(session.id);
         }
+
+        // M10-07/ADR-037 D-037-4：按原 queued_at/priority 重建排队 run（不丢队列）。
+        let mut dispatches: Vec<(SessionId, RunId)> = Vec::new();
+        for (session_id, mut queued) in queued_by_session {
+            queued.sort_by(|left, right| {
+                left.schedule
+                    .queued_at
+                    .unwrap_or(left.run.started_at)
+                    .cmp(&right.schedule.queued_at.unwrap_or(right.run.started_at))
+                    .then_with(|| left.run.id.as_str().cmp(right.run.id.as_str()))
+            });
+            let session_row = match self.inner.reads.session(&session_id).await? {
+                Some(session) => session,
+                None => continue,
+            };
+            // M7-03/ADR-017：`paused` 会话重启后保持 paused，不自动派发排队 run；
+            // 终态会话同理。将 queued run 收口为可重试失败（不自动重放、无孤儿）。
+            if session_row.status == SessionStatus::Paused
+                || aether_core::session_status_is_terminal(session_row.status)
+            {
+                for item in queued {
+                    let error = ErrorInfo {
+                        code: RUN_INTERRUPTED_CODE.to_owned(),
+                        message: "重启重建：会话处于 paused/终态，排队 run 不自动派发；可按会话恢复后重试"
+                            .to_owned(),
+                        recoverable: true,
+                    };
+                    if self
+                        .finish_run(
+                            &item.run.id,
+                            aether_core::RunStatus::Failed,
+                            Some(error.code.clone()),
+                        )
+                        .await
+                        .is_ok()
+                    {
+                        report.runs_failed.push(item.run.id.clone());
+                        let run_id = item.run.id.clone();
+                        let payload_run = run_id.clone();
+                        let _ = self
+                            .emit(
+                                &session_id,
+                                Some(&run_id),
+                                &session_row.runtime_id,
+                                EventPayload::RunFailed(RunFailedPayload {
+                                    run_id: payload_run,
+                                    error,
+                                }),
+                            )
+                            .await;
+                    }
+                }
+                continue;
+            }
+            // 每会话最多「1 在途 + 1 等待」；超出（异常/历史数据）按失败收口，避免孤儿。
+            let mut overflow = Vec::new();
+            if queued.len() > 2 {
+                overflow = queued.split_off(2);
+            }
+            let mut prepared: Vec<(
+                aether_store::ScheduledRun,
+                MessageId,
+                String,
+                Vec<aether_core::OutboundAttachment>,
+            )> = Vec::new();
+            for item in queued {
+                let Some(input_message_id) = item.run.input_message_id.clone() else {
+                    tracing::warn!(run_id = %item.run.id, "重启重建：queued run 缺少输入消息，按失败收口");
+                    if self
+                        .fail_requeue_run(
+                            &session_id,
+                            &session_row.runtime_id,
+                            &item.run.id,
+                            "重启重建：queued run 缺少输入消息，无法安全重放",
+                        )
+                        .await
+                    {
+                        report.runs_failed.push(item.run.id.clone());
+                    }
+                    continue;
+                };
+                let Some(message) = self.inner.reads.message(&input_message_id).await? else {
+                    tracing::warn!(run_id = %item.run.id, "重启重建：输入消息缺失，按失败收口");
+                    if self
+                        .fail_requeue_run(
+                            &session_id,
+                            &session_row.runtime_id,
+                            &item.run.id,
+                            "重启重建：输入消息缺失，无法安全重放",
+                        )
+                        .await
+                    {
+                        report.runs_failed.push(item.run.id.clone());
+                    }
+                    continue;
+                };
+                let attachments = match self.resolve_replay_attachments(&session_id, &message).await
+                {
+                    Ok(items) => items,
+                    Err(error) => {
+                        tracing::warn!(run_id = %item.run.id, error = %error, "重启重建：附件水合失败，按失败收口");
+                        if self
+                            .fail_requeue_run(
+                                &session_id,
+                                &session_row.runtime_id,
+                                &item.run.id,
+                                "重启重建：附件水合失败，无法安全重放（不静默丢弃附件）",
+                            )
+                            .await
+                        {
+                            report.runs_failed.push(item.run.id.clone());
+                        }
+                        continue;
+                    }
+                };
+                prepared.push((item, input_message_id, message.content.clone(), attachments));
+            }
+            let mut state = lock_state(&self.inner).await;
+            hydrate_inner(&self.inner, &mut state, &session_id).await?;
+            let runtime_id = session_row.runtime_id.clone();
+            for (index, (item, input_message_id, text, attachments)) in
+                prepared.into_iter().enumerate()
+            {
+                let schedule = item.schedule.clone();
+                let run_id = item.run.id.clone();
+                let queued_at = schedule.queued_at.unwrap_or(item.run.started_at);
+                let priority = schedule.priority;
+                let max_attempts = schedule.max_attempts.max(1);
+                let retry_count = schedule.retry_count;
+                if index == 0 {
+                    let Some(session) = state.sessions.get_mut(&session_id) else {
+                        continue;
+                    };
+                    let cancel = RunCancelToken::child_of(&session.cancel);
+                    session.active = Some(ActiveRun {
+                        run_id: run_id.clone(),
+                        input_message_id: input_message_id.clone(),
+                        runtime_id: runtime_id.clone(),
+                        text,
+                        thinking_depth: item
+                            .run
+                            .thinking_depth
+                            .unwrap_or(aether_core::THINKING_DEPTH_DEFAULT),
+                        thinking_override: false,
+                        references: Vec::new(),
+                        attachments,
+                        subagent_context: None,
+                        last_activity_ms: now,
+                        cancel,
+                        dispatched: false,
+                        priority,
+                        timeout_ms: DEFAULT_RUN_TIMEOUT_MS,
+                        max_attempts,
+                        retry_count,
+                        queued_at,
+                        dispatched_at_ms: None,
+                        timeout_requested_at_ms: None,
+                    });
+                    state.gate.queue.enqueue(GateWaiter::new(
+                        session_id.clone(),
+                        run_id.clone(),
+                        priority,
+                        runtime_weight(&runtime_id),
+                        queued_at,
+                        WaitReason::ConcurrencyGate,
+                    ));
+                } else {
+                    let Some(session) = state.sessions.get_mut(&session_id) else {
+                        continue;
+                    };
+                    session.waiting = Some(QueuedRun {
+                        run_id: run_id.clone(),
+                        input_message_id: input_message_id.clone(),
+                        runtime_id: runtime_id.clone(),
+                        text,
+                        thinking_depth: item
+                            .run
+                            .thinking_depth
+                            .unwrap_or(aether_core::THINKING_DEPTH_DEFAULT),
+                        thinking_override: false,
+                        references: Vec::new(),
+                        attachments,
+                        subagent_context: None,
+                        priority,
+                        timeout_ms: DEFAULT_RUN_TIMEOUT_MS,
+                        max_attempts,
+                        retry_count,
+                        queued_at,
+                    });
+                }
+                report.runs_requeued.push(run_id);
+            }
+            // 重建后按闸门推进（准入可行时；不超卖）。
+            if self.inner.pipeline.admission().is_ok() {
+                dispatches.extend(gate_advance_locked(&mut state, now));
+            }
+            publish_gate_snapshot(&self.inner, &state);
+            drop(state);
+            for item in overflow {
+                let run_id = item.run.id.clone();
+                let error = ErrorInfo {
+                    code: "queue_overflow_on_recover".to_owned(),
+                    message:
+                        "重启重建：同一会话排队 run 超过 2 条（1 在途 + 1 等待），已按失败收口"
+                            .to_owned(),
+                    recoverable: true,
+                };
+                if self
+                    .finish_run(
+                        &run_id,
+                        aether_core::RunStatus::Failed,
+                        Some(error.code.clone()),
+                    )
+                    .await
+                    .is_ok()
+                {
+                    report.runs_failed.push(run_id.clone());
+                    let _ = self
+                        .emit(
+                            &session_id,
+                            Some(&run_id),
+                            &session_row.runtime_id,
+                            EventPayload::RunFailed(RunFailedPayload {
+                                run_id: run_id.clone(),
+                                error,
+                            }),
+                        )
+                        .await;
+                }
+            }
+        }
+        for (session_id, run_id) in dispatches {
+            self.spawn_run(session_id, run_id);
+        }
         Ok(report)
     }
 
@@ -1666,8 +2154,15 @@ impl SessionManager {
         client_msg_id: &str,
         thinking_override: Option<u8>,
     ) -> Result<SendAck, LifecycleError> {
-        self.send_with_references(session_id, text, client_msg_id, thinking_override, Vec::new(), None)
-            .await
+        self.send_with_references(
+            session_id,
+            text,
+            client_msg_id,
+            thinking_override,
+            Vec::new(),
+            None,
+        )
+        .await
     }
 
     /// `session_send` + 可选文件引用（M7-06/ADR-024：`references` 随 `session.send`
@@ -1709,6 +2204,35 @@ impl SessionManager {
         attachments: Vec<aether_core::OutboundAttachment>,
         subagent_context: Option<aether_core::SubagentContext>,
     ) -> Result<SendAck, LifecycleError> {
+        self.send_with_schedule(
+            session_id,
+            text,
+            client_msg_id,
+            thinking_override,
+            references,
+            attachments,
+            subagent_context,
+            RunScheduleOptions::default(),
+        )
+        .await
+    }
+
+    /// M10-07/ADR-037：`session_send` + 优先级/超时/最大尝试次数。
+    ///
+    /// 「闸门前置」不变：优先级只影响**排队顺序**，不能绕过并发闸门/健康约束。
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send_with_schedule(
+        &self,
+        session_id: &SessionId,
+        text: &str,
+        client_msg_id: &str,
+        thinking_override: Option<u8>,
+        references: Vec<MessageReference>,
+        attachments: Vec<aether_core::OutboundAttachment>,
+        subagent_context: Option<aether_core::SubagentContext>,
+        schedule: RunScheduleOptions,
+    ) -> Result<SendAck, LifecycleError> {
+        let schedule = schedule.validate()?;
         self.inner
             .pipeline
             .admission()
@@ -1742,6 +2266,13 @@ impl SessionManager {
                     session_id: session_id.clone(),
                 });
             }
+            // M10-07/ADR-037 D-037-1：全局队列上限 64（拒绝先于持久化）。
+            if session.active.is_none() && !gate_has_slot(&state) && state.gate.queue.is_full() {
+                return Err(LifecycleError::StorageBackpressure {
+                    depth: state.gate.queue.len(),
+                    threshold: MAX_QUEUED_GLOBAL,
+                });
+            }
             // M2-04：L3 投递熔断/存储侧隔离 → 拒绝新 run（已有 run 不受影响）。
             self.check_backpressure(&session.runtime_id)?;
         }
@@ -1770,9 +2301,11 @@ impl SessionManager {
         } else {
             let parts: Vec<aether_core::AttachmentContentPart> =
                 attachments.iter().map(|item| item.content_part()).collect();
-            Some(serde_json::to_value(parts).map_err(|error| LifecycleError::Internal {
-                reason: format!("附件 content_parts 序列化失败：{error}"),
-            })?)
+            Some(
+                serde_json::to_value(parts).map_err(|error| LifecycleError::Internal {
+                    reason: format!("附件 content_parts 序列化失败：{error}"),
+                })?,
+            )
         };
         let attachment_ids: Vec<String> = attachments
             .iter()
@@ -1808,6 +2341,13 @@ impl SessionManager {
                 message: message.clone(),
                 run: run.clone(),
                 attachment_ids,
+                schedule: aether_store::RunSchedule {
+                    priority: schedule.priority,
+                    queued_at: Some(now),
+                    retry_count: 0,
+                    max_attempts: schedule.max_attempts,
+                    wait_reason: Some(WaitReason::ConcurrencyGate.as_str().to_owned()),
+                },
             })
             .await?;
         let (message_id, run_id, duplicate) = match outcome {
@@ -1834,8 +2374,9 @@ impl SessionManager {
         }
 
         let (queued, gate_queue) = {
-            // M7-02/ADR-022 §2.1#6：闸门计数 = 全局 running run 数；超限 → run 入
-            // 全局 FIFO（`runs.status='queued'`，占「当前 run 位」，不超卖）。
+            // M7-02/ADR-022 §2.1#6 / M10-07/ADR-037：闸门计数 = 全局 running run 数；
+            // 超限 → run 入优先级全局队列（`runs.status='queued'`，占「当前 run 位」，
+            // 不超卖；优先级只影响排队顺序）。
             let has_slot = gate_has_slot(&state);
             let limit = state.gate.limit;
             let session = state.sessions.get_mut(session_id).ok_or_else(|| {
@@ -1849,7 +2390,7 @@ impl SessionManager {
                 session.active = Some(ActiveRun {
                     run_id: run_id.clone(),
                     input_message_id: message_id.clone(),
-                    runtime_id,
+                    runtime_id: runtime_id.clone(),
                     text: text.to_owned(),
                     thinking_depth: requested_thinking_depth,
                     thinking_override: thinking_is_override,
@@ -1859,15 +2400,35 @@ impl SessionManager {
                     last_activity_ms: now,
                     cancel,
                     dispatched: has_slot,
+                    priority: schedule.priority,
+                    timeout_ms: schedule.timeout_ms,
+                    max_attempts: schedule.max_attempts,
+                    retry_count: 0,
+                    queued_at: now,
+                    dispatched_at_ms: has_slot.then_some(now),
+                    timeout_requested_at_ms: None,
                 });
                 if has_slot {
                     (false, None)
                 } else {
-                    state.gate.queue.enqueue(session_id.clone(), run_id.clone());
+                    let waiter = GateWaiter::new(
+                        session_id.clone(),
+                        run_id.clone(),
+                        schedule.priority,
+                        runtime_weight(&runtime_id),
+                        now,
+                        WaitReason::ConcurrencyGate,
+                    );
+                    if !state.gate.queue.enqueue(waiter) {
+                        return Err(LifecycleError::StorageBackpressure {
+                            depth: state.gate.queue.len(),
+                            threshold: MAX_QUEUED_GLOBAL,
+                        });
+                    }
                     let queue = state
                         .gate
                         .queue
-                        .position(&run_id)
+                        .position(&run_id, now)
                         .map(|position| QueuePosition { position, limit });
                     (false, queue)
                 }
@@ -1882,6 +2443,11 @@ impl SessionManager {
                     references,
                     attachments,
                     subagent_context,
+                    priority: schedule.priority,
+                    timeout_ms: schedule.timeout_ms,
+                    max_attempts: schedule.max_attempts,
+                    retry_count: 0,
+                    queued_at: now,
                 });
                 (true, None)
             }
@@ -2055,14 +2621,11 @@ impl SessionManager {
         title: &str,
     ) -> Result<Session, LifecycleError> {
         let now = self.inner.clock.now_ms();
-        let mut session = self
-            .inner
-            .reads
-            .session(session_id)
-            .await?
-            .ok_or_else(|| LifecycleError::SessionNotFound {
+        let mut session = self.inner.reads.session(session_id).await?.ok_or_else(|| {
+            LifecycleError::SessionNotFound {
                 session_id: session_id.clone(),
-            })?;
+            }
+        })?;
         let outcome = self
             .inner
             .write
@@ -2130,14 +2693,11 @@ impl SessionManager {
                 }
             }
         }
-        let session = self
-            .inner
-            .reads
-            .session(session_id)
-            .await?
-            .ok_or_else(|| LifecycleError::SessionNotFound {
+        let session = self.inner.reads.session(session_id).await?.ok_or_else(|| {
+            LifecycleError::SessionNotFound {
                 session_id: session_id.clone(),
-            })?;
+            }
+        })?;
         let outcome = self
             .inner
             .write
@@ -2291,10 +2851,7 @@ impl SessionManager {
     ///
     /// 覆盖：闸门排队 run（从 FIFO 移除 + 取消）与 interrupt 后提升的 run（取消；
     /// 已派发时同时释放闸门槽位并按 FIFO 推进）。返回是否存在被取消的残余 run。
-    async fn cancel_residual_runs(
-        &self,
-        session_id: &SessionId,
-    ) -> Result<bool, LifecycleError> {
+    async fn cancel_residual_runs(&self, session_id: &SessionId) -> Result<bool, LifecycleError> {
         let mut state = lock_state(&self.inner).await;
         self.hydrate_locked(&mut state, session_id).await?;
         let (active, waiting, released) = {
@@ -2403,6 +2960,116 @@ impl SessionManager {
     pub async fn watchdog_once(&self) -> Vec<RunId> {
         let timeout = self.inner.config.run_stream_timeout_ms;
         watchdog_once_inner(&self.inner, timeout).await
+    }
+
+    /// 自动重试待执行项数（诊断/测试）。
+    pub fn pending_retry_count(&self) -> usize {
+        lock_pending_retries(&self.inner).len()
+    }
+
+    /// 执行到期自动重试（watchdog 周期调用；测试可直接驱动）。
+    pub async fn process_pending_retries_once(&self) -> usize {
+        process_pending_retries(&self.inner).await
+    }
+
+    /// 饥饿保护巡检单次（watchdog 周期调用；测试可直接驱动）。
+    pub async fn sweep_starvation_guard_once(&self) -> usize {
+        sweep_starvation_guard(&self.inner).await
+    }
+
+    /// 队列查询（M10-07/ADR-037 D-037-1：全量/按会话；全局队列 + 会话等待槽合并视图）。
+    ///
+    /// 位置按 `score ASC → queued_at ASC → run_id ASC` 排序后从 1 计；`gate.queued`
+    /// 仍只计全局队列（与会话等待槽两层不重复计数）。
+    pub async fn queue_list(
+        &self,
+        session_id: Option<&SessionId>,
+        limit: usize,
+        offset: usize,
+    ) -> QueueListReport {
+        let state = lock_state(&self.inner).await;
+        let now = self.inner.clock.now_ms();
+        let gate = gate_snapshot(&state, now);
+        let mut candidates: Vec<GateWaiter> = state.gate.queue.entries().iter().cloned().collect();
+        for (id, session) in &state.sessions {
+            let Some(waiting) = &session.waiting else {
+                continue;
+            };
+            candidates.push(GateWaiter::new(
+                id.clone(),
+                waiting.run_id.clone(),
+                waiting.priority,
+                runtime_weight(&waiting.runtime_id),
+                waiting.queued_at,
+                WaitReason::ConcurrencyGate,
+            ));
+        }
+        candidates.sort_by(|left, right| {
+            left.score(now)
+                .cmp(&right.score(now))
+                .then(left.queued_at.cmp(&right.queued_at))
+                .then_with(|| left.run_id.as_str().cmp(right.run_id.as_str()))
+        });
+        let total = candidates
+            .iter()
+            .filter(|waiter| {
+                session_id
+                    .map(|id| &waiter.session_id == id)
+                    .unwrap_or(true)
+            })
+            .count();
+        let items: Vec<QueueEntry> = candidates
+            .into_iter()
+            .enumerate()
+            .filter(|(_, waiter)| {
+                session_id
+                    .map(|id| &waiter.session_id == id)
+                    .unwrap_or(true)
+            })
+            .map(|(index, waiter)| QueueEntry {
+                run_id: waiter.run_id.clone(),
+                session_id: waiter.session_id.clone(),
+                position: index + 1,
+                priority: waiter.base_priority,
+                score: waiter.score(now),
+                queued_at: waiter.queued_at,
+                wait_ms: waiter.wait_ms(now),
+                wait_reason: waiter.wait_reason.as_str().to_owned(),
+            })
+            .skip(offset)
+            .take(limit.min(QUEUE_LIST_MAX_LIMIT))
+            .collect();
+        QueueListReport { items, total, gate }
+    }
+
+    /// 各运行时已派发 run 计数（M10-07/ADR-037 D-037-3：自动路由负载 tie-break）。
+    pub async fn runtime_loads(&self) -> std::collections::BTreeMap<String, usize> {
+        let state = lock_state(&self.inner).await;
+        let mut loads: std::collections::BTreeMap<String, usize> =
+            std::collections::BTreeMap::new();
+        for session in state.sessions.values() {
+            if session
+                .active
+                .as_ref()
+                .map(|active| active.dispatched)
+                .unwrap_or(false)
+            {
+                *loads
+                    .entry(session.runtime_id.as_str().to_owned())
+                    .or_insert(0) += 1;
+            }
+        }
+        loads
+    }
+
+    /// 会话当前 active run 的优先级（子 Agent/内部节点继承；无 → `None`）。
+    pub async fn session_active_priority(&self, session_id: &SessionId) -> Option<i32> {
+        let state = lock_state(&self.inner).await;
+        state
+            .sessions
+            .get(session_id)
+            .and_then(|session| session.active.as_ref())
+            .map(|active| active.priority)
     }
 
     /// 任务看门狗单次巡检：返回本轮记录的任务 dump（M2-05；取消后超阈值未退出 →
@@ -2550,6 +3217,9 @@ impl SessionManager {
                 tokio::time::sleep(tick).await;
                 let timeout = watchdog_inner.config.run_stream_timeout_ms;
                 let _ = watchdog_once_inner(&watchdog_inner, timeout).await;
+                // M10-07/ADR-037：饥饿保护审计 + 到期自动重试（每 tick 一次）。
+                let _ = sweep_starvation_guard(&watchdog_inner).await;
+                let _ = process_pending_retries(&watchdog_inner).await;
                 // M2-07：收割会话执行任务；panic 经 JoinError 捕获并恢复（D2 不传染）。
                 let _ = reap_run_tasks(&watchdog_inner).await;
                 // M2-05：取消后 10s 未退出的会话任务 → dump + 强制清理。
@@ -2652,31 +3322,7 @@ impl SessionManager {
         state: &mut ManagerState,
         session_id: &SessionId,
     ) -> Result<(), LifecycleError> {
-        if state.sessions.contains_key(session_id) {
-            return Ok(());
-        }
-        let session = self.inner.reads.session(session_id).await?.ok_or_else(|| {
-            LifecycleError::SessionNotFound {
-                session_id: session_id.clone(),
-            }
-        })?;
-        let cancel = self
-            .inner
-            .cancel_tree
-            .session_token(session_id, session.parent_session_id.as_ref());
-        state.sessions.insert(
-            session_id.clone(),
-            SessionState {
-                fsm: aether_core::SessionFsm::new(session.status),
-                runtime_id: session.runtime_id,
-                active: None,
-                waiting: None,
-                cancel,
-                // M7-03/ADR-017：暂停标记不跨重启（内存态）。
-                pause_marker: None,
-            },
-        );
-        Ok(())
+        hydrate_inner(&self.inner, state, session_id).await
     }
 
     /// 会话状态行 + `session.status_changed` 事件（调用方持有状态锁；内存状态已转移）。
@@ -2740,6 +3386,44 @@ impl SessionManager {
             })
             .await?;
         Ok(())
+    }
+
+    /// 重启重建失败收口（M10-07：queued run 无法安全重放 → `run_interrupted` + 事件）。
+    async fn fail_requeue_run(
+        &self,
+        session_id: &SessionId,
+        runtime_id: &RuntimeId,
+        run_id: &RunId,
+        reason: &str,
+    ) -> bool {
+        let error = ErrorInfo {
+            code: RUN_INTERRUPTED_CODE.to_owned(),
+            message: reason.to_owned(),
+            recoverable: true,
+        };
+        if self
+            .finish_run(
+                run_id,
+                aether_core::RunStatus::Failed,
+                Some(error.code.clone()),
+            )
+            .await
+            .is_err()
+        {
+            return false;
+        }
+        let _ = self
+            .emit(
+                session_id,
+                Some(run_id),
+                runtime_id,
+                EventPayload::RunFailed(RunFailedPayload {
+                    run_id: run_id.clone(),
+                    error,
+                }),
+            )
+            .await;
+        true
     }
 
     /// 会话生命周期审计写入（M3-07；D9/SE-03 P0 最小集）。
@@ -3073,6 +3757,11 @@ async fn take_run_start(
         attachments: active.attachments.clone(),
         subagent_context: active.subagent_context.clone(),
         cancel: active.cancel.clone(),
+        priority: active.priority,
+        timeout_ms: active.timeout_ms,
+        max_attempts: active.max_attempts,
+        retry_count: active.retry_count,
+        queued_at: active.queued_at,
     }))
 }
 
@@ -3087,6 +3776,11 @@ struct RunStart {
     attachments: Vec<aether_core::OutboundAttachment>,
     subagent_context: Option<aether_core::SubagentContext>,
     cancel: RunCancelToken,
+    priority: i32,
+    timeout_ms: i64,
+    max_attempts: u32,
+    retry_count: u32,
+    queued_at: i64,
 }
 
 async fn dispatch_and_finalize(
@@ -3165,6 +3859,19 @@ struct TerminalSchedule {
     suspended: Option<RunStart>,
 }
 
+/// 摘除的活跃 run 元数据（M10-07：超时/自动重试判定）。
+struct DetachedRun {
+    run_id: RunId,
+    session_id: SessionId,
+    input_message_id: MessageId,
+    runtime_id: RuntimeId,
+    priority: i32,
+    timeout_ms: i64,
+    max_attempts: u32,
+    retry_count: u32,
+    timeout_requested_at_ms: Option<i64>,
+}
+
 /// 终态公共流程：摘除活跃位 → 等待槽提升 → 闸门调度（FIFO 推进/降级挂起）→
 /// 行终态 → 事件 → 会话 idle；返回调度结果（`None` = 该 run 已被超时/中断处理）。
 ///
@@ -3175,61 +3882,86 @@ async fn detach_and_prepare(
     inner: &Arc<ManagerInner>,
     session_id: &SessionId,
     run_id: &RunId,
-) -> Result<Option<(RuntimeId, TerminalSchedule)>, LifecycleError> {
+) -> Result<Option<(DetachedRun, TerminalSchedule)>, LifecycleError> {
     let mut state = lock_state(inner).await;
-    let (runtime_id, promoted) = {
-        let session = state.sessions.get_mut(session_id).ok_or_else(|| {
-            LifecycleError::SessionNotFound {
-                session_id: session_id.clone(),
-            }
-        })?;
-        match session.active.as_ref() {
-            Some(active) if &active.run_id == run_id => {
-                let active = session
-                    .active
-                    .take()
-                    .ok_or_else(|| LifecycleError::Internal {
-                        reason: "active 位竞态".to_owned(),
-                    })?;
-                let promoted = session.waiting.take().map(|queued| RunStart {
-                    run_id: queued.run_id,
-                    input_message_id: queued.input_message_id,
-                    runtime_id: queued.runtime_id,
-                    text: queued.text,
-                    thinking_depth: queued.thinking_depth,
-                    thinking_override: queued.thinking_override,
-                    references: queued.references,
-                    attachments: queued.attachments,
-                    subagent_context: queued.subagent_context,
-                    // M2-05：提升的 run 亦为会话取消树子节点。
-                    cancel: RunCancelToken::child_of(&session.cancel),
-                });
-                if let Some(start) = &promoted {
-                    session.active = Some(ActiveRun {
-                        run_id: start.run_id.clone(),
-                        input_message_id: start.input_message_id.clone(),
-                        runtime_id: start.runtime_id.clone(),
-                        text: start.text.clone(),
-                        thinking_depth: start.thinking_depth,
-                        thinking_override: start.thinking_override,
-                        references: start.references.clone(),
-                        attachments: start.attachments.clone(),
-                        subagent_context: start.subagent_context.clone(),
-                        last_activity_ms: inner.clock.now_ms(),
-                        cancel: start.cancel.clone(),
-                        dispatched: false,
-                    });
+    let (detached, promoted) =
+        {
+            let session = state.sessions.get_mut(session_id).ok_or_else(|| {
+                LifecycleError::SessionNotFound {
+                    session_id: session_id.clone(),
                 }
-                (active.runtime_id, promoted)
+            })?;
+            match session.active.as_ref() {
+                Some(active) if &active.run_id == run_id => {
+                    let active = session
+                        .active
+                        .take()
+                        .ok_or_else(|| LifecycleError::Internal {
+                            reason: "active 位竞态".to_owned(),
+                        })?;
+                    let detached = DetachedRun {
+                        run_id: active.run_id.clone(),
+                        session_id: session_id.clone(),
+                        input_message_id: active.input_message_id.clone(),
+                        runtime_id: active.runtime_id.clone(),
+                        priority: active.priority,
+                        timeout_ms: active.timeout_ms,
+                        max_attempts: active.max_attempts,
+                        retry_count: active.retry_count,
+                        timeout_requested_at_ms: active.timeout_requested_at_ms,
+                    };
+                    let promoted = session.waiting.take().map(|queued| RunStart {
+                        run_id: queued.run_id,
+                        input_message_id: queued.input_message_id,
+                        runtime_id: queued.runtime_id,
+                        text: queued.text,
+                        thinking_depth: queued.thinking_depth,
+                        thinking_override: queued.thinking_override,
+                        references: queued.references,
+                        attachments: queued.attachments,
+                        subagent_context: queued.subagent_context,
+                        // M2-05：提升的 run 亦为会话取消树子节点。
+                        cancel: RunCancelToken::child_of(&session.cancel),
+                        priority: queued.priority,
+                        timeout_ms: queued.timeout_ms,
+                        max_attempts: queued.max_attempts,
+                        retry_count: queued.retry_count,
+                        queued_at: queued.queued_at,
+                    });
+                    if let Some(start) = &promoted {
+                        session.active = Some(ActiveRun {
+                            run_id: start.run_id.clone(),
+                            input_message_id: start.input_message_id.clone(),
+                            runtime_id: start.runtime_id.clone(),
+                            text: start.text.clone(),
+                            thinking_depth: start.thinking_depth,
+                            thinking_override: start.thinking_override,
+                            references: start.references.clone(),
+                            attachments: start.attachments.clone(),
+                            subagent_context: start.subagent_context.clone(),
+                            last_activity_ms: inner.clock.now_ms(),
+                            cancel: start.cancel.clone(),
+                            dispatched: false,
+                            priority: start.priority,
+                            timeout_ms: start.timeout_ms,
+                            max_attempts: start.max_attempts,
+                            retry_count: start.retry_count,
+                            queued_at: start.queued_at,
+                            dispatched_at_ms: None,
+                            timeout_requested_at_ms: None,
+                        });
+                    }
+                    (detached, promoted)
+                }
+                _ => return Ok(None),
             }
-            _ => return Ok(None),
-        }
-    };
+        };
 
-    // 闸门调度（锁内单写者）：释放（终态 run 已摘除）→ FIFO 推进 → 等待槽提升判定。
+    // 闸门调度（锁内单写者）：释放（终态 run 已摘除）→ 队列推进 → 等待槽提升判定。
+    let now = inner.clock.now_ms();
     let admission_ok = inner.pipeline.admission().is_ok();
     let dispatches = if admission_ok {
-        gate_advance_locked(&mut state)
+        gate_advance_locked(&mut state, now)
     } else {
         Vec::new()
     };
@@ -3248,22 +3980,28 @@ async fn detach_and_prepare(
                 {
                     if active.run_id == start.run_id {
                         active.dispatched = true;
+                        active.dispatched_at_ms = Some(now);
                     }
                 }
                 (Some(start), None)
             } else {
-                // 等待槽 run 晋升时闸门饱和 → 进入全局 FIFO 尾部（ADR-022 附录 A-6）。
-                state
-                    .gate
-                    .queue
-                    .enqueue(session_id.clone(), start.run_id.clone());
+                // 等待槽 run 晋升时闸门饱和 → 进入优先级队列（ADR-022 附录 A-6）。
+                let runtime = start.runtime_id.clone();
+                state.gate.queue.enqueue(GateWaiter::new(
+                    session_id.clone(),
+                    start.run_id.clone(),
+                    start.priority,
+                    runtime_weight(&runtime),
+                    start.queued_at,
+                    WaitReason::ConcurrencyGate,
+                ));
                 (None, None)
             }
         }
     };
     publish_gate_snapshot(inner, &state);
     Ok(Some((
-        runtime_id,
+        detached,
         TerminalSchedule {
             dispatches,
             next,
@@ -3297,28 +4035,27 @@ async fn cancel_suspended_run(
     session_id: &SessionId,
     suspended: &RunStart,
 ) -> Result<(), LifecycleError> {
-    let runtime_id = {
-        let mut state = lock_state(inner).await;
-        let session =
-            state
-                .sessions
-                .get_mut(session_id)
-                .ok_or_else(|| LifecycleError::SessionNotFound {
+    let runtime_id =
+        {
+            let mut state = lock_state(inner).await;
+            let session = state.sessions.get_mut(session_id).ok_or_else(|| {
+                LifecycleError::SessionNotFound {
                     session_id: session_id.clone(),
-                })?;
-        match session.active.as_ref() {
-            Some(active) if active.run_id == suspended.run_id => {
-                let active = session
-                    .active
-                    .take()
-                    .ok_or_else(|| LifecycleError::Internal {
-                        reason: "active 位竞态".to_owned(),
-                    })?;
-                active.runtime_id
+                }
+            })?;
+            match session.active.as_ref() {
+                Some(active) if active.run_id == suspended.run_id => {
+                    let active = session
+                        .active
+                        .take()
+                        .ok_or_else(|| LifecycleError::Internal {
+                            reason: "active 位竞态".to_owned(),
+                        })?;
+                    active.runtime_id
+                }
+                _ => return Ok(()),
             }
-            _ => return Ok(()),
-        }
-    };
+        };
     inner
         .write
         .execute(StoreCommand::FinishRun {
@@ -3341,6 +4078,336 @@ async fn cancel_suspended_run(
     .await
 }
 
+/// 自动重试登记（M10-07/ADR-037 D-037-2）：仅 `max_attempts>1` 且错误分类可重试，
+/// 按 1s/2s/4s/8s/16s/30s/60s ±20% 退避（run id 确定性抖动）。
+fn schedule_auto_retry(inner: &Arc<ManagerInner>, detached: &DetachedRun, code: &str) {
+    if detached.max_attempts <= 1 || !is_auto_retryable(code) {
+        return;
+    }
+    let attempt = detached.retry_count.saturating_add(1);
+    if attempt >= detached.max_attempts {
+        return;
+    }
+    let backoff_ms = backoff_with_jitter_ms(attempt, detached.run_id.as_str());
+    let due_at_ms = inner.clock.now_ms().saturating_add(backoff_ms);
+    let pending = PendingRetry {
+        run_id: detached.run_id.clone(),
+        session_id: detached.session_id.clone(),
+        input_message_id: detached.input_message_id.clone(),
+        priority: detached.priority,
+        timeout_ms: detached.timeout_ms,
+        max_attempts: detached.max_attempts,
+        retry_count: detached.retry_count,
+        attempt,
+        due_at_ms,
+        backoff_ms,
+    };
+    let mut list = lock_pending_retries(inner);
+    list.retain(|item| item.run_id != detached.run_id);
+    list.push(pending);
+}
+
+/// 移除同一 run 的待执行自动重试（人工 `run_retry` 优先；同一 run 仅一个在途 attempt）。
+fn remove_pending_retry_run(inner: &Arc<ManagerInner>, run_id: &RunId) -> bool {
+    let mut list = lock_pending_retries(inner);
+    let before = list.len();
+    list.retain(|item| &item.run_id != run_id);
+    before != list.len()
+}
+
+/// 执行到期的自动重试（watchdog 周期调用；返回创建的新 attempt 数）。
+async fn process_pending_retries(inner: &Arc<ManagerInner>) -> usize {
+    let now = inner.clock.now_ms();
+    let due: Vec<PendingRetry> = {
+        let mut list = lock_pending_retries(inner);
+        let mut due = Vec::new();
+        let mut index = 0;
+        while index < list.len() {
+            if list[index].due_at_ms <= now {
+                due.push(list.remove(index));
+            } else {
+                index += 1;
+            }
+        }
+        due
+    };
+    let mut created = 0;
+    for pending in due {
+        match create_auto_retry_run(inner, pending).await {
+            Ok(true) => created += 1,
+            Ok(false) => {}
+            Err(error) => {
+                tracing::warn!(error = %error, "自动重试创建失败（旧 run 保留终态，可人工 run_retry）");
+            }
+        }
+    }
+    created
+}
+
+/// 单一到期项的重试 run 创建（锁内复核终态/attempt 链/会话状态，不重复执行）。
+async fn create_auto_retry_run(
+    inner: &Arc<ManagerInner>,
+    pending: PendingRetry,
+) -> Result<bool, LifecycleError> {
+    let run =
+        inner
+            .reads
+            .run(&pending.run_id)
+            .await?
+            .ok_or_else(|| LifecycleError::RunNotFound {
+                run_id: pending.run_id.clone(),
+            })?;
+    if !run_is_retryable(run.status) {
+        return Ok(false);
+    }
+    let code = run.error.as_deref().unwrap_or("unknown");
+    if !is_auto_retryable(code) {
+        return Ok(false);
+    }
+    // attempt 链：仅当前 run 是最新 attempt 且无在途 attempt 时才创建。
+    let attempts = inner
+        .reads
+        .runs_for_input_message(&pending.input_message_id)
+        .await?;
+    if attempts.iter().any(|item| {
+        matches!(
+            item.status,
+            aether_core::RunStatus::Queued | aether_core::RunStatus::Running
+        )
+    }) {
+        return Ok(false);
+    }
+    if attempts
+        .first()
+        .map(|item| item.run_id != pending.run_id)
+        .unwrap_or(true)
+    {
+        return Ok(false);
+    }
+    let input_message = inner
+        .reads
+        .message(&pending.input_message_id)
+        .await?
+        .ok_or_else(|| LifecycleError::Internal {
+            reason: format!(
+                "自动重试：输入消息 {} 不存在（审计数据不完整）",
+                pending.input_message_id
+            ),
+        })?;
+    let attachments = if crate::attachments::message_has_attachments(&input_message) {
+        let resolver = { lock_attachment_resolver(inner).clone() };
+        let Some(resolver) = resolver else {
+            tracing::warn!("自动重试：附件解析器未接线，跳过重试（不静默丢弃附件）");
+            return Ok(false);
+        };
+        match resolver.resolve(&pending.session_id, &input_message).await {
+            Ok(items) => items,
+            Err(error) => {
+                tracing::warn!(error = ?error, "自动重试：附件重新水合失败，跳过重试");
+                return Ok(false);
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    inner.pipeline.admission().map_err(LifecycleError::from)?;
+    let session_row = inner
+        .reads
+        .session(&pending.session_id)
+        .await?
+        .ok_or_else(|| LifecycleError::SessionNotFound {
+            session_id: pending.session_id.clone(),
+        })?;
+    if session_row.status == SessionStatus::Paused
+        || aether_core::session_status_is_terminal(session_row.status)
+    {
+        return Ok(false);
+    }
+    let now = inner.clock.now_ms();
+    let retry_count = pending.retry_count.saturating_add(1);
+    let new_run = Run {
+        id: RunId::new(ulid::generate()).map_err(internal_from)?,
+        session_id: pending.session_id.clone(),
+        status: aether_core::RunStatus::Queued,
+        input_message_id: Some(pending.input_message_id.clone()),
+        thinking_depth: Some(session_row.thinking_depth),
+        error: None,
+        started_at: now,
+        finished_at: None,
+    };
+    inner
+        .write
+        .execute(StoreCommand::InsertRun {
+            run: new_run.clone(),
+        })
+        .await?;
+    inner
+        .write
+        .execute(StoreCommand::UpdateRunSchedule {
+            run_id: new_run.id.clone(),
+            schedule: aether_store::RunSchedule {
+                priority: pending.priority,
+                queued_at: Some(now),
+                retry_count,
+                max_attempts: pending.max_attempts,
+                wait_reason: Some(WaitReason::ConcurrencyGate.as_str().to_owned()),
+            },
+        })
+        .await?;
+    let (queued, gate_dispatched) = {
+        let mut state = lock_state(inner).await;
+        hydrate_inner(inner, &mut state, &pending.session_id).await?;
+        let has_slot = gate_has_slot(&state);
+        let queue_full = state.gate.queue.is_full();
+        let Some(session) = state.sessions.get_mut(&pending.session_id) else {
+            return Ok(false);
+        };
+        if session.fsm.is_terminal() || session.fsm.status() == SessionStatus::Paused {
+            return Ok(false);
+        }
+        if session.active.is_some() && session.waiting.is_some() {
+            return Ok(false);
+        }
+        if session.active.is_none() && !has_slot && queue_full {
+            return Ok(false);
+        }
+        let runtime_id = session.runtime_id.clone();
+        if session.active.is_none() {
+            let cancel = RunCancelToken::child_of(&session.cancel);
+            session.active = Some(ActiveRun {
+                run_id: new_run.id.clone(),
+                input_message_id: pending.input_message_id.clone(),
+                runtime_id: runtime_id.clone(),
+                text: input_message.content.clone(),
+                thinking_depth: session_row.thinking_depth,
+                thinking_override: false,
+                references: Vec::new(),
+                attachments: attachments.clone(),
+                subagent_context: None,
+                last_activity_ms: now,
+                cancel,
+                dispatched: has_slot,
+                priority: pending.priority,
+                timeout_ms: pending.timeout_ms,
+                max_attempts: pending.max_attempts,
+                retry_count,
+                queued_at: now,
+                dispatched_at_ms: None,
+                timeout_requested_at_ms: None,
+            });
+            if let Some(active) = session.active.as_mut() {
+                if active.dispatched {
+                    active.dispatched_at_ms = Some(now);
+                    (false, true)
+                } else {
+                    state.gate.queue.enqueue(GateWaiter::new(
+                        pending.session_id.clone(),
+                        new_run.id.clone(),
+                        pending.priority,
+                        runtime_weight(&runtime_id),
+                        now,
+                        WaitReason::ConcurrencyGate,
+                    ));
+                    (false, false)
+                }
+            } else {
+                (false, false)
+            }
+        } else {
+            session.waiting = Some(QueuedRun {
+                run_id: new_run.id.clone(),
+                input_message_id: pending.input_message_id.clone(),
+                runtime_id,
+                text: input_message.content.clone(),
+                thinking_depth: session_row.thinking_depth,
+                thinking_override: false,
+                references: Vec::new(),
+                attachments,
+                subagent_context: None,
+                priority: pending.priority,
+                timeout_ms: pending.timeout_ms,
+                max_attempts: pending.max_attempts,
+                retry_count,
+                queued_at: now,
+            });
+            (true, false)
+        }
+    };
+    {
+        let state = lock_state(inner).await;
+        publish_gate_snapshot(inner, &state);
+    }
+    if gate_dispatched {
+        spawn_run_inner(inner, pending.session_id.clone(), new_run.id.clone());
+    }
+    if let Err(failure) = insert_audit_inner(
+        inner,
+        &pending.session_id,
+        "system",
+        "run.retry",
+        "retried",
+        json!({
+            "run_id": pending.run_id.as_str(),
+            "new_run_id": new_run.id.as_str(),
+            "auto": true,
+            "attempt": pending.attempt,
+            "max_attempts": pending.max_attempts,
+            "backoff_ms": pending.backoff_ms,
+            "queued": queued,
+        }),
+    )
+    .await
+    {
+        tracing::warn!(error = %failure, "自动重试审计写入失败（仅记录）");
+    }
+    Ok(true)
+}
+
+/// 饥饿保护巡检（M10-07/ADR-037 D-037-1）：等待 ≥5min 的排队 run 每 run 审计一次。
+async fn sweep_starvation_guard(inner: &Arc<ManagerInner>) -> usize {
+    let now = inner.clock.now_ms();
+    let candidates: Vec<(SessionId, RunId, i64)> = {
+        let mut state = lock_state(inner).await;
+        let ready: Vec<(SessionId, RunId, i64)> = state
+            .gate
+            .queue
+            .entries()
+            .iter()
+            .filter(|waiter| waiter.needs_starvation_guard(now))
+            .map(|waiter| {
+                (
+                    waiter.session_id.clone(),
+                    waiter.run_id.clone(),
+                    waiter.wait_ms(now),
+                )
+            })
+            .collect();
+        for (_, run_id, _) in &ready {
+            state.gate.queue.mark_starvation_guarded(run_id);
+        }
+        ready
+    };
+    for (session_id, run_id, wait_ms) in &candidates {
+        if let Err(failure) = insert_audit_inner(
+            inner,
+            session_id,
+            "system",
+            "scheduler.starvation_guard",
+            "boosted",
+            json!({
+                "run_id": run_id.as_str(),
+                "wait_ms": wait_ms,
+                "boost": STARVATION_GUARD_PENALTY,
+            }),
+        )
+        .await
+        {
+            tracing::warn!(error = %failure, "饥饿保护审计写入失败（仅记录）");
+        }
+    }
+    candidates.len()
+}
+
 async fn finalize_completed(
     inner: &Arc<ManagerInner>,
     session_id: &SessionId,
@@ -3348,9 +4415,10 @@ async fn finalize_completed(
     assistant_text: Option<String>,
     usage: Option<TokenUsage>,
 ) -> Result<Option<RunStart>, LifecycleError> {
-    let Some((runtime_id, schedule)) = detach_and_prepare(inner, session_id, run_id).await? else {
+    let Some((detached, schedule)) = detach_and_prepare(inner, session_id, run_id).await? else {
         return Ok(None);
     };
+    let runtime_id = detached.runtime_id.clone();
     if let Some(text) = assistant_text {
         let now = inner.clock.now_ms();
         let message = Message {
@@ -3425,9 +4493,11 @@ async fn finalize_failed(
     run_id: &RunId,
     error: ErrorInfo,
 ) -> Result<Option<RunStart>, LifecycleError> {
-    let Some((runtime_id, schedule)) = detach_and_prepare(inner, session_id, run_id).await? else {
+    let Some((detached, schedule)) = detach_and_prepare(inner, session_id, run_id).await? else {
         return Ok(None);
     };
+    let runtime_id = detached.runtime_id.clone();
+    let error_code = error.code.clone();
     inner
         .write
         .execute(StoreCommand::FinishRun {
@@ -3449,7 +4519,69 @@ async fn finalize_failed(
     )
     .await?;
     settle_session_idle(inner, session_id, &runtime_id).await?;
-    apply_terminal_schedule(inner, session_id, schedule).await
+    let next = apply_terminal_schedule(inner, session_id, schedule).await?;
+    schedule_auto_retry(inner, &detached, &error_code);
+    Ok(next)
+}
+
+/// 超时收口（M10-07/ADR-037 D-037-2）：`runs.status='timeout'` + `run.failed`
+/// （错误码 `run_timeout`，可重试）；自动重试分类同失败路径。
+async fn finalize_timeout(
+    inner: &Arc<ManagerInner>,
+    session_id: &SessionId,
+    run_id: &RunId,
+    detached: DetachedRun,
+    schedule: TerminalSchedule,
+) -> Result<Option<RunStart>, LifecycleError> {
+    let runtime_id = detached.runtime_id.clone();
+    let error = ErrorInfo {
+        code: crate::lifecycle::RUN_TIMEOUT_CODE.to_owned(),
+        message: format!(
+            "run 超时（{}ms；先中断，{}ms 未收口 → 标 timeout；可重试）",
+            detached.timeout_ms, TIMEOUT_SETTLE_GRACE_MS
+        ),
+        recoverable: true,
+    };
+    inner
+        .write
+        .execute(StoreCommand::FinishRun {
+            run_id: run_id.clone(),
+            status: aether_core::RunStatus::Timeout,
+            error: Some(error.code.clone()),
+            finished_at: inner.clock.now_ms(),
+        })
+        .await?;
+    emit_inner(
+        inner,
+        session_id,
+        Some(run_id),
+        &runtime_id,
+        EventPayload::RunFailed(RunFailedPayload {
+            run_id: run_id.clone(),
+            error,
+        }),
+    )
+    .await?;
+    if let Err(failure) = insert_audit_inner(
+        inner,
+        session_id,
+        "system",
+        "run.timeout",
+        "timeout",
+        json!({
+            "run_id": run_id.as_str(),
+            "timeout_ms": detached.timeout_ms,
+            "grace_ms": TIMEOUT_SETTLE_GRACE_MS,
+        }),
+    )
+    .await
+    {
+        tracing::warn!(run_id = %run_id, error = %failure, "超时审计写入失败（仅记录）");
+    }
+    settle_session_idle(inner, session_id, &runtime_id).await?;
+    let next = apply_terminal_schedule(inner, session_id, schedule).await?;
+    schedule_auto_retry(inner, &detached, RUN_TIMEOUT_CODE);
+    Ok(next)
 }
 
 async fn finalize_cancelled(
@@ -3458,9 +4590,15 @@ async fn finalize_cancelled(
     run_id: &RunId,
     reason: Option<String>,
 ) -> Result<Option<RunStart>, LifecycleError> {
-    let Some((runtime_id, schedule)) = detach_and_prepare(inner, session_id, run_id).await? else {
+    let Some((detached, schedule)) = detach_and_prepare(inner, session_id, run_id).await? else {
         return Ok(None);
     };
+    // 超时路径：先 interrupt（取消令牌），适配器在 5s 内收口为 cancelled → 仍按
+    // `timeout` 终态收口（原因已由超时决定，不误记为普通取消）。
+    if detached.timeout_requested_at_ms.is_some() {
+        return finalize_timeout(inner, session_id, run_id, detached, schedule).await;
+    }
+    let runtime_id = detached.runtime_id.clone();
     inner
         .write
         .execute(StoreCommand::FinishRun {
@@ -3532,20 +4670,54 @@ fn idle_transitions(
 }
 
 async fn watchdog_once_inner(inner: &Arc<ManagerInner>, timeout_ms: i64) -> Vec<RunId> {
+    /// 单轮超时分类：断流超时 / 已请求中断 / 宽限强制超时。
+    type TimeoutBatch = (
+        Vec<(SessionId, RunId)>,
+        Vec<(SessionId, RunId)>,
+        Vec<(SessionId, RunId)>,
+    );
     let now = inner.clock.now_ms();
-    let timed_out: Vec<(SessionId, RunId)> = {
-        let state = lock_state(inner).await;
+    let (timed_out, timeout_requests, forced_timeouts): TimeoutBatch = {
+        let mut state = lock_state(inner).await;
         let mut timed_out = Vec::new();
-        for (session_id, session) in &state.sessions {
-            if let Some(active) = &session.active {
-                // M7-02/ADR-022：闸门排队 run（未派发）不适用断流计时（无执行即无事件）。
-                if active.dispatched && now.saturating_sub(active.last_activity_ms) >= timeout_ms {
-                    timed_out.push((session_id.clone(), active.run_id.clone()));
+        let mut timeout_requests = Vec::new();
+        let mut forced_timeouts = Vec::new();
+        for (session_id, session) in state.sessions.iter_mut() {
+            let Some(active) = session.active.as_mut() else {
+                continue;
+            };
+            if !active.dispatched {
+                continue;
+            }
+            // M10-07/ADR-037 D-037-2：run 超时（先中断；宽限 5s 未收口 → 标 timeout）。
+            if let Some(requested_at) = active.timeout_requested_at_ms {
+                if now.saturating_sub(requested_at) >= TIMEOUT_SETTLE_GRACE_MS {
+                    forced_timeouts.push((session_id.clone(), active.run_id.clone()));
+                }
+                continue;
+            }
+            if let Some(dispatched_at) = active.dispatched_at_ms {
+                if now.saturating_sub(dispatched_at) >= active.timeout_ms {
+                    active.timeout_requested_at_ms = Some(now);
+                    active.cancel.cancel();
+                    timeout_requests.push((session_id.clone(), active.run_id.clone()));
+                    continue;
                 }
             }
+            // M7-02/ADR-022：闸门排队 run（未派发）不适用断流计时（无执行即无事件）。
+            if now.saturating_sub(active.last_activity_ms) >= timeout_ms {
+                timed_out.push((session_id.clone(), active.run_id.clone()));
+            }
         }
-        timed_out
+        (timed_out, timeout_requests, forced_timeouts)
     };
+    for (session_id, run_id) in &timeout_requests {
+        tracing::warn!(
+            session_id = %session_id,
+            run_id = %run_id,
+            "run 超时：已发出中断，等待适配器收口（宽限后才标记 timeout）"
+        );
+    }
     let mut failed = Vec::new();
     for (session_id, run_id) in timed_out {
         let error = ErrorInfo {
@@ -3572,7 +4744,35 @@ async fn watchdog_once_inner(inner: &Arc<ManagerInner>, timeout_ms: i64) -> Vec<
             }
         }
     }
+    for (session_id, run_id) in forced_timeouts {
+        match force_timeout(inner, &session_id, &run_id).await {
+            Ok(next) => {
+                inner
+                    .task_watchdog
+                    .mark_orphaned_by_run(&run_id, inner.clock.now_ms());
+                if let Some(next) = next {
+                    spawn_run_inner(inner, session_id.clone(), next.run_id.clone());
+                }
+                failed.push(run_id);
+            }
+            Err(error) => {
+                tracing::warn!(run_id = %run_id, error = %error, "超时收口失败（继续）");
+            }
+        }
+    }
     failed
+}
+
+/// 强制超时收口（watchdog 宽限后；适配器未在 5s 内收口）。
+async fn force_timeout(
+    inner: &Arc<ManagerInner>,
+    session_id: &SessionId,
+    run_id: &RunId,
+) -> Result<Option<RunStart>, LifecycleError> {
+    let Some((detached, schedule)) = detach_and_prepare(inner, session_id, run_id).await? else {
+        return Ok(None);
+    };
+    finalize_timeout(inner, session_id, run_id, detached, schedule).await
 }
 
 /// 管线降级中断（D4 降级期语义 3）：在途 run 转 `cancelled`（行 + 事件）；
@@ -3720,6 +4920,41 @@ async fn insert_audit_inner(
     Ok(())
 }
 
+/// 从库装配会话内存态（M2-01；`SessionState` 不存在时按行状态建立 FSM/取消节点）。
+async fn hydrate_inner(
+    inner: &Arc<ManagerInner>,
+    state: &mut ManagerState,
+    session_id: &SessionId,
+) -> Result<(), LifecycleError> {
+    if state.sessions.contains_key(session_id) {
+        return Ok(());
+    }
+    let session =
+        inner
+            .reads
+            .session(session_id)
+            .await?
+            .ok_or_else(|| LifecycleError::SessionNotFound {
+                session_id: session_id.clone(),
+            })?;
+    let cancel = inner
+        .cancel_tree
+        .session_token(session_id, session.parent_session_id.as_ref());
+    state.sessions.insert(
+        session_id.clone(),
+        SessionState {
+            fsm: aether_core::SessionFsm::new(session.status),
+            runtime_id: session.runtime_id,
+            active: None,
+            waiting: None,
+            cancel,
+            // M7-03/ADR-017：暂停标记不跨重启（内存态）。
+            pause_marker: None,
+        },
+    );
+    Ok(())
+}
+
 /// 取状态锁并以 `OwnedMappedMutexGuard` 返回（`OwnedMutexGuard` 非 `Send`，
 /// 不能跨 await 持有；mapped 形态为 `Send`，保证状态机+行+事件的整体串行）。
 async fn lock_state(
@@ -3733,6 +4968,14 @@ fn lock_backpressure(
     inner: &Arc<ManagerInner>,
 ) -> std::sync::MutexGuard<'_, Option<Arc<BackpressureController>>> {
     match inner.backpressure.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+/// 自动重试待执行队列加锁（中毒容忍；临界区无 I/O）。
+fn lock_pending_retries(inner: &Arc<ManagerInner>) -> std::sync::MutexGuard<'_, Vec<PendingRetry>> {
+    match inner.pending_retries.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     }
@@ -3768,31 +5011,62 @@ fn gate_has_slot(state: &ManagerState) -> bool {
     running_count(state) < state.gate.limit
 }
 
-/// 闸门快照（`limit/active/queued`）。
-fn gate_snapshot(state: &ManagerState) -> ConcurrencyGateSnapshot {
+/// 闸门快照（`limit/active/queued` + M10-07 优先级分桶/饥饿保护计数）。
+fn gate_snapshot(state: &ManagerState, now_ms: i64) -> ConcurrencyGateSnapshot {
+    let snapshot = state.gate.queue.snapshot(now_ms);
+    let mut buckets: Vec<PriorityBucket> = Vec::new();
+    for entry in &snapshot {
+        if let Some(bucket) = buckets
+            .iter_mut()
+            .find(|bucket| bucket.priority == entry.priority)
+        {
+            bucket.count += 1;
+        } else {
+            buckets.push(PriorityBucket {
+                priority: entry.priority,
+                count: 1,
+            });
+        }
+    }
+    buckets.sort_by_key(|bucket| std::cmp::Reverse(bucket.priority));
+    let starvation_guard = state
+        .gate
+        .queue
+        .entries()
+        .iter()
+        .filter(|waiter| waiter.wait_ms(now_ms) >= STARVATION_GUARD_MS)
+        .count();
     ConcurrencyGateSnapshot {
         limit: state.gate.limit,
         active: running_count(state),
         queued: state.gate.queue.len(),
+        queued_by_priority: Some(buckets),
+        starvation_guard: Some(starvation_guard),
     }
 }
 
 /// 发布闸门快照到共享单元（`health.concurrency_gate` 同步读）。
 fn publish_gate_snapshot(inner: &Arc<ManagerInner>, state: &ManagerState) {
+    let now = inner.clock.now_ms();
     let guard = lock_gate_cell(inner);
     if let Some(cell) = guard.as_ref() {
-        cell.set(gate_snapshot(state));
+        cell.set(gate_snapshot(state, now));
     }
 }
 
-/// 全局 FIFO 推进：有槽则逐个启动队首（每次推进仅启动队首 run，不超卖）。
-fn gate_advance_locked(state: &mut ManagerState) -> Vec<(SessionId, RunId)> {
+/// 固定运行时权重（ADR-022 附录 A-4；队列分数用）。
+fn runtime_weight(runtime_id: &RuntimeId) -> i32 {
+    i32::try_from(route_priority(runtime_id.as_str())).unwrap_or(100)
+}
+
+/// 全局队列推进：有槽则按分数逐个启动队首（每次推进仅启动队首 run，不超卖）。
+fn gate_advance_locked(state: &mut ManagerState, now_ms: i64) -> Vec<(SessionId, RunId)> {
     let mut dispatches = Vec::new();
     loop {
         if !gate_has_slot(state) {
             break;
         }
-        let Some(waiter) = state.gate.queue.pop_front() else {
+        let Some(waiter) = state.gate.queue.pop_best(now_ms) else {
             break;
         };
         let Some(session) = state.sessions.get_mut(&waiter.session_id) else {
@@ -3805,6 +5079,7 @@ fn gate_advance_locked(state: &mut ManagerState) -> Vec<(SessionId, RunId)> {
             continue;
         }
         active.dispatched = true;
+        active.dispatched_at_ms = Some(now_ms);
         dispatches.push((waiter.session_id, waiter.run_id));
     }
     dispatches
@@ -3818,11 +5093,12 @@ fn gate_release_and_advance(
     if inner.pipeline.admission().is_err() {
         return Vec::new();
     }
-    gate_advance_locked(state)
+    let now = inner.clock.now_ms();
+    gate_advance_locked(state, now)
 }
 
 /// 等待槽提升（interrupt 的闸门排队路径用）：有空槽且准入可行 → 派发（返回
-/// `(session, run)` 供调用方 spawn）；饱和 → 入 FIFO 尾部；降级 → 不提升（保留等待槽）。
+/// `(session, run)` 供调用方 spawn）；饱和 → 入优先级队列尾部；降级 → 不提升（保留等待槽）。
 fn promote_waiting_locked(
     inner: &Arc<ManagerInner>,
     state: &mut ManagerState,
@@ -3839,10 +5115,17 @@ fn promote_waiting_locked(
     if inner.pipeline.admission().is_err() {
         return None;
     }
+    let now = inner.clock.now_ms();
     let has_slot = gate_has_slot(state);
     let session = state.sessions.get_mut(session_id)?;
     let queued = session.waiting.take()?;
     let run_id = queued.run_id.clone();
+    let runtime_id = queued.runtime_id.clone();
+    let priority = queued.priority;
+    let timeout_ms = queued.timeout_ms;
+    let max_attempts = queued.max_attempts;
+    let retry_count = queued.retry_count;
+    let queued_at = queued.queued_at;
     let cancel = RunCancelToken::child_of(&session.cancel);
     session.active = Some(ActiveRun {
         run_id: queued.run_id,
@@ -3854,17 +5137,28 @@ fn promote_waiting_locked(
         references: queued.references,
         attachments: queued.attachments,
         subagent_context: queued.subagent_context,
-        last_activity_ms: inner.clock.now_ms(),
+        last_activity_ms: now,
         cancel,
         dispatched: has_slot,
+        priority,
+        timeout_ms,
+        max_attempts,
+        retry_count,
+        queued_at,
+        dispatched_at_ms: has_slot.then_some(now),
+        timeout_requested_at_ms: None,
     });
     if has_slot {
         Some((session_id.clone(), run_id))
     } else {
-        state
-            .gate
-            .queue
-            .enqueue(session_id.clone(), run_id);
+        state.gate.queue.enqueue(GateWaiter::new(
+            session_id.clone(),
+            run_id,
+            priority,
+            runtime_weight(&runtime_id),
+            queued_at,
+            WaitReason::ConcurrencyGate,
+        ));
         None
     }
 }

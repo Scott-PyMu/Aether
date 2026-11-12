@@ -36,8 +36,8 @@ fn all_commands_are_routed_at_the_rpc_layer() {
     let daemon_commands = daemon_commands();
     assert_eq!(
         daemon_commands.len(),
-        82,
-        "daemon 路由必须 82 条（M9 59 + M10-01 11 + M10-02 5 + M10-04 4 + M10-05 3）"
+        83,
+        "daemon 路由必须 83 条（M9 59 + M10-01 11 + M10-02 5 + M10-04 4 + M10-05 3 + M10-07 1）"
     );
     let mut id = 100;
     for method in &daemon_commands {

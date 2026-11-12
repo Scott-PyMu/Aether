@@ -11,24 +11,23 @@ use serde_json::Value;
 use super::dto::{
     AppRestartRequest, ArchiveExportRequest, ArtifactAddRequest, ArtifactRemoveRequest,
     ArtifactsListRequest, AttachmentAddRequest, AttachmentListRequest, AttachmentRemoveRequest,
-    AuditExportRequest, AuditQueryRequest, BackupCreateRequest,
-    BackupRestoreRequest, ExportDiagnosticsRequest, MessagesPageRequest, PermissionResolveRequest,
-    PermissionsPendingRequest, PresetAddRequest, PresetDeleteRequest, PresetUpdateRequest,
-    PresetsListRequest, ProviderCreateRequest, ProviderDeleteRequest, ProviderModelAddRequest,
-    ProviderModelToggleRequest, ProviderModelsFetchRequest, ProviderTestRequest, ProviderToggleRequest,
-    ProviderUpdateRequest, ProvidersListRequest,
-    RuleAddRequest, RuleDeleteRequest, RuleToggleRequest, RuleUpdateRequest, RunRetryRequest,
-    RuntimeDisableRequest, RuntimeEnableRequest, RuntimeRetryRequest, SessionCreateRequest,
-    SessionExportRequest,
-    SessionIdRequest, SessionListRequest, SessionPermissionModeSetRequest, SessionSendRequest,
-    SessionDeleteRequest, SessionRenameRequest, SessionSearchRequest,
-    SessionWorkspaceAssignRequest, SettingsGetRequest, SettingsSetRequest, WorkspaceCreateRequest,
-    WorkspaceDeleteRequest, WorkspaceSetRequest, WorkspaceUpdateRequest, WorkspacesListRequest,
-    WorkflowCreateRequest, WorkflowDeleteRequest, WorkflowIdRequest, WorkflowImportRequest,
-    WorkflowListRequest, WorkflowNodeRetryRequest, WorkflowRunCancelRequest, WorkflowRunGetRequest,
-    WorkflowRunListRequest, WorkflowRunRequest, WorkflowUpdateRequest,
-    SubagentCancelRequest, SubagentListRequest, SubagentResolveRequest, SubagentResultGetRequest,
-    SubagentSpawnRequest, ImportCancelRequest, ImportRequest, ImportStatusRequest,
+    AuditExportRequest, AuditQueryRequest, BackupCreateRequest, BackupRestoreRequest,
+    ExportDiagnosticsRequest, ImportCancelRequest, ImportRequest, ImportStatusRequest,
+    MessagesPageRequest, PermissionResolveRequest, PermissionsPendingRequest, PresetAddRequest,
+    PresetDeleteRequest, PresetUpdateRequest, PresetsListRequest, ProviderCreateRequest,
+    ProviderDeleteRequest, ProviderModelAddRequest, ProviderModelToggleRequest,
+    ProviderModelsFetchRequest, ProviderTestRequest, ProviderToggleRequest, ProviderUpdateRequest,
+    ProvidersListRequest, QueueListRequest, RuleAddRequest, RuleDeleteRequest, RuleToggleRequest,
+    RuleUpdateRequest, RunRetryRequest, RuntimeDisableRequest, RuntimeEnableRequest,
+    RuntimeRetryRequest, SessionCreateRequest, SessionDeleteRequest, SessionExportRequest,
+    SessionIdRequest, SessionListRequest, SessionPermissionModeSetRequest, SessionRenameRequest,
+    SessionSearchRequest, SessionSendRequest, SessionWorkspaceAssignRequest, SettingsGetRequest,
+    SettingsSetRequest, SubagentCancelRequest, SubagentListRequest, SubagentResolveRequest,
+    SubagentResultGetRequest, SubagentSpawnRequest, WorkflowCreateRequest, WorkflowDeleteRequest,
+    WorkflowIdRequest, WorkflowImportRequest, WorkflowListRequest, WorkflowNodeRetryRequest,
+    WorkflowRunCancelRequest, WorkflowRunGetRequest, WorkflowRunListRequest, WorkflowRunRequest,
+    WorkflowUpdateRequest, WorkspaceCreateRequest, WorkspaceDeleteRequest, WorkspaceSetRequest,
+    WorkspaceUpdateRequest, WorkspacesListRequest,
 };
 use super::error::IpcError;
 use super::path::ArtifactPath;
@@ -45,6 +44,11 @@ pub trait IpcBackend: Send + Sync + 'static {
     /// `write_queue_depth` 与监督器 runtime 摘要；默认未接线返回 `not_implemented`。
     fn health(&self) -> Result<Value, IpcError> {
         Err(IpcError::not_implemented("health"))
+    }
+
+    /// M10-07/ADR-037：队列位置/等待原因/优先级查询。
+    fn queue_list(&self, _request: &QueueListRequest) -> Result<Value, IpcError> {
+        Err(IpcError::not_implemented("queue_list"))
     }
 
     fn session_list(&self, _request: &SessionListRequest) -> Result<Value, IpcError> {
@@ -456,17 +460,11 @@ pub trait IpcBackend: Send + Sync + 'static {
         Err(IpcError::not_implemented("workflow_run_list"))
     }
 
-    fn workflow_run_cancel(
-        &self,
-        _request: &WorkflowRunCancelRequest,
-    ) -> Result<Value, IpcError> {
+    fn workflow_run_cancel(&self, _request: &WorkflowRunCancelRequest) -> Result<Value, IpcError> {
         Err(IpcError::not_implemented("workflow_run_cancel"))
     }
 
-    fn workflow_node_retry(
-        &self,
-        _request: &WorkflowNodeRetryRequest,
-    ) -> Result<Value, IpcError> {
+    fn workflow_node_retry(&self, _request: &WorkflowNodeRetryRequest) -> Result<Value, IpcError> {
         Err(IpcError::not_implemented("workflow_node_retry"))
     }
 
@@ -488,10 +486,7 @@ pub trait IpcBackend: Send + Sync + 'static {
         Err(IpcError::not_implemented("subagent_resolve"))
     }
 
-    fn subagent_result_get(
-        &self,
-        _request: &SubagentResultGetRequest,
-    ) -> Result<Value, IpcError> {
+    fn subagent_result_get(&self, _request: &SubagentResultGetRequest) -> Result<Value, IpcError> {
         Err(IpcError::not_implemented("subagent_result_get"))
     }
 

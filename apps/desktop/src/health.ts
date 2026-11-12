@@ -47,6 +47,10 @@ export interface ConcurrencyGate {
   limit: number;
   active: number;
   queued: number;
+  /** M10-07/ADR-037：按调用方优先级分桶的排队数（可选）。 */
+  queued_by_priority?: { priority: number; count: number }[];
+  /** M10-07/ADR-037：当前触发饥饿保护的排队 run 数（可选）。 */
+  starvation_guard?: number;
 }
 
 export interface HealthReport {

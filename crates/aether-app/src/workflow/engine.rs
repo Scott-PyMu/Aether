@@ -46,6 +46,8 @@ pub struct AgentRequest {
     pub model: Option<String>,
     pub permission_mode: Option<String>,
     pub timeout_ms: i64,
+    /// M10-07/ADR-037：工作流运行优先级（内部节点继承；只影响排队顺序）。
+    pub priority: i64,
     pub input: Value,
     pub cancel: Arc<AtomicBool>,
 }
@@ -1383,6 +1385,7 @@ impl WorkflowEngine {
                     timeout_ms: node
                         .timeout_ms
                         .unwrap_or(super::definition::DEFAULT_NODE_TIMEOUT_MS),
+                    priority: meta.priority,
                     input: node_input.clone(),
                     cancel: Arc::clone(cancel),
                 });

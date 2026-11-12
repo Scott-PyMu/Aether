@@ -43,16 +43,16 @@ function unique(values) {
 
 function assertManifest(manifest) {
   const counts = manifest.counts ?? {};
-  if (counts.total !== 86 || counts.daemon !== 82 || counts.shell !== 4) {
+  if (counts.total !== 87 || counts.daemon !== 83 || counts.shell !== 4) {
     throw new Error(
-      `[protocol-client] 路由计数 ${counts.daemon}/${counts.shell}/${counts.total} ≠ 82/4/86`,
+      `[protocol-client] 路由计数 ${counts.daemon}/${counts.shell}/${counts.total} ≠ 83/4/87`,
     );
   }
-  if (counts.ui !== 84 || counts.reserved !== 2) {
-    throw new Error(`[protocol-client] UI 暴露 ${counts.ui} / 保留 ${counts.reserved} ≠ 84/2`);
+  if (counts.ui !== 85 || counts.reserved !== 2) {
+    throw new Error(`[protocol-client] UI 暴露 ${counts.ui} / 保留 ${counts.reserved} ≠ 85/2`);
   }
-  if (!Array.isArray(manifest.commands) || manifest.commands.length !== 86) {
-    throw new Error("[protocol-client] command-manifest.commands 必须恰好 86 条");
+  if (!Array.isArray(manifest.commands) || manifest.commands.length !== 87) {
+    throw new Error("[protocol-client] command-manifest.commands 必须恰好 87 条");
   }
 }
 
@@ -452,7 +452,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const targetPath = path.join(root, TARGET);
   if (MODE === "generate") {
     writeFileSync(targetPath, rendered, "utf8");
-    console.log(`[protocol-client] 生成完成：${TARGET}（86 方法；82/4；32+35 错误码）`);
+    console.log(`[protocol-client] 生成完成：${TARGET}（87 方法；83/4；32+35 错误码）`);
     process.exit(0);
   }
   let current;
@@ -466,5 +466,5 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     console.error(`[protocol-client] 阻断：${TARGET} 与重新生成结果不一致（diff=0 要求）。`);
     process.exit(1);
   }
-  console.log("[protocol-client] 通过：86 方法 / 82+4 / 32+35 / diff=0");
+  console.log("[protocol-client] 通过：87 方法 / 83+4 / 32+35 / diff=0");
 }

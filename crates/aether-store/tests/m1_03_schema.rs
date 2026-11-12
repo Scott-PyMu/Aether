@@ -222,6 +222,12 @@ fn appendix_c_explicit_indexes_exist_with_expected_columns() {
             &["session_id", "created_at"],
             false,
         ),
+        (
+            "idx_runs_queue",
+            "runs",
+            &["status", "priority", "queued_at"],
+            false,
+        ),
     ];
 
     let mut expected_names: Vec<String> = expected
@@ -409,13 +415,7 @@ fn appendix_c_foreign_keys_exist() {
             "id",
             "NO ACTION",
         ),
-        (
-            "workflow_runs",
-            "session_id",
-            "sessions",
-            "id",
-            "CASCADE",
-        ),
+        ("workflow_runs", "session_id", "sessions", "id", "CASCADE"),
         // M10-02/ADR-032：结果/注入随子会话/父会话删除级联。
         (
             "subagent_results",
@@ -432,20 +432,8 @@ fn appendix_c_foreign_keys_exist() {
             "CASCADE",
         ),
         // M10-05/ADR-035：附件随会话删除级联；消息删除置空 message_id。
-        (
-            "attachments",
-            "session_id",
-            "sessions",
-            "id",
-            "CASCADE",
-        ),
-        (
-            "attachments",
-            "message_id",
-            "messages",
-            "id",
-            "SET NULL",
-        ),
+        ("attachments", "session_id", "sessions", "id", "CASCADE"),
+        ("attachments", "message_id", "messages", "id", "SET NULL"),
     ];
 
     let mut all: Vec<(String, String, String, String, String)> = Vec::new();

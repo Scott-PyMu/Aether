@@ -38,6 +38,7 @@ import type {
   ProviderToggleRequest,
   ProviderUpdateRequest,
   ProvidersListRequest,
+  QueueListRequest,
   RefPickRequest,
   RuleAddRequest,
   RuleDeleteRequest,
@@ -179,6 +180,7 @@ export const COMMANDS = [
   "attachment_add",
   "attachment_list",
   "attachment_remove",
+  "queue_list",
 ] as const;
 export type AetherCommand = (typeof COMMANDS)[number];
 
@@ -266,6 +268,7 @@ export const DAEMON_COMMANDS = [
   "attachment_add",
   "attachment_list",
   "attachment_remove",
+  "queue_list",
 ] as const;
 export type AetherDaemonCommand = (typeof DAEMON_COMMANDS)[number];
 
@@ -828,6 +831,9 @@ export interface AetherClient {
 
   /** `attachment_remove`（严格参数）。 */
   attachmentRemove<T = unknown>(params: AttachmentRemoveRequest): Promise<T>;
+
+  /** `queue_list`（严格参数）。 */
+  queueList<T = unknown>(params: QueueListRequest): Promise<T>;
 }
 
 const COMMAND_SET: ReadonlySet<string> = new Set(COMMANDS);
@@ -1136,6 +1142,9 @@ export function createAetherClient(provider: AetherBridgeProvider): AetherClient
     },
     async attachmentRemove<T = unknown>(params?: AttachmentRemoveRequest): Promise<T> {
       return call<T>("attachment_remove", params);
+    },
+    async queueList<T = unknown>(params?: QueueListRequest): Promise<T> {
+      return call<T>("queue_list", params);
     },
   };
 }

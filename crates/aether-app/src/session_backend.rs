@@ -46,20 +46,20 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::ipc::backend::IpcBackend;
+use crate::ipc::business::BusinessCode;
+use crate::ipc::cursor;
 use crate::ipc::dto::{
     ArtifactAddRequest, ArtifactRemoveRequest, ArtifactsListRequest, AttachmentAddRequest,
-    AttachmentListRequest, AttachmentRemoveRequest, MessagesPageRequest,
-    PermissionResolveRequest, PermissionsPendingRequest, PresetAddRequest, PresetDeleteRequest,
-    PresetUpdateRequest, PresetsListRequest, ProviderCreateRequest, ProviderDeleteRequest,
-    ProviderModelAddRequest, ProviderModelToggleRequest, ProviderModelsFetchRequest,
-    ProviderTestRequest, ProviderToggleRequest, ProviderUpdateRequest, ProvidersListRequest,
+    AttachmentListRequest, AttachmentRemoveRequest, MessagesPageRequest, PermissionResolveRequest,
+    PermissionsPendingRequest, PresetAddRequest, PresetDeleteRequest, PresetUpdateRequest,
+    PresetsListRequest, ProviderCreateRequest, ProviderDeleteRequest, ProviderModelAddRequest,
+    ProviderModelToggleRequest, ProviderModelsFetchRequest, ProviderTestRequest,
+    ProviderToggleRequest, ProviderUpdateRequest, ProvidersListRequest, QueueListRequest,
     RuleAddRequest, RuleDeleteRequest, RuleToggleRequest, RuleUpdateRequest, SessionCreateRequest,
     SessionDeleteRequest, SessionIdRequest, SessionListRequest, SessionPermissionModeSetRequest,
     SessionRenameRequest, SessionSearchRequest, SessionSendRequest, SessionWorkspaceAssignRequest,
     WorkspaceCreateRequest, WorkspaceDeleteRequest, WorkspaceUpdateRequest, WorkspacesListRequest,
 };
-use crate::ipc::business::BusinessCode;
-use crate::ipc::cursor;
 use crate::ipc::error::{IpcError, IpcErrorCode};
 use crate::ipc::path::ArtifactPath;
 use crate::json_payload::JsonPayload;
@@ -652,6 +652,49 @@ impl IpcBackend for SessionBackend {
         self.inner.health()
     }
 
+    /// M10-07/ADR-037：队列位置/等待原因/优先级（只读；`queue_list`）。
+    fn queue_list(&self, request: &QueueListRequest) -> Result<Value, IpcError> {
+        let manager = self.manager_required()?.clone();
+        let session_id = request.session_id.clone();
+        let limit = request.limit_value()?;
+        let offset = request.offset_value()?;
+        self.call(async move {
+            let session_id = match session_id {
+                Some(value) => Some(
+                    aether_core::SessionId::new(value)
+                        .map_err(|_| IpcError::invalid_format("session_id", "必须是 26 位 ULID"))?,
+                ),
+                None => None,
+            };
+            let report = manager.queue_list(session_id.as_ref(), limit, offset).await;
+            let items = report
+                .items
+                .iter()
+                .map(|entry| {
+                    json!({
+                        "run_id": entry.run_id.as_str(),
+                        "session_id": entry.session_id.as_str(),
+                        "position": entry.position,
+                        "priority": entry.priority,
+                        "score": entry.score,
+                        "queued_at": entry.queued_at,
+                        "wait_ms": entry.wait_ms,
+                        "wait_reason": entry.wait_reason,
+                    })
+                })
+                .collect::<Vec<_>>();
+            Ok(json!({
+                "items": items,
+                "total": report.total,
+                "gate": {
+                    "limit": report.gate.limit,
+                    "active": report.gate.active,
+                    "queued": report.gate.queued,
+                },
+            }))
+        })
+    }
+
     fn runtimes_list(&self) -> Result<Value, IpcError> {
         let supervisor = self.supervisor.clone().ok_or_else(|| {
             IpcError::core_not_ready("监督器未接线：runtimes_list 不可用（启动序列未完成）")
@@ -802,11 +845,8 @@ impl IpcBackend for SessionBackend {
                         .as_ref()
                         .and_then(|id| roots.get(id.as_str()).cloned().flatten());
                     let mut summary = SessionSummary::from_session(session, root)?;
-                    summary.has_children = child_counts
-                        .get(session.id.as_str())
-                        .copied()
-                        .unwrap_or(0)
-                        > 0;
+                    summary.has_children =
+                        child_counts.get(session.id.as_str()).copied().unwrap_or(0) > 0;
                     if let Some(name) = session
                         .preset_id
                         .as_ref()
@@ -901,7 +941,9 @@ impl IpcBackend for SessionBackend {
                         actor: "user".to_owned(),
                         action: "session.deleted".to_owned(),
                         resource: Some(format!("session:{session_id}")),
-                        detail: Some(json!({"reason": "has_children", "children": children}).to_string()),
+                        detail: Some(
+                            json!({"reason": "has_children", "children": children}).to_string(),
+                        ),
                         result: Some("denied".to_owned()),
                         ts: now,
                     };
@@ -955,6 +997,7 @@ impl IpcBackend for SessionBackend {
                         })?,
                         None => std::collections::BTreeMap::new(),
                     };
+                    let loads = manager.runtime_loads().await;
                     let mut candidates = Vec::new();
                     for id in supervisor.runtime_ids() {
                         let Some(runtime) = supervisor.get(&id) else {
@@ -966,11 +1009,13 @@ impl IpcBackend for SessionBackend {
                             .copied()
                             .unwrap_or(runtime.manifest().enabled);
                         candidates.push(aether_control::RouteCandidate {
-                            id,
+                            id: id.clone(),
                             enabled,
                             status,
                             // DSH 直通由 M7-06 实测登记投影映射后置位（当前恒 false）。
                             model_passthrough: false,
+                            // M10-07/ADR-037 D-037-3：同分候选按负载 tie-break。
+                            active_runs: loads.get(&id).copied().unwrap_or(0),
                         });
                     }
                     // 模型硬条件：存在启用 provider 提供该模型（ADR-022 §2.1#2②；
@@ -1030,6 +1075,14 @@ impl IpcBackend for SessionBackend {
                     let detail = reason.map(|reason| reason.as_str()).unwrap_or("disabled");
                     return Err(IpcError::invalid_value(format!(
                         "runtime {runtime_id:?} 已禁用（{detail}），不可创建会话；请先修复并重新启用"
+                    )));
+                }
+                // M10-07/ADR-037 D-037-3：健康过滤——手动指定同样排除 degraded
+                // （路由不静默回退/不把新会话交给降级运行时）。
+                if status == RuntimeStatus::Degraded {
+                    let detail = reason.map(|reason| reason.as_str()).unwrap_or("degraded");
+                    return Err(IpcError::invalid_value(format!(
+                        "runtime {runtime_id:?} 处于 degraded（{detail}），不可创建会话；请先修复或改选其他运行时"
                     )));
                 }
                 let manifest = runtime.manifest();
@@ -1857,8 +1910,8 @@ impl IpcBackend for SessionBackend {
                 .with_business_code(BusinessCode::AttachmentTooLarge));
             }
             // 2) 读取 + 哈希（单文件 ≤10 MiB）。
-            let (bytes, sha256) = crate::attachment::read_and_hash(&source).map_err(|error| {
-                match error {
+            let (bytes, sha256) =
+                crate::attachment::read_and_hash(&source).map_err(|error| match error {
                     crate::attachment::AttachmentReadError::TooLarge(size) => IpcError::too_large(
                         "source_path",
                         format!(
@@ -1870,8 +1923,7 @@ impl IpcBackend for SessionBackend {
                     crate::attachment::AttachmentReadError::Io(error) => {
                         IpcError::path_rejected(format!("附件源读取失败：{error}"))
                     }
-                }
-            })?;
+                })?;
             // 3) 会话限额（200 个 / 1 GiB）。
             let usage = reads
                 .attachment_usage(&session_id)
@@ -1895,9 +1947,12 @@ impl IpcBackend for SessionBackend {
             }
             // 4) 原子外置存储（全局内容寻址；已存在不覆盖）。
             let storage_path = crate::attachment::relative_content_path(&sha256, mime);
-            crate::attachment::store_content(&data_dir, &sha256, mime, &bytes).map_err(|error| {
-                IpcError::internal(error).with_business_code(BusinessCode::AttachmentStorageFailed)
-            })?;
+            crate::attachment::store_content(&data_dir, &sha256, mime, &bytes).map_err(
+                |error| {
+                    IpcError::internal(error)
+                        .with_business_code(BusinessCode::AttachmentStorageFailed)
+                },
+            )?;
             // 5) 元数据落库（同会话同内容幂等；不覆盖既有 id/created_at）。
             let record = AttachmentRecord {
                 id: ulid::Ulid::new().to_string(),
@@ -1905,9 +1960,8 @@ impl IpcBackend for SessionBackend {
                 message_id: None,
                 sha256,
                 mime: mime.as_str().to_owned(),
-                size_bytes: i64::try_from(bytes.len()).map_err(|_| {
-                    IpcError::internal("附件字节数超出 SQLite INTEGER 范围")
-                })?,
+                size_bytes: i64::try_from(bytes.len())
+                    .map_err(|_| IpcError::internal("附件字节数超出 SQLite INTEGER 范围"))?,
                 width: Some(i64::from(dimensions.width)),
                 height: Some(i64::from(dimensions.height)),
                 storage_path,
@@ -2075,6 +2129,8 @@ impl IpcBackend for SessionBackend {
         let references = request.resolved_references()?;
         // M10-02/ADR-032：子 Agent 结果回注（仅内部交付路径；普通用户消息为 None）。
         let request_context = request.subagent_context_value()?;
+        // M10-07/ADR-037：调度选项（priority/timeout_ms/max_attempts；命令层已校验）。
+        let schedule = request.schedule_options();
         self.call(async move {
             let session_id = parse_session_id(&session_id)?;
             let session_row = match &reads {
@@ -2223,24 +2279,24 @@ impl IpcBackend for SessionBackend {
                     .with_business_code(BusinessCode::SubagentContextRejected));
                 }
                 let supported = match (&supervisor, session_row.as_ref()) {
-                    (Some(supervisor), Some(session)) => match supervisor
-                        .get(session.runtime_id.as_str())
-                    {
-                        Some(runtime) => match runtime.connection().await {
-                            Some(connection) => match connection.state() {
-                                aether_adapters::connection::ConnectionState::Ready(hello)
-                                | aether_adapters::connection::ConnectionState::Degraded {
-                                    hello,
-                                    ..
-                                } => hello.runtime.capabilities.iter().any(|item| {
-                                    item == aether_core::SUBAGENT_CONTEXT_CAPABILITY
-                                }),
-                                _ => false,
+                    (Some(supervisor), Some(session)) => {
+                        match supervisor.get(session.runtime_id.as_str()) {
+                            Some(runtime) => match runtime.connection().await {
+                                Some(connection) => match connection.state() {
+                                    aether_adapters::connection::ConnectionState::Ready(hello)
+                                    | aether_adapters::connection::ConnectionState::Degraded {
+                                        hello,
+                                        ..
+                                    } => hello.runtime.capabilities.iter().any(|item| {
+                                        item == aether_core::SUBAGENT_CONTEXT_CAPABILITY
+                                    }),
+                                    _ => false,
+                                },
+                                None => false,
                             },
                             None => false,
-                        },
-                        None => false,
-                    },
+                        }
+                    }
                     _ => false,
                 };
                 if !supported {
@@ -2325,7 +2381,8 @@ impl IpcBackend for SessionBackend {
                         code: aether_core::MULTIMODAL_MODEL_UNVERIFIED.to_owned(),
                         field: "attachments".to_owned(),
                         runtime_id: session.runtime_id.as_str().to_owned(),
-                        message: "模型未声明 vision 能力：附件将按运行时能力发送（未验证）".to_owned(),
+                        message: "模型未声明 vision 能力：附件将按运行时能力发送（未验证）"
+                            .to_owned(),
                     });
                 }
                 for attachment_id in &attachment_ids {
@@ -2338,28 +2395,25 @@ impl IpcBackend for SessionBackend {
                         .await
                         .map_err(|error| IpcError::internal(format!("附件读取失败：{error}")))?
                         .ok_or_else(|| {
-                            IpcError::invalid_value(format!(
-                                "附件不存在或已删除：{attachment_id}"
-                            ))
+                            IpcError::invalid_value(format!("附件不存在或已删除：{attachment_id}"))
                         })?;
                     if record.session_id != session.id.as_str() {
                         return Err(IpcError::invalid_value(format!(
                             "附件不属于当前会话：{attachment_id}"
                         )));
                     }
-                    let mime = aether_core::AttachmentMime::from_wire(&record.mime).ok_or_else(
-                        || {
+                    let mime =
+                        aether_core::AttachmentMime::from_wire(&record.mime).ok_or_else(|| {
                             IpcError::internal(format!(
                                 "附件 MIME 非白名单（DB 不变量破坏）：{}",
                                 record.mime
                             ))
-                        },
-                    )?;
-                    let absolute = crate::attachment::resolve_storage_path(
-                        data_dir,
-                        &record.storage_path,
-                    )
-                    .map_err(|error| IpcError::internal(format!("附件路径校验失败：{error}")))?;
+                        })?;
+                    let absolute =
+                        crate::attachment::resolve_storage_path(data_dir, &record.storage_path)
+                            .map_err(|error| {
+                                IpcError::internal(format!("附件路径校验失败：{error}"))
+                            })?;
                     if !absolute.is_file() {
                         return Err(IpcError::internal(format!(
                             "附件文件缺失：{attachment_id}（拒绝发送，不静默丢弃）"
@@ -2408,7 +2462,7 @@ impl IpcBackend for SessionBackend {
             };
             let applied_context = request_context.clone();
             let ack = manager
-                .send_with_attachments(
+                .send_with_schedule(
                     &session_id,
                     &text,
                     &client_msg_id,
@@ -2416,6 +2470,7 @@ impl IpcBackend for SessionBackend {
                     references,
                     outbound_attachments,
                     request_context,
+                    schedule,
                 )
                 .await
                 .map_err(map_lifecycle_error)?;
@@ -3972,23 +4027,22 @@ pub fn map_lifecycle_error(error: LifecycleError) -> IpcError {
         LifecycleError::SessionNotFound { session_id } => {
             IpcError::session_not_found(session_id.as_str())
         }
-        LifecycleError::SessionBusy { .. } => IpcError::invalid_value(error.to_string())
-            .with_business_code(BusinessCode::SessionBusy),
+        LifecycleError::SessionBusy { .. } => {
+            IpcError::invalid_value(error.to_string()).with_business_code(BusinessCode::SessionBusy)
+        }
         LifecycleError::AttachmentRejected { kind, message } => match kind {
             aether_control::AttachmentResolveErrorKind::Unsupported => {
                 IpcError::invalid_value(message)
                     .with_business_code(BusinessCode::AttachmentTypeUnsupported)
             }
-            aether_control::AttachmentResolveErrorKind::TooLarge => IpcError::too_large(
-                "attachments",
-                message,
-            )
-            .with_business_code(BusinessCode::AttachmentTooLarge),
-            aether_control::AttachmentResolveErrorKind::LimitExceeded => IpcError::out_of_range(
-                "attachments",
-                message,
-            )
-            .with_business_code(BusinessCode::AttachmentLimitExceeded),
+            aether_control::AttachmentResolveErrorKind::TooLarge => {
+                IpcError::too_large("attachments", message)
+                    .with_business_code(BusinessCode::AttachmentTooLarge)
+            }
+            aether_control::AttachmentResolveErrorKind::LimitExceeded => {
+                IpcError::out_of_range("attachments", message)
+                    .with_business_code(BusinessCode::AttachmentLimitExceeded)
+            }
             aether_control::AttachmentResolveErrorKind::StorageFailed
             | aether_control::AttachmentResolveErrorKind::Invalid => IpcError::internal(message)
                 .with_business_code(BusinessCode::AttachmentStorageFailed),
@@ -3997,6 +4051,10 @@ pub fn map_lifecycle_error(error: LifecycleError) -> IpcError {
             .with_business_code(BusinessCode::SessionPaused),
         LifecycleError::StorageBackpressure { .. } => IpcError::invalid_value(error.to_string())
             .with_business_code(BusinessCode::StorageBackpressure),
+        LifecycleError::RetryNotAllowed { .. } => {
+            IpcError::invalid_value(error.to_string()).with_details(json!({ "retryable": false }))
+        }
+        LifecycleError::InvalidOption { field, reason } => IpcError::out_of_range(field, reason),
         LifecycleError::SessionClosed { .. }
         | LifecycleError::InvalidTransition { .. }
         | LifecycleError::RunNotFound { .. }

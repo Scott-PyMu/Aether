@@ -481,6 +481,8 @@
   "session.adapter_is_isolated_by_backpressure": "适配器 {p0} 背压隔离中（storage_backpressure）：重启后自动解除。",
   "session.queued_position": "排队中：第",
   "session.concurrency_limit": "位（并发上限",
+  "session.queue_wait_reason": "等待原因：{p0}",
+  "session.wait_reason.concurrency_gate": "并发闸门",
   "session.attachments_drag_paste_images_or": "附件：拖入/粘贴图片，或点击图片按钮（PNG/JPEG/WebP/GIF，≤10 MiB）",
   "session.the_current_runtime_does_not_4": "当前运行时未声明 multimodal：附件入口不可用",
   "session.remove_attachment": "移除附件 {p0}",

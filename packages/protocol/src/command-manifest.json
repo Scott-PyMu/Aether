@@ -6,10 +6,10 @@
     "groups": "docs/adr/ADR-029-electron-shell-rust-daemon.md §4.6/§16.1"
   },
   "counts": {
-    "total": 86,
-    "daemon": 82,
+    "total": 87,
+    "daemon": 83,
     "shell": 4,
-    "ui": 84,
+    "ui": 85,
     "reserved": 2,
     "groups": 18
   },
@@ -101,6 +101,10 @@
     {
       "group": "attachment",
       "count": 3
+    },
+    {
+      "group": "scheduler",
+      "count": 1
     }
   ],
   "commands": [
@@ -1048,6 +1052,17 @@
       "params": {
         "style": "strict",
         "dto": "AttachmentRemoveRequest"
+      }
+    },
+    {
+      "index": 87,
+      "name": "queue_list",
+      "route": "daemon",
+      "exposure": "ui",
+      "group": "scheduler",
+      "params": {
+        "style": "strict",
+        "dto": "QueueListRequest"
       }
     }
   ]

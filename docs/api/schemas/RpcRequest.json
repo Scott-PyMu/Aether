@@ -2558,6 +2558,36 @@
           "$ref": "#/components/schemas/AttachmentRemoveRequest"
         }
       }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jsonrpc",
+        "id",
+        "method"
+      ],
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "method": {
+          "const": "queue_list"
+        },
+        "params": {
+          "$ref": "#/components/schemas/QueueListRequest"
+        }
+      }
     }
   ]
 }

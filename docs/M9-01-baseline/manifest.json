@@ -1,8 +1,8 @@
 {
   "schema": "aether.m9-01-baseline.v1",
   "version": 1,
-  "recorded_at": "2026-11-11T23:47:59+08:00",
-  "head_commit": "e93770883fb8eaf76172df3d2d2d77b893d68854",
+  "recorded_at": "2026-11-12T15:54:15+08:00",
+  "head_commit": "c7acc80b5064c1f3f405ac01e92a78d7736ef77a",
   "platform": {
     "os": "win32",
     "arch": "x64",
@@ -16,17 +16,17 @@
     "migrations": "migrations"
   },
   "counts": {
-    "commands": 86,
-    "reachable": 84,
+    "commands": 87,
+    "reachable": 85,
     "reserved": 2,
-    "daemon": 82,
+    "daemon": 83,
     "shell": 4,
     "ipc_error_codes": 32,
     "business_codes": 35,
     "event_envelope_fields": 9,
     "event_types": 31,
     "settings_keys": 11,
-    "migrations": 12,
+    "migrations": 13,
     "response_types": 29,
     "event_payload_types": 31
   },
@@ -116,7 +116,8 @@
     "import_cancel",
     "attachment_add",
     "attachment_list",
-    "attachment_remove"
+    "attachment_remove",
+    "queue_list"
   ],
   "entries": [
     {
@@ -152,7 +153,7 @@
     {
       "path": "docs/M9-01-baseline/commands/07-session_send.json",
       "command": "session_send",
-      "sha256": "5fb470c19cdb0637be51106beb1ee601d0e8f3fa5b15096804bbd8aec42e5878"
+      "sha256": "d8b6ea15887385613d9b155203cb5eb44151a9bfe3671065483be5555af45831"
     },
     {
       "path": "docs/M9-01-baseline/commands/08-session_interrupt.json",
@@ -548,6 +549,11 @@
       "path": "docs/M9-01-baseline/commands/86-attachment_remove.json",
       "command": "attachment_remove",
       "sha256": "89f9b60e2672c99a0c633068acb54ff87fb57e8000857537582aa58eec2958b1"
+    },
+    {
+      "path": "docs/M9-01-baseline/commands/87-queue_list.json",
+      "command": "queue_list",
+      "sha256": "a8ffc446f75c60fb2391f0ff6d81db463e405004f582dd5df20587ae3e427697"
     }
   ],
   "artifacts": [
@@ -565,7 +571,7 @@
     },
     {
       "path": "docs/M9-01-baseline/contract/migrations.json",
-      "sha256": "03c7e92816e1f2345246b981852c7e2e1306f1b5841f4c751136c2173f9e697a"
+      "sha256": "7e58eb7dba93df5e3a834280a7e4973082635273c39cc299f8f9fa4fa025e4a9"
     },
     {
       "path": "docs/M9-01-baseline/contract/diagnostics.json",
@@ -577,7 +583,7 @@
     },
     {
       "path": "docs/M9-01-baseline/contract/responses.json",
-      "sha256": "bfc12555b77a7d6f074d950650b83d49e3717cbac5684451e7a1fcfb3ffa8d7d"
+      "sha256": "862ec264c6be1d543d0757dd35a70c23090cac65c92ba6b3f94aa3cf9af1bdbc"
     },
     {
       "path": "docs/M9-01-baseline/contract/event_payloads.json",
@@ -585,7 +591,7 @@
     },
     {
       "path": "docs/M9-01-baseline/contract/stats.json",
-      "sha256": "2199df23f7391de9de7db0980008551003dd20a0d5cb38ffb73f57ff059cf49e"
+      "sha256": "390d63384c0d40a49359013e1160008f1a8a3ccad2368d089763c23d84e7417c"
     },
     {
       "path": "docs/M9-01-baseline/contract/risks.json",
@@ -608,7 +614,7 @@
       "purpose": "硬阈值冻结"
     }
   ],
-  "contract_digest": "181fae9b1faed689571bd12e6e1f4b5764a5e2c64121bf368c438f4445e35a86",
+  "contract_digest": "a383afc4b5edc7dd29aa274d9a4e20cd918ef1507f460231982a10918871f9b1",
   "frozen": {
     "rule": "M9-04/M9-13 只新增，不改期望值；命令/错误码/事件/设置/迁移变更必须先走 ADR。",
     "recorded_before": "M9-02（抽取 aether-app 之前）"

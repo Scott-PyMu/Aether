@@ -45,6 +45,9 @@ pub struct RouteCandidate {
     pub status: RuntimeStatus,
     /// 该候选是否对请求模型直通（DSH 按会话选模型；M7-06 登记实测映射前恒 `false`）。
     pub model_passthrough: bool,
+    /// 该运行时当前已派发的 run 数（M10-07/ADR-037 D-037-3：同分候选按负载
+    /// `active_runs / max_concurrent` 次级排序；负载不改变固定 runtime_weight）。
+    pub active_runs: usize,
 }
 
 /// 候选追踪（决策 detail；审计 `route.decided` 载荷）。
@@ -54,6 +57,8 @@ pub struct RouteCandidateTrace {
     pub enabled: bool,
     pub status: RuntimeStatus,
     pub priority: u32,
+    /// 同分候选负载快照（M10-07/ADR-037 D-037-3）。
+    pub active_runs: usize,
     /// 是否通过全部硬条件（进入排序集合）。
     pub eligible: bool,
     /// 参与/排除原因（诊断与审计文案）。
@@ -64,7 +69,8 @@ pub struct RouteCandidateTrace {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RouteFailure {
     /// 无启用候选（未注册任何运行时，或全部 `enabled=0` / `disabled`）。
-    AllDisabled,    /// 有启用候选，但无一能路由请求模型。
+    AllDisabled,
+    /// 有启用候选，但无一能路由请求模型。
     ModelUnavailable { model: String },
     /// 有启用且模型可路由的候选，但状态均不可参与（`starting`/`degraded`）。
     NoReadyCandidate,
@@ -136,12 +142,12 @@ pub fn route_runtime(
         if model_ok {
             model_eligible_count += 1;
         }
-        let status_ok = matches!(
-            candidate.status,
-            RuntimeStatus::Ready | RuntimeStatus::Cold
-        );
+        let status_ok = matches!(candidate.status, RuntimeStatus::Ready | RuntimeStatus::Cold);
         if model_ok && !status_ok {
-            reasons.push(format!("status={}（不可参与路由）", candidate.status.as_str()));
+            reasons.push(format!(
+                "status={}（不可参与路由）",
+                candidate.status.as_str()
+            ));
         }
         let eligible = model_ok && status_ok;
         let detail = if eligible {
@@ -162,6 +168,7 @@ pub fn route_runtime(
             enabled: candidate.enabled,
             status: candidate.status,
             priority,
+            active_runs: candidate.active_runs,
             eligible,
             detail,
         });
@@ -181,12 +188,15 @@ pub fn route_runtime(
         return Err(failure);
     }
 
-    // 排序：ready 优先于 cold → 优先级升序 → id 字典序。
+    // 排序（ADR-022 §2.1#3 / ADR-037 D-037-3）：ready 优先于 cold → 固定优先级升序
+    // → 同分候选按负载（active_runs 升序）→ id 字典序。
     eligible.sort_by(|left, right| {
-        let ready_rank = |trace: &RouteCandidateTrace| usize::from(trace.status == RuntimeStatus::Cold);
+        let ready_rank =
+            |trace: &RouteCandidateTrace| usize::from(trace.status == RuntimeStatus::Cold);
         ready_rank(left)
             .cmp(&ready_rank(right))
             .then(left.priority.cmp(&right.priority))
+            .then(left.active_runs.cmp(&right.active_runs))
             .then_with(|| left.id.cmp(&right.id))
     });
     let selected = eligible
@@ -198,12 +208,13 @@ pub fn route_runtime(
         runtime_id: selected.id.clone(),
         priority: selected.priority,
         reason: format!(
-            "自动路由：候选 {} 个（启用 {} 个），选中 {}（status={}，优先级={}）",
+            "自动路由：候选 {} 个（启用 {} 个），选中 {}（status={}，优先级={}，负载={}）",
             candidates.len(),
             enabled_count,
             selected.id,
             selected.status.as_str(),
-            selected.priority
+            selected.priority,
+            selected.active_runs
         ),
         candidates: traces,
     })
@@ -221,6 +232,7 @@ mod tests {
             enabled: true,
             status,
             model_passthrough: false,
+            active_runs: 0,
         }
     }
 
@@ -230,6 +242,7 @@ mod tests {
             enabled: false,
             status,
             model_passthrough: false,
+            active_runs: 0,
         }
     }
 
@@ -263,7 +276,10 @@ mod tests {
             candidate("codex", RuntimeStatus::Ready),
         ];
         let decision = route_runtime(None, false, &candidates).expect("有候选");
-        assert_eq!(decision.runtime_id, "codex", "ready 优先于 cold（即使优先级更差）");
+        assert_eq!(
+            decision.runtime_id, "codex",
+            "ready 优先于 cold（即使优先级更差）"
+        );
 
         // 全部 cold 亦接受（入选并触发预热）。
         let colds = vec![
@@ -282,6 +298,31 @@ mod tests {
         ];
         let decision = route_runtime(None, false, &candidates).expect("有候选");
         assert_eq!(decision.runtime_id, "alpha-runtime", "相等按 id 字典序");
+    }
+
+    #[test]
+    fn equal_priority_prefers_lower_load_before_id() {
+        // M10-07/ADR-037 D-037-3：同分候选按负载（active_runs 升序）次级排序，
+        // 负载相同才按 id 字典序。
+        let candidates = vec![
+            RouteCandidate {
+                active_runs: 5,
+                ..candidate("alpha-runtime", RuntimeStatus::Ready)
+            },
+            RouteCandidate {
+                active_runs: 1,
+                ..candidate("zeta-runtime", RuntimeStatus::Ready)
+            },
+        ];
+        let decision = route_runtime(None, false, &candidates).expect("有候选");
+        assert_eq!(decision.runtime_id, "zeta-runtime", "低负载优先");
+        assert!(decision.reason.contains("负载=1"));
+        let trace = decision
+            .candidates
+            .iter()
+            .find(|trace| trace.id == "alpha-runtime")
+            .expect("trace");
+        assert_eq!(trace.active_runs, 5);
     }
 
     #[test]
@@ -351,9 +392,9 @@ mod tests {
             enabled: true,
             status: RuntimeStatus::Ready,
             model_passthrough: true,
+            active_runs: 0,
         }];
-        let decision =
-            route_runtime(Some("any-model"), false, &passthrough).expect("直通候选");
+        let decision = route_runtime(Some("any-model"), false, &passthrough).expect("直通候选");
         assert_eq!(decision.runtime_id, "deepseek-harness");
     }
 

@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+﻿#!/usr/bin/env node
 /**
  * `pnpm verify:m10-02` —— 子 Agent 派生与结果回注（ADR-032 v1.2）。
  *
@@ -71,7 +71,7 @@ for (const command of [
 ]) {
   check(`命令面含 ${command}`, dispatch.includes(`"${command}"`));
 }
-check("命令面 86 条（82 daemon + 4 shell）", /COMMANDS\.len\(\),\s*86/.test(dispatch));
+check("命令面 87 条（83 daemon + 4 shell）", /COMMANDS\.len\(\),\s*87/.test(dispatch));
 
 const event = read("crates/aether-core/src/event.rs");
 for (const needle of [
@@ -140,8 +140,8 @@ for (const testid of [
 check("UI 不新增 subagent-result-detail testid", !ui.includes('data-testid="subagent-result-detail"'));
 
 const manifest = JSON.parse(read("packages/protocol/src/command-manifest.json"));
-check("command-manifest 86 条", manifest.counts?.total === 86);
-check("command-manifest daemon=82", manifest.counts?.daemon === 82);
+check("command-manifest 86 条", manifest.counts?.total === 87);
+check("command-manifest daemon=82", manifest.counts?.daemon === 83);
 const errors = JSON.parse(read("packages/protocol/src/error_codes.json"));
 check("error_codes ipc=32", errors.ipc?.length === 32);
 check("error_codes business=35", errors.business?.length === 35);

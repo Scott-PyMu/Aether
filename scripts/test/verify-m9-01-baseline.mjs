@@ -6,8 +6,8 @@
  *  1. `docs/M9-01-baseline/manifest.json` 存在且 schema/版本/必填字段齐备；
  *  2. `commands` 与当前 `collect_commands!` 声明**逐项一致**（顺序 + 名称）；
  *  3. `entries` 路径唯一、文件存在、sha256 匹配；命令与条目一一对应；
- *  4. 计数自洽：86 = 82 daemon + 4 shell；84 可达 + 2 保留；ipc=32、business=35、
- *     事件信封 9 字段、设置 11 键（M10-06/ADR-036）、迁移 12 个（M10-05/0012）；
+ *  4. 计数自洽：87 = 83 daemon + 4 shell；85 可达 + 2 保留；ipc=32、business=35、
+ *     事件信封 9 字段、设置 11 键（M10-06/ADR-036）、迁移 13 个（M10-07/0013）；
  *  5. 辅助产物（contract/freeze）存在且哈希匹配，`contract_digest` 与当前源码重算一致
  *     （源码契约漂移即失败，防止「改了实现却没重录基线」）；
  *  6. 冻结面护栏：Electron 精确 patch（任何 package.json 的 electron 声明必须精确等于
@@ -193,14 +193,14 @@ const expectedCounts = {
   ipc_error_codes: 32,
   business_codes: 35,
   event_envelope_fields: 9,
-  // M10-06/ADR-036：设置键 9 → 11（`ui.locale`/`ui.theme`）。
+  // M10-07/ADR-037：调度器迁移 0013（runs 5 列 + 1 索引）。
   settings_keys: 11,
-  migrations: 12,
+  migrations: 13,
 };
 for (const [key, value] of Object.entries(expectedCounts)) {
   if (counts[key] !== value) fail(`counts.${key} 必须是 ${value}，实际 ${counts[key]}`);
 }
-if (daemon !== 82) fail(`daemon 路由必须是 82，实际 ${daemon}`);
+if (daemon !== 83) fail(`daemon 路由必须是 83，实际 ${daemon}`);
 if (shell !== 4) fail(`shell 路由必须是 4，实际 ${shell}`);
 
 // ---- 辅助产物 ----
@@ -328,9 +328,9 @@ if (!stats) {
 } else {
   const rules = [
     ["commands.total", stats.commands?.total, EXPECTED_COMMANDS],
-    ["commands.daemon", stats.commands?.daemon, 82],
+    ["commands.daemon", stats.commands?.daemon, 83],
     ["commands.shell", stats.commands?.shell, 4],
-    ["commands.reachable", stats.commands?.reachable, 84],
+    ["commands.reachable", stats.commands?.reachable, 85],
     ["protocol.dod_reference_bindings_lines", stats.protocol?.dod_reference_bindings_lines, 1003],
   ];
   for (const [path, actualValue, expected] of rules) {

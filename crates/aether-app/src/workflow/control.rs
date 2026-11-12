@@ -116,6 +116,7 @@ impl IpcBackend for WorkflowControlBackend {
         session_resume: SessionIdRequest,
         session_dispose: SessionIdRequest,
         messages_page: MessagesPageRequest,
+        queue_list: QueueListRequest,
         permissions_pending: PermissionsPendingRequest,
         permission_resolve: PermissionResolveRequest,
         session_permission_mode_set: SessionPermissionModeSetRequest,

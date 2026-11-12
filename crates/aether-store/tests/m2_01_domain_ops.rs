@@ -176,6 +176,7 @@ async fn domain_commands_and_reads_round_trip() {
             message: message.clone(),
             run: run_record.clone(),
             attachment_ids: Vec::new(),
+            schedule: Default::default(),
         })
         .await
         .unwrap();

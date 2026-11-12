@@ -95,6 +95,12 @@ pub const EMBEDDED_MIGRATIONS: &[MigrationFile] = &[
         name: "0012_attachments.sql",
         bytes: include_bytes!("../../../migrations/0012_attachments.sql"),
     },
+    // ADR-037/M10-07：调度器优先级/等待/重试元数据 + 队列索引。
+    MigrationFile {
+        version: 13,
+        name: "0013_scheduler_queue.sql",
+        bytes: include_bytes!("../../../migrations/0013_scheduler_queue.sql"),
+    },
 ];
 
 /// 迁移文件 sha256（小写十六进制）。
