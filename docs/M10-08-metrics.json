@@ -1,0 +1,485 @@
+{
+  "task": "M10-08",
+  "adr": "ADR-038",
+  "generatedAt": "2026-11-12T18:30:46.961Z",
+  "dataset": {
+    "rows": 20000000,
+    "bytes": {
+      "db": 5604716544,
+      "wal": 0,
+      "shm": 0,
+      "total": 5604716544
+    },
+    "sha256": "00834075d129ac808d4292610cdafc6e9864420ca6d1eaf5fef5ae4dbcc93895",
+    "sessions": 100,
+    "typeDistribution": {
+      "message.delta": {
+        "rows": 12398450,
+        "share": 0.619923,
+        "avgPayloadBytes": 146
+      },
+      "usage": {
+        "rows": 2000100,
+        "share": 0.100005,
+        "avgPayloadBytes": 41.3
+      },
+      "log": {
+        "rows": 1600263,
+        "share": 0.080013,
+        "avgPayloadBytes": 144
+      },
+      "run.started": {
+        "rows": 1001197,
+        "share": 0.05006,
+        "avgPayloadBytes": 20
+      },
+      "run.completed": {
+        "rows": 999984,
+        "share": 0.049999,
+        "avgPayloadBytes": 53
+      },
+      "message.completed": {
+        "rows": 800684,
+        "share": 0.040034,
+        "avgPayloadBytes": 24
+      },
+      "permission.requested": {
+        "rows": 400537,
+        "share": 0.020027,
+        "avgPayloadBytes": 63
+      },
+      "tool.call_started": {
+        "rows": 398779,
+        "share": 0.019939,
+        "avgPayloadBytes": 45
+      },
+      "tool.call_completed": {
+        "rows": 400006,
+        "share": 0.02,
+        "avgPayloadBytes": 40
+      }
+    }
+  },
+  "machine": {
+    "os": "win32 10.0.26200",
+    "platform": "win32",
+    "arch": "x64",
+    "cpu": "13th Gen Intel(R) Core(TM) i5-13400",
+    "cores": 16,
+    "ramBytes": 16775471104,
+    "node": "v24.14.1",
+    "volume": "C:\\",
+    "fileSystem": "NTFS",
+    "diskModel": "YMTC YMSS2EB06B66MC",
+    "diskBusType": "NVMe",
+    "freeBytes": 353969987584
+  },
+  "runs": {
+    "single": [
+      {
+        "runIndex": 1,
+        "writeP95Ms": 19,
+        "writeMaxMs": 96,
+        "events": 276464,
+        "eventsPerSecond": 460.236,
+        "readP95Ms": 98.899,
+        "readMessagesP95Ms": 2.629,
+        "readLastSeqP95Ms": 2.385,
+        "quickCheckColdMs": 112095.784,
+        "quickCheckMedianMs": 112095.784,
+        "backupMs": 168225.304,
+        "restoreMs": 73569.958,
+        "retention": {
+          "db": "<external>/aether.db",
+          "retentionDays": 30,
+          "cutoff": 1791910285637,
+          "eligible": 14684946,
+          "sampleRows": 50000,
+          "sampleComplete": false,
+          "deleteMs": 44541.684,
+          "checkpointMs": 7.956,
+          "batches": 10,
+          "batchP95Ms": 4891.75,
+          "batchMaxMs": 4911.754,
+          "rowsPerSecond": 1122.5,
+          "projectedFullDeleteMs": 13081844,
+          "pageCount": 1373694,
+          "freelistCount": 240,
+          "pageSize": 4096,
+          "fileBytesBefore": 5626642432,
+          "fileBytes": 5626650624,
+          "liveBytes": 5625667584,
+          "projectedLiveBytes": 5340330627,
+          "selection": "covering index (type, ts); batch 5000; delete by rowid; no rowid sort",
+          "copyMs": 3889.192,
+          "retentionShareOfRows": 0.724236,
+          "sampleLiveBytes": 5625667584,
+          "analyticProjectedBytes": 1489777915,
+          "projectedRetainedBytes": 1489777915,
+          "projectedRetainedGiB": 1.387,
+          "projectedFullDeleteMinutes": 218,
+          "projectedFullDeleteHours": 3.63,
+          "belowFiveGiB": true
+        },
+        "violations": [
+          "quickCheckCold=112095.784ms"
+        ],
+        "failures": []
+      },
+      {
+        "runIndex": 2,
+        "writeP95Ms": 19,
+        "writeMaxMs": 73,
+        "events": 276304,
+        "eventsPerSecond": 459.967,
+        "readP95Ms": 94.234,
+        "readMessagesP95Ms": 2.499,
+        "readLastSeqP95Ms": 2.465,
+        "quickCheckColdMs": 97849.35,
+        "quickCheckMedianMs": 97849.35,
+        "backupMs": 161212.102,
+        "restoreMs": 83602.331,
+        "retention": null,
+        "violations": [
+          "quickCheckCold=97849.35ms"
+        ],
+        "failures": []
+      },
+      {
+        "runIndex": 3,
+        "writeP95Ms": 19,
+        "writeMaxMs": 92,
+        "events": 276280,
+        "eventsPerSecond": 459.948,
+        "readP95Ms": 95.719,
+        "readMessagesP95Ms": 2.281,
+        "readLastSeqP95Ms": 2.506,
+        "quickCheckColdMs": 83038.132,
+        "quickCheckMedianMs": 83038.132,
+        "backupMs": 163850.679,
+        "restoreMs": 82257.841,
+        "retention": null,
+        "violations": [
+          "quickCheckCold=83038.132ms"
+        ],
+        "failures": []
+      }
+    ],
+    "sharded": [
+      {
+        "runIndex": 1,
+        "shards": 8,
+        "writeP95Ms": 19,
+        "readP95Ms": 75.757,
+        "quickCheckColdMs": 71838.06,
+        "backupMs": 52246.408,
+        "restoreMs": 38016.256,
+        "violations": [
+          "quickCheckCold=71838.06ms"
+        ]
+      },
+      {
+        "runIndex": 2,
+        "shards": 8,
+        "writeP95Ms": 19,
+        "readP95Ms": 62.284,
+        "quickCheckColdMs": 74451.713,
+        "backupMs": 49534.686,
+        "restoreMs": 36115.706,
+        "violations": [
+          "quickCheckCold=74451.713ms"
+        ]
+      },
+      {
+        "runIndex": 3,
+        "shards": 8,
+        "writeP95Ms": 18,
+        "readP95Ms": 61.473,
+        "quickCheckColdMs": 72861.791,
+        "backupMs": 51407.972,
+        "restoreMs": 45809.299,
+        "violations": [
+          "quickCheckCold=72861.791ms"
+        ]
+      }
+    ]
+  },
+  "aggregates": {
+    "writeP95Ms": {
+      "values": [
+        19,
+        19,
+        19
+      ],
+      "p50": 19,
+      "p95": 19,
+      "max": 19
+    },
+    "readP95Ms": {
+      "values": [
+        98.899,
+        94.234,
+        95.719
+      ],
+      "p50": 95.719,
+      "p95": 98.581,
+      "max": 98.899
+    },
+    "quickCheckColdMs": {
+      "values": [
+        112095.784,
+        97849.35,
+        83038.132
+      ],
+      "p50": 97849.35,
+      "p95": 110671.141,
+      "max": 112095.784
+    },
+    "backupMs": {
+      "values": [
+        168225.304,
+        161212.102,
+        163850.679
+      ],
+      "p50": 163850.679,
+      "p95": 167787.842,
+      "max": 168225.304
+    },
+    "restoreMs": {
+      "values": [
+        73569.958,
+        83602.331,
+        82257.841
+      ],
+      "p50": 82257.841,
+      "p95": 83467.882,
+      "max": 83602.331
+    },
+    "failures": 0,
+    "projectedRetainedBytes": 1489777915,
+    "projectedRetainedGiB": 1.387
+  },
+  "sharded": {
+    "writeP95": {
+      "values": [
+        19,
+        19,
+        18
+      ],
+      "p50": 19,
+      "p95": 19,
+      "max": 19
+    },
+    "readP95": {
+      "values": [
+        75.757,
+        62.284,
+        61.473
+      ],
+      "p50": 62.284,
+      "p95": 74.41,
+      "max": 75.757
+    },
+    "quickCheckCold": {
+      "values": [
+        71838.06,
+        74451.713,
+        72861.791
+      ],
+      "p50": 72861.791,
+      "p95": 74292.721,
+      "max": 74451.713
+    },
+    "backupMs": {
+      "values": [
+        52246.408,
+        49534.686,
+        51407.972
+      ],
+      "p50": 51407.972,
+      "p95": 52162.564,
+      "max": 52246.408
+    },
+    "restoreMs": {
+      "values": [
+        38016.256,
+        36115.706,
+        45809.299
+      ],
+      "p50": 38016.256,
+      "p95": 45029.995,
+      "max": 45809.299
+    },
+    "shards": 8
+  },
+  "shardedComparison": {
+    "improvement": {
+      "writeP95": 0,
+      "readP95": -34.93,
+      "quickCheckCold": -25.54,
+      "backup": -68.63,
+      "restore": -53.78
+    },
+    "improved": true,
+    "note": "分片改善"
+  },
+  "judgement": [
+    {
+      "metric": "单库写 P95",
+      "single": 19,
+      "unit": "ms",
+      "threshold": "≤50",
+      "pass": true,
+      "sharded": 19
+    },
+    {
+      "metric": "补读 P95",
+      "single": 95.719,
+      "unit": "ms",
+      "threshold": "<150",
+      "pass": true,
+      "sharded": 62.284
+    },
+    {
+      "metric": "启动 quick_check（冷）",
+      "single": 97849.35,
+      "unit": "ms",
+      "threshold": "≤30000",
+      "pass": false,
+      "sharded": 72861.791
+    },
+    {
+      "metric": "备份耗时",
+      "single": 163850.679,
+      "unit": "ms",
+      "threshold": "≤600000",
+      "pass": true,
+      "sharded": 51407.972
+    },
+    {
+      "metric": "恢复耗时",
+      "single": 82257.841,
+      "unit": "ms",
+      "threshold": "≤900000",
+      "pass": true,
+      "sharded": 38016.256
+    },
+    {
+      "metric": "12 个月投影 / 保留后",
+      "single": 1489777915,
+      "unit": "bytes",
+      "threshold": "<5368709120（或保留策略可压到）",
+      "pass": true,
+      "sharded": null
+    },
+    {
+      "metric": "失败",
+      "single": 0,
+      "unit": "次",
+      "threshold": "0",
+      "pass": true,
+      "sharded": null
+    }
+  ],
+  "decision": "sharding_required",
+  "startup": {
+    "task": "M10-08",
+    "adr": "ADR-038 + M10-06 启动体验补充口径",
+    "dataset": {
+      "dir": "<external>/dataset",
+      "rows": 20000000,
+      "sha256": "00834075d129ac808d4292610cdafc6e9864420ca6d1eaf5fef5ae4dbcc93895",
+      "bytes": {
+        "db": 5604716544,
+        "wal": 0,
+        "shm": 0,
+        "total": 5604716544
+      }
+    },
+    "machine": {
+      "os": "win32 10.0.26200",
+      "platform": "win32",
+      "arch": "x64",
+      "cpu": "13th Gen Intel(R) Core(TM) i5-13400",
+      "cores": 16,
+      "ramBytes": 16775471104,
+      "node": "v24.14.1",
+      "volume": "C:\\",
+      "fileSystem": "NTFS",
+      "diskModel": "YMTC YMSS2EB06B66MC",
+      "diskBusType": "NVMe",
+      "freeBytes": 353969987584
+    },
+    "runs": [
+      {
+        "run": 1,
+        "at": "2026-11-12T18:27:14.387Z",
+        "windowShownMs": 1780,
+        "uiReadyMs": 127249,
+        "initializeMs": 1085,
+        "withinTarget": true,
+        "daemonSpawnCount": 1,
+        "daemonEverReady": true,
+        "fatal": null,
+        "ready": true,
+        "phase": "ready",
+        "shellLog": "<external>/shell.log",
+        "daemonLog": "<external>/aetherd.log"
+      },
+      {
+        "run": 2,
+        "at": "2026-11-12T18:28:43.070Z",
+        "windowShownMs": 1536,
+        "uiReadyMs": 86659,
+        "initializeMs": 112,
+        "withinTarget": true,
+        "daemonSpawnCount": 1,
+        "daemonEverReady": true,
+        "fatal": null,
+        "ready": true,
+        "phase": "ready",
+        "shellLog": "<external>/shell.log",
+        "daemonLog": "<external>/aetherd.log"
+      },
+      {
+        "run": 3,
+        "at": "2026-11-12T18:30:26.478Z",
+        "windowShownMs": 1018,
+        "uiReadyMs": 101065,
+        "initializeMs": 136,
+        "withinTarget": true,
+        "daemonSpawnCount": 1,
+        "daemonEverReady": true,
+        "fatal": null,
+        "ready": true,
+        "phase": "ready",
+        "shellLog": "<external>/shell.log",
+        "daemonLog": "<external>/aetherd.log"
+      }
+    ],
+    "windowShownMs": {
+      "count": 3,
+      "min": 1018,
+      "p50": 1536,
+      "p95": 1755.6,
+      "p99": 1775.12,
+      "max": 1780,
+      "mean": 1444.667
+    },
+    "uiReadyMs": {
+      "count": 3,
+      "min": 86659,
+      "p50": 101065,
+      "p95": 124630.6,
+      "p99": 126725.32,
+      "max": 127249,
+      "mean": 104991
+    },
+    "budgetMs": 1500,
+    "exceedsBudget": true
+  },
+  "startupExceeds": true,
+  "optimizationAdr": "docs/adr/ADR-039-m10-event-sharding-and-startup-optimization.md",
+  "startupRequiresAdr": false,
+  "ok": false
+}

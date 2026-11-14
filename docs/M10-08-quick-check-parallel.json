@@ -1,0 +1,219 @@
+{
+  "task": "M10-08",
+  "adr": "ADR-039（草案）",
+  "shards": 8,
+  "runs": [
+    {
+      "iteration": 1,
+      "wallMs": 20621.302,
+      "sumSequentialMs": 147831.977,
+      "maxShardMs": 20443.063,
+      "perShard": [
+        {
+          "shard": 0,
+          "openMs": 26.652,
+          "quickCheckMs": 20329.254,
+          "totalMs": 20397.83,
+          "ok": true
+        },
+        {
+          "shard": 1,
+          "openMs": 44.15,
+          "quickCheckMs": 20148.529,
+          "totalMs": 20225.418,
+          "ok": true
+        },
+        {
+          "shard": 2,
+          "openMs": 43.822,
+          "quickCheckMs": 19923.101,
+          "totalMs": 20006.017,
+          "ok": true
+        },
+        {
+          "shard": 3,
+          "openMs": 26.101,
+          "quickCheckMs": 20381.119,
+          "totalMs": 20443.063,
+          "ok": true
+        },
+        {
+          "shard": 4,
+          "openMs": 26.766,
+          "quickCheckMs": 16420.415,
+          "totalMs": 16700.428,
+          "ok": true
+        },
+        {
+          "shard": 5,
+          "openMs": 18.211,
+          "quickCheckMs": 16445.116,
+          "totalMs": 16694.229,
+          "ok": true
+        },
+        {
+          "shard": 6,
+          "openMs": 9.924,
+          "quickCheckMs": 16404.616,
+          "totalMs": 16689.425,
+          "ok": true
+        },
+        {
+          "shard": 7,
+          "openMs": 5.848,
+          "quickCheckMs": 16418.23,
+          "totalMs": 16675.567,
+          "ok": true
+        }
+      ]
+    },
+    {
+      "iteration": 2,
+      "wallMs": 19357.664,
+      "sumSequentialMs": 103471.248,
+      "maxShardMs": 18426.205,
+      "perShard": [
+        {
+          "shard": 0,
+          "openMs": 12.5,
+          "quickCheckMs": 7827.418,
+          "totalMs": 7866.361,
+          "ok": true
+        },
+        {
+          "shard": 1,
+          "openMs": 12.466,
+          "quickCheckMs": 7678.674,
+          "totalMs": 7725.313,
+          "ok": true
+        },
+        {
+          "shard": 2,
+          "openMs": 12.572,
+          "quickCheckMs": 7346.5,
+          "totalMs": 7402.646,
+          "ok": true
+        },
+        {
+          "shard": 3,
+          "openMs": 12.545,
+          "quickCheckMs": 7122.664,
+          "totalMs": 7307.255,
+          "ok": true
+        },
+        {
+          "shard": 4,
+          "openMs": 12.692,
+          "quickCheckMs": 18183.9,
+          "totalMs": 18224.414,
+          "ok": true
+        },
+        {
+          "shard": 5,
+          "openMs": 12.71,
+          "quickCheckMs": 18082.06,
+          "totalMs": 18133.393,
+          "ok": true
+        },
+        {
+          "shard": 6,
+          "openMs": 12.736,
+          "quickCheckMs": 18390.396,
+          "totalMs": 18426.205,
+          "ok": true
+        },
+        {
+          "shard": 7,
+          "openMs": 12.703,
+          "quickCheckMs": 18353.642,
+          "totalMs": 18385.661,
+          "ok": true
+        }
+      ]
+    },
+    {
+      "iteration": 3,
+      "wallMs": 15649.815,
+      "sumSequentialMs": 64772.168,
+      "maxShardMs": 15442.721,
+      "perShard": [
+        {
+          "shard": 0,
+          "openMs": 5.698,
+          "quickCheckMs": 12841.661,
+          "totalMs": 12879.416,
+          "ok": true
+        },
+        {
+          "shard": 1,
+          "openMs": 7.668,
+          "quickCheckMs": 12984.977,
+          "totalMs": 13017.366,
+          "ok": true
+        },
+        {
+          "shard": 2,
+          "openMs": 7.413,
+          "quickCheckMs": 14950.907,
+          "totalMs": 14975.623,
+          "ok": true
+        },
+        {
+          "shard": 3,
+          "openMs": 7.33,
+          "quickCheckMs": 15419.214,
+          "totalMs": 15442.721,
+          "ok": true
+        },
+        {
+          "shard": 4,
+          "openMs": 6.573,
+          "quickCheckMs": 2094.996,
+          "totalMs": 2120.354,
+          "ok": true
+        },
+        {
+          "shard": 5,
+          "openMs": 5.5,
+          "quickCheckMs": 2080.145,
+          "totalMs": 2107.205,
+          "ok": true
+        },
+        {
+          "shard": 6,
+          "openMs": 5.848,
+          "quickCheckMs": 2094.699,
+          "totalMs": 2120.368,
+          "ok": true
+        },
+        {
+          "shard": 7,
+          "openMs": 4.438,
+          "quickCheckMs": 2083.483,
+          "totalMs": 2109.115,
+          "ok": true
+        }
+      ]
+    }
+  ],
+  "wallMs": {
+    "count": 3,
+    "min": 15649.815,
+    "p50": 19357.664,
+    "p95": 20494.938,
+    "p99": 20596.029,
+    "max": 20621.302,
+    "mean": 18542.927
+  },
+  "sumSequentialMs": {
+    "count": 3,
+    "min": 64772.168,
+    "p50": 103471.248,
+    "p95": 143395.904,
+    "p99": 146944.762,
+    "max": 147831.977,
+    "mean": 105358.464
+  },
+  "speedup": 5.35,
+  "ok": true
+}

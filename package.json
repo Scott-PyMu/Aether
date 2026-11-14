@@ -152,6 +152,14 @@
     "verify:m10-06:electron": "node scripts/test/m10-06/electron-visual.mjs",
     "verify:m10-07": "node scripts/test/m10-07/verify-m10-07.mjs",
     "verify:scheduler": "node scripts/test/m10-07/verify-m10-07.mjs",
+    "gen:m10-08:dataset": "node scripts/test/m10-08/gen-events-dataset.mjs",
+    "bench:m10-08": "node scripts/test/m10-08/bench-events.mjs",
+    "build:m10-08:shards": "node scripts/test/m10-08/build-shards.mjs",
+    "startup:m10-08": "node scripts/test/m10-08/startup-e2e.mjs",
+    "m10-08:quick-check-parallel": "node scripts/test/m10-08/parallel-quick-check.mjs",
+    "aggregate:m10-08": "node scripts/test/m10-08/aggregate-m10-08.mjs",
+    "run:m10-08": "node scripts/test/m10-08/run-full.mjs",
+    "verify:m10-08": "node scripts/test/m10-08/verify-m10-08.mjs",
     "stage:native-runtime": "node scripts/ci/stage-native-runtime.mjs"
   },
   "devDependencies": {

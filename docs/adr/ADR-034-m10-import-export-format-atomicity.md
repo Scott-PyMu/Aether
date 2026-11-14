@@ -3,14 +3,14 @@
 | 项 | 内容 |
 |---|---|
 | 编号 | ADR-034（M10-00-04） |
-| 版本 | **v1.0（2026-11-05）** |
-| 状态 | **已接受（2026-11-05，M10-00 ADR 批次；用户授权 AI 审批；人工复核建议见 `docs/M10-00-ADR批次评审.md`）** |
-| 决策日期 | 2026-11-05 |
-| 决策载体 | 《设计文档》**v1.31**（D3/D4/D10/D13、附录 C）；`docs/P2-架构迁移-实施计划与验收标准.md` **v0.9**；`docs/M10-00-登记表.json` |
-| 关联 | 设计 §5 P2、DS-04；ADR-005（`client_msg_id` 幂等）、ADR-009（`messages_page`）、ADR-020（备份/恢复）、ADR-021（归档格式）、ADR-023（审计）、ADR-025（会话管理）、ADR-029（daemon） |
-| 取代 / 被取代 | 无（新增）；扩展 ADR-021 的归档格式使用面，不改变其 v1 行格式 |
+| 版本 | **v1.1（2026-11-14，ADR-039 v1.0 分库适配）** |
+| 状态 | **已接受（v1.1，2026-11-14；v1.0 于 2026-11-05 M10-00 ADR 批次接受；人工复核建议见 `docs/M10-00-ADR批次评审.md`）** |
+| 决策日期 | 2026-11-14（v1.1）；2026-11-05（v1.0） |
+| 决策载体 | 《设计文档》**v1.35**（D3/D4/D10/D13、附录 C）；`docs/P2-架构迁移-实施计划与验收标准.md` **v0.14**；`docs/M10-00-登记表.json`；**ADR-039 v1.0** |
+| 关联 | 设计 §5 P2、DS-04；ADR-005（`client_msg_id` 幂等）、ADR-009（`messages_page`）、ADR-020（备份/恢复 v1.1）、ADR-021（归档格式）、ADR-023（审计）、ADR-025（会话管理）、ADR-029（daemon）、**ADR-039（事件分库/generation/`CURRENT`）** |
+| 取代 / 被取代 | 本 ADR **v1.1 取代 v1.0**；扩展 ADR-021 的归档格式使用面，不改变其 v1 行格式 |
 | 回退条件 | 见 §7 |
-| 实现状态 | **未开始（登记先行；M10-04 执行）**；未登记前不得写业务代码 |
+| 实现状态 | **M10-04 已执行（v1.0 导入）；v1.1 为 ADR-039 分库适配，随 M10-09 落地**；未登记前不得写业务代码 |
 
 ## 1. 背景与触发
 
@@ -30,21 +30,20 @@ P1 已实现 `session_export`/`archive_export`（JSONL + manifest，`kind=sessio
 - **不执行内容**：导入只做数据写入；**不触发工具调用、不访问网络、不执行事件 payload、不重建原生会话/不调用适配器**；导入后的会话按 provider/model 可用性决定是否只读。
 - **导出格式不变**：`session_export`/`archive_export` 继续输出 v1 manifest + 行；M10-04 只允许新增可选字段（如 `exported_by`、`app_version`），不得改既有字段语义；M9-13 基线对照仍通过。
 
-### D-034-2 原子性：staging DB + 维护窗口 + 原子切换
+### D-034-2 原子性：多库 generation staging + 维护窗口 + `CURRENT` 原子切换
 
-导入是维护操作，**不复用普通写队列长事务**（D3 单事务目标 <500ms）：
+导入是维护操作，**不复用普通写队列长事务**（D3 单事务目标 <500ms）；ADR-039 v1.0 起 staging 从单 DB 扩展为**多库 generation staging**：
 
 1. **获取维护锁**：`import`/`restore` 互斥；进入 `maintenance=import`，停止接纳新 run（已有 run 等待/取消由用户选择），UI 显示只读/进度。
-2. **快照当前库**：`VACUUM INTO <data_dir>/imports/<job_id>/work.db`（或等价只读复制 + WAL checkpoint）；失败 → `import_job_not_active`/`internal`，不动现场。
-3. **staging 应用**：在 `work.db` 上按行批量写入（每批 ≤1000 行，单事务目标 <500ms），维护 `import_id_map` 临时表（`old_id,new_id,kind`，仅 staging 库）；每批校验行数/哈希；进度每 1s 或每 10k 行更新。
-4. **候选验收**：`PRAGMA quick_check`、schema 版本 ≤ 当前程序、行数/关键字段计数、manifest 哈希复验；任一失败 → 丢弃 work.db，现场不变。
-5. **原子切换**：写恢复日志（复用 D13 七步的 `.pre-import` 现场保护 + `-wal`/`-shm` 同批改名），关闭连接池/写队列，`rename(work.db → aether.db)`；失败 → 回滚现场。
-6. **重开/恢复**：重新打开 DB、`quick_check`、迁移到当前版本；成功 → `maintenance` 解除、广播 `import.completed` 审计；失败 → 回滚 `.pre-import` 并重启 daemon。
-7. **清理**：成功后删除 `imports/<job_id>` staging；崩溃残留由启动清理（>24h 或 job 非活动）；`dry_run` 只执行 1–4 并返回预览，不切换。
+2. **创建 staging generation**：复制当前 generation 到 `<data_dir>/staging/import-<job_id>/generation/`（主库 + `events/events-0..7.db` + `events/shards.json`；逐库 `VACUUM INTO`/等价只读复制 + WAL checkpoint）；失败 → `import_job_not_active`/`internal`，不动现场。目标空间 ≥ 预期增量×1.2 + 当前 generation 的 1.2 倍；不得跨卷 staging。
+3. **staging 应用**：在 staging 主库按行批量写入（每批 ≤1000 行，单事务 <500ms）；导入 session 写 `shard_id`、`deletion_pending=0`；事件按 `session_id` 路由写入 staging 分片；主库 `events` 恒空；维护 `import_id_map` 临时表（仅 staging）；每批校验行数/哈希；进度每 1s 或每 10k 行更新。
+4. **候选验收**：主库/分片 `PRAGMA quick_check`、schema 版本、8 分片、行数/关键字段计数、manifest 哈希、main events=0；写 staging `manifest.json`（计数/哈希）；任一失败 → 丢弃 staging，现场不变。
+5. **原子切换**：写 `import-journal.json`（old/new generation、`shards_sha256`、phase）；在无写者窗口按 ADR-039 D-039-8 原子替换 `CURRENT` 指向 staging generation；重新打开/`quick_check`/迁移；成功 → 提交、清理 journal、旧 generation `.pre-import-<ts>`、`maintenance` 解除、广播 `import.completed` 审计；失败 → `CURRENT` 回指旧 generation、整套回滚。
+6. **清理**：成功后删除 staging；崩溃残留由启动按 journal 提交/回滚或清理（>24h 或 job 非活动）；`dry_run` 只执行 1–4 并返回预览，不切换、不写 journal。
 
-- **取消**：`import_cancel` 在每个批次边界检查；取消 → 停止写入、删除 staging、保留现场；返回 `import_cancelled`。kill -9：启动时根据 journal/staging 标记清理，不自动续跑（可重新导入）。
-- **大文件**：≥1GB 样本流式处理；进度/取消/空间检查（目标数据目录可用空间 ≥ 预期增量×1.2 + 当前 db+wal 的 1.2 倍）；不足 → `import_too_large`/`invalid_value`。
-- **不产生半成品**：任何失败都不改变既有 `aether.db`；`.pre-import` 保留至下一次成功启动后按保留策略清理。
+- **取消**：`import_cancel` 在每个批次边界检查；取消 → 停止写入、删除 staging、保留现场；返回 `import_cancelled`。kill -9：启动时根据 journal/staging 标记提交/回滚/清理，不自动续跑（可重新导入）。
+- **大文件**：≥1GB 样本流式处理；进度/取消/空间检查；不足 → `import_too_large`/`invalid_value`。
+- **不产生半成品**：任何失败都不改变当前 generation；`.pre-import` 保留至下一次成功启动后按保留策略清理；`CURRENT` 是唯一提交点。
 
 ### D-034-3 ID 重映射与冲突
 
@@ -55,9 +54,9 @@ P1 已实现 `session_export`/`archive_export`（JSONL + manifest，`kind=sessio
 
 - **默认 `remap`**：避免与现有数据冲突；`preserve` 仅用于空库/明确合并场景；UI 默认 remap 并提示。
 - 映射规则：
-  - `sessions.id` → 新 ULID；`sessions.parent_session_id`、`workflow_runs.session_id`、`node_runs.session_id`、`tasks.session_id`、`artifacts.session_id`、`messages.session_id`、`events.session_id`、`permissions.session_id`、`audit_log.session_id` 同步映射。
+  - `sessions.id` → 新 ULID；`sessions.shard_id` 按新 id 重新计算（`shard_for`），`deletion_pending=0`；`sessions.parent_session_id`、`workflow_runs.session_id`、`node_runs.session_id`、`tasks.session_id`、`artifacts.session_id`、`messages.session_id`、`events.session_id`、`permissions.session_id`、`audit_log.session_id` 同步映射。
   - `messages.id`/`runs.id`/`events.id`/`permissions.id`/`audit_log.id` → 新 ULID；`runs.input_message_id`、`messages.run_id`、`events.run_id`、`node_runs.id` 等引用同步映射。
-  - `events.seq`/`messages.seq` 按会话**保持相对顺序**重新分配（从目标会话当前 max+1 起），保证 `UNIQUE(session_id,seq)`；事件按 `seq` 升序写入；不改变事件类型/ts/payload。
+  - `events.seq`/`messages.seq` 按会话**保持相对顺序**重新分配（从目标会话当前 max+1 起），保证片内 `UNIQUE(session_id,seq)`；事件按 `seq` 升序写入该会话分片；主库 `events` 恒空；不改变事件类型/ts/payload。
   - `client_msg_id`：同会话内已存在 → 视为重复，跳过该消息（计 `duplicates`）并警告；不报错、不覆盖；保留 `UNIQUE(session_id,client_msg_id)`。
   - `sessions.title` 缺失 → `Imported session <id 前 8 位>`；`workspace_id` 缺失/不存在 → `NULL` + 警告 + 会话只读（不自动创建工作区）；`provider_id`/`model` 缺失/停用/不属于 → 保留原值，`provider_state=invalid`/`model_state=invalid`，会话只读 + 警告；不自动选新 provider。
   - `artifacts.path`：只作为引用文本导入；若路径不存在或不在工作区，跳过并警告（不读取、不复制、不执行）；不导入 `api_key`/token 字段。
@@ -77,6 +76,7 @@ P1 已实现 `session_export`/`archive_export`（JSONL + manifest，`kind=sessio
 - `ImportJobStatus`：`{job_id, kind:"session|archive", status:"staging|validating|applying|awaiting_restart|completed|failed|cancelled", mode, dry_run, progress:{rows,bytes,total_bytes?}, summary?:{sessions,messages,events,runs,audits,duplicates,skipped}, warnings?:[{code,path?,detail}], error?:{code,message}}`。
 - 作业在 daemon 内异步执行；`session_import`/`archive_import` 只做路径/首行/大小预检并返回 job；后续进度靠 `import_status` 轮询（UI 1s；CLI 1s/`--watch`）。
 - 同一时间只允许 1 个导入作业（`import_job_not_active`/`import_conflict`）；与 `backup_restore` 互斥；`maintenance` 期间 `session_send`/`workflow_run` 拒绝（`core_not_ready`/`storage_backpressure`），只读命令可用。
+- **导出与 pending 删除**：`session_export` 对 `deletion_pending=1` 会话隐藏/拒绝；`archive_export` 排除 pending（或标记 `pending_deletion`），不得导出已请求删除数据。
 - 取消：仅在 `staging|validating|applying` 有效；`awaiting_restart|completed|failed|cancelled` → `import_job_not_active`。
 
 ### D-034-5 导出增量与审计
@@ -87,23 +87,24 @@ P1 已实现 `session_export`/`archive_export`（JSONL + manifest，`kind=sessio
 
 ### D-034-6 迁移规划位
 
-- **无新增表/列/索引**：staging 使用临时 DB + 临时 `import_id_map`；审计/会话/消息/事件复用现有表。
-- 不修改 0001–0009；若实现中确需列/索引，先修订本 ADR 并登记 0010+，与附录 C/`verify:m1-03` 同批。
+- **无新增表/列/索引**：staging 使用多库 generation + 临时 `import_id_map`；审计/会话/消息/事件复用现有表；事件写入分片，主库 `events` 恒空。
+- **0014 由 ADR-039 v1.0 登记**（`sessions.shard_id`/`deletion_pending` + 索引）；ADR-034 v1.1 不新增迁移。不修改 0001–0013；若实现中确需列/索引，先修订本 ADR 并登记后续迁移，与附录 C/`verify:m1-03` 同批。
 
 ## 3. 影响
 
-- 《设计文档》v1.31：D7 命令面 +4（累计 82）；D13 增导入维护例外；附录 C 无新迁移（仅说明 staging 临时库）。
-- P2 计划 v0.9：M10-04 解锁；G11 以往返/原子/大库/脱敏为验收口径。
-- UI-UX v0.18：S-06 增导入入口/结果/警告/失败恢复；不新增锚点组（复用 `archive`/`backup-*`；如需新增在 M10-04 证据登记）。
-- 不新增依赖/设置键；不改变 EventEnvelope/事件类型；不改 `IpcErrorCode` 32。
+- 《设计文档》v1.35：D3/D4/D13 导入改为多库 generation staging + `CURRENT` 原子切换；D7 命令面 +4 不变；附录 C 的 0014 由 ADR-039 v1.0 登记（本 ADR 不新增迁移）。
+- P2 计划 v0.14：M10-04 已执行；G11 以往返/原子/大库/脱敏为验收口径；M10-09 承接分库适配。
+- UI-UX v0.20：S-06 导入入口/结果/警告/失败恢复；旧 `single_file` 恢复禁用；附件未随库提示；不新增锚点组（复用 `archive`/`backup-*`；如需新增在 M10-09 证据登记）。
+- 不新增依赖/设置键；不改变 EventEnvelope/事件类型；不改 `IpcErrorCode` 32；命令 4 不变。
 
 ## 4. 主要风险与缓解
 
 | 风险 | 缓解 | 失效条件 |
 |---|---|---|
 | 导入不可信数据 | manifest/schema/version/checksum；未知 kind 拒绝；不执行内容；行/文件上限 | 损坏样本改变既有数据 → G11 不通过 |
-| 半成品/数据丢失 | staging DB + 原子切换 + `.pre-import` 回滚；失败不动现场 | 出现半成品或既有数据丢失 → 停止发布 |
-| 长事务/写放大 | 批量事务 <500ms；维护窗口停写；staging 独立库 | 单事务 >500ms 且无法拆分 → 记录并优化 |
+| 半成品/数据丢失 | 多库 generation staging + `CURRENT` 原子切换 + journal + `.pre-import` 回滚；失败不动现场 | 出现半成品/半套 generation 或既有数据丢失 → 停止发布 |
+| 多库 staging/路径 | staging 复制 current generation；主库+分片 `quick_check`；路径 canonicalize/前缀/symlink 拒绝；CURRENT 唯一提交点 | 跨库不一致/路径越界 → G11 不通过 |
+| 长事务/写放大 | 批量事务 <500ms；维护窗口停写；staging 独立 generation | 单事务 >500ms 且无法拆分 → 记录并优化 |
 | ID 冲突/引用断裂 | remap 映射全引用；`preserve` 冲突显式拒绝 | 出现悬挂引用/重复 seq → G11 不通过 |
 | 大文件内存 | 1MiB 流式；进度/取消；空间检查 | OOM 或不可取消 → 修复后重跑 |
 | 密钥/路径泄漏 | 脱敏扫描 0 命中；不导入 key/token；诊断不含内容 | 任一泄漏 → 停止发布 |
@@ -122,16 +123,17 @@ P1 已实现 `session_export`/`archive_export`（JSONL + manifest，`kind=sessio
 
 - 命令：4（累计登记 78 → 82）。
 - 事件：0（进度走 `import_status`；不新增事件类型）。
-- 设置键：0；迁移：0（staging 临时库）。
+- 设置键：0；迁移：0（本 ADR 不新增；ADR-039 v1.0 的 0014 独立登记）。
 - 业务码：7（`import_invalid_format`/`import_checksum_mismatch`/`import_conflict`/`import_too_large`/`import_cancelled`/`import_job_not_found`/`import_job_not_active`）。
 - 审计动作：7（`import.*`/`export.*`）。
-- UI-UX 锚点：0 新增组（复用 S-06 `archive`/`backup-*`；M10-04 如需新增在证据登记）。
+- UI-UX 锚点：0 新增组（复用 S-06 `archive`/`backup-*`；M10-09 如需新增在证据登记）。
+- 分库适配：staging generation + `CURRENT`；`archive_export` 排除 pending；主库 events 恒空。
 
 ## 7. 回退条件
 
 1. 本 ADR 被否决 → M10-04 保持「未解锁」；不实现导入；导出仍可用。
 2. 往返/原子/大库/脱敏任一失败 → 不发布导入；保留导出；修复后重跑 G11。
-3. staging/切换导致数据丢失 → 立即停止发布，按恢复手册回滚 `.pre-import`；不得手工改库。
+3. staging/切换导致数据丢失 → 立即停止发布，按 ADR-039 D-039-8 回指旧 generation/整套回滚；不得手工改库。
 4. 需要新依赖/压缩容器 → 另立 ADR；不得静默引入。
 
 ## 8. 评审记录
@@ -140,11 +142,13 @@ P1 已实现 `session_export`/`archive_export`（JSONL + manifest，`kind=sessio
 |---|---|---|---|
 | 2026-11-05 | 文档维护（AI） | v1.0 创建 | 按 M10-00 DoD-1/2/4/7/8；登记先行，代码未改 |
 | 2026-11-05 | 独立评审（AI，M10-00 批次） | 通过 | 检查格式复用/原子切换/ID 映射/不可信输入/审计；闭环见 `docs/M10-00-ADR批次评审.md` |
+| 2026-11-14 | 文档维护（AI） | v1.1 分库适配 | 按 ADR-039 v1.0：多库 generation staging + `CURRENT`；`shard_id`/`deletion_pending`；pending 导出排除 |
 
 ## 9. 变更记录
 
 | 版本 | 日期 | 变更 | 作者 |
 |---|---|---|---|
+| v1.1 | 2026-11-14 | 分库适配：单 staging DB → 多库 generation staging + `CURRENT` 原子切换；事件按会话路由分片；`shard_id`/`deletion_pending`；`archive_export` 排除 pending；不新增迁移 | 文档维护 |
 | v1.0 | 2026-11-05 | 创建：格式 v1/staging 原子切换/ID 重映射/4 命令/审计/回退 | 文档维护 |
 
 ---
@@ -167,7 +171,7 @@ P1 已实现 `session_export`/`archive_export`（JSONL + manifest，`kind=sessio
 | `kind` | `session/message/run/event/permission/artifact/audit/node_run/workflow_run` |
 | `session_old`/`session_new` | 便于按会话校验 seq |
 
-临时表只存在于 staging `work.db`，切换后丢弃；不进入正式 schema。
+临时表只存在于 staging generation 主库，切换后丢弃；不进入正式 schema。
 
 ## 附录 C：导入/恢复互斥
 
