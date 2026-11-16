@@ -185,6 +185,8 @@ impl MaintenanceGuard {
         cell.set(Some(MaintenanceState {
             kind: kind.to_owned(),
             reason,
+            started_at: now_ms(),
+            progress: None,
         }));
         Self {
             cell: Arc::clone(cell),

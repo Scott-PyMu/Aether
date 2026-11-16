@@ -193,7 +193,11 @@ pub fn build_backend(
                     reads,
                     write,
                     pipeline,
+                    storage_check,
+                    ..
                 } = boot;
+                // M10-10：health.maintenance 与备份/恢复维护态共享同一 cell。
+                let core = core.with_maintenance_cell(std::sync::Arc::clone(&maintenance));
                 // M3-04（D13 第 7 步）：恢复请求/启动处理结果写审计（无待处理恢复则跳过）。
                 if let Some(outcome) = &restore_outcome {
                     backup_control::write_boot_restore_audit(&write, &handle, outcome);
@@ -390,7 +394,9 @@ pub fn build_backend(
                             as std::sync::Arc<dyn core_health::PipelineHealthSource>,
                         runtimes_for_diagnostics,
                     )
-                    .with_concurrency_gate(concurrency_gate.clone()),
+                    .with_concurrency_gate(concurrency_gate.clone())
+                    .with_storage_check_cell(std::sync::Arc::clone(&storage_check))
+                    .with_maintenance_cell(std::sync::Arc::clone(&maintenance)),
                     logs: log_sink.clone(),
                     task_dumps: session_manager.clone().map(|manager| {
                         std::sync::Arc::new(manager)

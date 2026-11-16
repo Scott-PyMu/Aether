@@ -1096,6 +1096,27 @@ fn dod5_diagnostics_audit_and_response_do_not_contain_secret_material() {
     let bundle_text = std::fs::read(response["path"].as_str().expect("路径")).expect("读取");
     let bundle_hits = scan_secret_material(&bundle_text, &needles);
     assert!(bundle_hits.is_empty(), "诊断包命中：{bundle_hits:?}");
+    // M10-10 DoD-9：诊断包必须物理包含当前 generation 主库 + 8 分片 + shards.json。
+    let bundle_json: serde_json::Value = serde_json::from_slice(&bundle_text).expect("诊断 JSON");
+    let files = &bundle_json["storage_layout"]["files"];
+    let copied = files["files"].as_array().expect("storage_layout.files.files");
+    assert!(copied.len() >= 10, "主库+8 分片+shards.json 至少 10 个文件");
+    let db_files = copied
+        .iter()
+        .filter(|entry| {
+            entry["path"]
+                .as_str()
+                .is_some_and(|value| value.ends_with(".db"))
+        })
+        .count();
+    assert_eq!(db_files, 9, "主库+8 分片共 9 个 .db");
+    let files_dir = files["dir"].as_str().expect("files.dir");
+    for name in ["generation/aether.db", "generation/events/shards.json"] {
+        assert!(
+            std::path::Path::new(files_dir).join(name).is_file(),
+            "诊断包缺少 {name}"
+        );
+    }
 
     // 审计（backup.auto.run/backup.restore 详情不含密钥材料）。
     let audit_text: Vec<u8> = fixture

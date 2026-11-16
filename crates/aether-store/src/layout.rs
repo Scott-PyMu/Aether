@@ -650,6 +650,71 @@ pub fn read_clean_shutdown(layout: &StorageLayout) -> Option<CleanShutdown> {
     serde_json::from_slice(&bytes).ok()
 }
 
+/// M10-10 严格 sidecar 匹配：generation / 版本 / 关闭阶段 + 主库与每片指纹全部一致。
+///
+/// 仅用于决定是否跳过后台 `quick_check`；不修改任何文件。指纹不匹配（含 WAL 非 0、
+/// 上次异常退出、版本升级、恢复/导入）返回 `false`，调用方必须走后台检查。
+pub fn clean_shutdown_is_strict(layout: &StorageLayout, app_version: &str) -> bool {
+    let Some(sidecar) = read_clean_shutdown(layout) else {
+        return false;
+    };
+    if sidecar.generation != layout.generation()
+        || sidecar.app_version != app_version
+        || !sidecar.close_sequence_completed
+        || !sidecar.write_queue_drained
+        || !sidecar.background_check_completed
+        || sidecar.shards.len() != layout.shard_paths().len()
+    {
+        return false;
+    }
+    // 严格匹配只读文件头/大小/WAL：不打开 SQLite、不重算 MAX(seq)。
+    // 任何写入都会改变 header change counter 或 file/WAL 大小；应用版本、
+    // generation、关闭阶段已在上方校验。5.22GiB 下避免 8 次全表 MAX(seq) 扫描，
+    // 把严格跳过路径控制在 1.5s 预算内。
+    let main_stats = FingerprintStats::read(layout.main_db());
+    if !main_stats.matches(&sidecar.main) {
+        return false;
+    }
+    if sidecar.shards.len() != layout.shard_paths().len() {
+        return false;
+    }
+    for (shard_id, path) in layout.shard_paths().iter().enumerate() {
+        let Ok(shard_id) = u8::try_from(shard_id) else {
+            return false;
+        };
+        let Some(expected) = sidecar.shards.iter().find(|entry| entry.shard_id == shard_id) else {
+            return false;
+        };
+        if !FingerprintStats::read(path).matches(&expected.database) {
+            return false;
+        }
+    }
+    true
+}
+
+/// 严格 sidecar 的快速文件指纹（不打开 SQLite）。
+struct FingerprintStats {
+    header_change_counter: u64,
+    file_size: u64,
+    wal_size: u64,
+}
+
+impl FingerprintStats {
+    fn read(path: &Path) -> Self {
+        Self {
+            header_change_counter: header_change_counter(path).unwrap_or(u64::MAX),
+            file_size: file_size(path),
+            wal_size: file_size(&sqlite_sidecar(path, "-wal")),
+        }
+    }
+
+    fn matches(&self, expected: &DatabaseFingerprint) -> bool {
+        self.header_change_counter == expected.header_change_counter
+            && self.file_size == expected.file_size
+            && self.wal_size == expected.wal_size
+    }
+}
+
 /// 删除 sidecar（恢复/导入/降级/版本升级后失效）。
 pub fn invalidate_clean_shutdown(layout: &StorageLayout) -> Result<(), StoreError> {
     match fs::remove_file(layout.sidecar_path()) {

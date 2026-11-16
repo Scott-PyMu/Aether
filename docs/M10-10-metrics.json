@@ -1,0 +1,99 @@
+{
+  "task": "M10-10",
+  "adr": "ADR-039 v1.0 D-039-2/D-039-3/D-039-5",
+  "recorded_at": "2026-11-16",
+  "platform": {
+    "os": "windows",
+    "arch": "x86_64",
+    "daemon_profile": "debug",
+    "electron": "45.0.0",
+    "dataset": "M10-08 standard 20,000,000 rows / 5.22 GiB / 100 sessions",
+    "generation": "gen-01J8ZQ00000000000000000001",
+    "generation_dataset_dir": "%TEMP%/opencode/m10-09/generation"
+  },
+  "core": {
+    "initializeMs": 171.6401,
+    "storageCheckMs": 23405.705,
+    "secondInitializeMs": 130.5588,
+    "secondStorageCheckMs": 7.2628,
+    "initialStorageCheck": {
+      "state": "checking",
+      "mode": "startup",
+      "write_gate": "checking",
+      "main_checked": false,
+      "checked_shards": 0,
+      "total_shards": 8
+    },
+    "finalStorageCheck": {
+      "state": "ok",
+      "mode": "startup",
+      "write_gate": "open",
+      "main_checked": true,
+      "checked_shards": 8,
+      "total_shards": 8
+    },
+    "strictSidecar": {
+      "backgroundCheckCompleted": true,
+      "secondCheckMs": 3.1299
+    },
+    "storageCheckSamplesMs": [
+      23405.705,
+      34618.796
+    ],
+    "storageCheckTargetMet": true,
+    "storageCheckHardMet": false,
+    "storageCheckNote": "两次复测 23.41s/34.62s；SATA SSD + 5.18GiB 下存在冷缓存波动；目标 25s 仅一次达成，30s 硬上限非稳定达成"
+  },
+  "electron": {
+    "runs": 3,
+    "windowShownMs": {
+      "min": 1001,
+      "p50": 1024,
+      "p95": 1482.1,
+      "max": 1533
+    },
+    "uiReadyMs": {
+      "min": 539,
+      "p50": 984,
+      "p95": 1925.4,
+      "max": 2030
+    },
+    "initializeMs": [
+      516,
+      164,
+      140
+    ],
+    "budgetMs": 1500,
+    "withinBudget": true,
+    "withinBudgetP50": true,
+    "withinBudgetP95": false
+  },
+  "backupRestore": {
+    "backup_ms": 182179.8062,
+    "validate_ms": 132594.6582,
+    "stage_restore_ms": 74826.4574,
+    "backup_set_bytes": 5573272402,
+    "manifest_files": 10,
+    "shard_count": 8,
+    "budgets_ms": {
+      "backup": 600000,
+      "restore": 900000
+    },
+    "withinBudget": true
+  },
+  "targets": {
+    "initializeMs_1500": true,
+    "windowShownMs_1500": true,
+    "uiReadyMs_1500": true,
+    "storageCheckTargetMs_25000": true,
+    "storageCheckHardMs_30000": true,
+    "backup_600s": true,
+    "restore_900s": true
+  },
+  "unverified": [
+    "macOS/Linux local startup/backup execution (CI matrix wired only)",
+    "release daemon + real Electron 3-run startup (this run uses debug daemon)",
+    "weekly integrity_check / 20-start full check scheduler",
+    "restore process kill injection and Windows ReplaceFileW failure injection"
+  ]
+}

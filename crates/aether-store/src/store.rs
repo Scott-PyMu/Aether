@@ -110,6 +110,25 @@ impl Store {
         })
     }
 
+    /// 打开写连接但**不执行** `quick_check`（M10-10 启动并行检查；检查由调用方
+    /// 在后台完成）。`quick_check` 失败不会在这里转安全模式，调用方必须根据后台
+    /// 结果设置 `health.storage_check` 并保持写门关闭。
+    pub fn open_deferred_check(path: impl AsRef<Path>) -> Result<Self, StoreError> {
+        let path = path.as_ref().to_path_buf();
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() && !parent.exists() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        let mut conn = Self::open_writer_connection(&path)?;
+        migration::migrate(&mut conn)?;
+        Ok(Self {
+            conn,
+            mode: StoreMode::ReadWrite,
+            path,
+        })
+    }
+
     /// 新装创建数据库：建表前 `auto_vacuum=INCREMENTAL`（ADR-039 D-039-4）→ 迁移 0 → 最新。
     ///
     /// 仅用于 generation 初始化（主库/分片库首次创建）；既有库不得重设 `auto_vacuum`。

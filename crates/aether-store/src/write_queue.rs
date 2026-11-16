@@ -11,7 +11,7 @@
 //! 事件 sequencer、先日志后广播、delta 合并与 `persist_degraded` 状态机属 M1-05。
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -269,6 +269,8 @@ struct QueueCounters {
 #[derive(Debug)]
 struct WriteGate {
     paused: watch::Sender<bool>,
+    /// 启动检查期：写请求快速拒绝（`storage_backpressure`），避免启动尾段阻塞。
+    rejecting: AtomicBool,
     /// 保持至少一个 receiver，避免 `watch::Sender::send` 因无订阅者失败。
     _keepalive: watch::Receiver<bool>,
 }
@@ -278,6 +280,7 @@ impl WriteGate {
         let (paused, keepalive) = watch::channel(false);
         Self {
             paused,
+            rejecting: AtomicBool::new(false),
             _keepalive: keepalive,
         }
     }
@@ -290,11 +293,22 @@ impl WriteGate {
     }
 
     fn pause(&self) {
+        self.rejecting.store(false, Ordering::Release);
+        let _ = self.paused.send(true);
+    }
+
+    fn pause_rejecting(&self) {
+        self.rejecting.store(true, Ordering::Release);
         let _ = self.paused.send(true);
     }
 
     fn resume(&self) {
+        self.rejecting.store(false, Ordering::Release);
         let _ = self.paused.send(false);
+    }
+
+    fn is_rejecting(&self) -> bool {
+        self.rejecting.load(Ordering::Acquire)
     }
 }
 
@@ -331,6 +345,12 @@ impl WriteQueue {
     ) -> Result<CommitReceipt, StoreError> {
         if events.is_empty() {
             return Err(StoreError::EmptyWriteBatch);
+        }
+        if self.gate.is_rejecting() {
+            return Err(StoreError::StorageBackpressure {
+                depth: 0,
+                threshold: 0,
+            });
         }
         self.gate.wait_open().await;
         let entries = u64::try_from(events.len()).unwrap_or(u64::MAX);
@@ -372,7 +392,11 @@ impl WriteQueue {
     /// - 命令在写任务内独立事务执行：成功 = `COMMIT` 已返回；
     /// - 与事件批次的顺序保持 FIFO（命令到达前的批次先提交）。
     pub async fn execute(&self, command: StoreCommand) -> Result<StoreOutcome, StoreError> {
-        self.gate.wait_open().await;
+        // 启动检查期允许非事件命令（会话创建/审计等）完成，避免启动尾段阻塞；
+        // 事件写入仍由 append_events 快速拒绝。维护态（rejecting=false,paused=true）继续阻塞。
+        if !self.gate.is_rejecting() {
+            self.gate.wait_open().await;
+        }
         let (reply, reply_rx) = oneshot::channel();
         self.counters
             .submitted_entries
@@ -446,6 +470,17 @@ impl WriteQueue {
             });
         }
         Ok(())
+    }
+
+    /// M10-10 启动检查：暂停新写入，期间写请求快速返回
+    /// `storage_backpressure`（不阻塞启动尾段；维护态仍用 `pause_and_drain` 阻塞）。
+    pub fn pause_writes(&self) {
+        self.gate.pause_rejecting();
+    }
+
+    /// M10-10 启动检查通过：恢复写入。
+    pub fn resume_writes(&self) {
+        self.gate.resume();
     }
 
     /// 进入维护态：暂停新写入，FIFO drain 此前全部消息，返回 Drop 恢复守卫。
@@ -1028,6 +1063,8 @@ pub struct StoreRuntime {
     layout: Option<StorageLayout>,
     /// 是否在正常关闭后写 `clean_shutdown.json`（降级/故障路径关闭）。
     write_clean_sidecar: bool,
+    /// M10-10：后台启动检查是否完成（写入 sidecar，供下次严格跳过）。
+    background_check_completed: Arc<AtomicBool>,
     queue: WriteQueue,
     reads: ReadPool,
     writer: Option<JoinHandle<()>>,
@@ -1073,6 +1110,7 @@ impl StoreRuntime {
             path,
             layout: None,
             write_clean_sidecar: false,
+            background_check_completed: Arc::new(AtomicBool::new(false)),
             queue,
             reads,
             writer: Some(writer),
@@ -1089,12 +1127,40 @@ impl StoreRuntime {
         config: WriteQueueConfig,
         handle: &Handle,
     ) -> Result<Self, StoreError> {
+        Self::open_generation_with(layout, config, handle, false)
+    }
+
+    /// M10-10 快速启动：打开主库 + 8 分片写连接但**不执行** `quick_check`，
+    /// 写门初始为关闭；调用方必须在后台检查完成后调用 [`WriteQueue::resume_writes`]。
+    /// 结构不变量（主库 `events=0`、`sessions.shard_id` 等）仍同步校验。
+    pub fn open_generation_deferred(
+        layout: StorageLayout,
+        config: WriteQueueConfig,
+        handle: &Handle,
+    ) -> Result<Self, StoreError> {
+        Self::open_generation_with(layout, config, handle, true)
+    }
+
+    fn open_generation_with(
+        layout: StorageLayout,
+        config: WriteQueueConfig,
+        handle: &Handle,
+        defer_check: bool,
+    ) -> Result<Self, StoreError> {
         config.validate()?;
-        let main_store = Store::open(layout.main_db())?;
+        let main_store = if defer_check {
+            Store::open_deferred_check(layout.main_db())?
+        } else {
+            Store::open(layout.main_db())?
+        };
         let (main_connection, _) = main_store.into_writer_connection()?;
         let mut shard_connections = Vec::with_capacity(layout.shard_paths().len());
         for (shard_id, path) in layout.shard_paths().iter().enumerate() {
-            let store = Store::open(path)?;
+            let store = if defer_check {
+                Store::open_deferred_check(path)?
+            } else {
+                Store::open(path)?
+            };
             if let Some(reason) = store.safe_mode_reason() {
                 return Err(StoreError::SafeModeWriteRefused {
                     reason: format!("分片 {shard_id} quick_check 失败：{reason}"),
@@ -1123,6 +1189,9 @@ impl StoreRuntime {
             config: Arc::clone(&config),
             gate: Arc::new(WriteGate::new()),
         };
+        if defer_check {
+            queue.pause_writes();
+        }
         let writer = handle.spawn(writer_loop(
             receiver,
             main_connection,
@@ -1136,6 +1205,7 @@ impl StoreRuntime {
             path: layout.main_db().to_path_buf(),
             layout: Some(layout),
             write_clean_sidecar: true,
+            background_check_completed: Arc::new(AtomicBool::new(false)),
             queue,
             reads,
             writer: Some(writer),
@@ -1145,6 +1215,22 @@ impl StoreRuntime {
     /// 关闭前禁用 `clean_shutdown.json`（降级/检查失败/故障路径；M10-10 严格 sidecar）。
     pub fn disable_clean_sidecar(&mut self) {
         self.write_clean_sidecar = false;
+    }
+
+    /// M10-10：启动检查通过后恢复写入（与 `open_generation_deferred` 配对）。
+    pub fn resume_writes(&self) {
+        self.queue.resume_writes();
+    }
+
+    /// M10-10：后台检查完成标志（写入 shutdown sidecar）。
+    pub fn background_check_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.background_check_completed)
+    }
+
+    /// M10-10：标记后台启动检查完成（调用方在检查全部通过后调用）。
+    pub fn mark_background_check_completed(&self) {
+        self.background_check_completed
+            .store(true, Ordering::Release);
     }
 
     /// generation 布局（单库模式 `None`）。
@@ -1423,7 +1509,9 @@ impl StoreRuntime {
             closed_at: now_ms(),
             close_sequence_completed: true,
             write_queue_drained: true,
-            background_check_completed: false,
+            background_check_completed: self
+                .background_check_completed
+                .load(Ordering::Acquire),
             last_full_check_at,
             clean_start_count,
             main: crate::layout::database_fingerprint(layout.main_db(), None)?,

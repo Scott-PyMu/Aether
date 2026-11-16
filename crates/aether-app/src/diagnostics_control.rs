@@ -181,6 +181,100 @@ impl DiagnosticsControlBackend {
         PathBuf::from(format!("{}-wal", self.db_path().display()))
     }
 
+    /// M10-10 DoD-9：把当前 generation 主库 + 8 分片 + `shards.json` + `CURRENT`
+    /// 复制到诊断包旁路目录（JSON 中记录 relative path/size/manifest）。
+    fn copy_generation_files(
+        &self,
+        target_dir: &Path,
+        bundle_file_name: &str,
+    ) -> Result<Option<Value>, IpcError> {
+        let Some(layout) = self.layout() else {
+            return Ok(None);
+        };
+        let files_dir = target_dir.join(format!("{bundle_file_name}.files"));
+        std::fs::create_dir_all(&files_dir).map_err(|error| {
+            IpcError::invalid_value(format!(
+                "诊断包 generation 目录创建失败：{}：{error}",
+                files_dir.display()
+            ))
+        })?;
+        let mut files: Vec<Value> = Vec::new();
+        let mut copy_one = |source: &Path, relative: &Path| -> Result<(), IpcError> {
+            let destination = files_dir.join(relative);
+            if let Some(parent) = destination.parent() {
+                std::fs::create_dir_all(parent).map_err(|error| {
+                    IpcError::invalid_value(format!(
+                        "诊断包目录创建失败：{}：{error}",
+                        parent.display()
+                    ))
+                })?;
+            }
+            std::fs::copy(source, &destination).map_err(|error| {
+                IpcError::invalid_value(format!(
+                    "诊断包库文件复制失败：{}：{error}",
+                    source.display()
+                ))
+            })?;
+            files.push(json!({
+                "path": relative.to_string_lossy().replace('\\', "/"),
+                "bytes": std::fs::metadata(&destination).map(|m| m.len()).unwrap_or(0),
+            }));
+            Ok(())
+        };
+        copy_one(layout.main_db(), Path::new("generation/aether.db"))?;
+        let main_wal = aether_store::sqlite_sidecar(layout.main_db(), "-wal");
+        if main_wal.is_file() {
+            copy_one(&main_wal, Path::new("generation/aether.db-wal"))?;
+        }
+        for (shard_id, path) in layout.shard_paths().iter().enumerate() {
+            copy_one(
+                path,
+                &PathBuf::from(format!("generation/events/events-{shard_id}.db")),
+            )?;
+            let wal = aether_store::sqlite_sidecar(path, "-wal");
+            if wal.is_file() {
+                copy_one(
+                    &wal,
+                    &PathBuf::from(format!("generation/events/events-{shard_id}.db-wal")),
+                )?;
+            }
+        }
+        copy_one(
+            layout.shards_json(),
+            Path::new("generation/events/shards.json"),
+        )?;
+        copy_one(layout.current_path(), Path::new("CURRENT"))?;
+        if layout.sidecar_path().is_file() {
+            copy_one(
+                layout.sidecar_path(),
+                Path::new("generation/clean_shutdown.json"),
+            )?;
+        }
+        let manifest = json!({
+            "generation": layout.generation(),
+            "shard_count": layout.shard_paths().len(),
+            "files": files,
+            "attachments_notice": aether_store::RESTORE_ATTACHMENTS_NOTICE,
+        });
+        let manifest_path = files_dir.join("manifest.json");
+        std::fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&manifest)
+                .map_err(|error| IpcError::internal(format!("诊断包 manifest 序列化失败：{error}")))?,
+        )
+        .map_err(|error| {
+            IpcError::invalid_value(format!(
+                "诊断包 manifest 写出失败：{}：{error}",
+                manifest_path.display()
+            ))
+        })?;
+        Ok(Some(json!({
+            "dir": files_dir.to_string_lossy(),
+            "manifest": manifest_path.to_string_lossy(),
+            "files": manifest["files"].clone(),
+        })))
+    }
+
     fn reads_required(&self) -> Result<ReadPool, IpcError> {
         self.reads.clone().ok_or_else(|| {
             IpcError::core_not_ready("诊断后端未接线：read 连接池不可用（启动失败或未完成）")
@@ -667,7 +761,17 @@ impl IpcBackend for DiagnosticsControlBackend {
             )));
         }
 
-        let (bundle, _notes) = self.collect_bundle(self.clock.now_ms())?;
+        let generated_at = self.clock.now_ms();
+        let file_name = Self::bundle_file_name(canonical_target_dir, generated_at);
+        let (mut bundle, _notes) = self.collect_bundle(generated_at)?;
+        if let Some(files) = self.copy_generation_files(canonical_target_dir, &file_name)? {
+            if let Some(layout) = bundle
+                .get_mut("storage_layout")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                layout.insert("files".to_owned(), files);
+            }
+        }
         let redactor = Redactor::new()
             .map_err(|error| IpcError::internal(format!("脱敏器初始化失败：{error}")))?;
         let redacted = redactor.redact_json(&bundle);
@@ -681,8 +785,6 @@ impl IpcBackend for DiagnosticsControlBackend {
             ));
         }
 
-        let generated_at = self.clock.now_ms();
-        let file_name = Self::bundle_file_name(canonical_target_dir, generated_at);
         let dest = canonical_target_dir.join(&file_name);
         std::fs::write(&dest, text.as_bytes()).map_err(|error| {
             IpcError::invalid_value(format!(

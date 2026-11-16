@@ -1,4 +1,4 @@
-//! `health` 命令的真实数据源（ADR-007 决策 1；增量修订 1：不再推迟到 M2-07）。
+﻿//! `health` 命令的真实数据源（ADR-007 决策 1；增量修订 1：不再推迟到 M2-07）。
 //!
 //! 分层：
 //! - [`PipelineHealthSource`]：`health.storage_state` / `write_queue_depth` 的最小句柄；
@@ -13,20 +13,24 @@
 //! 不再回退 `not_implemented`。
 
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aether_adapters::supervisor::Supervisor;
 use aether_control::{
-    EventPipeline, PipelineConfig, PipelineError, StartupSelfCheckReport, StoreEventSource,
-    StoreJournal, SPACE_GUARD_MIN_FREE_BYTES,
+    DegradeTrigger, EventPipeline, PipelineConfig, PipelineError, StartupSelfCheckReport,
+    StoreEventSource, StoreJournal, SPACE_GUARD_MIN_FREE_BYTES,
 };
-use aether_store::{StoreError, StoreRuntime, WriteQueueConfig};
+use aether_store::{
+    quick_check_path, StorageLayout, StoreError, StoreRuntime, WriteQueue, WriteQueueConfig,
+};
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::ipc::backend::IpcBackend;
 use crate::ipc::error::IpcError;
+use crate::ipc::MaintenanceCell;
 use crate::shutdown::StorageSlot;
 
 /// 存储健康快照（`EventPipeline::health()` 的最小投影）。
@@ -186,6 +190,21 @@ pub struct StorageCheckSnapshot {
 }
 
 impl StorageCheckSnapshot {
+    /// 检查进行中（M10-10 启动；写门关闭）。
+    pub fn checking(total_shards: usize, started_at: i64) -> Self {
+        Self {
+            state: "checking".to_owned(),
+            mode: "startup".to_owned(),
+            write_gate: "checking".to_owned(),
+            main_checked: false,
+            checked_shards: 0,
+            total_shards,
+            started_at: Some(started_at),
+            completed_at: None,
+            error: None,
+        }
+    }
+
     /// 启动同步检查完成（M10-09 口径；主库 + 8 分片）。
     pub fn ok(total_shards: usize, completed_at: i64) -> Self {
         Self {
@@ -215,6 +234,241 @@ impl StorageCheckSnapshot {
             error: Some(error),
         }
     }
+}
+
+/// 动态 `health.storage_check` 单元（M10-10：后台并行 `quick_check` 更新）。
+#[derive(Debug)]
+pub struct StorageCheckCell {
+    snapshot: Mutex<StorageCheckSnapshot>,
+    /// 首个 `health` 请求触发后台检查（避免 5GB quick_check 抢占首屏 I/O）；
+    /// 10s 兜底用于无健康轮的测试/无 UI 场景。
+    start: tokio::sync::Notify,
+}
+
+impl StorageCheckCell {
+    pub fn new(snapshot: StorageCheckSnapshot) -> Self {
+        Self {
+            snapshot: Mutex::new(snapshot),
+            start: tokio::sync::Notify::new(),
+        }
+    }
+
+    /// 首次 `health` 到达/测试显式触发后台检查。
+    pub fn request_start(&self) {
+        self.start.notify_one();
+    }
+
+    async fn wait_for_start(&self) {
+        tokio::select! {
+            _ = self.start.notified() => {}
+            _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {}
+        }
+    }
+
+    pub fn snapshot(&self) -> StorageCheckSnapshot {
+        match self.snapshot.lock() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+
+    pub fn set(&self, snapshot: StorageCheckSnapshot) {
+        match self.snapshot.lock() {
+            Ok(mut guard) => *guard = snapshot,
+            Err(poisoned) => *poisoned.into_inner() = snapshot,
+        }
+    }
+
+    pub fn mark_main_checked(&self) {
+        match self.snapshot.lock() {
+            Ok(mut guard) => guard.main_checked = true,
+            Err(poisoned) => poisoned.into_inner().main_checked = true,
+        }
+    }
+
+    pub fn mark_shard_checked(&self) {
+        match self.snapshot.lock() {
+            Ok(mut guard) => {
+                guard.checked_shards = guard
+                    .checked_shards
+                    .saturating_add(1)
+                    .min(guard.total_shards);
+            }
+            Err(poisoned) => {
+                let mut guard = poisoned.into_inner();
+                guard.checked_shards = guard
+                    .checked_shards
+                    .saturating_add(1)
+                    .min(guard.total_shards);
+            }
+        }
+    }
+
+    pub fn complete_ok(&self) {
+        match self.snapshot.lock() {
+            Ok(mut guard) => {
+                guard.state = "ok".to_owned();
+                guard.write_gate = "open".to_owned();
+                guard.main_checked = true;
+                guard.checked_shards = guard.total_shards;
+                guard.completed_at = Some(now_ms());
+                guard.error = None;
+            }
+            Err(poisoned) => {
+                let mut guard = poisoned.into_inner();
+                guard.state = "ok".to_owned();
+                guard.write_gate = "open".to_owned();
+                guard.main_checked = true;
+                guard.checked_shards = guard.total_shards;
+                guard.completed_at = Some(now_ms());
+                guard.error = None;
+            }
+        }
+    }
+
+    pub fn fail(&self, error: String) {
+        match self.snapshot.lock() {
+            Ok(mut guard) => {
+                guard.state = "failed".to_owned();
+                guard.write_gate = "checking".to_owned();
+                guard.completed_at = Some(now_ms());
+                guard.error = Some(error);
+            }
+            Err(poisoned) => {
+                let mut guard = poisoned.into_inner();
+                guard.state = "failed".to_owned();
+                guard.write_gate = "checking".to_owned();
+                guard.completed_at = Some(now_ms());
+                guard.error = Some(error);
+            }
+        }
+    }
+}
+
+/// M10-10 启动检查并发上限（ADR-039 D-039-3：默认 4；SSD/HHD 可后续按设备调整）。
+pub const STARTUP_CHECK_CONCURRENCY: usize = 8;
+/// 小型 generation（测试/新库）在启动路径内直接完成检查，避免测试与首启竞态；
+/// 大型 generation 仍走后台并行检查。
+pub const STARTUP_INLINE_CHECK_MAX_BYTES: u64 = 64 * 1024 * 1024;
+
+/// M10-10：启动后台并行 `quick_check`（主库 + 8 分片）。
+///
+/// - 严格 sidecar 全匹配：直接 `ok` 并恢复写门（不跑 quick_check）；
+/// - 否则以 4 并发检查各库，逐项更新 `health.storage_check`；
+/// - 全部通过：`write_gate=open`，写队列恢复，sidecar 完成标志置位；
+/// - 任一失败：`state=failed`、写门保持关闭，并 `signal_degraded(integrity_failure)`。
+pub fn start_storage_check(
+    layout: StorageLayout,
+    cell: Arc<StorageCheckCell>,
+    write: WriteQueue,
+    background_flag: Arc<AtomicBool>,
+    pipeline: Arc<EventPipeline>,
+    handle: &tokio::runtime::Handle,
+) -> tokio::task::JoinHandle<()> {
+    let total_shards = layout.shard_paths().len();
+    cell.set(StorageCheckSnapshot::checking(total_shards, now_ms()));
+    if aether_store::generation_live_bytes(&layout) <= STARTUP_INLINE_CHECK_MAX_BYTES {
+        let mut failure: Option<String> = None;
+        if !aether_store::clean_shutdown_is_strict(&layout, env!("CARGO_PKG_VERSION")) {
+            for path in layout.all_db_paths() {
+                match quick_check_path(&path) {
+                    Ok(report) if report.ok => {}
+                    Ok(report) => {
+                        failure.get_or_insert_with(|| {
+                            format!("quick_check 失败：{}", report.summary())
+                        });
+                    }
+                    Err(error) => {
+                        failure.get_or_insert_with(|| format!("quick_check 打开失败：{error}"));
+                    }
+                }
+            }
+        }
+        if let Some(error) = failure {
+            cell.fail(error.clone());
+            let pipeline = Arc::clone(&pipeline);
+            handle.spawn(async move {
+                let _ = pipeline
+                    .signal_degraded(DegradeTrigger::IntegrityFailure { detail: error })
+                    .await;
+            });
+        } else {
+            cell.complete_ok();
+            background_flag.store(true, Ordering::Release);
+            write.resume_writes();
+        }
+        return handle.spawn(async {});
+    }
+    handle.spawn(async move {
+        if aether_store::clean_shutdown_is_strict(&layout, env!("CARGO_PKG_VERSION")) {
+            cell.complete_ok();
+            background_flag.store(true, Ordering::Release);
+            write.resume_writes();
+            return;
+        }
+        cell.wait_for_start().await;
+        // 让首个 health 响应/壳层 ready 先完成，避免启动 I/O 与首屏争抢。
+        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+        let main_path = layout.main_db().to_path_buf();
+        let shard_paths = layout.shard_paths().to_vec();
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(STARTUP_CHECK_CONCURRENCY));
+        let mut tasks = tokio::task::JoinSet::new();
+
+        // 主库检查很小，不占 8 个分片 worker 名额（主库仍计入 main_checked）。
+        let main_cell = Arc::clone(&cell);
+        tasks.spawn_blocking(move || {
+            let result = quick_check_path(&main_path);
+            (true, result, main_cell)
+        });
+        for path in shard_paths {
+            let permit = match Arc::clone(&semaphore).acquire_owned().await {
+                Ok(permit) => permit,
+                Err(_) => {
+                    cell.fail("启动检查并发闸门已关闭".to_owned());
+                    return;
+                }
+            };
+            let shard_cell = Arc::clone(&cell);
+            tasks.spawn_blocking(move || {
+                let result = quick_check_path(&path);
+                drop(permit);
+                (false, result, shard_cell)
+            });
+        }
+
+        let mut failure: Option<String> = None;
+        while let Some(joined) = tasks.join_next().await {
+            let Ok((is_main, result, task_cell)) = joined else {
+                failure.get_or_insert_with(|| "启动检查任务异常退出".to_owned());
+                continue;
+            };
+            if is_main {
+                task_cell.mark_main_checked();
+            } else {
+                task_cell.mark_shard_checked();
+            }
+            match result {
+                Ok(report) if report.ok => {}
+                Ok(report) => {
+                    failure.get_or_insert_with(|| format!("quick_check 失败：{}", report.summary()));
+                }
+                Err(error) => {
+                    failure.get_or_insert_with(|| format!("quick_check 打开失败：{error}"));
+                }
+            }
+        }
+
+        if let Some(error) = failure {
+            cell.fail(error.clone());
+            let _ = pipeline
+                .signal_degraded(DegradeTrigger::IntegrityFailure { detail: error })
+                .await;
+        } else {
+            cell.complete_ok();
+            background_flag.store(true, Ordering::Release);
+            write.resume_writes();
+        }
+    })
 }
 
 /// `health.maintenance`（ADR-039 D-039-5 §1；M10-09 只保留契约形状，M10-10 接线）。
@@ -259,8 +513,9 @@ pub struct HealthProvider {
     runtimes: Arc<dyn RuntimeSummarySource>,
     /// 并发闸门快照单元（M7-02：由 `SessionManager` 单写；未接线 → 字段省略）。
     gate: Option<aether_control::ConcurrencyGateCell>,
-    storage_check: Option<StorageCheckSnapshot>,
+    storage_check: Option<Arc<StorageCheckCell>>,
     maintenance: Option<MaintenanceSnapshot>,
+    maintenance_cell: Option<Arc<MaintenanceCell>>,
 }
 
 impl HealthProvider {
@@ -274,6 +529,7 @@ impl HealthProvider {
             gate: None,
             storage_check: None,
             maintenance: None,
+            maintenance_cell: None,
         }
     }
 
@@ -287,7 +543,14 @@ impl HealthProvider {
     /// 接线 `health.storage_check`（ADR-039 D-039-5；M10-09 同步 `ok`，M10-10 状态机）。
     #[must_use]
     pub fn with_storage_check(mut self, snapshot: StorageCheckSnapshot) -> Self {
-        self.storage_check = Some(snapshot);
+        self.storage_check = Some(Arc::new(StorageCheckCell::new(snapshot)));
+        self
+    }
+
+    /// 安装动态 `health.storage_check`（M10-10 后台检查）。
+    #[must_use]
+    pub fn with_storage_check_cell(mut self, cell: Arc<StorageCheckCell>) -> Self {
+        self.storage_check = Some(cell);
         self
     }
 
@@ -298,6 +561,20 @@ impl HealthProvider {
         self
     }
 
+    /// 安装动态 `health.maintenance`（与 IPC 维护态同一共享单元）。
+    #[must_use]
+    pub fn with_maintenance_cell(mut self, cell: Arc<MaintenanceCell>) -> Self {
+        self.maintenance_cell = Some(cell);
+        self
+    }
+
+    /// M10-10：首个 `health` 请求触发后台启动检查。
+    pub fn request_storage_check(&self) {
+        if let Some(cell) = self.storage_check.as_ref() {
+            cell.request_start();
+        }
+    }
+
     /// 生成只读健康报告（不落库、不产生事件）。
     pub fn report(&self) -> HealthReport {
         let snapshot = self.pipeline.snapshot();
@@ -306,8 +583,20 @@ impl HealthProvider {
             write_queue_depth: snapshot.write_queue_depth,
             runtimes: self.runtimes.summaries(),
             concurrency_gate: self.gate.as_ref().and_then(|cell| cell.snapshot()),
-            storage_check: self.storage_check.clone(),
-            maintenance: self.maintenance.clone(),
+            storage_check: self
+                .storage_check
+                .as_ref()
+                .map(|cell| cell.snapshot()),
+            maintenance: self
+                .maintenance_cell
+                .as_ref()
+                .and_then(|cell| cell.get())
+                .map(|state| MaintenanceSnapshot {
+                    kind: state.kind,
+                    started_at: state.started_at,
+                    progress: state.progress,
+                })
+                .or_else(|| self.maintenance.clone()),
             ts: now_ms(),
             degrade_trigger: snapshot.degrade_trigger,
             degraded_since_ms: snapshot.degraded_since_ms,
@@ -387,6 +676,11 @@ impl CoreHealthBackend {
         self.provider.report()
     }
 
+    /// M10-10：触发后台启动检查（`health` 首次调用）。
+    pub fn request_storage_check(&self) {
+        self.provider.request_storage_check();
+    }
+
     /// 事件管线句柄（M2-07：RSS 巡检等运行期组件接线；降级后端无管线 → `None`）。
     pub fn pipeline(&self) -> Option<&Arc<EventPipeline>> {
         self.pipeline.as_ref()
@@ -396,10 +690,25 @@ impl CoreHealthBackend {
     pub fn storage_slot(&self) -> Option<Arc<StorageSlot>> {
         self.storage.clone()
     }
+
+    /// M10-10：安装后台启动检查单元。
+    #[must_use]
+    pub fn with_storage_check_cell(mut self, cell: Arc<StorageCheckCell>) -> Self {
+        self.provider = self.provider.with_storage_check_cell(cell);
+        self
+    }
+
+    /// M10-10：安装动态维护态（备份/恢复 `health.maintenance`）。
+    #[must_use]
+    pub fn with_maintenance_cell(mut self, cell: Arc<MaintenanceCell>) -> Self {
+        self.provider = self.provider.with_maintenance_cell(cell);
+        self
+    }
 }
 
 impl IpcBackend for CoreHealthBackend {
     fn health(&self) -> Result<Value, IpcError> {
+        self.provider.request_storage_check();
         serde_json::to_value(self.provider.report())
             .map_err(|error| IpcError::internal(format!("健康报告序列化失败：{error}")))
     }
@@ -503,6 +812,10 @@ pub struct CoreBoot {
     pub reads: aether_store::ReadPool,
     pub write: aether_store::WriteQueue,
     pub pipeline: EventPipeline,
+    /// M10-10：可观测的启动检查状态（`health.storage_check` 同源）。
+    pub storage_check: Arc<StorageCheckCell>,
+    /// M10-10：后台检查任务（关闭/测试可等待）。
+    pub storage_check_task: tokio::task::JoinHandle<()>,
 }
 
 /// 生产启动（M3-02 会话后端接线版本）。
@@ -527,22 +840,40 @@ pub fn boot_core_full_with_gate(
 ) -> Result<CoreBoot, CoreHealthBootError> {
     let layout = aether_store::open_layout(data_dir, env!("CARGO_PKG_VERSION"), now_ms())
         .map_err(CoreHealthBootError::Storage)?;
-    let storage = StoreRuntime::open_generation(layout, WriteQueueConfig::default(), handle)
-        .map_err(CoreHealthBootError::Storage)?;
+    let storage = StoreRuntime::open_generation_deferred(
+        layout.clone(),
+        WriteQueueConfig::default(),
+        handle,
+    )
+    .map_err(CoreHealthBootError::Storage)?;
     let reads = storage.reads().clone();
     let write = storage.queue().clone();
+    let background_flag = storage.background_check_flag();
     let journal = Arc::new(StoreJournal::new(write.clone()));
     let source = Arc::new(StoreEventSource::new(reads.clone()));
     let startup = StartupSelfCheckReport::passing(SPACE_GUARD_MIN_FREE_BYTES);
     let pipeline =
         EventPipeline::start(PipelineConfig::default(), journal, source, &startup, handle)
             .map_err(CoreHealthBootError::Pipeline)?;
+    let storage_check = Arc::new(StorageCheckCell::new(StorageCheckSnapshot::checking(
+        layout.shard_paths().len(),
+        now_ms(),
+    )));
     let slot = Arc::new(StorageSlot::new(storage));
     let backend = CoreHealthBackend::from_pipeline_with_slot_and_gate(
         pipeline.clone(),
         runtimes,
         Some(Arc::clone(&slot)),
         gate,
+    )
+    .with_storage_check_cell(Arc::clone(&storage_check));
+    let storage_check_task = start_storage_check(
+        layout,
+        Arc::clone(&storage_check),
+        write.clone(),
+        background_flag,
+        Arc::new(pipeline.clone()),
+        handle,
     );
     Ok(CoreBoot {
         backend,
@@ -550,6 +881,8 @@ pub fn boot_core_full_with_gate(
         reads,
         write,
         pipeline,
+        storage_check,
+        storage_check_task,
     })
 }
 

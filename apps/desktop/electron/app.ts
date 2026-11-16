@@ -715,6 +715,16 @@ async function startDaemonForWindow(
     if (options.loadRenderer) {
       await loadMainRenderer(win);
     }
+    // M10-10：首个 health 可能由 renderer 的轮询延迟触发；壳层在 renderer 加载完成
+    // 后主动补一次 ready 标记（health 后端此时已可响应，检查仍在后台进行）。
+    if (runtime.uiReadyAt === null) {
+      runtime.uiReadyAt = Date.now();
+      runtime.logger.log("info", "ui.ready", {
+        uiReadyMs: runtime.uiReadyAt - runtime.startedAt,
+        source: "shell",
+      });
+      revealMainWindow(win);
+    }
     return;
   }
 

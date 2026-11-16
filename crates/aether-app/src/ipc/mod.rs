@@ -44,6 +44,10 @@ pub struct MaintenanceState {
     pub kind: String,
     /// 面向 UI 的原因文本（不含密钥）。
     pub reason: String,
+    /// 维护开始时间（Unix epoch ms；`health.maintenance.started_at`）。
+    pub started_at: i64,
+    /// 可选进度（如 `{phase, completed_shards, total_shards}`）。
+    pub progress: Option<serde_json::Value>,
 }
 
 /// 维护态共享单元（组合根注入 IpcState 与备份后端）。
@@ -238,6 +242,8 @@ impl IpcState {
             .map(|reason| MaintenanceState {
                 kind: "import".to_owned(),
                 reason,
+                started_at: 0,
+                progress: None,
             })
     }
 

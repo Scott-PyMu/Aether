@@ -1403,6 +1403,20 @@
       ]
     },
     {
+      "id": "crates/aether-app/src/core_health.rs::HealthProvider",
+      "name": "HealthProvider",
+      "kind": "struct",
+      "source": "crates/aether-tauri/src/core_health.rs",
+      "fields": []
+    },
+    {
+      "id": "crates/aether-app/src/core_health.rs::CoreHealthBackend",
+      "name": "CoreHealthBackend",
+      "kind": "struct",
+      "source": "crates/aether-tauri/src/core_health.rs",
+      "fields": []
+    },
+    {
       "id": "crates/aether-core/src/domain.rs::TokenUsage",
       "name": "TokenUsage",
       "kind": "struct",
@@ -2148,6 +2162,6 @@
   ],
   "counts": {
     "commands": 87,
-    "types": 31
+    "types": 33
   }
 }

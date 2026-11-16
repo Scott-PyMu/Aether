@@ -94,8 +94,9 @@ pub use import::{
     SESSION_IMPORT_SOURCES,
 };
 pub use layout::{
-    assert_invariants, cleanup_old_generations, cleanup_unreferenced_staging,
-    commit_staged_generation, database_fingerprint, file_size, generation_live_bytes,
+    assert_invariants, clean_shutdown_is_strict, cleanup_old_generations,
+    cleanup_unreferenced_staging, commit_staged_generation, database_fingerprint, file_size,
+    generation_live_bytes,
     generations_total_bytes, header_change_counter, initialize as initialize_layout,
     invalidate_clean_shutdown, is_valid_generation_id, journal_file_name, list_generations,
     open_or_initialize as open_layout, pending_deletions, read_clean_shutdown, read_current,

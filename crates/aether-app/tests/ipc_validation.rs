@@ -2652,6 +2652,8 @@ fn backup_and_restore_maintenance_allow_only_health_and_app_exit() {
     cell.set(Some(MaintenanceState {
         kind: "backup".to_owned(),
         reason: "备份维护中".to_owned(),
+        started_at: 1,
+        progress: None,
     }));
     assert!(fixture.state.install_maintenance(cell));
 
