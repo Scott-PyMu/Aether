@@ -56,7 +56,6 @@
     "migration_0014": "sessions.shard_id + sessions.deletion_pending + idx_sessions_shard_id + idx_sessions_deletion_pending"
   },
   "unverified": [
-    "macOS/Linux execution",
     "backup/restore 600s/900s budgets on 5.22GiB dataset",
     "WAL non-checkpointed / backup-with-writes / restore kill injection / Windows CURRENT replacement failure"
   ],
@@ -76,5 +75,14 @@
     "failures": 0,
     "main_events": 0,
     "clean_shutdown": true
+  },
+  "ci": {
+    "workflow": "m10-09-sharding",
+    "runs": {
+      "ubuntu": "success",
+      "windows": "success",
+      "macos": "success"
+    },
+    "note": "CI 功能门禁；标准 600s 性能在本地 SSD 完成"
   }
 }
