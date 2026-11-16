@@ -230,7 +230,9 @@ const PAGING_SEMANTIC_CASES = {
 };
 
 function read(rel) {
-  return readFileSync(path.join(root, rel), "utf8");
+  // 契约解析必须跨平台稳定：Windows CRLF 与 Linux LF 归一化，避免同一提交
+  // 在 CI 产生不同 contract_digest。
+  return readFileSync(path.join(root, rel), "utf8").replaceAll("\r\n", "\n");
 }
 
 function sha256(text) {

@@ -1,8 +1,8 @@
 {
   "schema": "aether.m9-01-baseline.v1",
   "version": 1,
-  "recorded_at": "2026-11-16T13:50:58+08:00",
-  "head_commit": "0e4b40d8e5d9fcc13739c9640a8c2f97cd3cd38d",
+  "recorded_at": "2026-11-16T14:43:54+08:00",
+  "head_commit": "da243b4a49b01e97d37a45e6e4ab817cd6702a21",
   "platform": {
     "os": "win32",
     "arch": "x64",
@@ -27,7 +27,7 @@
     "event_types": 31,
     "settings_keys": 11,
     "migrations": 14,
-    "response_types": 33,
+    "response_types": 31,
     "event_payload_types": 31
   },
   "commands": [
@@ -583,7 +583,7 @@
     },
     {
       "path": "docs/M9-01-baseline/contract/responses.json",
-      "sha256": "137bd53ffe8554f199d685e981d8846c1d900f6427e769df40647175dee86dd0"
+      "sha256": "8d8b9259eee083a5abe00139295f751a6c3a3a0d7fe6dd032ac66d629f0c4609"
     },
     {
       "path": "docs/M9-01-baseline/contract/event_payloads.json",
@@ -614,7 +614,7 @@
       "purpose": "硬阈值冻结"
     }
   ],
-  "contract_digest": "0f3fdaf9ffe7bf6ee8a3600c26fa7b8ca072bf6e2eca0e012fe7cb0c78c92667",
+  "contract_digest": "05b3343fcd41305f935707fc36a4c0f784943e3282af45cd0838e90a228485af",
   "frozen": {
     "rule": "M9-04/M9-13 只新增，不改期望值；命令/错误码/事件/设置/迁移变更必须先走 ADR。",
     "recorded_before": "M9-02（抽取 aether-app 之前）"

@@ -27,6 +27,8 @@ import process from "node:process";
 import { bin, repoRoot, run, summarize } from "../lib/exec.mjs";
 
 const cargo = bin("cargo");
+const designDocPath = path.join(repoRoot, "设计文档.md");
+const hasDesignDoc = existsSync(designDocPath);
 const migrationsDir = path.join(repoRoot, "migrations");
 // 迁移集按文件名升序动态发现（0001 + 0002+；新迁移自动纳入有效 schema 比对）。
 const migrationFiles = readdirSync(migrationsDir)
@@ -464,6 +466,12 @@ function checkMigrationHygiene() {
 // ===== DoD3 静态：迁移集有效 schema ↔ 附录 C =====
 
 function checkMigrationsMatchAppendix() {
+  // 设计文档.md 为本地受控文档（.gitignore 排除，CI checkout 不含）；缺失时由
+  // Rust schema 单测覆盖，不在 CI 误报。
+  if (!hasDesignDoc) {
+    console.log("[static] SKIP 设计文档.md 不存在（CI checkout）；由 Rust schema 测试覆盖");
+    return;
+  }
   compareModels(effectiveMigrationModel(), appendixModel(), "static", {
     assertExplicitCount: true,
   });
@@ -697,10 +705,15 @@ for (const [name, check] of staticChecks) {
 }
 
 try {
-  compareModels(dumpToModel(runSchemaDump()), appendixModel(), "live", {
-    assertExplicitCount: true,
-  });
-  record("实时：真实库结构 ↔ 附录 C（表/列/默认值/外键/索引/UNIQUE）", 0);
+  if (!hasDesignDoc) {
+    console.log("[live] SKIP 设计文档.md 不存在（CI checkout）；由 Rust schema 测试覆盖");
+    record("实时：真实库结构 ↔ 附录 C（表/列/默认值/外键/索引/UNIQUE）（SKIP）", 0);
+  } else {
+    compareModels(dumpToModel(runSchemaDump()), appendixModel(), "live", {
+      assertExplicitCount: true,
+    });
+    record("实时：真实库结构 ↔ 附录 C（表/列/默认值/外键/索引/UNIQUE）", 0);
+  }
 } catch (error) {
   console.error(`[live] 失败：${error.stack ?? error.message}`);
   record("实时：真实库结构 ↔ 附录 C（表/列/默认值/外键/索引/UNIQUE）", 1);
