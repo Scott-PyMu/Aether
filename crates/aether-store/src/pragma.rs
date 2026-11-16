@@ -27,6 +27,10 @@ pub const JOURNAL_SIZE_LIMIT_BYTES: i64 = 67_108_864;
 pub const TEMP_STORE_MEMORY: i64 = 2;
 /// `cache_size=-32000`（KiB；负值表示 KiB 单位）。
 pub const CACHE_SIZE_KIB: i64 = -32_000;
+/// 只读连接 mmap 窗口（M10-10 性能调优；不改变 WAL/事务语义）。
+/// 顺序 `quick_check` 通过 mmap 读取可显著减少 read syscall；256 MiB 覆盖单分片
+/// 约 1/3 页，配合 OS 缓存足以降低冷读放大。
+pub const MMAP_SIZE_BYTES: i64 = 512 * 1024 * 1024;
 
 /// 对读写连接执行 PRAGMA 全集（含 `journal_mode=WAL`）。
 pub fn apply(conn: &Connection) -> Result<(), StoreError> {
@@ -61,6 +65,8 @@ pub fn apply_read_only(conn: &Connection) -> Result<(), StoreError> {
     conn.pragma_update(None, "journal_size_limit", JOURNAL_SIZE_LIMIT_BYTES)?;
     conn.pragma_update(None, "temp_store", "MEMORY")?;
     conn.pragma_update(None, "cache_size", CACHE_SIZE_KIB)?;
+    // 仅只读连接启用 mmap；写连接仍走标准 WAL 页缓存。
+    conn.pragma_update(None, "mmap_size", MMAP_SIZE_BYTES)?;
     Ok(())
 }
 

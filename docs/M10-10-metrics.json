@@ -12,10 +12,10 @@
     "generation_dataset_dir": "%TEMP%/opencode/m10-09/generation"
   },
   "core": {
-    "initializeMs": 171.6401,
-    "storageCheckMs": 23405.705,
-    "secondInitializeMs": 130.5588,
-    "secondStorageCheckMs": 7.2628,
+    "initializeMs": 152.4611,
+    "storageCheckMs": 15776.4525,
+    "secondInitializeMs": 1257.2889,
+    "secondStorageCheckMs": 5.0975,
     "initialStorageCheck": {
       "state": "checking",
       "mode": "startup",
@@ -34,15 +34,15 @@
     },
     "strictSidecar": {
       "backgroundCheckCompleted": true,
-      "secondCheckMs": 3.1299
+      "secondCheckMs": 5.0975
     },
     "storageCheckSamplesMs": [
-      23405.705,
-      34618.796
+      15776.4525,
+      15934.3284
     ],
     "storageCheckTargetMet": true,
-    "storageCheckHardMet": false,
-    "storageCheckNote": "两次复测 23.41s/34.62s；SATA SSD + 5.18GiB 下存在冷缓存波动；目标 25s 仅一次达成，30s 硬上限非稳定达成"
+    "storageCheckHardMet": true,
+    "storageCheckNote": "mmap_size=512MiB 后两次 15.78s/15.93s；8 并发 quick_check 稳定在 25s 内"
   },
   "electron": {
     "runs": 3,
@@ -135,6 +135,30 @@
       10744.69
     ],
     "parallelWallMs": 31690.57,
-    "conclusion": "8 并发 quick_check 共享磁盘/CPU，总吞吐不随并发线性扩展；冷热缓存差异 + 后台写/UI I/O 竞争导致 23-35s 波动"
+    "conclusion": "8 并发共享磁盘/CPU；mmap_size=512MiB 将并行墙钟从 31.69s 降至 10.64s，产品 storageCheck 降至 15.78/15.93s；冷热缓存/后台 I/O 仍有约 1s 波动",
+    "mmapSizeBytes": 536870912,
+    "parallelWallMsAfterMmap": 10637.97,
+    "sequentialPassMsAfterMmap": [
+      [
+        6148.74,
+        6589.94,
+        7749.95,
+        6468.91,
+        6464.11,
+        8255.83,
+        4938.11,
+        5775.19
+      ],
+      [
+        7394.8,
+        5608.68,
+        7842.81,
+        6640.41,
+        6742.58,
+        6940.8,
+        5905.27,
+        5845.48
+      ]
+    ]
   }
 }
