@@ -91,7 +91,7 @@
     "restore_900s": true
   },
   "unverified": [
-    "macOS/Linux local startup/backup execution (CI matrix wired only)",
+    "macOS/Linux M10-10 Electron startup not run (M10-09 sharding CI matrix passed)",
     "release daemon + real Electron 3-run startup (this run uses debug daemon)",
     "weekly integrity_check / 20-start full check scheduler"
   ],
