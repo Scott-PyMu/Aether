@@ -132,6 +132,9 @@ pub struct DatabaseFingerprint {
     pub header_change_counter: u64,
     pub file_size: u64,
     pub wal_size: u64,
+    /// 文件 mtime（毫秒；检测仅原位更新、size/header 未变的脏分片）。
+    #[serde(default)]
+    pub modified_at_ms: i64,
     pub last_seq: Option<u64>,
 }
 
@@ -655,8 +658,36 @@ pub fn read_clean_shutdown(layout: &StorageLayout) -> Option<CleanShutdown> {
 /// 仅用于决定是否跳过后台 `quick_check`；不修改任何文件。指纹不匹配（含 WAL 非 0、
 /// 上次异常退出、版本升级、恢复/导入）返回 `false`，调用方必须走后台检查。
 pub fn clean_shutdown_is_strict(layout: &StorageLayout, app_version: &str) -> bool {
+    plan_startup_checks(layout, app_version).strict_ok
+}
+
+/// 启动检查计划（M10-10 选择性脏分片；ADR-040 草案）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartupCheckPlan {
+    /// 全部指纹匹配：无需启动 quick_check（周检另行触发）。
+    pub strict_ok: bool,
+    /// 需要检查主库。
+    pub main: bool,
+    /// 需要检查的分片 id（0..8）。
+    pub shards: Vec<u8>,
+    /// 无法做选择性判断，退化为主库 + 全部分片。
+    pub full_fallback: bool,
+    pub reason: String,
+}
+
+/// 计算启动检查范围：sidecar 完整且仅部分分片指纹变化时，只检查变化分片；
+/// sidecar 缺失/版本或关闭阶段不完整时退化为全量。
+pub fn plan_startup_checks(layout: &StorageLayout, app_version: &str) -> StartupCheckPlan {
     let Some(sidecar) = read_clean_shutdown(layout) else {
-        return false;
+        return StartupCheckPlan {
+            strict_ok: false,
+            main: true,
+            shards: (0..layout.shard_paths().len())
+                .filter_map(|id| u8::try_from(id).ok())
+                .collect(),
+            full_fallback: true,
+            reason: "sidecar_missing".to_owned(),
+        };
     };
     if sidecar.generation != layout.generation()
         || sidecar.app_version != app_version
@@ -665,31 +696,50 @@ pub fn clean_shutdown_is_strict(layout: &StorageLayout, app_version: &str) -> bo
         || !sidecar.background_check_completed
         || sidecar.shards.len() != layout.shard_paths().len()
     {
-        return false;
-    }
-    // 严格匹配只读文件头/大小/WAL：不打开 SQLite、不重算 MAX(seq)。
-    // 任何写入都会改变 header change counter 或 file/WAL 大小；应用版本、
-    // generation、关闭阶段已在上方校验。5.22GiB 下避免 8 次全表 MAX(seq) 扫描，
-    // 把严格跳过路径控制在 1.5s 预算内。
-    let main_stats = FingerprintStats::read(layout.main_db());
-    if !main_stats.matches(&sidecar.main) {
-        return false;
-    }
-    if sidecar.shards.len() != layout.shard_paths().len() {
-        return false;
-    }
-    for (shard_id, path) in layout.shard_paths().iter().enumerate() {
-        let Ok(shard_id) = u8::try_from(shard_id) else {
-            return false;
+        return StartupCheckPlan {
+            strict_ok: false,
+            main: true,
+            shards: (0..layout.shard_paths().len())
+                .filter_map(|id| u8::try_from(id).ok())
+                .collect(),
+            full_fallback: true,
+            reason: "sidecar_not_strict".to_owned(),
         };
-        let Some(expected) = sidecar.shards.iter().find(|entry| entry.shard_id == shard_id) else {
-            return false;
+    }
+    let main_mismatch = !FingerprintStats::read(layout.main_db()).matches(&sidecar.main);
+    let mut mismatched = Vec::new();
+    for (shard_id, path) in layout.shard_paths().iter().enumerate() {
+        let Ok(shard_id_u8) = u8::try_from(shard_id) else {
+            continue;
+        };
+        let Some(expected) = sidecar
+            .shards
+            .iter()
+            .find(|entry| entry.shard_id == shard_id_u8)
+        else {
+            continue;
         };
         if !FingerprintStats::read(path).matches(&expected.database) {
-            return false;
+            mismatched.push(shard_id_u8);
         }
     }
-    true
+    if !main_mismatch && mismatched.is_empty() {
+        return StartupCheckPlan {
+            strict_ok: true,
+            main: false,
+            shards: Vec::new(),
+            full_fallback: false,
+            reason: "sidecar_strict".to_owned(),
+        };
+    }
+    StartupCheckPlan {
+        strict_ok: false,
+        // 主库很小；有任一脏分片时顺带检查主库（约毫秒级）。
+        main: true,
+        shards: mismatched,
+        full_fallback: false,
+        reason: "dirty_shards".to_owned(),
+    }
 }
 
 /// 严格 sidecar 的快速文件指纹（不打开 SQLite）。
@@ -697,6 +747,7 @@ struct FingerprintStats {
     header_change_counter: u64,
     file_size: u64,
     wal_size: u64,
+    modified_at_ms: i64,
 }
 
 impl FingerprintStats {
@@ -705,6 +756,7 @@ impl FingerprintStats {
             header_change_counter: header_change_counter(path).unwrap_or(u64::MAX),
             file_size: file_size(path),
             wal_size: file_size(&sqlite_sidecar(path, "-wal")),
+            modified_at_ms: modified_at_ms(path),
         }
     }
 
@@ -712,6 +764,7 @@ impl FingerprintStats {
         self.header_change_counter == expected.header_change_counter
             && self.file_size == expected.file_size
             && self.wal_size == expected.wal_size
+            && self.modified_at_ms == expected.modified_at_ms
     }
 }
 
@@ -743,6 +796,7 @@ pub fn database_fingerprint(
         header_change_counter: header_change_counter(path)?,
         file_size: file_size(path),
         wal_size: file_size(&sqlite_sidecar(path, "-wal")),
+        modified_at_ms: modified_at_ms(path),
         last_seq,
     })
 }
@@ -777,6 +831,16 @@ pub fn header_change_counter(path: &Path) -> Result<u64, StoreError> {
 pub fn file_size(path: &Path) -> u64 {
     fs::metadata(path)
         .map(|metadata| metadata.len())
+        .unwrap_or(0)
+}
+
+/// 文件 mtime（毫秒；不存在 → 0）。
+fn modified_at_ms(path: &Path) -> i64 {
+    fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .and_then(|duration| i64::try_from(duration.as_millis()).ok())
         .unwrap_or(0)
 }
 

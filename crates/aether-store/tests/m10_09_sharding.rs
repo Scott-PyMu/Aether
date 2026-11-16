@@ -19,8 +19,8 @@ use aether_store::layout::{
     CLEAN_SHUTDOWN_NAME, SHARD_COUNT,
 };
 use aether_store::{
-    create_backup_set, replace_file_atomic, validate_backup_set, Store, StoreCommand, StoreRuntime,
-    WriteQueueConfig,
+    create_backup_set, plan_startup_checks, replace_file_atomic, validate_backup_set, Store,
+    StoreCommand, StoreRuntime, WriteQueueConfig,
 };
 use rusqlite::Connection;
 
@@ -516,6 +516,64 @@ fn current_replacement_failure_keeps_old_pointer() {
     std::fs::set_permissions(&destination, permissions).expect("writable");
     assert!(result.is_err(), "只读 CURRENT 的替换必须失败");
     assert_eq!(std::fs::read(&destination).expect("old content"), b"old");
+}
+
+#[test]
+fn selective_check_plan_only_marks_dirty_shards() {
+    let dir = tempfile::tempdir().expect("temp");
+    let layout = initialize_layout(dir.path(), "0.1.0", 1).expect("init");
+    seed_session(&layout, SESSION_A);
+    let (storage, runtime) = runtime_for(layout.clone());
+    runtime.block_on(async {
+        storage
+            .queue()
+            .append_events(vec![event(SESSION_A, 1)])
+            .await
+            .expect("append");
+        storage.mark_background_check_completed();
+        storage.shutdown().await.expect("shutdown");
+    });
+    let strict = plan_startup_checks(&layout, "0.1.0");
+    assert!(strict.strict_ok, "正常关闭后应严格跳过");
+
+    let shard_id = shard_for(SESSION_A);
+    let shard = layout.shard_path(shard_id).expect("shard");
+    let connection = Connection::open(shard).expect("open shard");
+    connection
+        .execute(
+            "INSERT INTO events (id, session_id, run_id, runtime_id, seq, type, payload, ts, v) \
+             VALUES ('01J8ZQ0000000000000000DIRT', ?1, NULL, 'mock', 2, 'log', '{\"level\":\"info\"}', 2, 1)",
+            [SESSION_A],
+        )
+        .expect("dirty shard");
+    connection.close().expect("close");
+    let plan = plan_startup_checks(&layout, "0.1.0");
+    assert!(!plan.strict_ok);
+    assert!(plan.main, "出现脏分片时附带主库检查");
+    assert_eq!(plan.shards, vec![shard_id]);
+    assert!(!plan.full_fallback);
+}
+
+#[test]
+fn periodic_full_check_due_after_20_starts_and_resets() {
+    let dir = tempfile::tempdir().expect("temp");
+    let layout = initialize_layout(dir.path(), "0.1.0", 1).expect("init");
+    let (storage, runtime) = runtime_for(layout.clone());
+    runtime.block_on(async { storage.shutdown().await.expect("shutdown") });
+    let mut sidecar = aether_store::read_clean_shutdown(&layout).expect("sidecar");
+    sidecar.clean_start_count = 19;
+    sidecar.last_full_check_at = None;
+    aether_store::write_clean_shutdown(&layout, &sidecar).expect("sidecar");
+
+    let (storage, runtime) = runtime_for(layout.clone());
+    assert!(storage.full_check_due(1_794_800_000_000));
+    storage.mark_full_check_completed(1_794_800_000_000);
+    assert!(!storage.full_check_due(1_794_800_000_000));
+    assert_eq!(storage.clean_start_count(), 0);
+    runtime.block_on(async { storage.shutdown().await.expect("shutdown") });
+    let sidecar = aether_store::read_clean_shutdown(&layout).expect("sidecar after");
+    assert_eq!(sidecar.clean_start_count, 0);
+    assert_eq!(sidecar.last_full_check_at, Some(1_794_800_000_000));
 }
 
 #[test]

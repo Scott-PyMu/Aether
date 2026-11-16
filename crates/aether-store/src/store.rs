@@ -311,10 +311,25 @@ pub fn quick_check_path(path: &Path) -> Result<IntegrityReport, StoreError> {
     Ok(quick_check(&connection))
 }
 
+/// 完整 `PRAGMA integrity_check`（周检/20 次启动检查；比 quick_check 慢）。
+pub fn integrity_check_path(path: &Path) -> Result<IntegrityReport, StoreError> {
+    let connection = Store::open_read_only(path)?;
+    Ok(integrity_check(&connection))
+}
+
+/// 完整 `PRAGMA integrity_check`（只读连接；D-039-2 周检口径）。
+pub fn integrity_check(conn: &Connection) -> IntegrityReport {
+    run_integrity_pragma(conn, "PRAGMA integrity_check")
+}
+
 /// `PRAGMA quick_check`（D3 启动快速完整性检查）；不返回 `Err`，失败即 `ok = false`。
 pub fn quick_check(conn: &Connection) -> IntegrityReport {
+    run_integrity_pragma(conn, "PRAGMA quick_check")
+}
+
+fn run_integrity_pragma(conn: &Connection, pragma: &str) -> IntegrityReport {
     let mut messages = Vec::new();
-    match conn.prepare("PRAGMA quick_check") {
+    match conn.prepare(pragma) {
         Ok(mut statement) => match statement.query_map([], |row| row.get::<_, String>(0)) {
             Ok(rows) => {
                 for row in rows {

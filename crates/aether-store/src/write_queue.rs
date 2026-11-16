@@ -11,7 +11,7 @@
 //! 事件 sequencer、先日志后广播、delta 合并与 `persist_degraded` 状态机属 M1-05。
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -1065,6 +1065,10 @@ pub struct StoreRuntime {
     write_clean_sidecar: bool,
     /// M10-10：后台启动检查是否完成（写入 sidecar，供下次严格跳过）。
     background_check_completed: Arc<AtomicBool>,
+    /// 上次完整 `integrity_check` 时间（0 = 从未）；写入 sidecar。
+    last_full_check_at: Arc<AtomicI64>,
+    /// 连续干净启动次数（20 次触发完整检查；成功后归零）。
+    clean_start_count: Arc<AtomicU32>,
     queue: WriteQueue,
     reads: ReadPool,
     writer: Option<JoinHandle<()>>,
@@ -1111,6 +1115,8 @@ impl StoreRuntime {
             layout: None,
             write_clean_sidecar: false,
             background_check_completed: Arc::new(AtomicBool::new(false)),
+            last_full_check_at: Arc::new(AtomicI64::new(0)),
+            clean_start_count: Arc::new(AtomicU32::new(0)),
             queue,
             reads,
             writer: Some(writer),
@@ -1201,11 +1207,23 @@ impl StoreRuntime {
             Arc::clone(&counters),
             alerts,
         ));
+        let sidecar = crate::layout::read_clean_shutdown(&layout)
+            .filter(|sidecar| sidecar.generation == layout.generation());
+        let last_full_check_at = sidecar
+            .as_ref()
+            .and_then(|sidecar| sidecar.last_full_check_at)
+            .unwrap_or(0);
+        let clean_start_count = sidecar
+            .as_ref()
+            .map(|sidecar| sidecar.clean_start_count.saturating_add(1))
+            .unwrap_or(0);
         Ok(Self {
             path: layout.main_db().to_path_buf(),
             layout: Some(layout),
             write_clean_sidecar: true,
             background_check_completed: Arc::new(AtomicBool::new(false)),
+            last_full_check_at: Arc::new(AtomicI64::new(last_full_check_at)),
+            clean_start_count: Arc::new(AtomicU32::new(clean_start_count)),
             queue,
             reads,
             writer: Some(writer),
@@ -1227,10 +1245,44 @@ impl StoreRuntime {
         Arc::clone(&self.background_check_completed)
     }
 
+    /// 周检状态（last_full_check_at / clean_start_count），供后台检查任务更新。
+    pub fn full_check_state(&self) -> (Arc<AtomicI64>, Arc<AtomicU32>) {
+        (
+            Arc::clone(&self.last_full_check_at),
+            Arc::clone(&self.clean_start_count),
+        )
+    }
+
     /// M10-10：标记后台启动检查完成（调用方在检查全部通过后调用）。
     pub fn mark_background_check_completed(&self) {
         self.background_check_completed
             .store(true, Ordering::Release);
+    }
+
+    /// 上次完整 `integrity_check` 时间（0 = 从未）。
+    pub fn last_full_check_at(&self) -> Option<i64> {
+        let value = self.last_full_check_at.load(Ordering::Acquire);
+        (value > 0).then_some(value)
+    }
+
+    /// 连续干净启动次数。
+    pub fn clean_start_count(&self) -> u32 {
+        self.clean_start_count.load(Ordering::Acquire)
+    }
+
+    /// 周检（7 天）或 20 次启动触发完整 `integrity_check`。
+    pub fn full_check_due(&self, now_ms: i64) -> bool {
+        if self.clean_start_count() >= 20 {
+            return true;
+        }
+        self.last_full_check_at()
+            .is_some_and(|last| now_ms.saturating_sub(last) >= 7 * 24 * 60 * 60 * 1000)
+    }
+
+    /// 完整检查成功：记录时间并重置 20 次计数。
+    pub fn mark_full_check_completed(&self, now_ms: i64) {
+        self.last_full_check_at.store(now_ms, Ordering::Release);
+        self.clean_start_count.store(0, Ordering::Release);
     }
 
     /// generation 布局（单库模式 `None`）。
@@ -1486,15 +1538,8 @@ impl StoreRuntime {
         let Some(layout) = self.layout.as_ref() else {
             return Ok(());
         };
-        let previous = crate::layout::read_clean_shutdown(layout);
-        let clean_start_count = previous
-            .as_ref()
-            .filter(|sidecar| sidecar.generation == layout.generation())
-            .map(|sidecar| sidecar.clean_start_count.saturating_add(1))
-            .unwrap_or(0);
-        let last_full_check_at = previous
-            .as_ref()
-            .and_then(|sidecar| sidecar.last_full_check_at);
+        let clean_start_count = self.clean_start_count();
+        let last_full_check_at = self.last_full_check_at();
         let mut shards = Vec::with_capacity(layout.shard_paths().len());
         for (shard_id, path) in layout.shard_paths().iter().enumerate() {
             let last_seq = crate::layout::shard_last_seq(path)?;

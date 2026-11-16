@@ -99,12 +99,14 @@ pub use layout::{
     generation_live_bytes,
     generations_total_bytes, header_change_counter, initialize as initialize_layout,
     invalidate_clean_shutdown, is_valid_generation_id, journal_file_name, list_generations,
-    open_or_initialize as open_layout, pending_deletions, read_clean_shutdown, read_current,
+    open_or_initialize as open_layout, pending_deletions, plan_startup_checks, read_clean_shutdown,
+    read_current,
     read_existing as read_layout, read_generation_journal, remove_generation_journal,
     replace_file_atomic, shard_file_name, shard_for, shard_last_seq, sqlite_sidecar,
     write_clean_shutdown, write_current, write_generation_journal, CleanShutdown, CurrentPointer,
     DatabaseFingerprint, GenerationInfo, GenerationJournal, GenerationRecovery, GenerationStatus,
-    ShardEntry, ShardFingerprint, ShardsManifest, StorageLayout, CLEAN_SHUTDOWN_NAME,
+    ShardEntry, ShardFingerprint, ShardsManifest, StartupCheckPlan, StorageLayout,
+    CLEAN_SHUTDOWN_NAME,
     CURRENT_FILE_NAME, EVENTS_DIR_NAME, FAILED_GENERATION_PREFIX, FORMAT_VERSION,
     GENERATIONS_DIR_NAME, IMPORT_JOURNAL_NAME, JOURNAL_VERSION, MAIN_DB_NAME,
     PRE_GENERATION_PREFIX, RESTORE_JOURNAL_NAME, SHARDS_MANIFEST_NAME, SHARD_COUNT,
@@ -124,7 +126,8 @@ pub use ops::{
 pub use pragma::PragmaSnapshot;
 pub use preflight::{preflight, preflight_generation, GenerationPreflight, PreflightReport};
 pub use store::{
-    quick_check, quick_check_path, ExportReport, IntegrityReport, Store, StoreMode, TableExport,
+    integrity_check, integrity_check_path, quick_check, quick_check_path, ExportReport,
+    IntegrityReport, Store, StoreMode, TableExport,
 };
 pub use subagent::{SubagentCommand, SubagentInjectionRecord, SubagentResultRecord};
 pub use workflow::{NodeRunRecord, TaskRecord, WorkflowCommand, WorkflowRecord, WorkflowRunRecord};

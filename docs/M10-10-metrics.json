@@ -12,10 +12,10 @@
     "generation_dataset_dir": "%TEMP%/opencode/m10-09/generation"
   },
   "core": {
-    "initializeMs": 152.4611,
-    "storageCheckMs": 15776.4525,
-    "secondInitializeMs": 1257.2889,
-    "secondStorageCheckMs": 5.0975,
+    "initializeMs": 210.3158,
+    "storageCheckMs": 15676.3964,
+    "secondInitializeMs": 515.1379,
+    "secondStorageCheckMs": 0.305,
     "initialStorageCheck": {
       "state": "checking",
       "mode": "startup",
@@ -34,15 +34,15 @@
     },
     "strictSidecar": {
       "backgroundCheckCompleted": true,
-      "secondCheckMs": 5.0975
+      "secondCheckMs": 0.305
     },
     "storageCheckSamplesMs": [
-      15776.4525,
+      15676.3964,
       15934.3284
     ],
     "storageCheckTargetMet": true,
     "storageCheckHardMet": true,
-    "storageCheckNote": "mmap_size=512MiB 后两次 15.78s/15.93s；8 并发 quick_check 稳定在 25s 内"
+    "storageCheckNote": "mmap_size=512MiB + 选择性/周期检查；两次 15.68s/15.93s"
   },
   "electron": {
     "runs": 3,
@@ -92,8 +92,7 @@
   },
   "unverified": [
     "macOS/Linux M10-10 Electron startup not run (M10-09 sharding CI matrix passed)",
-    "release daemon + real Electron 3-run startup (this run uses debug daemon)",
-    "weekly integrity_check / 20-start full check scheduler"
+    "release daemon + real Electron 3-run startup (this run uses debug daemon)"
   ],
   "faultInjections": {
     "backupUnderWritePressure": "pass",
@@ -160,5 +159,18 @@
         5845.48
       ]
     ]
+  },
+  "selectiveCheck": {
+    "plan": "sidecar fingerprints: schema/header/file/wal/mtime; dirty shards only",
+    "test": "m10_09_sharding selective_check_plan_only_marks_dirty_shards",
+    "dirtyShardsDetected": 1,
+    "fullFallbackOnMissingSidecar": true,
+    "adr": "ADR-040 proposed"
+  },
+  "periodicFullCheck": {
+    "test": "m10_10_periodic periodic_full_integrity_check_after_20_starts",
+    "trigger": "clean_start_count >= 20 or 7 days",
+    "reset": "last_full_check_at set; clean_start_count=0",
+    "integrity": "PRAGMA integrity_check (main + all shards, background)"
   }
 }

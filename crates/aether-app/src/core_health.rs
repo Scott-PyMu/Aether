@@ -13,7 +13,7 @@
 //! 不再回退 `not_implemented`。
 
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -23,7 +23,8 @@ use aether_control::{
     StoreEventSource, StoreJournal, SPACE_GUARD_MIN_FREE_BYTES,
 };
 use aether_store::{
-    quick_check_path, StorageLayout, StoreError, StoreRuntime, WriteQueue, WriteQueueConfig,
+    integrity_check_path, plan_startup_checks, quick_check_path, StorageLayout, StoreError,
+    StoreRuntime, WriteQueue, WriteQueueConfig,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -205,6 +206,21 @@ impl StorageCheckSnapshot {
         }
     }
 
+    /// 周检/20 次启动完整检查（后台；写门保持 open）。
+    pub fn background_checking(total_shards: usize, started_at: i64) -> Self {
+        Self {
+            state: "checking".to_owned(),
+            mode: "background".to_owned(),
+            write_gate: "open".to_owned(),
+            main_checked: false,
+            checked_shards: 0,
+            total_shards,
+            started_at: Some(started_at),
+            completed_at: None,
+            error: None,
+        }
+    }
+
     /// 启动同步检查完成（M10-09 口径；主库 + 8 分片）。
     pub fn ok(total_shards: usize, completed_at: i64) -> Self {
         Self {
@@ -326,6 +342,30 @@ impl StorageCheckCell {
         }
     }
 
+    pub fn complete_background_ok(&self) {
+        match self.snapshot.lock() {
+            Ok(mut guard) => {
+                guard.state = "ok".to_owned();
+                guard.mode = "background".to_owned();
+                guard.write_gate = "open".to_owned();
+                guard.main_checked = true;
+                guard.checked_shards = guard.total_shards;
+                guard.completed_at = Some(now_ms());
+                guard.error = None;
+            }
+            Err(poisoned) => {
+                let mut guard = poisoned.into_inner();
+                guard.state = "ok".to_owned();
+                guard.mode = "background".to_owned();
+                guard.write_gate = "open".to_owned();
+                guard.main_checked = true;
+                guard.checked_shards = guard.total_shards;
+                guard.completed_at = Some(now_ms());
+                guard.error = None;
+            }
+        }
+    }
+
     pub fn fail(&self, error: String) {
         match self.snapshot.lock() {
             Ok(mut guard) => {
@@ -351,12 +391,81 @@ pub const STARTUP_CHECK_CONCURRENCY: usize = 8;
 /// 大型 generation 仍走后台并行检查。
 pub const STARTUP_INLINE_CHECK_MAX_BYTES: u64 = 64 * 1024 * 1024;
 
+/// 周期完整检查（周检/20 次启动）：后台 `integrity_check` 主库 + 全部分片，
+/// 写门保持 open；失败则关闭写门并 `persist_degraded`。
+fn spawn_periodic_full_check(
+    layout: StorageLayout,
+    cell: Arc<StorageCheckCell>,
+    write: WriteQueue,
+    pipeline: Arc<EventPipeline>,
+    handle: &tokio::runtime::Handle,
+    last_full: Arc<AtomicI64>,
+    clean_count: Arc<AtomicU32>,
+) {
+    let total = layout.shard_paths().len();
+    handle.spawn(async move {
+        cell.set(StorageCheckSnapshot::background_checking(total, now_ms()));
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(STARTUP_CHECK_CONCURRENCY));
+        let mut tasks = tokio::task::JoinSet::new();
+        for (index, path) in layout.all_db_paths().into_iter().enumerate() {
+            let permit = match Arc::clone(&semaphore).acquire_owned().await {
+                Ok(permit) => permit,
+                Err(_) => {
+                    cell.fail("周期完整检查并发闸门已关闭".to_owned());
+                    return;
+                }
+            };
+            let task_cell = Arc::clone(&cell);
+            tasks.spawn_blocking(move || {
+                let result = integrity_check_path(&path);
+                drop(permit);
+                (index == 0, result, task_cell)
+            });
+        }
+        let mut failure: Option<String> = None;
+        while let Some(joined) = tasks.join_next().await {
+            let Ok((is_main, result, task_cell)) = joined else {
+                failure.get_or_insert_with(|| "周期完整检查任务异常退出".to_owned());
+                continue;
+            };
+            if is_main {
+                task_cell.mark_main_checked();
+            } else {
+                task_cell.mark_shard_checked();
+            }
+            match result {
+                Ok(report) if report.ok => {}
+                Ok(report) => {
+                    failure.get_or_insert_with(|| {
+                        format!("integrity_check 失败：{}", report.summary())
+                    });
+                }
+                Err(error) => {
+                    failure.get_or_insert_with(|| format!("integrity_check 打开失败：{error}"));
+                }
+            }
+        }
+        if let Some(error) = failure {
+            cell.fail(error.clone());
+            write.pause_writes();
+            let _ = pipeline
+                .signal_degraded(DegradeTrigger::IntegrityFailure { detail: error })
+                .await;
+        } else {
+            cell.complete_background_ok();
+            last_full.store(now_ms(), Ordering::Release);
+            clean_count.store(0, Ordering::Release);
+        }
+    });
+}
+
 /// M10-10：启动后台并行 `quick_check`（主库 + 8 分片）。
 ///
 /// - 严格 sidecar 全匹配：直接 `ok` 并恢复写门（不跑 quick_check）；
 /// - 否则以 4 并发检查各库，逐项更新 `health.storage_check`；
 /// - 全部通过：`write_gate=open`，写队列恢复，sidecar 完成标志置位；
 /// - 任一失败：`state=failed`、写门保持关闭，并 `signal_degraded(integrity_failure)`。
+#[allow(clippy::too_many_arguments)]
 pub fn start_storage_check(
     layout: StorageLayout,
     cell: Arc<StorageCheckCell>,
@@ -364,23 +473,51 @@ pub fn start_storage_check(
     background_flag: Arc<AtomicBool>,
     pipeline: Arc<EventPipeline>,
     handle: &tokio::runtime::Handle,
+    full_check_due: bool,
+    last_full: Arc<AtomicI64>,
+    clean_count: Arc<AtomicU32>,
 ) -> tokio::task::JoinHandle<()> {
     let total_shards = layout.shard_paths().len();
     cell.set(StorageCheckSnapshot::checking(total_shards, now_ms()));
+    let plan = plan_startup_checks(&layout, env!("CARGO_PKG_VERSION"));
+    if plan.strict_ok {
+        cell.complete_ok();
+        background_flag.store(true, Ordering::Release);
+        write.resume_writes();
+        if full_check_due {
+            spawn_periodic_full_check(
+                layout.clone(),
+                Arc::clone(&cell),
+                write.clone(),
+                Arc::clone(&pipeline),
+                handle,
+                Arc::clone(&last_full),
+                Arc::clone(&clean_count),
+            );
+        }
+        return handle.spawn(async {});
+    }
     if aether_store::generation_live_bytes(&layout) <= STARTUP_INLINE_CHECK_MAX_BYTES {
         let mut failure: Option<String> = None;
-        if !aether_store::clean_shutdown_is_strict(&layout, env!("CARGO_PKG_VERSION")) {
-            for path in layout.all_db_paths() {
-                match quick_check_path(&path) {
-                    Ok(report) if report.ok => {}
-                    Ok(report) => {
-                        failure.get_or_insert_with(|| {
-                            format!("quick_check 失败：{}", report.summary())
-                        });
-                    }
-                    Err(error) => {
-                        failure.get_or_insert_with(|| format!("quick_check 打开失败：{error}"));
-                    }
+        let mut paths = Vec::new();
+        if plan.main {
+            paths.push(layout.main_db().to_path_buf());
+        }
+        for shard_id in &plan.shards {
+            if let Some(path) = layout.shard_paths().get(usize::from(*shard_id)) {
+                paths.push(path.clone());
+            }
+        }
+        for path in paths {
+            match quick_check_path(&path) {
+                Ok(report) if report.ok => {}
+                Ok(report) => {
+                    failure.get_or_insert_with(|| {
+                        format!("quick_check 失败：{}", report.summary())
+                    });
+                }
+                Err(error) => {
+                    failure.get_or_insert_with(|| format!("quick_check 打开失败：{error}"));
                 }
             }
         }
@@ -396,31 +533,48 @@ pub fn start_storage_check(
             cell.complete_ok();
             background_flag.store(true, Ordering::Release);
             write.resume_writes();
+            if full_check_due {
+                spawn_periodic_full_check(
+                    layout.clone(),
+                    Arc::clone(&cell),
+                    write.clone(),
+                    Arc::clone(&pipeline),
+                    handle,
+                    Arc::clone(&last_full),
+                    Arc::clone(&clean_count),
+                );
+            }
         }
         return handle.spawn(async {});
     }
+    let handle_for_full = handle.clone();
     handle.spawn(async move {
-        if aether_store::clean_shutdown_is_strict(&layout, env!("CARGO_PKG_VERSION")) {
-            cell.complete_ok();
-            background_flag.store(true, Ordering::Release);
-            write.resume_writes();
-            return;
-        }
         cell.wait_for_start().await;
         // 让首个 health 响应/壳层 ready 先完成，避免启动 I/O 与首屏争抢。
         tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
-        let main_path = layout.main_db().to_path_buf();
-        let shard_paths = layout.shard_paths().to_vec();
+        let main_path = plan.main.then(|| layout.main_db().to_path_buf());
+        let shard_paths: Vec<(u8, std::path::PathBuf)> = plan
+            .shards
+            .iter()
+            .filter_map(|id| {
+                layout
+                    .shard_paths()
+                    .get(usize::from(*id))
+                    .map(|path| (*id, path.clone()))
+            })
+            .collect();
         let semaphore = Arc::new(tokio::sync::Semaphore::new(STARTUP_CHECK_CONCURRENCY));
         let mut tasks = tokio::task::JoinSet::new();
 
-        // 主库检查很小，不占 8 个分片 worker 名额（主库仍计入 main_checked）。
-        let main_cell = Arc::clone(&cell);
-        tasks.spawn_blocking(move || {
-            let result = quick_check_path(&main_path);
-            (true, result, main_cell)
-        });
-        for path in shard_paths {
+        // 主库检查很小，不占分片 worker 名额（主库仍计入 main_checked）。
+        if let Some(main_path) = main_path {
+            let main_cell = Arc::clone(&cell);
+            tasks.spawn_blocking(move || {
+                let result = quick_check_path(&main_path);
+                (true, result, main_cell)
+            });
+        }
+        for (_shard_id, path) in shard_paths {
             let permit = match Arc::clone(&semaphore).acquire_owned().await {
                 Ok(permit) => permit,
                 Err(_) => {
@@ -467,6 +621,17 @@ pub fn start_storage_check(
             cell.complete_ok();
             background_flag.store(true, Ordering::Release);
             write.resume_writes();
+            if full_check_due {
+                spawn_periodic_full_check(
+                    layout.clone(),
+                    Arc::clone(&cell),
+                    write.clone(),
+                    Arc::clone(&pipeline),
+                    &handle_for_full,
+                    Arc::clone(&last_full),
+                    Arc::clone(&clean_count),
+                );
+            }
         }
     })
 }
@@ -849,6 +1014,8 @@ pub fn boot_core_full_with_gate(
     let reads = storage.reads().clone();
     let write = storage.queue().clone();
     let background_flag = storage.background_check_flag();
+    let full_check_due = storage.full_check_due(now_ms());
+    let (last_full, clean_count) = storage.full_check_state();
     let journal = Arc::new(StoreJournal::new(write.clone()));
     let source = Arc::new(StoreEventSource::new(reads.clone()));
     let startup = StartupSelfCheckReport::passing(SPACE_GUARD_MIN_FREE_BYTES);
@@ -874,6 +1041,9 @@ pub fn boot_core_full_with_gate(
         background_flag,
         Arc::new(pipeline.clone()),
         handle,
+        full_check_due,
+        last_full,
+        clean_count,
     );
     Ok(CoreBoot {
         backend,
