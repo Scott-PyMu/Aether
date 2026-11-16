@@ -1,8 +1,8 @@
 {
   "schema": "aether.m9-01-baseline.v1",
   "version": 1,
-  "recorded_at": "2026-11-12T15:54:15+08:00",
-  "head_commit": "c7acc80b5064c1f3f405ac01e92a78d7736ef77a",
+  "recorded_at": "2026-11-15T01:11:43+08:00",
+  "head_commit": "0b29d2a0ec6a8690e9a79aa6b9be17b1958ad320",
   "platform": {
     "os": "win32",
     "arch": "x64",
@@ -26,8 +26,8 @@
     "event_envelope_fields": 9,
     "event_types": 31,
     "settings_keys": 11,
-    "migrations": 13,
-    "response_types": 29,
+    "migrations": 14,
+    "response_types": 31,
     "event_payload_types": 31
   },
   "commands": [
@@ -571,7 +571,7 @@
     },
     {
       "path": "docs/M9-01-baseline/contract/migrations.json",
-      "sha256": "7e58eb7dba93df5e3a834280a7e4973082635273c39cc299f8f9fa4fa025e4a9"
+      "sha256": "98c61095e5c688ff7d2f37ab09920f8dd415d2c55fe91b309449262beafbc02e"
     },
     {
       "path": "docs/M9-01-baseline/contract/diagnostics.json",
@@ -583,7 +583,7 @@
     },
     {
       "path": "docs/M9-01-baseline/contract/responses.json",
-      "sha256": "862ec264c6be1d543d0757dd35a70c23090cac65c92ba6b3f94aa3cf9af1bdbc"
+      "sha256": "8d8b9259eee083a5abe00139295f751a6c3a3a0d7fe6dd032ac66d629f0c4609"
     },
     {
       "path": "docs/M9-01-baseline/contract/event_payloads.json",
@@ -614,7 +614,7 @@
       "purpose": "硬阈值冻结"
     }
   ],
-  "contract_digest": "a383afc4b5edc7dd29aa274d9a4e20cd918ef1507f460231982a10918871f9b1",
+  "contract_digest": "05b3343fcd41305f935707fc36a4c0f784943e3282af45cd0838e90a228485af",
   "frozen": {
     "rule": "M9-04/M9-13 只新增，不改期望值；命令/错误码/事件/设置/迁移变更必须先走 ADR。",
     "recorded_before": "M9-02（抽取 aether-app 之前）"

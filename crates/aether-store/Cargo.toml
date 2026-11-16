@@ -24,6 +24,8 @@ ulid = "=1.1.3"
 # 设计 D2/D3：单写任务与读连接池运行在核心 tokio 多线程运行时上（M1-04）。
 # 仅需 rt/sync/time（框架由上层提供）；已在 Cargo.lock（tokio 1.53，MIT）。
 tokio = { version = "1", features = ["rt", "sync", "time"] }
+# ADR-039 布局/旧 generation 清理的诊断日志（workspace 已在 Cargo.lock，MIT）。
+tracing = "0.1"
 
 [dev-dependencies]
 # 测试用临时库文件（已在 Cargo.lock 中，MIT/Apache-2.0）。

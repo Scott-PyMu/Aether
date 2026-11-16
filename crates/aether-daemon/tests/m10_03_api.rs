@@ -25,12 +25,9 @@ const SESSION_ID: &str = "01J00000000000000000000M03";
 
 fn seed_database(data_dir: &Path) {
     std::fs::create_dir_all(data_dir).expect("数据目录");
-    let db = data_dir.join("aether.db");
-    {
-        let store = aether_store::Store::open(&db).expect("建库/迁移");
-        drop(store);
-    }
-    let connection = rusqlite::Connection::open(&db).expect("直连");
+    let layout = aether_store::initialize_layout(data_dir, "0.1.0", 1).expect("初始化 generation");
+    let db = layout.main_db();
+    let connection = rusqlite::Connection::open(db).expect("直连");
     connection
         .execute(
             "INSERT INTO runtimes (id, name, kind, version, created_at, updated_at) \
@@ -40,9 +37,9 @@ fn seed_database(data_dir: &Path) {
         .expect("runtime 行");
     connection
         .execute(
-            "INSERT INTO sessions (id, runtime_id, title, status, created_at, updated_at) \
-             VALUES (?1, 'mock', 'seed', 'idle', 1, 1)",
-            [SESSION_ID],
+            "INSERT INTO sessions (id, runtime_id, title, status, created_at, updated_at, shard_id) \
+             VALUES (?1, 'mock', 'seed', 'idle', 1, 1, ?2)",
+            rusqlite::params![SESSION_ID, i64::from(aether_store::shard_for(SESSION_ID))],
         )
         .expect("session 行");
 }

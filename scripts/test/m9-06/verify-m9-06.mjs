@@ -8,7 +8,7 @@
  *  3. DoD-3：`ref_pick`/`startup_pick_target` 壳本地（严格参数/canonical/取消）
  *     与 `artifact_add` 复核；
  *  4. DoD-4：server-initiated `dialog.pick` 仅协议 fixture（正常/超时/取消/迟到丢弃），
- *     产品路径不引用；59/4 不变；
+ *     产品路径不引用；83/4 不变；
  *  5. DoD-5：`permissions_pending` 轮询 + `permission.pending` 通知并存，唯一决议
  *     入口 `permission_resolve`。
  */
@@ -151,7 +151,7 @@ for (const needle of [
   if (!rpcSource.includes(needle)) fail(`[DoD-4] server_request 缺少 ${needle}`);
 }
 
-// 59/4：dialog.pick 不在命令面；壳本地仍为 4 条。
+// 87/4：dialog.pick 不在命令面；壳本地仍为 4 条。
 const dispatch = read("crates/aether-app/src/ipc/dispatch.rs");
 const shellBlock = dispatch.match(/pub const SHELL_COMMANDS: &\[&str\] = &\[([\s\S]*?)\];/);
 if (!shellBlock) {
@@ -163,10 +163,10 @@ if (!shellBlock) {
   }
 }
 if (/^\s*"dialog\.pick",/m.test(dispatch)) {
-  fail("[DoD-4] dialog.pick 不得进入 63 条命令清单");
+  fail("[DoD-4] dialog.pick 不得进入 87 条命令清单");
 }
 const manifest = readJson("packages/protocol/src/command-manifest.json");
-if (manifest.counts?.total !== 63 || manifest.counts?.daemon !== 59 || manifest.counts?.shell !== 4) {
+if (manifest.counts?.total !== 87 || manifest.counts?.daemon !== 83 || manifest.counts?.shell !== 4) {
   fail(
     `[DoD-4] 路由计数漂移：total=${manifest.counts?.total} daemon=${manifest.counts?.daemon} shell=${manifest.counts?.shell}`,
   );
@@ -309,7 +309,7 @@ if (problems.length > 0) {
   console.error("[m9-06] 静态检查失败：");
   for (const problem of problems) console.error(`  - ${problem}`);
 }
-record("静态契约：dialog.pick 仅预留 / 59+4 / 通知唯一决议路径 / 选择器复核在案", problems.length === 0 ? 0 : 1);
+record("静态契约：dialog.pick 仅预留 / 83+4 / 通知唯一决议路径 / 选择器复核在案", problems.length === 0 ? 0 : 1);
 
 const exit = summarize("verify-m9-06", checks);
 if (exit === 0) {

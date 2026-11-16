@@ -36,6 +36,7 @@ use aether_app::ipc::path::{
 };
 use aether_app::ipc::validate::{parse_strict, CommandRequest, MAX_MESSAGE_BYTES, MAX_TITLE_CHARS};
 use aether_app::ipc::{IpcState, COMMANDS};
+use aether_app::ipc::{MaintenanceCell, MaintenanceState};
 use serde_json::{json, Value};
 
 const ULID: &str = "01J8ZQ5R0N7W9Y8X6V4T2S0K1M";
@@ -875,7 +876,7 @@ fn malformed_samples_return_structured_errors_and_do_not_reach_backend() {
         (
             "backup_restore",
             json!({ "source": { "external": { "path": external_txt.to_string_lossy() } } }),
-            "path_rejected",
+            "invalid_value",
             None,
         ),
         (
@@ -1507,9 +1508,10 @@ fn malformed_samples_return_structured_errors_and_do_not_reach_backend() {
 fn valid_requests_reach_backend_exactly_once() {
     let fixture = fixture("valid");
     let inside = long_path(&fixture.root);
-    let external_db = fixture.outside.join("restore-candidate.db");
-    std::fs::write(&external_db, b"candidate").expect("写入外部候选 .db");
-    let external_db = long_path(&external_db);
+    let external_set = fixture.outside.join("restore-candidate");
+    std::fs::create_dir_all(&external_set).expect("创建外部备份集目录");
+    std::fs::write(external_set.join("manifest.json"), b"{}").expect("写入 manifest.json");
+    let external_db = long_path(&external_set);
     let reference_file = fixture.root.join("reference.md");
     std::fs::write(&reference_file, b"# ref").expect("写入引用文件");
     let reference_file = long_path(&reference_file);
@@ -2641,5 +2643,43 @@ fn every_command_is_routed_and_rejects_unknown_members() {
         "not_implemented",
         None,
         "未知方法",
+    );
+}
+#[test]
+fn backup_and_restore_maintenance_allow_only_health_and_app_exit() {
+    let fixture = fixture("maintenance");
+    let cell = Arc::new(MaintenanceCell::new());
+    cell.set(Some(MaintenanceState {
+        kind: "backup".to_owned(),
+        reason: "备份维护中".to_owned(),
+    }));
+    assert!(fixture.state.install_maintenance(cell));
+
+    let rejected = invoke(&fixture.state, "session_list", json!({})).unwrap_err();
+    assert_eq!(
+        rejected.get("code").and_then(Value::as_str),
+        Some("core_not_ready"),
+        "备份维护态拒绝读命令：{rejected}"
+    );
+    let message = rejected
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    assert!(
+        message.contains("备份维护中") && message.contains("health/app_exit"),
+        "维护态错误文案：{rejected}"
+    );
+
+    let health = invoke(&fixture.state, "health", Value::Null).expect("health 必须放行");
+    assert_eq!(
+        health.get("recorded").and_then(Value::as_str),
+        Some("health")
+    );
+    let exit = invoke(&fixture.state, "app_exit", json!({ "confirm": true }))
+        .expect_err("未接线壳层时 app_exit 由命令体拒绝");
+    let exit_message = exit.get("message").and_then(Value::as_str).unwrap_or("");
+    assert!(
+        !exit_message.contains("备份维护中"),
+        "app_exit 不得被维护态拒绝：{exit}"
     );
 }

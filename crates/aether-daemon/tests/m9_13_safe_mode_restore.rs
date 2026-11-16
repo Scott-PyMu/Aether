@@ -14,7 +14,6 @@ mod harness;
 
 use std::io::{Seek, SeekFrom, Write};
 
-use aether_store::backup::{read_restore_journal, restore_journal_path};
 use harness::{Daemon, TestDirs, FRAME_TIMEOUT};
 use serde_json::{json, Value};
 
@@ -24,12 +23,8 @@ const MESSAGE_B: &str = "01J00000000000000000013M02";
 
 fn seed_database(data_dir: &std::path::Path) {
     std::fs::create_dir_all(data_dir).expect("数据目录");
-    let db = data_dir.join("aether.db");
-    {
-        let store = aether_store::Store::open(&db).expect("建库/迁移");
-        drop(store);
-    }
-    let connection = rusqlite::Connection::open(&db).expect("直连");
+    let layout = aether_store::initialize_layout(data_dir, "0.1.0", 1).expect("初始化 generation");
+    let connection = rusqlite::Connection::open(layout.main_db()).expect("直连");
     connection
         .execute(
             "INSERT INTO runtimes (id, name, kind, version, created_at, updated_at) \
@@ -39,9 +34,9 @@ fn seed_database(data_dir: &std::path::Path) {
         .expect("runtime 行");
     connection
         .execute(
-            "INSERT INTO sessions (id, runtime_id, title, status, created_at, updated_at) \
-             VALUES (?1, 'mock', 'M9-13 safe mode', 'idle', 1, 1)",
-            [SESSION_ID],
+            "INSERT INTO sessions (id, runtime_id, title, status, created_at, updated_at, shard_id) \
+             VALUES (?1, 'mock', 'M9-13 safe mode', 'idle', 1, 1, ?2)",
+            rusqlite::params![SESSION_ID, i64::from(aether_store::shard_for(SESSION_ID))],
         )
         .expect("session 行");
     for (id, role, content, seq) in [
@@ -115,12 +110,23 @@ fn health_until_ready(daemon: &mut Daemon) -> Value {
 fn safe_mode_allows_backup_restore_and_applies_it_on_next_start() {
     let _serial = harness::serial_guard();
     let dirs = TestDirs::new();
-    let db = dirs.data_dir().join("aether.db");
     seed_database(&dirs.data_dir());
+    let initial_layout = aether_store::read_layout(&dirs.data_dir()).expect("generation");
+    let db = initial_layout.main_db().to_path_buf();
 
-    // 外部明文候选：恢复前先复制（候选自身必须 quick_check 通过）。
-    let candidate = dirs.root.path().join("m9-13-candidate.db");
-    std::fs::copy(&db, &candidate).expect("复制候选");
+    // 外部整套备份集（恢复前先制作；候选自身 quick_check 必须通过）。
+    let set = aether_store::create_backup_set(
+        &initial_layout,
+        dirs.root.path(),
+        "01J0000000000000000013BK01",
+        "manual",
+        1,
+        "0.1.0",
+        false,
+        "none",
+    )
+    .expect("制作备份集");
+    let candidate = set.record.path.clone();
     corrupt_last_page(&db);
 
     // 1) 安全模式：quick_check 失败但进程不退出，health=persist_degraded。
@@ -152,21 +158,22 @@ fn safe_mode_allows_backup_restore_and_applies_it_on_next_start() {
         "安全模式必须允许 backup_restore 维护例外：{restore}"
     );
     assert_eq!(restore["result"]["restart_required"], json!(true));
-    let journal = read_restore_journal(&db)
-        .expect("读取现场日志")
-        .expect("现场日志必须存在");
-    assert_eq!(journal.status, "requested", "恢复请求必须登记为 requested");
+    let journal = aether_store::read_generation_journal(&dirs.data_dir(), "restore")
+        .expect("读取 journal")
+        .expect("journal 必须存在");
+    assert_eq!(journal.phase, "staged", "恢复请求必须登记为 staged");
     assert!(
-        restore_journal_path(&db).exists(),
-        "现场日志文件必须落盘：{}",
-        restore_journal_path(&db).display()
+        dirs.data_dir().join("restore-journal.json").exists(),
+        "generation journal 文件必须落盘"
     );
 
-    // 3) 关闭并重启：启动序列执行恢复，随后正常打开（quick_check 通过）。
+    // 3) 关闭并重启：启动序列执行整套切换，随后正常打开（quick_check 通过）。
     assert_eq!(daemon.shutdown(), 0, "安全模式仍可干净退出");
     assert!(
-        read_restore_journal(&db).expect("读取现场日志").is_some(),
-        "重启前现场日志必须保留（由下次启动消费）"
+        aether_store::read_generation_journal(&dirs.data_dir(), "restore")
+            .expect("读取 journal")
+            .is_some(),
+        "重启前 journal 必须保留（由下次启动消费）"
     );
 
     let mut restarted = Daemon::spawn(&dirs);
@@ -178,8 +185,10 @@ fn safe_mode_allows_backup_restore_and_applies_it_on_next_start() {
         "恢复后必须回到可写正常态：{health}"
     );
     assert!(
-        read_restore_journal(&db).expect("读取现场日志").is_none(),
-        "恢复成功后现场日志必须收尾"
+        aether_store::read_generation_journal(&dirs.data_dir(), "restore")
+            .expect("读取 journal")
+            .is_none(),
+        "恢复成功后 journal 必须收尾"
     );
 
     let sessions = restarted.request(2, "session_list", json!({}));
@@ -202,7 +211,8 @@ fn safe_mode_allows_backup_restore_and_applies_it_on_next_start() {
     assert_eq!(restarted.shutdown(), 0);
 
     // 4) 审计：启动恢复写 `backup.restore`（D13 第 7 步）。
-    let connection = rusqlite::Connection::open(&db).expect("直连");
+    let restored_layout = aether_store::read_layout(&dirs.data_dir()).expect("恢复后 layout");
+    let connection = rusqlite::Connection::open(restored_layout.main_db()).expect("直连");
     let audits: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM audit_log WHERE action = 'backup.restore'",

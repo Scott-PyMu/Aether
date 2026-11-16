@@ -43,8 +43,9 @@ const D5_RUNTIME_STATES = ["cold", "starting", "ready", "degraded", "disabled"];
 // 附录 C 显式 `CREATE INDEX` 数量（idx_events_session_seq 已由 0002 删除并收敛为 UNIQUE 索引；
 // M6-01 落库 permission_rules 后 5 → 6；M6-03 审计三索引后 6 → 9；
 // M10-01 编排运行视图 + tasks 两索引后 9 → 12（attempt UNIQUE 由表级约束承载）；
-// M10-02 子 Agent 树/注入索引后 12 → 14；M10-07 调度器队列索引后 14 → 16。
-const EXPECTED_EXPLICIT_INDEXES = 16;
+// M10-02 子 Agent 树/注入索引后 12 → 14；M10-07 调度器队列索引后 14 → 16；
+// M10-09/ADR-039 会话分片/删除 tombstone 两索引后 16 → 18。
+const EXPECTED_EXPLICIT_INDEXES = 18;
 
 // ===== SQL 解析工具 =====
 
@@ -254,7 +255,10 @@ function applyDdl(model, sql, source) {
       model.indexes.splice(index, 1);
       continue;
     }
-    match = /^CREATE UNIQUE INDEX\s+(\w+)\s+ON\s+(\w+)\s*\(([^)]*)\)$/i.exec(statement);
+    match =
+      /^CREATE UNIQUE INDEX\s+(?:IF NOT EXISTS\s+)?(\w+)\s+ON\s+(\w+)\s*\(([^)]*)\)$/i.exec(
+        statement,
+      );
     if (match) {
       model.indexes.push({
         name: match[1],
@@ -264,7 +268,7 @@ function applyDdl(model, sql, source) {
       });
       continue;
     }
-    match = /^CREATE INDEX\s+(\w+)\s+ON\s+(\w+)\s*\(([^)]*)\)$/i.exec(statement);
+    match = /^CREATE INDEX\s+(?:IF NOT EXISTS\s+)?(\w+)\s+ON\s+(\w+)\s*\(([^)]*)\)$/i.exec(statement);
     if (match) {
       model.indexes.push({
         name: match[1],
@@ -655,7 +659,9 @@ const staticChecks = [
     () => {
       const events = effectiveMigrationModel().tables.get("events");
       if (!events) throw new Error("迁移缺少 events 表");
-      const sql = ddlStatements(migrationFiles.map((file) => file.sql).join("\n")).find((item) =>
+      // 只在 0001 的 events 建表语句上检查（后续迁移的 CHECK 属于其他表）。
+      const base = migrationFiles.find((file) => file.name.startsWith("0001_"));
+      const sql = ddlStatements(base.sql).find((item) =>
         /^CREATE TABLE events\b/i.test(item),
       );
       if (/\bCHECK\b/i.test(sql)) {

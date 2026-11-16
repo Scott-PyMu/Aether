@@ -1459,13 +1459,12 @@ pub struct BackupRestoreRequest {
 impl BackupRestoreRequest {
     /// 外部候选路径的规范化结果（内部来源为 `None`）。
     ///
-    /// M5-03：候选后缀接受 `.db`（P0 明文产物）或 `.aebk`（`AEBK1` 加密产物）。
+    /// ADR-039 D-039-5 §4：接受含 `manifest.json` 的备份集目录或 `manifest.json` 文件；
+    /// 旧 `.db`/`.aebk` 单文件拒绝（`validate_external_backup_set`）。
     pub fn canonical_external_path(&self) -> Result<Option<std::path::PathBuf>, IpcError> {
         match &self.source {
             BackupSource::Internal { .. } => Ok(None),
-            BackupSource::External { path } => {
-                path::validate_external_backup_candidate(path).map(Some)
-            }
+            BackupSource::External { path } => path::validate_external_backup_set(path).map(Some),
         }
     }
 
@@ -1490,7 +1489,7 @@ impl CommandRequest for BackupRestoreRequest {
                 }
             }
             BackupSource::External { path } => {
-                path::validate_external_backup_candidate(path).map(|_| ())?;
+                path::validate_external_backup_set(path).map(|_| ())?;
             }
         }
         if let Some(passphrase) = &self.passphrase {

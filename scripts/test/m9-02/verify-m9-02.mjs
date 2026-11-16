@@ -108,14 +108,14 @@ for (const rel of rustSources("crates/aether-app/src")) {
   if (/\btauri::/.test(source)) fail(`[DoD-1] ${rel} 含 tauri:: 调用`);
 }
 
-// ===== DoD-2：COMMANDS = 基线 63 条，且路由 arm 齐备 =====
+// ===== DoD-2：COMMANDS = 基线 87 条，且路由 arm 齐备 =====
 const dispatchSource = read(COMMANDS_SRC);
 const commands = extractStringArray(dispatchSource, "COMMANDS");
 checked.commands = commands.length;
 const baseline = readJson(BASELINE_MANIFEST);
 const baselineCommands = baseline.commands ?? [];
-if (commands.length !== 63) fail(`[DoD-2] COMMANDS 数量 ${commands.length} ≠ 63`);
-if (baseline.counts?.commands !== 63) {
+if (commands.length !== 87) fail(`[DoD-2] COMMANDS 数量 ${commands.length} ≠ 63`);
+if (baseline.counts?.commands !== 87) {
   fail(`[DoD-2] 基线计数 commands=${baseline.counts?.commands} ≠ 63`);
 }
 if (commands.length !== baselineCommands.length) {
@@ -133,13 +133,13 @@ const shellPresent = SHELL_COMMANDS.filter((name) => commands.includes(name));
 if (shellPresent.length !== SHELL_COMMANDS.length) {
   fail(`[DoD-2] 壳命令集合不齐备：${SHELL_COMMANDS.filter((name) => !commands.includes(name))}`);
 }
-if (baseline.counts?.daemon !== 59 || baseline.counts?.shell !== 4) {
+if (baseline.counts?.daemon !== 83 || baseline.counts?.shell !== 4) {
   fail(
-    `[DoD-2] 基线路由计数 daemon=${baseline.counts?.daemon} shell=${baseline.counts?.shell}（期望 59/4）`,
+    `[DoD-2] 基线路由计数 daemon=${baseline.counts?.daemon} shell=${baseline.counts?.shell}（期望 83/4）`,
   );
 }
 for (const reserved of RESERVED_COMMANDS) {
-  if (!commands.includes(reserved)) fail(`[DoD-2] 保留命令 ${reserved} 不在 63 内`);
+  if (!commands.includes(reserved)) fail(`[DoD-2] 保留命令 ${reserved} 不在 87 内`);
 }
 for (const command of commands) {
   if (!dispatchSource.includes(`"${command}" => handlers::`)) {
@@ -264,7 +264,7 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[m9-02] OK：命令 ${checked.commands}（59 daemon + 4 shell）· ` +
+  `[m9-02] OK：命令 ${checked.commands}（83 daemon + 4 shell）· ` +
     (tauriRetired ? "Tauri 已退役（G8，无回退包）" : `wrapper ${checked.wrappers}`) +
     ` · app 源文件 ${checked.sourceFiles}（无 tauri）· 基线一致 · 测试迁移齐备`,
 );

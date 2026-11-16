@@ -8,8 +8,8 @@
  *  3. CSP 生产/开发断言；导航/新窗口/webview/权限/DevTools 拦截；
  *  4. 启动顺序（窗口→daemon）、initialize 10s 硬超时 + 重试 1 次、S-12 六原因、
  *     `quick_check` degraded 不退出、无 S-01/S-01a/`startup_*` UI 入口；
- *  5. 4 条壳本地命令与 63/59/4 路由；路径 canonicalize/校验；
- *  6. UI-UX v0.17 S-12/S-13 锚点、数据目录/手动移动、锚点 22；证据文件。
+ *  5. 4 条壳本地命令与 87/83/4 路由；路径 canonicalize/校验；
+ *  6. UI-UX v0.20 S-12/S-13 锚点、数据目录/手动移动、锚点 22；证据文件。
  */
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
@@ -334,10 +334,10 @@ expectMatch(shellLocal, /statSync/, "选择器返回路径必须校验文件/目
 expectMatch(shellLocal, /confirm:true/, "退出/重启必须显式 confirm:true");
 const manifest = readJson("packages/protocol/src/command-manifest.json");
 checked.routes = manifest.commands.length;
-expect(manifest.counts?.total === 63, "命令总数必须 63");
-expect(manifest.counts?.daemon === 59, "daemon 路由必须 59");
+expect(manifest.counts?.total === 87, "命令总数必须 87");
+expect(manifest.counts?.daemon === 83, "daemon 路由必须 83");
 expect(manifest.counts?.shell === 4, "shell 路由必须 4");
-expect(manifest.counts?.ui === 61, "UI 暴露必须 61");
+expect(manifest.counts?.ui === 85, "UI 暴露必须 85");
 expect(manifest.counts?.reserved === 2, "保留命令必须 2");
 for (const name of ["startup_get", "startup_migrate"]) {
   const command = manifest.commands.find((item) => item.name === name);
@@ -374,7 +374,7 @@ expect(
 );
 expect(exists("docs/M9-07-证据.md"), "缺少 docs/M9-07-证据.md");
 const uiux = read("docs/UI-UX-设计规格.md");
-expect(uiux.includes("设计规格 v0.17"), "UI-UX 必须 v0.17");
+expect(uiux.includes("设计规格 v0.20"), "UI-UX 必须 v0.20");
 expect(uiux.includes("22"), "UI-UX 必须登记锚点 22");
 expect(uiux.includes("S-12") && uiux.includes("S-13"), "UI-UX 缺少 S-12/S-13");
 expect(uiux.includes("data_dir_locked") && uiux.includes("db_open_failed"), "UI-UX 缺少业务码");

@@ -605,6 +605,45 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+  m10-09-sharding:
+    name: M10-09 event sharding (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      CARGO_BUILD_JOBS: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install workspace deps
+        run: pnpm install --frozen-lockfile
+      - name: Install Linux keyring deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+      - name: Run M10-09 sharding verification
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm verify:m10-09 2>&1 | tee m10-09-sharding.log
+      - name: Upload M10-09 log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: m10-09-sharding-${{ matrix.os }}
+          path: m10-09-sharding.log
+          if-no-files-found: warn
+          retention-days: 30
+
   m9-12-e2e-windows:
     name: M9-12 Playwright Electron E2E (Windows)
     runs-on: windows-2022

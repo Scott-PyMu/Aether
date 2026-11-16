@@ -25,13 +25,19 @@ fn assert_bootstrap_lock_failure(mut daemon: Daemon) {
     let frame = daemon
         .try_next_frame(Duration::from_secs(15))
         .expect("第二个 daemon 必须写出首帧错误");
-    assert_eq!(frame["id"], Value::Null, "预初始化错误必须是 id:null：{frame}");
+    assert_eq!(
+        frame["id"],
+        Value::Null,
+        "预初始化错误必须是 id:null：{frame}"
+    );
     assert_eq!(
         frame["error"]["data"]["business_code"],
         json!("data_dir_locked"),
         "业务码必须是 data_dir_locked：{frame}"
     );
-    let exit = daemon.wait_exit(Duration::from_secs(15)).expect("第二个 daemon 必须退出");
+    let exit = daemon
+        .wait_exit(Duration::from_secs(15))
+        .expect("第二个 daemon 必须退出");
     assert_eq!(exit, 20, "data_dir_locked 退出码必须 20");
 }
 
@@ -52,7 +58,10 @@ fn lock_is_held_and_second_daemon_fails_with_20() {
 
     // 第一个 daemon 仍可用（锁不是全局单例）。
     let health = first.request(2, "health", Value::Null);
-    assert!(health.get("result").is_some(), "持锁 daemon 必须仍可用：{health}");
+    assert!(
+        health.get("result").is_some(),
+        "持锁 daemon 必须仍可用：{health}"
+    );
     assert_eq!(first.shutdown(), 0);
 }
 
@@ -63,8 +72,8 @@ fn kill_9_releases_lock_and_next_daemon_starts_without_migration() {
     let mut first = Daemon::spawn(&dirs);
     first.initialize(1);
     first.wait_ready();
-    let db = dirs.data_dir().join("aether.db");
-    assert!(db.exists(), "预热后数据库必须存在");
+    let layout = aether_store::read_layout(&dirs.data_dir()).expect("generation");
+    assert!(layout.main_db().exists(), "预热后数据库必须存在");
 
     first.kill_hard();
     // OS 释放句柄后锁可重新获取（不依赖存在性判断/陈旧锁清理）。
@@ -125,7 +134,10 @@ fn shutdown_ack_is_immediate_and_exit_within_8_2s() {
         json!(true),
         "shutdown 必须立即回执：{response}"
     );
-    assert!(ack_ms < Duration::from_secs(1), "回执不得等待关闭序列（{ack_ms:?}）");
+    assert!(
+        ack_ms < Duration::from_secs(1),
+        "回执不得等待关闭序列（{ack_ms:?}）"
+    );
     let exit = daemon
         .wait_exit(SHUTDOWN_BUDGET)
         .expect("shutdown 后必须 ≤8.2s 退出");

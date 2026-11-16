@@ -238,13 +238,13 @@ for (const icon of ["icon.ico", "icon.icns", "icon.png"]) {
 
 // ===== 6. 文档/发布说明/G8 报告 =====
 const requiredDocs = {
-  "README.md": ["已退役", "aether-tauri", "pnpm dev:desktop", "pnpm package:desktop", "M10-00 已执行"],
+  "README.md": ["已退役", "aether-tauri", "pnpm dev:desktop", "pnpm package:desktop", "v1.35"],
   "docs/P2-架构迁移-实施计划与验收标准.md": [
-    "v0.11",
+    "v0.14",
     "M9-14",
     "docs/M9-14-证据.md",
     "ADR-030 v0.2",
-    "M10-00 已执行",
+    "M10-00",
   ],
   "docs/M9-14-证据.md": ["DoD-1", "DoD-2", "DoD-3", "DoD-4", "DoD-5"],
   "docs/M9-14-发布说明.md": ["旧内测包", "手工卸载", "数据目录", "Keychain"],
@@ -260,8 +260,8 @@ const requiredDocs = {
 // AGENTS.md / 设计文档.md 在本仓库为本地受控文档（.gitignore 排除，不入 CI checkout）；
 // 本机存在时强制校验，CI 缺失时显式 NOTE（不静默跳过）。
 const localDocs = {
-  "AGENTS.md": ["已退役", "v1.33", "v0.11", "M10-00/决策记录"],
-  "设计文档.md": ["v1.33", "已退役", "不阻塞 M9/M10"],
+  "AGENTS.md": ["已退役", "v1.35", "v0.14", "M10-00"],
+  "设计文档.md": ["v1.35", "已退役", "不阻塞 M9/M10"],
 };
 for (const [rel, tokens] of Object.entries(requiredDocs)) {
   if (!exists(rel)) {
@@ -329,7 +329,7 @@ check(
   total >= 63 && daemon >= 59 && shell === 4 && ui >= 61,
   `${total}/${daemon}/${shell}/${ui}`,
 );
-check("daemon 59 / shell 4", daemon >= 59 && shell === 4, `${daemon}/${shell}`);
+check("daemon 83 / shell 4", daemon >= 83 && shell === 4, `${daemon}/${shell}`);
 const migrations = readdirSync(path.join(repoRoot, "migrations"))
   .filter((name) => /^\d{4}_.*\.sql$/.test(name))
   .sort();

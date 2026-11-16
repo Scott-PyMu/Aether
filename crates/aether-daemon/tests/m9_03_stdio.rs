@@ -381,10 +381,8 @@ fn applied_migration_checksum_mismatch_is_fatal_exit_22() {
     let _serial = harness::serial_guard();
     let dirs = TestDirs::new();
     std::fs::create_dir_all(dirs.data_dir()).expect("数据目录");
-    let db = dirs.data_dir().join("aether.db");
-    {
-        let _store = aether_store::Store::open(&db).expect("建库并迁移");
-    }
+    let layout = aether_store::initialize_layout(&dirs.data_dir(), "0.1.0", 1).expect("初始化");
+    let db = layout.main_db().to_path_buf();
     {
         let conn = rusqlite::Connection::open(&db).expect("直连");
         conn.execute(
@@ -459,9 +457,9 @@ fn quick_check_failure_enters_read_only_safe_mode_without_exiting() {
     let _serial = harness::serial_guard();
     let dirs = TestDirs::new();
     std::fs::create_dir_all(dirs.data_dir()).expect("数据目录");
-    let db = dirs.data_dir().join("aether.db");
+    let layout = aether_store::initialize_layout(&dirs.data_dir(), "0.1.0", 1).expect("初始化");
+    let db = layout.main_db().to_path_buf();
     {
-        let _store = aether_store::Store::open(&db).expect("建库并迁移");
         let conn = rusqlite::Connection::open(&db).expect("直连");
         conn.execute_batch(
             "CREATE TABLE corrupt_probe (x BLOB);\n\

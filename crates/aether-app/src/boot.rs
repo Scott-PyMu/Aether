@@ -15,6 +15,8 @@ pub struct BackendBundle {
     pub write: Option<aether_store::WriteQueue>,
     /// M9-09：Keychain preflight（只读；无密钥存储/降级启动为 None）。
     pub keychain_preflight: Option<crate::keychain_preflight::KeychainPreflightReport>,
+    /// ADR-039 D-039-5：备份/恢复维护态共享单元（壳层注入 IpcState）。
+    pub maintenance: Option<std::sync::Arc<ipc::MaintenanceCell>>,
 }
 
 /// M9-12（ADR-029 §7/§8.2 P2-10）：权限服务配置。
@@ -72,10 +74,13 @@ pub fn build_backend(
             pipeline: None,
             write: None,
             keychain_preflight: None,
+            maintenance: None,
         };
     }
     let data_dir = std::path::PathBuf::from(startup.snapshot().data_dir);
     let handle = runtime.clone();
+    // ADR-039 D-039-5：备份/恢复维护态（组合根与 IpcState 共享）。
+    let maintenance = std::sync::Arc::new(ipc::MaintenanceCell::new());
 
     // M3-04（D13 七步第 3–6 步）：待处理恢复在存储打开**之前**执行（无写者窗口）；
     // 中断（kill -9）遗留的现场日志在此回滚（DoD4）。结果在核心启动后写审计。
@@ -99,7 +104,9 @@ pub fn build_backend(
             "导入启动切换完成（staging → aether.db；既有数据未丢失）"
         ),
         Ok(None) => {}
-        Err(error) => tracing::error!(error = %error, "导入启动切换失败（作业已标记 failed；既有数据未改变）"),
+        Err(error) => {
+            tracing::error!(error = %error, "导入启动切换失败（作业已标记 failed；既有数据未改变）")
+        }
     }
 
     // M2-07（ADR-007 §5-2）：监督器摘要接线在 health 之前完成，
@@ -322,13 +329,12 @@ pub fn build_backend(
                     Some(executor) => executor.clone(),
                     None => std::sync::Arc::new(adapter_executor::UnavailableExecutor),
                 };
-                let replay_resolver = std::sync::Arc::new(
-                    crate::attachment::AttachmentReplayResolver::new(
+                let replay_resolver =
+                    std::sync::Arc::new(crate::attachment::AttachmentReplayResolver::new(
                         reads.clone(),
                         data_dir.clone(),
                         supervisor.clone(),
-                    ),
-                );
+                    ));
                 let mut manager = aether_control::SessionManager::new(
                     aether_control::LifecycleConfig::default(),
                     std::sync::Arc::new(aether_control::SystemClock),
@@ -423,19 +429,27 @@ pub fn build_backend(
                 // 安全模式；仍允许 `backup_restore` 维护例外（先登记现场日志，恢复由
                 // 下次启动的无写者窗口执行）。只读连接池不启动写任务/不迁移/不写库。
                 let degraded = std::sync::Arc::new(core_health::degraded_backend(&reason));
-                let safe_mode_reads =
-                    aether_store::ReadPool::open_read_only(data_dir.join("aether.db"), 2).ok();
+                let safe_mode_reads = aether_store::ReadPool::open_read_only(
+                    aether_store::read_layout(&data_dir)
+                        .map(|layout| layout.main_db().to_path_buf())
+                        .unwrap_or_else(|_| data_dir.join("aether.db")),
+                    2,
+                )
+                .ok();
                 let backend: std::sync::Arc<dyn ipc::IpcBackend> = match safe_mode_reads {
                     Some(reads) => {
                         let secrets = provider_control::boot_secret_store(&data_dir);
-                        std::sync::Arc::new(backup_control::BackupControlBackend::new(
-                            degraded,
-                            data_dir.clone(),
-                            Some(reads),
-                            None,
-                            handle.clone(),
-                            secrets,
-                        ))
+                        std::sync::Arc::new(
+                            backup_control::BackupControlBackend::new(
+                                degraded,
+                                data_dir.clone(),
+                                Some(reads),
+                                None,
+                                handle.clone(),
+                                secrets,
+                            )
+                            .with_maintenance_cell(std::sync::Arc::clone(&maintenance)),
+                        )
                     }
                     None => degraded,
                 };
@@ -444,6 +458,28 @@ pub fn build_backend(
         };
 
     // M2-08 启动序列尾段（D2：库打开 + quick_check → 孤儿清理 → 迁移/预热）：
+    // ADR-039 D-039-8 §1：启动成功后清理更早的 `.pre-*`/`.failed-*`（保留当前+最近 1 份），
+    // 容量 >1.5× live 时告警（不删除当前/journal 引用）。
+    if let Ok(layout) = aether_store::read_layout(&data_dir) {
+        let live = aether_store::generation_live_bytes(&layout);
+        let total = aether_store::generations_total_bytes(&layout);
+        if live > 0 && total > live.saturating_mul(3) / 2 {
+            tracing::warn!(
+                live_bytes = live,
+                total_bytes = total,
+                "generation 总量超过当前 live 的 1.5 倍（容量告警；旧 generation 清理保留最近 1 份）"
+            );
+        }
+        let removed =
+            aether_store::cleanup_generations(&data_dir, aether_store::import::current_time_ms());
+        if !removed.is_empty() {
+            tracing::info!(
+                removed = removed.len(),
+                "已清理过旧 generation（保留当前+最近 1 份）"
+            );
+        }
+    }
+
     // 清理台账残留（强杀核心后的孤儿）；按持久化偏好预热（M7-01/ADR-015 决策 5：
     // `enabled=0` 不 spawn、置 `cold → disabled(user_disabled)`）；接线心跳监控（T5b）。
     // M7-06/ADR-024 / ADR-028：存储/密钥存储就绪后**先接线**，再预热适配器——
@@ -475,7 +511,9 @@ pub fn build_backend(
             },
             None => Vec::new(),
         };
-        let store = boot_secrets.as_ref().map(|store| store.as_ref() as &dyn aether_security::SecretStore);
+        let store = boot_secrets
+            .as_ref()
+            .map(|store| store.as_ref() as &dyn aether_security::SecretStore);
         let report = crate::keychain_preflight::run_boot(store, &provider_ids);
         tracing::info!(
             scope = %report.scope,
@@ -594,14 +632,17 @@ pub fn build_backend(
     // 备份暂停并告警（不产出明文，ADR-020 缓解措施）。降级启动（无存储）不探测。
     let inner: std::sync::Arc<dyn ipc::IpcBackend> = match backup_deps {
         Some((reads, write)) => {
-            let backend = std::sync::Arc::new(backup_control::BackupControlBackend::new(
-                inner,
-                data_dir.clone(),
-                Some(reads),
-                Some(write),
-                handle.clone(),
-                boot_secrets.clone(),
-            ));
+            let backend = std::sync::Arc::new(
+                backup_control::BackupControlBackend::new(
+                    inner,
+                    data_dir.clone(),
+                    Some(reads),
+                    Some(write),
+                    handle.clone(),
+                    boot_secrets.clone(),
+                )
+                .with_maintenance_cell(std::sync::Arc::clone(&maintenance)),
+            );
             if let (Some(orchestrator), Some(task)) =
                 (&orchestrator, backend.spawn_auto_backup(&handle))
             {
@@ -696,9 +737,9 @@ pub fn build_backend(
     let backend: std::sync::Arc<dyn ipc::IpcBackend> =
         match (reads_for_workflow, write_for_workflow) {
             (Some(reads), Some(write)) => {
-                let agent = std::sync::Arc::new(
-                    workflow::SessionAgentExecutor::new(std::sync::Arc::clone(&session_backend)),
-                );
+                let agent = std::sync::Arc::new(workflow::SessionAgentExecutor::new(
+                    std::sync::Arc::clone(&session_backend),
+                ));
                 let engine = std::sync::Arc::new(workflow::WorkflowEngine::new(
                     reads.clone(),
                     write.clone(),
@@ -771,5 +812,6 @@ pub fn build_backend(
         pipeline: pipeline_for_bridge,
         write: write_for_bridge,
         keychain_preflight,
+        maintenance: Some(maintenance),
     }
 }

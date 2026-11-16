@@ -1,0 +1,80 @@
+{
+  "task": "M10-09",
+  "adr": "ADR-039 v1.0 (D-039-1/5/6/8)",
+  "recorded_at": "2026-11-15",
+  "platform": {
+    "os": "windows",
+    "arch": "x86_64",
+    "profile": "debug",
+    "disk": "source dataset on WDC WD20EZBX-08AYR (SATA HDD); generation on C: SSD",
+    "dataset": "M10-08 standard: 20,000,000 rows / 5.22 GiB / 100 sessions; generation built by scripts/test/m10-09/build-generation.mjs"
+  },
+  "dataset": {
+    "rows": 20000000,
+    "bytes": 5604724736,
+    "sha256": "c29bd1e03c12902bc55e086a967b5df9350b57b13935a2ad67a7497dac875edb",
+    "sessions": 100,
+    "generation_seconds": 4372.5,
+    "generation_bytes": 5561683149,
+    "generation_shards": 8,
+    "generation_build": "single sequential source scan + stable FNV-1a routing; target on SSD",
+    "generation_data_dir": "%TEMP%/opencode/m10-09/generation"
+  },
+  "shard_count": 8,
+  "write_p95_ms": 32.342299999999994,
+  "write_samples": 195990,
+  "write_max_ms": 521.2188,
+  "write_target_ms": 50,
+  "write_duration_seconds": 602.3401127,
+  "write_duration_target_seconds": 600,
+  "events_page_p95_ms": 45.3616,
+  "events_page_samples": 13579,
+  "events_page_target_ms": 150,
+  "events_page_standard_note": "M10-08 合成 payload 不满足 EventPayload 严格 schema；标准读复测只读同一 run 新写入的合法 log 事件（seq > 初始 max），不修改产品解码逻辑。",
+  "main_events_after_write": 0,
+  "clean_shutdown_generation_matches_current": true,
+  "fault_injections": {
+    "legacy_flat_layout_rejected": true,
+    "main_events_non_empty_rejected": true,
+    "shard_id_out_of_range_rejected": true,
+    "deletion_pending_check_rejected": true,
+    "shards_sha256_mismatch_rejected": true,
+    "missing_shard_rejected": true,
+    "backup_manifest_hash_tamper_rejected": true,
+    "legacy_single_file_backup_rejected": true,
+    "restore_staging_corruption_rejected": true,
+    "restore_staging_partial_cleanup": true,
+    "startup_pending_deletion_recovery": true
+  },
+  "contract": {
+    "commands_implemented": 87,
+    "commands_registered": 87,
+    "ipc_error_codes": 32,
+    "business_codes": 35,
+    "settings_keys": 11,
+    "migrations": 14,
+    "migration_0014": "sessions.shard_id + sessions.deletion_pending + idx_sessions_shard_id + idx_sessions_deletion_pending"
+  },
+  "unverified": [
+    "macOS/Linux execution",
+    "backup/restore 600s/900s budgets on 5.22GiB dataset",
+    "WAL non-checkpointed / backup-with-writes / restore kill injection / Windows CURRENT replacement failure"
+  ],
+  "standard_600s": {
+    "concurrency": 10,
+    "duration_seconds": 602.3401127,
+    "profile": "debug",
+    "data_dir": "C:\\Users\\Lenovo\\AppData\\Local\\Temp\\opencode\\m10-09\\generation",
+    "write_samples": 195990,
+    "write_p50_ms": 31.0746,
+    "write_p95_ms": 32.342299999999994,
+    "write_max_ms": 521.2188,
+    "read_samples": 13579,
+    "read_p50_ms": 44.1427,
+    "read_p95_ms": 45.3616,
+    "read_max_ms": 67.7211,
+    "failures": 0,
+    "main_events": 0,
+    "clean_shutdown": true
+  }
+}

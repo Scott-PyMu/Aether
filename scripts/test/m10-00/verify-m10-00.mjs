@@ -145,9 +145,9 @@ if (existsSync(path.join(root, freezePath))) {
 if (freeze) {
   check("冻结清单 schema", freeze.schema === "aether.m10.doc-freeze.v1");
   check("冻结清单任务 M10-00", freeze.task === "M10-00");
-  check("冻结清单设计 v1.32", freeze.design_version === "v1.32");
-  check("冻结清单 P2 v0.10", freeze.p2_plan_version === "v0.10");
-  check("冻结清单 UI-UX v0.19", freeze.uiux_version === "v0.19");
+  check("冻结清单设计 v1.32", freeze.design_version === "v1.35");
+  check("冻结清单 P2 v0.10", freeze.p2_plan_version === "v0.14");
+  check("冻结清单 UI-UX v0.19", freeze.uiux_version === "v0.20");
   check(
     "冻结清单条目 = 18",
     (freeze.artifacts ?? []).length === 18,
@@ -222,7 +222,7 @@ function checkDesign(name, condition, detail = "") {
   if (!designAvailable) return;
   check(name, condition, detail);
 }
-checkDesign("设计文档版本 v1.33", design.includes("v1.33"));
+checkDesign("设计文档版本 v1.33", design.includes("v1.35"));
 for (const id of ["ADR-031", "ADR-032", "ADR-033", "ADR-034", "ADR-035", "ADR-036", "ADR-037", "ADR-038"]) {
   checkDesign(`设计文档引用 ${id}`, design.includes(id));
 }
@@ -247,8 +247,8 @@ if (registry) {
 
 // ---------- 4. P2 计划 ----------
 const plan = read("docs/P2-架构迁移-实施计划与验收标准.md");
-check("P2 计划版本 v0.11", plan.includes("v0.11") && plan.includes("计划版本"));
-check("P2 计划 M10-00 已执行", plan.includes("M10-00 已执行"));
+check("P2 计划版本 v0.11", plan.includes("v0.14") && plan.includes("计划版本"));
+check("P2 计划 M10-00 已执行", plan.includes("M10-00～M10-08 已执行"));
 check("P2 计划 M10 解锁", plan.includes("M10-01～M10-08 解锁"));
 check("P2 计划含 verify:m10-00", plan.includes("verify:m10-00"));
 for (const id of ["ADR-031", "ADR-032", "ADR-033", "ADR-034", "ADR-035", "ADR-036", "ADR-037", "ADR-038"]) {
@@ -257,7 +257,7 @@ for (const id of ["ADR-031", "ADR-032", "ADR-033", "ADR-034", "ADR-035", "ADR-03
 
 // ---------- 5. UI-UX ----------
 const uiux = read("docs/UI-UX-设计规格.md");
-check("UI-UX 版本 v0.19", uiux.includes("v0.19"));
+check("UI-UX 版本 v0.19", uiux.includes("v0.20"));
 check("UI-UX 锚点 29", uiux.includes("29"));
 check("UI-UX 含 C11 i18n/主题", uiux.includes("C11"));
 for (const anchor of registry?.uiux_anchors ?? []) {

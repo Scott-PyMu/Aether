@@ -20,7 +20,9 @@ pub mod archive;
 pub mod backup;
 pub mod checkpoint;
 pub mod error;
+pub mod generation_backup;
 pub mod import;
+pub mod layout;
 pub mod migration;
 pub mod ops;
 pub mod pragma;
@@ -33,13 +35,14 @@ pub mod write_queue;
 pub use archive::{
     archive_line_whitelist, archive_retention_batch, audit_archive_file_name,
     cleanup_archive_temps, compact_date_utc, export_audit_archive, export_full_archive,
-    export_session_archive, full_archive_file_name, retention_archive_file_name,
-    select_retention_batch, session_archive_file_name, unique_archive_path, verify_archive_file,
-    ArchiveCounts, ArchiveManifest, ArchiveReport, ArchiveSanitizer, ArchiveVerification,
-    RetentionEventRow, ARCHIVE_BUFFER_BYTES, ARCHIVE_FORMAT_VERSION, ARCHIVE_MANIFEST_KIND,
-    ARCHIVE_PARTIAL_INFIX, ARCHIVE_SOURCE_ARCHIVE_EXPORT, ARCHIVE_SOURCE_AUDIT_EXPORT,
-    ARCHIVE_SOURCE_AUTO_RETENTION, ARCHIVE_SOURCE_SESSION_EXPORT, ARCHIVE_TEMP_INFIX,
-    RETENTION_BATCH_MAX, RETENTION_EVENT_TYPES,
+    export_full_archive_generation, export_session_archive, export_session_archive_generation,
+    full_archive_file_name, retention_archive_file_name, select_retention_batch,
+    select_retention_batch_generation, session_archive_file_name, unique_archive_path,
+    verify_archive_file, ArchiveCounts, ArchiveManifest, ArchiveReport, ArchiveSanitizer,
+    ArchiveVerification, RetentionEventRow, ARCHIVE_BUFFER_BYTES, ARCHIVE_FORMAT_VERSION,
+    ARCHIVE_MANIFEST_KIND, ARCHIVE_PARTIAL_INFIX, ARCHIVE_SOURCE_ARCHIVE_EXPORT,
+    ARCHIVE_SOURCE_AUDIT_EXPORT, ARCHIVE_SOURCE_AUTO_RETENTION, ARCHIVE_SOURCE_SESSION_EXPORT,
+    ARCHIVE_TEMP_INFIX, RETENTION_BATCH_MAX, RETENTION_EVENT_TYPES,
 };
 
 pub use backup::{
@@ -49,11 +52,21 @@ pub use backup::{
     create_backup_staging, execute_restore, finalize_restore, program_schema_version, prune_plan,
     prune_plan_for_kind, read_restore_journal, recover_or_apply_pending_restore, request_restore,
     required_space_bytes, restore_journal_path, rollback_scene, validate_candidate,
-    write_restore_journal, BackupRecord, CandidateReport, RestoreFault, RestoreJournal,
-    RestoreReport, RestoreRequest, RestoreStartupOutcome, RestoreStep, RestoreStepRecord,
-    SceneProtection, BACKUP_RETENTION, BACKUP_TEMP_INFIX, ENCRYPTED_BACKUP_EXTENSION,
-    PRE_RESTORE_INFIX, RESTORE_CANDIDATE_INFIX, RESTORE_JOURNAL_SUFFIX, RESTORE_TEMP_INFIX,
-    SPACE_MARGIN_DENOMINATOR, SPACE_MARGIN_NUMERATOR,
+    write_restore_journal, BackupIntegrity, BackupRecord, CandidateReport, RestoreFault,
+    RestoreJournal, RestoreReport, RestoreRequest, RestoreStartupOutcome, RestoreStep,
+    RestoreStepRecord, SceneProtection, BACKUP_RETENTION, BACKUP_TEMP_INFIX,
+    ENCRYPTED_BACKUP_EXTENSION, PRE_RESTORE_INFIX, RESTORE_CANDIDATE_INFIX, RESTORE_JOURNAL_SUFFIX,
+    RESTORE_TEMP_INFIX, SPACE_MARGIN_DENOMINATOR, SPACE_MARGIN_NUMERATOR,
+};
+pub use generation_backup::{
+    assert_generation_ready, cleanup_generations, create_backup_set, events_count,
+    generation_diagnostics, new_generation_id, restore_space_required, rewrite_backup_set_manifest,
+    stage_restore, stage_restore_plain, stage_restore_with, staging_generation,
+    validate_backup_set, validate_relative_path, verify_layout, verify_staged_generation,
+    BackupFileEntry, BackupSetManifest, BackupSetOutcome, ValidatedBackupSet,
+    BACKUP_FORMAT_SHARDED_SET, BACKUP_FORMAT_SINGLE_FILE, BACKUP_GENERATION_DIR,
+    BACKUP_SET_TEMP_PREFIX, BACKUP_SET_VERSION, ENCRYPTED_SET_SUFFIX, MANIFEST_FILE_NAME,
+    MANIFEST_SHA256_FILE_NAME, RESTORE_ATTACHMENTS_NOTICE,
 };
 
 pub use checkpoint::{
@@ -63,21 +76,38 @@ pub use checkpoint::{
 };
 pub use error::StoreError;
 pub use import::{
-    apply_source_to_staging, boot_apply_pending_import, cleanup_imports, cleanup_staging,
-    create_staging_snapshot, current_time_ms, has_active_job, has_marker, import_root,
-    is_valid_job_id, job_dir, job_path, job_status_value, mark_staging, new_ulid, pending_exists,
-    pending_path, precheck_source, read_job, read_pending, reconcile_interrupted_imports,
-    remove_pending, validate_source, verify_staging, work_db_path, write_job, write_pending,
-    ImportApplyReport, ImportBootReport, ImportFailure, ImportFailureInfo, ImportFailureKind,
-    ImportJob, ImportJobStatus, ImportManifest, ImportMode, ImportProgress, ImportSummary,
-    ImportValidation, ImportWarning, PendingImport, StagingVerification, ARCHIVE_IMPORT_SOURCES,
-    AUDIT_ACTION_IMPORT_CANCELLED, AUDIT_ACTION_IMPORT_COMPLETED, AUDIT_ACTION_IMPORT_FAILED,
-    AUDIT_ACTION_IMPORT_STARTED, IMPORT_BATCH_ROWS, IMPORT_BUFFER_BYTES, IMPORT_CONFLICT_MAX,
-    IMPORT_DIR, IMPORT_FILE_MAX_BYTES, IMPORT_FORMAT_VERSION, IMPORT_JOB_FILE, IMPORT_JOB_VERSION,
-    IMPORT_LINE_MAX_BYTES, IMPORT_MANIFEST_LINE_MAX_BYTES, IMPORT_PENDING_FILE,
-    IMPORT_SOURCE_ARCHIVE_EXPORT, IMPORT_SOURCE_AUDIT_EXPORT, IMPORT_SOURCE_AUTO_RETENTION,
-    IMPORT_SOURCE_SESSION_EXPORT, IMPORT_STALE_HOURS, IMPORT_WARNING_MAX, IMPORT_WORK_DB,
-    PRE_IMPORT_INFIX, SESSION_IMPORT_SOURCES,
+    apply_source_to_staging, boot_apply_pending_import, build_import_generation, cleanup_imports,
+    cleanup_staging, create_staging_snapshot, current_time_ms, has_active_job, has_marker,
+    import_root, is_valid_job_id, job_dir, job_path, job_status_value, mark_staging, new_ulid,
+    pending_exists, pending_path, precheck_source, read_job, read_pending,
+    reconcile_interrupted_imports, remove_pending, validate_source, verify_staging, work_db_path,
+    write_job, write_pending, ImportApplyReport, ImportBootReport, ImportFailure,
+    ImportFailureInfo, ImportFailureKind, ImportGeneration, ImportJob, ImportJobStatus,
+    ImportManifest, ImportMode, ImportProgress, ImportSummary, ImportValidation, ImportWarning,
+    PendingImport, StagingVerification, ARCHIVE_IMPORT_SOURCES, AUDIT_ACTION_IMPORT_CANCELLED,
+    AUDIT_ACTION_IMPORT_COMPLETED, AUDIT_ACTION_IMPORT_FAILED, AUDIT_ACTION_IMPORT_STARTED,
+    IMPORT_BATCH_ROWS, IMPORT_BUFFER_BYTES, IMPORT_CONFLICT_MAX, IMPORT_DIR, IMPORT_FILE_MAX_BYTES,
+    IMPORT_FORMAT_VERSION, IMPORT_JOB_FILE, IMPORT_JOB_VERSION, IMPORT_LINE_MAX_BYTES,
+    IMPORT_MANIFEST_LINE_MAX_BYTES, IMPORT_PENDING_FILE, IMPORT_SOURCE_ARCHIVE_EXPORT,
+    IMPORT_SOURCE_AUDIT_EXPORT, IMPORT_SOURCE_AUTO_RETENTION, IMPORT_SOURCE_SESSION_EXPORT,
+    IMPORT_STALE_HOURS, IMPORT_WARNING_MAX, IMPORT_WORK_DB, PRE_IMPORT_INFIX,
+    SESSION_IMPORT_SOURCES,
+};
+pub use layout::{
+    assert_invariants, cleanup_old_generations, cleanup_unreferenced_staging,
+    commit_staged_generation, database_fingerprint, file_size, generation_live_bytes,
+    generations_total_bytes, header_change_counter, initialize as initialize_layout,
+    invalidate_clean_shutdown, is_valid_generation_id, journal_file_name, list_generations,
+    open_or_initialize as open_layout, pending_deletions, read_clean_shutdown, read_current,
+    read_existing as read_layout, read_generation_journal, remove_generation_journal,
+    replace_file_atomic, shard_file_name, shard_for, shard_last_seq, sqlite_sidecar,
+    write_clean_shutdown, write_current, write_generation_journal, CleanShutdown, CurrentPointer,
+    DatabaseFingerprint, GenerationInfo, GenerationJournal, GenerationRecovery, GenerationStatus,
+    ShardEntry, ShardFingerprint, ShardsManifest, StorageLayout, CLEAN_SHUTDOWN_NAME,
+    CURRENT_FILE_NAME, EVENTS_DIR_NAME, FAILED_GENERATION_PREFIX, FORMAT_VERSION,
+    GENERATIONS_DIR_NAME, IMPORT_JOURNAL_NAME, JOURNAL_VERSION, MAIN_DB_NAME,
+    PRE_GENERATION_PREFIX, RESTORE_JOURNAL_NAME, SHARDS_MANIFEST_NAME, SHARD_COUNT,
+    STAGING_DIR_NAME,
 };
 pub use migration::{
     checksum, migrate, migrate_with, AppliedMigration, MigrationFile, EMBEDDED_MIGRATIONS,
@@ -91,16 +121,18 @@ pub use ops::{
     WorkspaceSessionCounts, AUDIT_QUERY_DEFAULT_LIMIT, AUDIT_QUERY_MAX_LIMIT, SUMMARY_TABLES,
 };
 pub use pragma::PragmaSnapshot;
-pub use preflight::{preflight, PreflightReport};
-pub use store::{quick_check, ExportReport, IntegrityReport, Store, StoreMode, TableExport};
+pub use preflight::{preflight, preflight_generation, GenerationPreflight, PreflightReport};
+pub use store::{
+    quick_check, quick_check_path, ExportReport, IntegrityReport, Store, StoreMode, TableExport,
+};
 pub use subagent::{SubagentCommand, SubagentInjectionRecord, SubagentResultRecord};
 pub use workflow::{NodeRunRecord, TaskRecord, WorkflowCommand, WorkflowRecord, WorkflowRunRecord};
 pub use write_queue::{
-    BatchTrigger, CommitReceipt, QueueMetrics, QueuePressureLevel, QueuePressurePhase, ReadPool,
-    ReadPoolCloseReport, ShutdownConfig, ShutdownReport, ShutdownStep, ShutdownStepRecord,
-    StoreRuntime, WriteQueue, WriteQueueAlert, WriteQueueConfig, FLUSH_INTERVAL, L1_THRESHOLD,
-    L2_THRESHOLD, MAX_BATCH_ENTRIES, QUEUE_CAPACITY, READ_CONNECTION_COUNT, SHUTDOWN_DRAIN_TIMEOUT,
-    SHUTDOWN_READ_CLOSE_TIMEOUT,
+    BatchTrigger, CommitReceipt, MaintenanceWriteGuard, QueueMetrics, QueuePressureLevel,
+    QueuePressurePhase, ReadPool, ReadPoolCloseReport, ShutdownConfig, ShutdownReport, ShutdownStep,
+    ShutdownStepRecord, StoreRuntime, WriteQueue, WriteQueueAlert, WriteQueueConfig, FLUSH_INTERVAL,
+    L1_THRESHOLD, L2_THRESHOLD, MAX_BATCH_ENTRIES, QUEUE_CAPACITY, READ_CONNECTION_COUNT,
+    SHUTDOWN_DRAIN_TIMEOUT, SHUTDOWN_READ_CLOSE_TIMEOUT,
 };
 
 #[cfg(test)]

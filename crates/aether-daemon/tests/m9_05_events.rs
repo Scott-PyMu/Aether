@@ -22,12 +22,8 @@ const SESSION_ID: &str = "01J00000000000000000000S05";
 /// 预置 `runtimes`/`sessions` 行（事件管线不依赖适配器；rename 只读写会话行）。
 fn seed_database(data_dir: &std::path::Path) {
     std::fs::create_dir_all(data_dir).expect("数据目录");
-    let db = data_dir.join("aether.db");
-    {
-        let store = aether_store::Store::open(&db).expect("建库/迁移");
-        drop(store);
-    }
-    let connection = rusqlite::Connection::open(&db).expect("直连");
+    let layout = aether_store::initialize_layout(data_dir, "0.1.0", 1).expect("初始化 generation");
+    let connection = rusqlite::Connection::open(layout.main_db()).expect("直连");
     connection
         .execute(
             "INSERT INTO runtimes (id, name, kind, version, created_at, updated_at) \
@@ -37,9 +33,9 @@ fn seed_database(data_dir: &std::path::Path) {
         .expect("runtime 行");
     connection
         .execute(
-            "INSERT INTO sessions (id, runtime_id, title, status, created_at, updated_at) \
-             VALUES (?1, 'mock', 'seed', 'idle', 1, 1)",
-            [SESSION_ID],
+            "INSERT INTO sessions (id, runtime_id, title, status, created_at, updated_at, shard_id) \
+             VALUES (?1, 'mock', 'seed', 'idle', 1, 1, ?2)",
+            rusqlite::params![SESSION_ID, i64::from(aether_store::shard_for(SESSION_ID))],
         )
         .expect("session 行");
 }
@@ -129,7 +125,12 @@ fn daemon_pushes_aether_event_after_log_with_monotonic_seq() {
     let code = daemon.shutdown();
     assert_eq!(code, 0, "事件桥停止后 daemon 必须干净退出");
 
-    let connection = rusqlite::Connection::open(dirs.data_dir().join("aether.db")).expect("直连");
+    let layout = aether_store::read_layout(&dirs.data_dir()).expect("generation");
+    let shard_path = layout
+        .shard_path(aether_store::shard_for(SESSION_ID))
+        .expect("分片路径")
+        .to_path_buf();
+    let connection = rusqlite::Connection::open(shard_path).expect("直连分片");
     let count: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM events WHERE session_id = ?1",

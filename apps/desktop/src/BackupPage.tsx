@@ -344,12 +344,15 @@ export function BackupPage({
     resetMessages();
     try {
       const response = await ipc.restore(source);
+      const base = response.restart_required
+        ? t("backup.restore_request_recorded_the_app")
+        : t("backup.restore_request_recorded");
+      const attachmentsNotice =
+        response.candidate?.attachments_notice ?? t("backup.attachments_not_included");
       setRestoreResult({
         result: "requested",
         source: response.source,
-        message: response.restart_required
-          ? t("backup.restore_request_recorded_the_app")
-          : t("backup.restore_request_recorded"),
+        message: `${base} ${attachmentsNotice}`,
       });
       setPending(null);
       await refresh();
@@ -734,10 +737,18 @@ export function BackupPage({
                       data-testid="backup-restore"
                       data-source="internal"
                       data-backup-id={backup.id}
-                      disabled={busy}
+                      data-format={backup.format ?? "sharded_set"}
+                      disabled={busy || backup.format === "single_file"}
+                      title={
+                        backup.format === "single_file"
+                          ? t("backup.single_file_restore_disabled")
+                          : undefined
+                      }
                       onClick={() => requestRestore({ source: "internal", id: backup.id })}
                     >
-                      {t("app.action.restore")}
+                      {backup.format === "single_file"
+                        ? t("backup.restore_unavailable")
+                        : t("app.action.restore")}
                     </button>
                   </span>
                 </li>

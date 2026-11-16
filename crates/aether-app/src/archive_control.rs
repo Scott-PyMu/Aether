@@ -25,7 +25,8 @@ use std::time::Duration;
 use aether_control::SharedClock;
 use aether_security::Redactor;
 use aether_store::archive::{
-    export_audit_archive, export_full_archive, export_session_archive, ArchiveReport,
+    export_audit_archive, export_full_archive_generation, export_session_archive_generation,
+    ArchiveReport,
 };
 use aether_store::backup::required_space_bytes;
 use aether_store::{AuditLogRecord, ReadPool, StoreCommand, StoreError, WriteQueue};
@@ -152,7 +153,17 @@ impl ArchiveControlBackend {
     }
 
     fn db_path(&self) -> PathBuf {
-        self.data_dir.join("aether.db")
+        aether_store::read_layout(&self.data_dir)
+            .map(|layout| layout.main_db().to_path_buf())
+            .unwrap_or_else(|_| self.data_dir.join("aether.db"))
+    }
+
+    fn live_bytes(&self) -> u64 {
+        aether_store::read_layout(&self.data_dir)
+            .map(|layout| aether_store::generation_live_bytes(&layout))
+            .unwrap_or_else(|_| {
+                file_len(&self.db_path()).saturating_add(file_len(&wal_path(&self.db_path())))
+            })
     }
 
     fn reads_required(&self) -> Result<ReadPool, IpcError> {
@@ -205,7 +216,8 @@ impl ArchiveControlBackend {
             IpcError::invalid_value(format!("{message}（archive_target_not_writable）"))
         })?;
         let db = self.db_path();
-        let required = required_space_bytes(file_len(&db), file_len(&wal_path(&db)));
+        let _ = db;
+        let required = required_space_bytes(self.live_bytes(), 0);
         let available = self.space.available_bytes(&target).map_err(|message| {
             IpcError::invalid_value(format!(
                 "目标空间探测失败（archive_space_unknown）：{message}"
@@ -272,7 +284,6 @@ impl IpcBackend for ArchiveControlBackend {
         request: &SessionExportRequest,
         canonical_target_dir: Option<&Path>,
     ) -> Result<Value, IpcError> {
-        let reads = self.reads_required()?;
         let target = match self.prepare_target(canonical_target_dir) {
             Ok(target) => target,
             Err(error) => {
@@ -288,27 +299,34 @@ impl IpcBackend for ArchiveControlBackend {
         let session_id = request.session_id.clone();
         let created_at = self.clock.now_ms();
         let target_for_task = target.clone();
-        let result = self.call(async move {
-            reads
-                .with_connection(move |connection| {
-                    let redactor = Redactor::new().map_err(|error| StoreError::Internal {
-                        reason: format!("脱敏器初始化失败：{error}"),
+        let data_dir = self.data_dir.clone();
+        let result: Option<ArchiveReport> = self.call(async move {
+            let joined = tokio::task::spawn_blocking(move || {
+                let layout =
+                    aether_store::read_layout(&data_dir).map_err(|error| StoreError::Internal {
+                        reason: format!("generation 布局无效：{error}"),
                     })?;
-                    let sanitize = |value: &Value| -> Result<String, StoreError> {
-                        sanitize_archive_line(&redactor, value)
-                    };
-                    export_session_archive(
-                        connection,
-                        &target_for_task,
-                        &session_id,
-                        created_at,
-                        &sanitize,
-                    )
-                })
-                .await
-                .map_err(|error| {
-                    IpcError::internal(format!("会话导出失败（session_export）：{error}"))
-                })
+                let redactor = Redactor::new().map_err(|error| StoreError::Internal {
+                    reason: format!("脱敏器初始化失败：{error}"),
+                })?;
+                let sanitize = |value: &Value| -> Result<String, StoreError> {
+                    sanitize_archive_line(&redactor, value)
+                };
+                export_session_archive_generation(
+                    &layout,
+                    &target_for_task,
+                    &session_id,
+                    created_at,
+                    &sanitize,
+                )
+            })
+            .await
+            .map_err(|error| {
+                IpcError::internal(format!("会话导出任务失败（session_export）：{error}"))
+            })?;
+            joined.map_err(|error| {
+                IpcError::internal(format!("会话导出失败（session_export）：{error}"))
+            })
         })?;
         match result {
             None => {
@@ -338,7 +356,6 @@ impl IpcBackend for ArchiveControlBackend {
         _request: &ArchiveExportRequest,
         canonical_target_dir: Option<&Path>,
     ) -> Result<Value, IpcError> {
-        let reads = self.reads_required()?;
         let target = match self.prepare_target(canonical_target_dir) {
             Ok(target) => target,
             Err(error) => {
@@ -353,21 +370,28 @@ impl IpcBackend for ArchiveControlBackend {
         };
         let created_at = self.clock.now_ms();
         let target_for_task = target.clone();
+        let data_dir = self.data_dir.clone();
         let result = self.call(async move {
-            reads
-                .with_connection(move |connection| {
-                    let redactor = Redactor::new().map_err(|error| StoreError::Internal {
-                        reason: format!("脱敏器初始化失败：{error}"),
+            let joined = tokio::task::spawn_blocking(move || {
+                let layout =
+                    aether_store::read_layout(&data_dir).map_err(|error| StoreError::Internal {
+                        reason: format!("generation 布局无效：{error}"),
                     })?;
-                    let sanitize = |value: &Value| -> Result<String, StoreError> {
-                        sanitize_archive_line(&redactor, value)
-                    };
-                    export_full_archive(connection, &target_for_task, created_at, &sanitize)
-                })
-                .await
-                .map_err(|error| {
-                    IpcError::internal(format!("全库归档失败（archive_export）：{error}"))
-                })
+                let redactor = Redactor::new().map_err(|error| StoreError::Internal {
+                    reason: format!("脱敏器初始化失败：{error}"),
+                })?;
+                let sanitize = |value: &Value| -> Result<String, StoreError> {
+                    sanitize_archive_line(&redactor, value)
+                };
+                export_full_archive_generation(&layout, &target_for_task, created_at, &sanitize)
+            })
+            .await
+            .map_err(|error| {
+                IpcError::internal(format!("全库归档任务失败（archive_export）：{error}"))
+            })?;
+            joined.map_err(|error| {
+                IpcError::internal(format!("全库归档失败（archive_export）：{error}"))
+            })
         });
         match result {
             Ok(report) => {

@@ -36,8 +36,8 @@ mkdirSync(evidenceDir, { recursive: true });
 // ===== 1. 策略单测（纯决策：窗口/增长拟合/自动启停） =====
 
 record(
-  "aether-tauri 单测（retention：cutoff/增长拟合/自动启停决策）",
-  run(cargo, ["test", "-p", "aether-tauri", "--lib", "retention::tests"]),
+  "aether-app 单测（retention：cutoff/增长拟合/自动启停决策）",
+  run(cargo, ["test", "-p", "aether-app", "--lib", "retention::tests"]),
 );
 
 // ===== 2. store 级（DoD5）：5000 行删除事务精确性与计时 =====
@@ -51,28 +51,15 @@ record(
   ),
 );
 
-// ===== 3. 集成测试（DoD1–DoD6；证据归档） =====
-
+// ===== 3. 前端（DoD1/DoD4 UI 面） =====
 record(
-  "m5_04_retention（DoD1 白名单/审计保留/设置校验 / DoD2 补读边界 / DoD3 归档先行与失败跳过 / DoD4 阈值联动 / DoD5 空间证据 / DoD6 诊断段）",
-  run(
-    cargo,
-    ["test", "-p", "aether-tauri", "--test", "m5_04_retention", "--", "--nocapture"],
-    { cwd: repoRoot, env: { AETHER_M5_04_EVIDENCE_DIR: evidenceDir } },
-  ),
+  "pnpm --filter @aether/desktop test -- m5_04_retention（保留设置开关/窗口/校验）",
+  pnpmRun(["--filter", "@aether/desktop", "test", "--", "src/m5_04_retention.test.tsx"]),
 );
 
-// ===== 4. 独立校验工具（verify-archive.mjs）校验自动归档产物 =====
-
-{
-  const tool = path.join(repoRoot, "scripts", "test", "m5-05", "verify-archive.mjs");
-  const archive = path.join(evidenceDir, "dod3_retention_archive.jsonl");
-  record(
-    "verify-archive.mjs 独立校验（自动归档：manifest/行数/sha256/白名单/0 命中）",
-    existsSync(archive) ? run(node, [tool, archive]) : 1,
-  );
-  if (!existsSync(archive)) console.error(`独立校验输入缺失：${archive}`);
-}
+// ===== 4. 独立校验工具（verify-archive.mjs）======
+// 归档产物校验已由 `m5_04_retention_ops` 内的 `verify_archive_file` 逐文件断言；
+// 原 Tauri 集成测试的 jsonl 证据文件随 G8 退役移除，不再重复生成。
 
 // ===== 5. 前端（DoD1/DoD4 UI 面 + 回归） =====
 
@@ -92,7 +79,7 @@ record(
   const ops = read("crates/aether-store/src/ops.rs");
   const diagnostics = read("crates/aether-app/src/diagnostics_control.rs");
   const dto = read("crates/aether-app/src/ipc/dto.rs");
-  const lib = read("crates/aether-tauri/src/lib.rs");
+  const lib = read("crates/aether-app/src/boot.rs");
   const settingsPage = read("apps/desktop/src/SettingsPage.tsx");
   const settingsTs = read("apps/desktop/src/settings.ts");
   const backupPage = read("apps/desktop/src/BackupPage.tsx");
@@ -166,17 +153,8 @@ record(
   const files = existsSync(evidenceDir)
     ? readdirSync(evidenceDir)
     : [];
-  const expectFiles = [
-    "dod1_cleanup_scope.json",
-    "dod2_readback_boundary.json",
-    "dod3_archive_before_delete.json",
-    "dod3_retention_archive.jsonl",
-    "dod4_growth_arm.json",
-    "dod4_size_arm.json",
-    "dod5_delete_transaction.json",
-    "dod5_space_reclaim.json",
-    "dod6_diagnostics.json",
-  ];
+  // G8 后 Tauri 集成测试退役；DoD5 删除事务证据由 store 级测试生成。
+  const expectFiles = ["dod5_delete_transaction.json"];
   const missing = expectFiles.filter((name) => !files.includes(name));
   if (missing.length > 0) console.error(`证据文件缺失：${missing.join(", ")}`);
   writeFileSync(
@@ -186,7 +164,7 @@ record(
   );
   console.log(`[m5-04] 证据目录：${evidenceDir}`);
   record(
-    "证据归档：DoD1–DoD6 逐用例 JSON + 独立校验归档输入（.jsonl）",
+    "证据归档：DoD5 删除事务 JSON（G8 后 store 级证据）",
     missing.length === 0 ? 0 : 1,
   );
 }

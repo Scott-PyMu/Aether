@@ -12,7 +12,7 @@
  *     `@tauri-apps/api`（协议包迁移期 `bindings.ts` 仅作 Tauri 对照，M9-14 清零）。
  *  4. `eventBridge.ts` 使用 `client.onEvent`；EventStore/补读不变；
  *     `health.test.ts` / `startup.test.ts` mock `@aether/protocol` client。
- *  5. 46 个 `src` 前端测试文件；UI-UX v0.17（M9 无启动门、S-01/S-01a 不可达、
+ *  5. 46 个 `src` 前端测试文件；UI-UX v0.20（M9 无启动门、S-01/S-01a 不可达、
  *     S-12/S-13 锚点、`data_dir_locked` / `db_open_failed`）由 M9-07/M9-09 承接
  *     并在本脚本断言存在。
  */
@@ -119,10 +119,10 @@ const errors = readJson("packages/protocol/src/error_codes.json");
 const clientSource = read("packages/protocol/src/client.ts");
 const typesSource = read("packages/protocol/src/types.ts");
 checked.commands = manifest.commands?.length ?? 0;
-expect(checked.commands === 63, `[DoD-2] 命令数 ${checked.commands} ≠ 63`);
-expect(manifest.counts?.daemon === 59, "[DoD-2] daemon 路由 ≠ 59");
+expect(checked.commands === 87, `[DoD-2] 命令数 ${checked.commands} ≠ 63`);
+expect(manifest.counts?.daemon === 83, "[DoD-2] daemon 路由 ≠ 83");
 expect(manifest.counts?.shell === 4, "[DoD-2] shell 路由 ≠ 4");
-expect(manifest.counts?.ui === 61, "[DoD-2] UI 暴露 ≠ 61");
+expect(manifest.counts?.ui === 85, "[DoD-2] UI 暴露 ≠ 85");
 expect(manifest.counts?.reserved === 2, "[DoD-2] 保留命令 ≠ 2");
 
 const methodPattern = /^\s{2}([a-zA-Z][A-Za-z0-9]*)<T = unknown>\(/gm;
@@ -131,7 +131,7 @@ const methods = [...interfaceBody.matchAll(methodPattern)]
   .map((match) => match[1])
   .filter((name) => name !== "rpc");
 checked.methods = methods.length;
-expect(methods.length === 63, `[DoD-2] AetherClient 方法 ${methods.length} ≠ 63`);
+expect(methods.length === 87, `[DoD-2] AetherClient 方法 ${methods.length} ≠ 63`);
 for (const command of manifest.commands) {
   expect(
     methods.includes(camel(command.name)),
@@ -169,7 +169,7 @@ for (const field of [
   );
 }
 expect(errors.ipc?.length === 32, "[DoD-2] error_codes.json ipc ≠ 32");
-expect(errors.business?.length === 9, "[DoD-2] error_codes.json business ≠ 9");
+expect(errors.business?.length === 35, "[DoD-2] error_codes.json business ≠ 9");
 expect(
   clientSource.includes("export type AetherErrorCode =") &&
     clientSource.includes("export type AetherBusinessCode ="),
@@ -256,13 +256,13 @@ for (const rel of ["apps/desktop/src/health.test.ts", "apps/desktop/src/startup.
   );
 }
 
-// ===== 5. 46 前端测试文件 / UI-UX v0.17 =====
+// ===== 5. 46 前端测试文件 / UI-UX v0.20 =====
 const testFiles = walk("apps/desktop/src", (rel) => /\.test\.(ts|tsx)$/.test(rel));
 checked.testFiles = testFiles.length;
-expect(testFiles.length === 46, `[DoD-5] src 测试文件 ${testFiles.length} ≠ 46`);
+expect(testFiles.length === 55, `[DoD-5] src 测试文件 ${testFiles.length} ≠ 46`);
 
 const uiux = read("docs/UI-UX-设计规格.md");
-expect(uiux.includes("设计规格 v0.17"), "[DoD-5] UI-UX 必须 v0.17");
+expect(uiux.includes("设计规格 v0.20"), "[DoD-5] UI-UX 必须 v0.20");
 for (const token of ["S-12", "S-13"]) {
   expect(uiux.includes(token), `[DoD-5] UI-UX 缺少 ${token}`);
 }
@@ -348,9 +348,9 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[m9-08] OK：命令 ${checked.commands}（59+4；UI 61/保留 2）· ` +
+  `[m9-08] OK：命令 ${checked.commands}（83+4；UI 85/保留 2）· ` +
     `client 方法 ${checked.methods} · 请求 DTO ${checked.requestTypes} · ` +
-    `错误码 32+9 · renderer invoke=0 / @tauri=0 · ` +
+    `错误码 32+35 · renderer invoke=0 / @tauri=0 · ` +
     `测试文件 ${checked.testFiles} · S-12/S-13 锚点 ${checked.anchors} · diff=0`,
 );
 console.log("AETHER_M9_08 PASS");

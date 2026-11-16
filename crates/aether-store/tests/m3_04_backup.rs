@@ -406,6 +406,12 @@ async fn backups_table_roundtrip() {
         encrypted: false,
         kind: "internal".to_owned(),
         created_at: 11,
+        format: None,
+        set_path: None,
+        manifest_path: None,
+        manifest_sha256: None,
+        shard_count: None,
+        integrity: None,
     };
     queue
         .execute(StoreCommand::InsertBackup {

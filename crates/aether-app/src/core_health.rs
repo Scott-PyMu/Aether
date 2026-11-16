@@ -162,6 +162,71 @@ impl RuntimeSummarySource for SupervisorRuntimeSummaries {
     }
 }
 
+/// `health.storage_check`（ADR-039 D-039-5 §1；M10-09 启动检查同步完成后为 `ok`，
+/// M10-10 改为并行异步状态机）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StorageCheckSnapshot {
+    /// `checking` / `ok` / `failed`。
+    pub state: String,
+    /// `startup` / `background`。
+    pub mode: String,
+    /// `checking` / `open`（启动准入；不是降级状态）。
+    pub write_gate: String,
+    /// 主库 `quick_check` 是否完成。
+    pub main_checked: bool,
+    /// 已完成分片数（x/8）。
+    pub checked_shards: usize,
+    pub total_shards: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl StorageCheckSnapshot {
+    /// 启动同步检查完成（M10-09 口径；主库 + 8 分片）。
+    pub fn ok(total_shards: usize, completed_at: i64) -> Self {
+        Self {
+            state: "ok".to_owned(),
+            mode: "startup".to_owned(),
+            write_gate: "open".to_owned(),
+            main_checked: true,
+            checked_shards: total_shards,
+            total_shards,
+            started_at: Some(completed_at),
+            completed_at: Some(completed_at),
+            error: None,
+        }
+    }
+
+    /// 检查失败（主库/分片）。
+    pub fn failed(total_shards: usize, checked_shards: usize, error: String) -> Self {
+        Self {
+            state: "failed".to_owned(),
+            mode: "startup".to_owned(),
+            write_gate: "open".to_owned(),
+            main_checked: false,
+            checked_shards,
+            total_shards,
+            started_at: None,
+            completed_at: None,
+            error: Some(error),
+        }
+    }
+}
+
+/// `health.maintenance`（ADR-039 D-039-5 §1；M10-09 只保留契约形状，M10-10 接线）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MaintenanceSnapshot {
+    /// `backup` / `restore`。
+    pub kind: String,
+    pub started_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress: Option<serde_json::Value>,
+}
+
 /// `health` 命令返回（ADR-007 附录 A；字段语义见该附录）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct HealthReport {
@@ -173,6 +238,12 @@ pub struct HealthReport {
     /// 未接线（降级启动/测试构造）省略。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub concurrency_gate: Option<aether_control::ConcurrencyGateSnapshot>,
+    /// ADR-039 D-039-5：启动检查状态（检查中不是降级；M10-10 异步化）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage_check: Option<StorageCheckSnapshot>,
+    /// ADR-039 D-039-5：备份/恢复维护态（除 `health`/`app_exit` 外命令拒绝）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub maintenance: Option<MaintenanceSnapshot>,
     pub ts: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub degrade_trigger: Option<String>,
@@ -188,6 +259,8 @@ pub struct HealthProvider {
     runtimes: Arc<dyn RuntimeSummarySource>,
     /// 并发闸门快照单元（M7-02：由 `SessionManager` 单写；未接线 → 字段省略）。
     gate: Option<aether_control::ConcurrencyGateCell>,
+    storage_check: Option<StorageCheckSnapshot>,
+    maintenance: Option<MaintenanceSnapshot>,
 }
 
 impl HealthProvider {
@@ -199,6 +272,8 @@ impl HealthProvider {
             pipeline,
             runtimes,
             gate: None,
+            storage_check: None,
+            maintenance: None,
         }
     }
 
@@ -206,6 +281,20 @@ impl HealthProvider {
     #[must_use]
     pub fn with_concurrency_gate(mut self, cell: aether_control::ConcurrencyGateCell) -> Self {
         self.gate = Some(cell);
+        self
+    }
+
+    /// 接线 `health.storage_check`（ADR-039 D-039-5；M10-09 同步 `ok`，M10-10 状态机）。
+    #[must_use]
+    pub fn with_storage_check(mut self, snapshot: StorageCheckSnapshot) -> Self {
+        self.storage_check = Some(snapshot);
+        self
+    }
+
+    /// 接线 `health.maintenance`（ADR-039 D-039-5；备份/恢复维护态）。
+    #[must_use]
+    pub fn with_maintenance(mut self, snapshot: MaintenanceSnapshot) -> Self {
+        self.maintenance = Some(snapshot);
         self
     }
 
@@ -217,6 +306,8 @@ impl HealthProvider {
             write_queue_depth: snapshot.write_queue_depth,
             runtimes: self.runtimes.summaries(),
             concurrency_gate: self.gate.as_ref().and_then(|cell| cell.snapshot()),
+            storage_check: self.storage_check.clone(),
+            maintenance: self.maintenance.clone(),
             ts: now_ms(),
             degrade_trigger: snapshot.degrade_trigger,
             degraded_since_ms: snapshot.degraded_since_ms,
@@ -277,7 +368,9 @@ impl CoreHealthBackend {
         let pipeline = Arc::new(pipeline);
         let source: Arc<dyn PipelineHealthSource> =
             Arc::clone(&pipeline) as Arc<dyn PipelineHealthSource>;
-        let provider = HealthProvider::new(source, runtimes);
+        let provider = HealthProvider::new(source, runtimes).with_storage_check(
+            StorageCheckSnapshot::ok(aether_store::SHARD_COUNT, now_ms()),
+        );
         let provider = match gate {
             Some(cell) => provider.with_concurrency_gate(cell),
             None => provider,
@@ -332,6 +425,11 @@ pub fn degraded_provider(reason: &str) -> HealthProvider {
         Arc::new(StaticHealthSource::new(snapshot)),
         Arc::new(StaticRuntimeSummaries::unwired()),
     )
+    .with_storage_check(StorageCheckSnapshot::failed(
+        aether_store::SHARD_COUNT,
+        0,
+        reason.to_owned(),
+    ))
 }
 
 /// 核心启动错误（存储打开 / 管线启动）。
@@ -427,8 +525,9 @@ pub fn boot_core_full_with_gate(
     runtimes: Arc<dyn RuntimeSummarySource>,
     gate: Option<aether_control::ConcurrencyGateCell>,
 ) -> Result<CoreBoot, CoreHealthBootError> {
-    let db_path = data_dir.join("aether.db");
-    let storage = StoreRuntime::open(&db_path, WriteQueueConfig::default(), handle)
+    let layout = aether_store::open_layout(data_dir, env!("CARGO_PKG_VERSION"), now_ms())
+        .map_err(CoreHealthBootError::Storage)?;
+    let storage = StoreRuntime::open_generation(layout, WriteQueueConfig::default(), handle)
         .map_err(CoreHealthBootError::Storage)?;
     let reads = storage.reads().clone();
     let write = storage.queue().clone();

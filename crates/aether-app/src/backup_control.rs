@@ -26,16 +26,10 @@ use std::time::Duration;
 use aether_control::{SharedClock, SystemClock};
 use aether_security::{
     decrypt_backup_file, derive_passphrase_key_with_salt, inspect_backup_artifact,
-    is_encrypted_backup_artifact, load_or_create_master_key, BackupArtifactMode,
-    BackupCryptoParams, SecretError, SecretStore,
-};
-use aether_store::backup::{
-    cleanup_restore_candidates, program_schema_version, read_restore_journal, request_restore,
-    validate_candidate, RESTORE_CANDIDATE_INFIX,
+    load_or_create_master_key, BackupCryptoParams, SecretStore,
 };
 use aether_store::{
-    recover_or_apply_pending_restore, AuditLogRecord, ReadPool, RestoreStartupOutcome,
-    StoreCommand, StoreError, WriteQueue,
+    AuditLogRecord, ReadPool, RestoreStartupOutcome, StoreCommand, StoreError, WriteQueue,
 };
 use serde_json::{json, Value};
 
@@ -51,9 +45,10 @@ use crate::ipc::dto::{
     SessionSendRequest, SettingsGetRequest, SettingsSetRequest, WorkspaceSetRequest,
 };
 use crate::ipc::error::IpcError;
+use crate::ipc::{MaintenanceCell, MaintenanceState};
 
 /// 备份命令硬超时（大库 `VACUUM INTO` 预算；与 D6 方法超时表独立，手动动作给足窗口）。
-pub const BACKUP_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
+pub const BACKUP_COMMAND_TIMEOUT: Duration = Duration::from_secs(600);
 /// 容量巡检警告阈值（D13：2GB）。
 pub const CAPACITY_WARN_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 /// 容量巡检强烈提示阈值（D13：5GB）。
@@ -174,6 +169,34 @@ pub struct BackupControlBackend {
     secrets: Option<Arc<dyn SecretStore>>,
     /// M5-03：口令模式 KDF 参数（生产 A3 冻结值；测试/演练注入弱参数）。
     crypto_params: BackupCryptoParams,
+    /// ADR-039 D-039-5：备份/恢复维护态（组合根注入共享单元）。
+    maintenance: Arc<MaintenanceCell>,
+}
+
+/// 维护态 RAII 守卫（进入备份/恢复 → 退出恢复上一状态）。
+struct MaintenanceGuard {
+    cell: Arc<MaintenanceCell>,
+    previous: Option<MaintenanceState>,
+}
+
+impl MaintenanceGuard {
+    fn enter(cell: &Arc<MaintenanceCell>, kind: &str, reason: String) -> Self {
+        let previous = cell.get();
+        cell.set(Some(MaintenanceState {
+            kind: kind.to_owned(),
+            reason,
+        }));
+        Self {
+            cell: Arc::clone(cell),
+            previous,
+        }
+    }
+}
+
+impl Drop for MaintenanceGuard {
+    fn drop(&mut self) {
+        self.cell.set(self.previous.take());
+    }
 }
 
 impl BackupControlBackend {
@@ -212,7 +235,15 @@ impl BackupControlBackend {
             auto,
             secrets,
             crypto_params: BackupCryptoParams::a3(),
+            maintenance: Arc::new(MaintenanceCell::new()),
         }
+    }
+
+    /// 注入维护态共享单元（ADR-039 D-039-5；组合根）。
+    #[must_use]
+    pub fn with_maintenance_cell(mut self, cell: Arc<MaintenanceCell>) -> Self {
+        self.maintenance = cell;
+        self
     }
 
     /// 注入主密钥存储（测试/演练；组合根经构造参数接线）。
@@ -281,9 +312,37 @@ impl BackupControlBackend {
         self.auto.as_ref().map(|auto| auto.spawn(handle))
     }
 
-    /// 数据库路径（数据目录 `aether.db`，M1-06 约定）。
+    /// 当前 generation 主库路径（布局无效时退回旧扁平路径，供诊断/降级备份）。
     pub fn db_path(&self) -> PathBuf {
-        self.data_dir.join("aether.db")
+        aether_store::read_layout(&self.data_dir)
+            .map(|layout| layout.main_db().to_path_buf())
+            .unwrap_or_else(|_| self.data_dir.join("aether.db"))
+    }
+
+    fn live_capacity(&self) -> (u64, u64) {
+        let Ok(layout) = aether_store::read_layout(&self.data_dir) else {
+            let db = self.db_path();
+            return (file_len(&db), file_len(&wal_path(&db)));
+        };
+        let mut main_db = 0u64;
+        let mut main_wal = 0u64;
+        let mut shard_db = 0u64;
+        let mut shard_wal = 0u64;
+        for (index, path) in layout.all_db_paths().iter().enumerate() {
+            let db = file_len(path);
+            let wal = file_len(&wal_path(path));
+            if index == 0 {
+                main_db = db;
+                main_wal = wal;
+            } else {
+                shard_db = shard_db.saturating_add(db);
+                shard_wal = shard_wal.saturating_add(wal);
+            }
+        }
+        (
+            main_db.saturating_add(shard_db),
+            main_wal.saturating_add(shard_wal),
+        )
     }
 
     /// 默认备份目录（D13：应用 `backups` 目录）。
@@ -344,122 +403,6 @@ impl BackupControlBackend {
                 .map_err(|error| IpcError::internal(format!("恢复审计写入失败：{error}")))
         })
     }
-
-    /// M5-03：加密产物恢复路径（解密 → 第 2 步候选校验 → 现场日志登记）。
-    ///
-    /// 失败路径（口令/密钥错误、头篡改、候选非法）在登记现场日志之前返回，
-    /// **当前库三件套不被触碰**（ADR-020 §2.1-4）。
-    fn restore_encrypted_candidate(
-        &self,
-        request: &BackupRestoreRequest,
-        candidate_path: &Path,
-        source: &str,
-        db_path: &Path,
-    ) -> Result<Value, IpcError> {
-        let info = inspect_backup_artifact(candidate_path).map_err(|error| {
-            IpcError::invalid_value(format!(
-                "恢复候选校验失败（backup_candidate_invalid）：加密产物头非法：{error}"
-            ))
-        })?;
-
-        // 来源 id 交叉校验（ADR-020 附录 A-2：「来源 id 记入产物头（恢复校验）」）。
-        if let BackupSource::Internal { id } = &request.source {
-            if info.source_backup_id != *id {
-                return Err(IpcError::invalid_value(format!(
-                    "恢复候选校验失败（backup_candidate_invalid）：产物来源 id（{}）与台账 id（{id}）不一致",
-                    info.source_backup_id
-                )));
-            }
-        }
-
-        let passphrase = request.passphrase_value();
-        let key = match info.mode {
-            BackupArtifactMode::Passphrase => {
-                let Some(passphrase) = passphrase else {
-                    return Err(IpcError::invalid_value(
-                        "该备份为口令加密产物，恢复需要提供口令（backup_passphrase_required）",
-                    ));
-                };
-                let Some(salt) = info.salt else {
-                    return Err(IpcError::invalid_value(
-                        "恢复候选校验失败（backup_candidate_invalid）：口令模式产物缺少盐",
-                    ));
-                };
-                derive_passphrase_key_with_salt(self.crypto_params, &salt, &passphrase)
-                    .map_err(|error| IpcError::internal(format!("恢复口令派生失败：{error}")))?
-            }
-            BackupArtifactMode::Keychain => {
-                let store = self.secrets.as_deref().ok_or_else(|| {
-                    IpcError::invalid_value(
-                        "主密钥不可用（backup_key_unavailable）：OS 凭据库不可用且未解锁 A3 降级口令；仅口令模式产物可用口令恢复",
-                    )
-                })?;
-                load_or_create_master_key(store).map_err(|error| {
-                    IpcError::invalid_value(format!(
-                        "主密钥不可用（backup_key_unavailable）：{error}"
-                    ))
-                })?
-            }
-        };
-
-        // 解密到候选临时文件（明文；随启动序列消费后清理；口令不落盘）。
-        let decrypted = self.decrypted_candidate_path(db_path);
-        if decrypted.exists() {
-            let _ = std::fs::remove_file(&decrypted);
-        }
-        if let Err(error) = decrypt_backup_file(candidate_path, &decrypted, &key) {
-            let _ = std::fs::remove_file(&decrypted);
-            return Err(map_decrypt_error(error));
-        }
-
-        let candidate = match validate_candidate(&decrypted, program_schema_version()) {
-            Ok(candidate) => candidate,
-            Err(error) => {
-                let _ = std::fs::remove_file(&decrypted);
-                return Err(map_backup_error(error));
-            }
-        };
-        if let Err(error) = request_restore(db_path, &decrypted, now_ms()) {
-            let _ = std::fs::remove_file(&decrypted);
-            return Err(map_backup_error(error));
-        }
-        self.write_audit(
-            "requested",
-            candidate_path,
-            &format!(
-                "encrypted({}); source_backup_id={}; schema v{} / {} 字节；db={}",
-                artifact_mode_str(info.mode),
-                info.source_backup_id,
-                candidate.schema_version,
-                candidate.size_bytes,
-                db_path.display()
-            ),
-        )?;
-
-        Ok(json!({
-            "restoring": true,
-            "restart_required": true,
-            "source": source,
-            "candidate": {
-                "path": candidate.path.to_string_lossy(),
-                "size_bytes": candidate.size_bytes,
-                "schema_version": candidate.schema_version,
-                "encrypted": true,
-                "artifact_mode": artifact_mode_str(info.mode),
-                "source_backup_id": info.source_backup_id,
-            },
-            "db_path": db_path.to_string_lossy(),
-        }))
-    }
-
-    /// 解密候选临时文件路径（`<db>.restore-cand-<ts>`；同目录，随恢复收尾清理）。
-    fn decrypted_candidate_path(&self, db_path: &Path) -> PathBuf {
-        let name = db_path
-            .file_name()
-            .map(|value| value.to_string_lossy().to_string())
-            .unwrap_or_else(|| "aether.db".to_owned());
-        db_path.with_file_name(format!("{name}{RESTORE_CANDIDATE_INFIX}{}", now_ms()))
-    }
 }
 
 impl IpcBackend for BackupControlBackend {
@@ -479,6 +422,11 @@ impl IpcBackend for BackupControlBackend {
     ) -> Result<Value, IpcError> {
         let reads = self.reads_required()?;
         let write = self.write_required()?;
+        let _maintenance = MaintenanceGuard::enter(
+            &self.maintenance,
+            "backup",
+            "备份维护中，其他功能暂不可用".to_owned(),
+        );
 
         // 目标目录：外部（系统选择器 canonicalize 结果）或默认 `backups/`。
         let target = match canonical_target_dir {
@@ -512,7 +460,7 @@ impl IpcBackend for BackupControlBackend {
 
         let created_at = now_ms();
         let id = ulid::Ulid::new().to_string();
-        let db_path = self.db_path();
+        let data_dir = self.data_dir.clone();
         let space = Arc::clone(&self.space);
         let lock = Arc::clone(&self.run_lock);
         let secrets = self.secrets.clone();
@@ -533,7 +481,7 @@ impl IpcBackend for BackupControlBackend {
                 secrets: secrets.as_deref(),
                 crypto_params,
             };
-            execute_backup(&reads, &write, &db_path, &lock, space.as_ref(), &job).await
+            execute_backup(&reads, &write, &data_dir, &lock, space.as_ref(), &job).await
         })?;
 
         Ok(json!({
@@ -550,9 +498,9 @@ impl IpcBackend for BackupControlBackend {
                 .await
                 .map_err(|error| IpcError::internal(format!("备份清单读取失败：{error}")))
         })?;
+        let all: Vec<_> = all.into_iter().map(enrich_backup_record).collect();
 
-        let db_bytes = file_len(&self.db_path());
-        let wal_bytes = file_len(&wal_path(&self.db_path()));
+        let (db_bytes, wal_bytes) = self.live_capacity();
         let capacity = self.capacity.to_json(db_bytes, wal_bytes);
         let auto = match &self.auto {
             Some(auto) => {
@@ -584,27 +532,35 @@ impl IpcBackend for BackupControlBackend {
         }
     }
 
-    /// D13/ADR-004 + M5-03：候选校验（第 1–2 步）→ 登记恢复现场日志 → 命令层请求重启；
-    /// 第 3–6 步由下次启动序列执行（`boot_apply_pending_restore`）。
+    /// ADR-039 D-039-5 §4/D-039-8：整套备份恢复（外部路径仅接受备份集目录或
+    /// `manifest.json`；旧 `.db`/`.aebk` 单文件由 `validate_backup_set` 拒绝）。
     ///
-    /// 加密产物（`AEBK1`，ADR-020 附录 A-2）：按产物头模式解密——口令模式要求
-    /// `passphrase`（缺省 → `backup_passphrase_required`）；主密钥模式经安全存储读取
-    /// `keychain://aether/backup/master`（不可用 → `backup_key_unavailable`）。解密出的
-    /// 明文候选（`aether.db.restore-cand-<ts>`）经第 2 步校验后随现场日志登记，
-    /// 由启动序列消费；口令/密钥错误（tag 校验失败）→ `backup_decrypt_failed`，
-    /// **现场三件套不被破坏**（本路径不触碰当前库）。
+    /// 校验 → staging 空间预检（≥ generation ×1.1）→ 同卷 staging generation →
+    /// `restore-journal.json`；`CURRENT` 原子切换由下次启动序列执行。
     fn backup_restore(
         &self,
         request: &BackupRestoreRequest,
         canonical_external_path: Option<&Path>,
     ) -> Result<Value, IpcError> {
-        let reads = self.reads_required()?;
-        let db_path = self.db_path();
-
-        let (candidate_path, source) = match &request.source {
+        let _reads = self.reads_required()?;
+        let _maintenance = MaintenanceGuard::enter(
+            &self.maintenance,
+            "restore",
+            "恢复维护中，其他功能暂不可用".to_owned(),
+        );
+        let _write_gate = match self.write.clone() {
+            Some(write) => Some(self.call(async move {
+                write
+                    .pause_and_drain()
+                    .await
+                    .map_err(|error| IpcError::internal(format!("恢复维护态 drain 失败：{error}")))
+            })?),
+            None => None,
+        };
+        let (candidate_path, source, source_backup_id) = match &request.source {
             BackupSource::Internal { id } => {
                 let lookup_id = id.clone();
-                let reads_for_task = reads.clone();
+                let reads_for_task = self.reads_required()?;
                 let record = self.call(async move {
                     reads_for_task
                         .backup(&lookup_id)
@@ -614,7 +570,7 @@ impl IpcBackend for BackupControlBackend {
                 let record = record.ok_or_else(|| {
                     IpcError::invalid_value(format!("内部备份不存在（backup_not_found）：{id}"))
                 })?;
-                (record.path, "internal")
+                (record.path, "internal", Some(id.clone()))
             }
             BackupSource::External { .. } => {
                 let path = canonical_external_path
@@ -622,29 +578,93 @@ impl IpcBackend for BackupControlBackend {
                         IpcError::internal("外部候选路径未 canonicalize（命令层校验缺失）")
                     })?
                     .to_path_buf();
-                (path, "external")
+                (path, "external", None)
             }
         };
 
-        // M5-03：产物形态判定（magic 优先；明文 `.db` 保持 P0 路径）。
-        if is_encrypted_backup_artifact(&candidate_path) {
-            return self.restore_encrypted_candidate(request, &candidate_path, source, &db_path);
+        let set = aether_store::validate_backup_set(&candidate_path).map_err(map_backup_error)?;
+        if set.manifest.shard_count != aether_store::SHARD_COUNT {
+            return Err(IpcError::invalid_value(format!(
+                "恢复候选校验失败（backup_candidate_invalid）：分片数 {}（期望 {}）",
+                set.manifest.shard_count,
+                aether_store::SHARD_COUNT
+            )));
+        }
+        // ADR-039 D-039-5 §5.3：复制前预检 `<data_dir>/staging` 可用空间 ≥ generation ×1.1。
+        let required = aether_store::restore_space_required(set.total_bytes);
+        let available = self
+            .space
+            .available_bytes(&self.data_dir)
+            .map_err(|message| IpcError::internal(format!("恢复空间探测失败：{message}")))?;
+        if available < required {
+            return Err(IpcError::invalid_value(format!(
+                "恢复空间不足（backup_space_insufficient）：可用 {available} 字节 < 需求 {required} 字节（备份 generation ×1.1）；当前数据未改变"
+            )));
         }
 
-        // 第 2 步：候选校验（高版本拒绝并提示升级程序；损坏候选拒绝）。
-        let candidate = validate_candidate(&candidate_path, program_schema_version())
-            .map_err(map_backup_error)?;
+        let new_generation = aether_store::new_generation_id();
+        let requested_at = now_ms();
+        if set.manifest.artifact_mode == "passphrase" && request.passphrase_value().is_none() {
+            return Err(IpcError::invalid_value(
+                "该备份为口令加密产物，恢复需要提供口令（backup_passphrase_required）",
+            ));
+        }
+        let staged = if set.manifest.encrypted {
+            let master = set_master_key(request, self.secrets.as_deref())?;
+            let crypto_params = self.crypto_params;
+            let passphrase = request.passphrase_value();
+            aether_store::stage_restore_with(
+                &self.data_dir,
+                &set,
+                &new_generation,
+                requested_at,
+                |source_path, dest| {
+                    decrypt_set_file(
+                        source_path,
+                        dest,
+                        master.as_ref(),
+                        passphrase.as_ref(),
+                        crypto_params,
+                    )
+                },
+            )
+        } else {
+            aether_store::stage_restore(&self.data_dir, &set, &new_generation, requested_at)
+        };
+        let journal = match staged {
+            Ok(journal) => journal,
+            Err(error) => {
+                let staging =
+                    aether_store::staging_generation(&self.data_dir, "restore", &new_generation);
+                if let Some(job_dir) = staging.parent() {
+                    let _ = std::fs::remove_dir_all(job_dir);
+                }
+                let _ = std::fs::remove_dir_all(staging);
+                return Err(map_restore_error(error));
+            }
+        };
+        if let Err(error) = aether_store::write_generation_journal(&self.data_dir, &journal) {
+            let staging =
+                aether_store::staging_generation(&self.data_dir, "restore", &new_generation);
+            if let Some(job_dir) = staging.parent() {
+                let _ = std::fs::remove_dir_all(job_dir);
+            }
+            let _ = std::fs::remove_dir_all(staging);
+            return Err(map_restore_error(error));
+        }
+        // staging/journal 已完成：恢复写队列后再写审计（审计写入需要写队列）。
+        drop(_write_gate);
 
-        // 登记恢复请求（现场日志；执行在下次启动序列的无写者窗口）。
-        request_restore(&db_path, &candidate_path, now_ms()).map_err(map_backup_error)?;
         self.write_audit(
             "requested",
-            &candidate_path,
+            &set.root,
             &format!(
-                "schema v{} / {} 字节；db={}",
-                candidate.schema_version,
-                candidate.size_bytes,
-                db_path.display()
+                "sharded_set schema v{} / {} 字节 / {} 分片；generation={}；{}",
+                set.manifest.schema_version,
+                set.total_bytes,
+                set.manifest.shard_count,
+                new_generation,
+                aether_store::RESTORE_ATTACHMENTS_NOTICE
             ),
         )?;
 
@@ -653,14 +673,21 @@ impl IpcBackend for BackupControlBackend {
             "restart_required": true,
             "source": source,
             "candidate": {
-                "path": candidate.path.to_string_lossy(),
-                "size_bytes": candidate.size_bytes,
-                "schema_version": candidate.schema_version,
-                "encrypted": false,
-                "artifact_mode": Value::Null,
-                "source_backup_id": Value::Null,
+                "path": set.root.to_string_lossy(),
+                "set_path": set.root.to_string_lossy(),
+                "manifest_path": set.manifest_path.to_string_lossy(),
+                "manifest_sha256": set.manifest_sha256,
+                "size_bytes": set.total_bytes,
+                "schema_version": set.manifest.schema_version,
+                "encrypted": set.manifest.encrypted,
+                "artifact_mode": set.manifest.artifact_mode,
+                "source_backup_id": source_backup_id,
+                "format": aether_store::BACKUP_FORMAT_SHARDED_SET,
+                "shard_count": set.manifest.shard_count,
+                "generation": new_generation,
+                "attachments_notice": aether_store::RESTORE_ATTACHMENTS_NOTICE,
             },
-            "db_path": db_path.to_string_lossy(),
+            "db_path": self.db_path().to_string_lossy(),
         }))
     }
 
@@ -776,69 +803,169 @@ pub fn map_backup_error(error: StoreError) -> IpcError {
     }
 }
 
-/// M5-03：解密失败 → 结构化错误（`backup_decrypt_failed`；不含口令/密钥值）。
-fn map_decrypt_error(error: SecretError) -> IpcError {
-    match error {
-        SecretError::Decrypt => IpcError::invalid_value(
-            "恢复口令或主密钥错误（backup_decrypt_failed）：产物认证失败（口令/密钥错误或产物被篡改）；当前数据未受影响",
-        ),
-        other => IpcError::internal(format!("恢复解密失败（backup_decrypt_failed）：{other}")),
-    }
-}
-
-/// 产物模式 → 稳定文本（响应/审计/证据）。
-fn artifact_mode_str(mode: BackupArtifactMode) -> &'static str {
-    match mode {
-        BackupArtifactMode::Keychain => "keychain",
-        BackupArtifactMode::Passphrase => "passphrase",
-    }
-}
-
-/// 启动序列（存储打开**之前**）处理待处理恢复：执行第 3–6 步或回滚中断现场（D13/DoD4）。
-///
-/// M5-03：加密产物恢复会在库目录留下明文候选（`<db>.restore-cand-*`）。启动时先
-/// 清理历史残留（保留现场日志引用的候选），处理结束后删除被引用的候选文件。
-///
-/// 返回 `None` = 无待处理日志；`Some(outcome)` 由调用方在核心启动后写审计。
-pub fn boot_apply_pending_restore(data_dir: &Path) -> Option<RestoreStartupOutcome> {
-    let db_path = data_dir.join("aether.db");
-    let pending = read_restore_journal(&db_path).ok().flatten();
-    let keep = pending
-        .as_ref()
-        .map(|journal| PathBuf::from(&journal.candidate_path));
-    match cleanup_restore_candidates(&db_path, keep.as_deref()) {
-        Ok(0) => {}
-        Ok(removed) => tracing::info!(removed, "清理历史解密候选残留（M5-03）"),
-        Err(error) => tracing::warn!(error = %error, "解密候选残留清理失败（继续启动）"),
-    }
-
-    let outcome = match recover_or_apply_pending_restore(&db_path) {
-        Ok(RestoreStartupOutcome::None) => None,
-        Ok(outcome) => {
-            tracing::info!(outcome = ?outcome, "启动序列处理恢复现场日志");
-            Some(outcome)
+/// 加密备份集主密钥（Keychain 模式；口令模式返回 `None`，逐文件派生）。
+fn set_master_key(
+    request: &BackupRestoreRequest,
+    secrets: Option<&dyn SecretStore>,
+) -> Result<Option<[u8; aether_security::KEY_LEN]>, IpcError> {
+    match request.passphrase_value() {
+        Some(_) => Ok(None),
+        None => {
+            let store = secrets.ok_or_else(|| {
+                IpcError::invalid_value(
+                    "主密钥不可用（backup_key_unavailable）：OS 凭据库不可用且未解锁 A3 降级口令；加密备份集需要主密钥或口令",
+                )
+            })?;
+            let master = load_or_create_master_key(store).map_err(|error| {
+                IpcError::invalid_value(format!("主密钥不可用（backup_key_unavailable）：{error}"))
+            })?;
+            Ok(Some(*master))
         }
-        Err(error) => {
-            tracing::error!(error = %error, "启动序列处理恢复现场日志失败");
-            Some(RestoreStartupOutcome::Failed {
-                error: format!("启动恢复处理失败：{error}"),
-            })
+    }
+}
+
+/// 解密备份集单个文件（Keychain 主密钥或逐文件口令盐派生）。
+fn decrypt_set_file(
+    source: &Path,
+    dest: &Path,
+    master: Option<&[u8; aether_security::KEY_LEN]>,
+    passphrase: Option<&aether_security::SecretValue>,
+    crypto_params: BackupCryptoParams,
+) -> Result<(), StoreError> {
+    let key = match master {
+        Some(master) => *master,
+        None => {
+            let passphrase = passphrase.ok_or_else(|| StoreError::Internal {
+                reason: "该备份为口令加密集合，恢复需要提供口令（backup_passphrase_required）"
+                    .to_owned(),
+            })?;
+            let info = inspect_backup_artifact(source).map_err(|error| StoreError::Internal {
+                reason: format!("加密产物头非法：{error}"),
+            })?;
+            let salt = info.salt.ok_or_else(|| StoreError::Internal {
+                reason: "口令模式产物缺少盐".to_owned(),
+            })?;
+            let derived = derive_passphrase_key_with_salt(crypto_params, &salt, passphrase)
+                .map_err(|error| StoreError::Internal {
+                    reason: format!("恢复口令派生失败：{error}"),
+                })?;
+            *derived
         }
     };
+    decrypt_backup_file(source, dest, &key)
+        .map(|_| ())
+        .map_err(|error| StoreError::Internal {
+            reason: format!("备份解密失败（backup_decrypt_failed）：{error}"),
+        })
+}
 
-    // 被现场日志引用的解密候选已消费/已回滚：删除（仅限本机制生成的临时候选）。
-    if let Some(keep) = keep {
-        let is_candidate_temp = keep
-            .file_name()
-            .map(|name| name.to_string_lossy().contains(RESTORE_CANDIDATE_INFIX))
-            .unwrap_or(false);
-        if is_candidate_temp && keep.exists() {
-            if let Err(error) = std::fs::remove_file(&keep) {
-                tracing::warn!(path = %keep.display(), error = %error, "解密候选清理失败");
+/// 备份记录富化（ADR-039 D-039-5 §4）：目录备份集读取 manifest 补充
+/// `format/set_path/manifest_path/manifest_sha256/shard_count/integrity`；
+/// 旧单文件记录标记 `single_file`（仅展示，UI 恢复禁用）。
+fn enrich_backup_record(mut record: aether_store::BackupRecord) -> aether_store::BackupRecord {
+    if record.path.is_dir() {
+        let manifest_path = record.path.join(aether_store::MANIFEST_FILE_NAME);
+        if manifest_path.is_file() {
+            if let Ok(bytes) = std::fs::read(&manifest_path) {
+                if let Ok(manifest) =
+                    serde_json::from_slice::<aether_store::BackupSetManifest>(&bytes)
+                {
+                    record.format = Some(aether_store::BACKUP_FORMAT_SHARDED_SET.to_owned());
+                    record.set_path = Some(record.path.clone());
+                    record.manifest_path = Some(manifest_path);
+                    record.manifest_sha256 = Some(sha256_hex(&bytes));
+                    record.shard_count = Some(manifest.shard_count);
+                    record.integrity = Some(aether_store::BackupIntegrity {
+                        status: "ok".to_owned(),
+                        checked_at: None,
+                    });
+                    return record;
+                }
             }
         }
     }
-    outcome
+    record.format = Some(aether_store::BACKUP_FORMAT_SINGLE_FILE.to_owned());
+    record.integrity = Some(aether_store::BackupIntegrity {
+        status: "unverified".to_owned(),
+        checked_at: None,
+    });
+    record
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(bytes))
+}
+
+/// 恢复错误映射：解密/口令失败保留业务码（`backup_decrypt_failed`/
+/// `backup_passphrase_required`），其余沿用 [`map_backup_error`]。
+fn map_restore_error(error: StoreError) -> IpcError {
+    if let StoreError::Internal { reason } = &error {
+        if reason.contains("backup_decrypt_failed") || reason.contains("backup_passphrase_required")
+        {
+            return IpcError::invalid_value(reason.clone());
+        }
+    }
+    map_backup_error(error)
+}
+
+/// 启动序列（存储打开**之前**）处理待处理恢复（ADR-039 D-039-8 整套切换）：
+/// 校验 staging generation → 原子写 `CURRENT` → 旧 generation 保留 `.pre-restore-*`
+/// → 清理 journal；失败整套回滚/保留 journal，当前库不被损。
+///
+/// 加密解密已在 `backup_restore` 命令阶段完成（staging generation 为明文）。
+/// 返回 `None` = 无待处理 journal；`Some(outcome)` 由调用方在核心启动后写审计。
+pub fn boot_apply_pending_restore(data_dir: &Path) -> Option<RestoreStartupOutcome> {
+    let journal = match aether_store::read_generation_journal(data_dir, "restore") {
+        Ok(Some(journal)) => journal,
+        Ok(None) => return None,
+        Err(error) => {
+            tracing::error!(error = %error, "恢复 journal 不可读");
+            return Some(RestoreStartupOutcome::Failed {
+                error: format!("恢复 journal 不可用：{error}"),
+            });
+        }
+    };
+    let started = std::time::Instant::now();
+    if let Err(error) =
+        aether_store::verify_staged_generation(data_dir, "restore", &journal.new_generation)
+    {
+        tracing::error!(error = %error, "恢复 staging generation 校验失败（保留当前库）");
+        return Some(RestoreStartupOutcome::Failed {
+            error: format!("恢复 staging 校验失败：{error}"),
+        });
+    }
+    let pointer =
+        match aether_store::commit_staged_generation(data_dir, "restore", &journal, now_ms()) {
+            Ok(pointer) => pointer,
+            Err(error) => {
+                tracing::error!(error = %error, "恢复 CURRENT 切换失败（整套回滚至旧 generation）");
+                return Some(RestoreStartupOutcome::Failed {
+                    error: format!("恢复切换失败：{error}"),
+                });
+            }
+        };
+    let _ = aether_store::remove_generation_journal(data_dir, "restore");
+    let schema_version = aether_store::read_layout(data_dir)
+        .ok()
+        .and_then(|layout| aether_store::preflight(layout.main_db()).ok())
+        .map(|report| report.schema_version)
+        .unwrap_or(0);
+    Some(RestoreStartupOutcome::Applied(
+        aether_store::RestoreReport {
+            candidate: aether_store::CandidateReport {
+                path: pointer.generation.clone().into(),
+                size_bytes: 0,
+                schema_version,
+            },
+            scene: None,
+            applied: true,
+            rolled_back: false,
+            verified_schema_version: schema_version,
+            total_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            steps: Vec::new(),
+        },
+    ))
 }
 
 /// 核心启动完成后写入恢复结果审计（D13 第 7 步；写失败只告警不阻断启动）。

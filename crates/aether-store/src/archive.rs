@@ -413,7 +413,7 @@ pub fn export_session_archive(
 ) -> Result<Option<ArchiveReport>, StoreError> {
     let exists: Option<i64> = conn
         .query_row(
-            "SELECT 1 FROM sessions WHERE id = ?1",
+            "SELECT 1 FROM sessions WHERE id = ?1 AND COALESCE(deletion_pending, 0) = 0",
             [session_id],
             |row| row.get(0),
         )
@@ -467,6 +467,148 @@ pub fn export_full_archive(
         rollback?;
         Ok(report)
     })
+}
+
+/// 单会话归档（分片版；ADR-039 D-039-1 §6）：主库 sessions/messages + 指定分片 events。
+///
+/// 会话不存在或 `deletion_pending=1` → `Ok(None)`（pending 不导出）。
+pub fn export_session_archive_sharded(
+    main: &Connection,
+    shard: &Connection,
+    dir: &Path,
+    session_id: &str,
+    created_at_ms: i64,
+    sanitize: ArchiveSanitizer<'_>,
+) -> Result<Option<ArchiveReport>, StoreError> {
+    let exists: Option<i64> = main
+        .query_row(
+            "SELECT 1 FROM sessions WHERE id = ?1 AND COALESCE(deletion_pending, 0) = 0",
+            [session_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if exists.is_none() {
+        return Ok(None);
+    }
+    let dest = unique_archive_path(dir, &session_archive_file_name(session_id, created_at_ms))?;
+    let report = write_archive(
+        &dest,
+        ARCHIVE_SOURCE_SESSION_EXPORT,
+        Some(session_id),
+        created_at_ms,
+        |sink| {
+            export_sessions(main, sink, sanitize, Some(session_id))?;
+            export_messages(main, sink, sanitize, Some(session_id))?;
+            export_events(shard, sink, sanitize, Some(session_id))?;
+            Ok(())
+        },
+    )?;
+    Ok(Some(report))
+}
+
+/// 全库归档（分片版；ADR-039 D-039-1 §6）：
+/// 主库 sessions/messages/runs（排除 `deletion_pending=1`）+ 8 分片 events。
+pub fn export_full_archive_sharded(
+    main: &Connection,
+    shards: &[&Connection],
+    dir: &Path,
+    created_at_ms: i64,
+    sanitize: ArchiveSanitizer<'_>,
+) -> Result<ArchiveReport, StoreError> {
+    let allowed = active_session_ids(main)?;
+    let dest = unique_archive_path(dir, &full_archive_file_name(created_at_ms))?;
+    main.execute_batch("BEGIN DEFERRED;")?;
+    let result = write_archive(
+        &dest,
+        ARCHIVE_SOURCE_ARCHIVE_EXPORT,
+        None,
+        created_at_ms,
+        |sink| {
+            export_sessions(main, sink, sanitize, None)?;
+            export_messages(main, sink, sanitize, None)?;
+            for shard in shards {
+                export_events_filtered(shard, sink, sanitize, None, Some(&allowed))?;
+            }
+            export_runs(main, sink, sanitize)?;
+            Ok(())
+        },
+    );
+    let rollback = main.execute_batch("COMMIT;");
+    result.and_then(|report| {
+        rollback?;
+        Ok(report)
+    })
+}
+
+fn active_session_ids(main: &Connection) -> Result<std::collections::HashSet<String>, StoreError> {
+    let mut statement =
+        main.prepare("SELECT id FROM sessions WHERE COALESCE(deletion_pending, 0) = 0")?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+    let mut ids = std::collections::HashSet::new();
+    for row in rows {
+        ids.insert(row?);
+    }
+    Ok(ids)
+}
+
+/// 单会话归档（generation 版）：主库 + 会话所属分片。
+pub fn export_session_archive_generation(
+    layout: &crate::layout::StorageLayout,
+    dir: &Path,
+    session_id: &str,
+    created_at_ms: i64,
+    sanitize: ArchiveSanitizer<'_>,
+) -> Result<Option<ArchiveReport>, StoreError> {
+    let main = crate::store::Store::open_read_only(layout.main_db())?;
+    let shard_id = crate::layout::shard_for(session_id);
+    let shard_path = layout
+        .shard_path(shard_id)
+        .ok_or_else(|| StoreError::ShardInvariant {
+            reason: format!("会话 {session_id} 的分片 {shard_id} 不存在"),
+        })?;
+    let shard = crate::store::Store::open_read_only(shard_path)?;
+    export_session_archive_sharded(&main, &shard, dir, session_id, created_at_ms, sanitize)
+}
+
+/// 全库归档（generation 版）：主库 + 8 分片。
+pub fn export_full_archive_generation(
+    layout: &crate::layout::StorageLayout,
+    dir: &Path,
+    created_at_ms: i64,
+    sanitize: ArchiveSanitizer<'_>,
+) -> Result<ArchiveReport, StoreError> {
+    let main = crate::store::Store::open_read_only(layout.main_db())?;
+    let mut shards = Vec::with_capacity(layout.shard_paths().len());
+    for path in layout.shard_paths() {
+        shards.push(crate::store::Store::open_read_only(path)?);
+    }
+    let refs: Vec<&Connection> = shards.iter().collect();
+    export_full_archive_sharded(&main, &refs, dir, created_at_ms, sanitize)
+}
+
+/// 保留选批（generation 版）：逐分片按 `(type, ts)`/`rowid` 选批（M10-11 优化批大小）。
+///
+/// 返回 `(shard_id, rows)`；单批总量受 `limit` 约束（跨片合计）。
+pub fn select_retention_batch_generation(
+    layout: &crate::layout::StorageLayout,
+    cutoff_ts: i64,
+    limit: usize,
+) -> Result<Vec<(u8, Vec<RetentionEventRow>)>, StoreError> {
+    let mut remaining = limit.min(RETENTION_BATCH_MAX);
+    let mut batches = Vec::new();
+    for (index, path) in layout.shard_paths().iter().enumerate() {
+        if remaining == 0 {
+            break;
+        }
+        let shard_id = u8::try_from(index).unwrap_or(0);
+        let connection = crate::store::Store::open_read_only(path)?;
+        let rows = select_retention_batch(&connection, cutoff_ts, remaining)?;
+        if !rows.is_empty() {
+            remaining = remaining.saturating_sub(rows.len());
+            batches.push((shard_id, rows));
+        }
+    }
+    Ok(batches)
 }
 
 /// 审计导出（`audit_export`；M6-03/ADR-023 附录 A-3）。
@@ -684,7 +826,7 @@ fn export_sessions(
 ) -> Result<(), StoreError> {
     const SQL_ALL: &str = "SELECT id, runtime_id, workspace_id, parent_session_id, title, status, \
          model, thinking_depth, system_prompt, config, token_usage, created_at, updated_at, closed_at \
-         FROM sessions ORDER BY id ASC";
+         FROM sessions WHERE COALESCE(deletion_pending, 0) = 0 ORDER BY id ASC";
     const SQL_ONE: &str = "SELECT id, runtime_id, workspace_id, parent_session_id, title, status, \
          model, thinking_depth, system_prompt, config, token_usage, created_at, updated_at, closed_at \
          FROM sessions WHERE id = ?1";
@@ -738,6 +880,8 @@ fn export_messages(
     session_id: Option<&str>,
 ) -> Result<(), StoreError> {
     const SQL_ALL: &str = "SELECT id, session_id, role, content, seq, created_at FROM messages \
+         WHERE EXISTS (SELECT 1 FROM sessions s WHERE s.id = messages.session_id \
+                       AND COALESCE(s.deletion_pending, 0) = 0) \
          ORDER BY session_id ASC, seq ASC, rowid ASC";
     const SQL_ONE: &str = "SELECT id, session_id, role, content, seq, created_at FROM messages \
          WHERE session_id = ?1 ORDER BY seq ASC, rowid ASC";
@@ -779,6 +923,16 @@ fn export_events(
     sanitize: ArchiveSanitizer<'_>,
     session_id: Option<&str>,
 ) -> Result<(), StoreError> {
+    export_events_filtered(conn, sink, sanitize, session_id, None)
+}
+
+fn export_events_filtered(
+    conn: &Connection,
+    sink: &mut PayloadSink,
+    sanitize: ArchiveSanitizer<'_>,
+    session_id: Option<&str>,
+    allowed: Option<&std::collections::HashSet<String>>,
+) -> Result<(), StoreError> {
     const SQL_ALL: &str = "SELECT id, session_id, run_id, runtime_id, seq, type, payload, ts, v \
          FROM events ORDER BY session_id ASC, seq ASC, rowid ASC";
     const SQL_ONE: &str = "SELECT id, session_id, run_id, runtime_id, seq, type, payload, ts, v \
@@ -786,6 +940,12 @@ fn export_events(
     let mut statement = conn.prepare(session_id.map_or(SQL_ALL, |_| SQL_ONE))?;
     let mut emit = |row: &Row<'_>| -> Result<(), StoreError> {
         let id: String = row.get(0)?;
+        let session: String = row.get(1)?;
+        if let Some(allowed) = allowed {
+            if !allowed.contains(&session) {
+                return Ok(());
+            }
+        }
         let payload: String = row.get(6)?;
         let payload: Value =
             serde_json::from_str(&payload).map_err(|_| StoreError::InvalidStoredEvent {
@@ -796,7 +956,7 @@ fn export_events(
             "v": row.get::<_, i64>(8)?,
             "kind": "event",
             "id": id,
-            "session_id": row.get::<_, String>(1)?,
+            "session_id": session,
             "run_id": row.get::<_, Option<String>>(2)?,
             "runtime_id": row.get::<_, String>(3)?,
             "seq": row.get::<_, i64>(4)?,

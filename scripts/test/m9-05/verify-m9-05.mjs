@@ -83,8 +83,8 @@ const actualTypes = [...enumBlock.matchAll(/#\[serde\(rename = "([^"]+)"\)\]/g)]
   (match) => match[1],
 );
 checked.eventTypes = actualTypes.length;
-if (actualTypes.length !== 23) {
-  fail(`[DoD-1] EventType 必须 23 项（19 MVP + 4 预留），实际 ${actualTypes.length}`);
+if (actualTypes.length !== 31) {
+  fail(`[DoD-1] EventType 必须 31 项（19 MVP + 12 预留），实际 ${actualTypes.length}`);
 }
 for (const type of expectedTypes) {
   if (!actualTypes.includes(type)) fail(`[DoD-1] 缺少附录 B 事件类型：${type}`);
@@ -95,8 +95,8 @@ for (const type of actualTypes) {
 if (!/pub const MVP: \[Self; 19\]/.test(eventSource)) {
   fail("[DoD-1] MVP 事件类型集合必须为 19");
 }
-if (!/pub const RESERVED: \[Self; 4\]/.test(eventSource)) {
-  fail("[DoD-1] 预留事件类型集合必须为 4");
+if (!/pub const RESERVED: \[Self; 12\]/.test(eventSource)) {
+  fail("[DoD-1] 预留事件类型集合必须为 12");
 }
 
 // DB UNIQUE(session_id, seq) 兜底（0002 增量迁移，不改 0001）。

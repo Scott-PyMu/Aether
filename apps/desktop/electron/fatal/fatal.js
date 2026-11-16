@@ -49,7 +49,15 @@ async function loadState() {
       root.dataset.reason = state.reason;
     }
     setText(reason, REASON_LABELS[state.reason] ?? state.reason);
-    setText(message, state.message);
+    const detail = typeof state.message === "string" ? state.message : "";
+    if (state.reason === "db_open_failed" && detail.includes("incomplete_generation")) {
+      setText(
+        message,
+        `${detail}\n提示：删除半成品 generation 或重建数据目录；不会自动切换/删除。`,
+      );
+    } else {
+      setText(message, detail);
+    }
     setText(logPath, state.logPath);
     setText(dataDir, state.dataDir);
     setText(manualText, state.manualMove);

@@ -36,6 +36,7 @@ const listResponse: BackupListResponse = {
       // M5-02/ADR-020：手动产物 kind='manual'（位置语义由 path 判定）。
       kind: "manual",
       created_at: 1_700_000_000_000,
+      format: "sharded_set",
     },
     {
       id: "01J000000000000000000000B2",
@@ -44,6 +45,7 @@ const listResponse: BackupListResponse = {
       encrypted: false,
       kind: "manual",
       created_at: 1_700_000_001_000,
+      format: "single_file",
     },
   ],
   capacity: {
@@ -246,5 +248,18 @@ describe("App 覆盖层入口", () => {
     await waitFor(() => {
       expect(screen.queryByTestId("overlay-backup")).toBeNull();
     });
+  });
+
+  it("旧 single_file 备份条目的恢复按钮禁用（ADR-039 D-039-5）", async () => {
+    const ipc = fakeIpc();
+    render(<BackupPage ipc={ipc} onBack={() => {}} />);
+    const items = await screen.findAllByTestId("backup-item");
+    const legacyButton = items[1]!.querySelector(
+      '[data-testid="backup-restore"]',
+    ) as HTMLButtonElement;
+    expect(legacyButton).toBeTruthy();
+    expect(legacyButton.disabled).toBe(true);
+    expect(legacyButton.getAttribute("data-format")).toBe("single_file");
+    expect(legacyButton.textContent).toContain("不可恢复");
   });
 });

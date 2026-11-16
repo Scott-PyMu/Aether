@@ -47,29 +47,29 @@
       "reason": "M10-08 启动体验补充口径（>1.5s 另立优化 ADR；不改变 30s 分库阈值）"
     }
   ],
-  "design_version": "v1.32",
-  "p2_plan_version": "v0.10",
-  "uiux_version": "v0.19",
+  "design_version": "v1.35",
+  "p2_plan_version": "v0.14",
+  "uiux_version": "v0.20",
   "artifacts": [
     {
       "path": "设计文档.md",
-      "sha256": "14891ff3d1c744b2bc1e946e65b32186de7ab2271d9dbe8ab4852c8df4d85c79"
+      "sha256": "35a163cc96d22095aa8ee0fc0b49ba251a03d4fb1691e5e3eb8b71eb1ee20374"
     },
     {
       "path": "AGENTS.md",
-      "sha256": "dac1d836b0c94a54367cf8c7f7c825b4c745370f4b6c5782f4392d4dd4895e91"
+      "sha256": "330bf3347d8d8ac115425be2bd7c8f54614e5d87cf90b1ba78b209e9d427787b"
     },
     {
       "path": "README.md",
-      "sha256": "afe83042a0635bfbea70b0ec9f47da5ab06f51c726c62e34385e8a145e12312e"
+      "sha256": "922d95845f4bb551d0604d8db675bf24cf5555d2ab15896f0792c4ebf4e6cbec"
     },
     {
       "path": "docs/P2-架构迁移-实施计划与验收标准.md",
-      "sha256": "91dcec2bfae4500c5a4a410b5b0f98ba8a9d905b193f04c81b4e6689a66ffba7"
+      "sha256": "920496a5e6fc5aef91dea219abb2eb455036ef3c2db780da54a8b567ba63147a"
     },
     {
       "path": "docs/UI-UX-设计规格.md",
-      "sha256": "d59deed33ec79a109c7674bb18fd563709f7202a7a0aa21acd6420a4d94c1dc2"
+      "sha256": "d78faf95b4e99e73623a2dbe77a794a15d4b2de4236853cef99f53d5fe5dc80d"
     },
     {
       "path": "docs/adr/ADR-031-m10-orchestration-dsl-state-machine.md",
@@ -85,7 +85,7 @@
     },
     {
       "path": "docs/adr/ADR-034-m10-import-export-format-atomicity.md",
-      "sha256": "168a07fecae93289295689377cb0e7aa4406590cec665c18757a5680eedb8841"
+      "sha256": "da11ed89c11f10186048b56c8cad23536ccda9143173ac4a9936cf22e4f409e7"
     },
     {
       "path": "docs/adr/ADR-035-m10-multimodal-attachments.md",
@@ -97,7 +97,7 @@
     },
     {
       "path": "docs/adr/ADR-037-m10-scheduler-priority-retry-routing.md",
-      "sha256": "60ca975bf614f348e73cceeaf23d6ef2da81406ed95e7c8f5da3abc36e891cd4"
+      "sha256": "b00830798555830564829fac5dee37f91a386018b8615e13d555e907a45afcf1"
     },
     {
       "path": "docs/adr/ADR-038-m10-event-sharding-preplan.md",

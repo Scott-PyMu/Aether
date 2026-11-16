@@ -26,7 +26,7 @@ use aether_store::import::{
 use aether_store::{AuditLogRecord, StoreCommand, WriteQueue};
 use serde_json::{json, Value};
 
-use crate::backup_control::{file_len, wal_path, NativeSpaceProbe, SpaceProbe};
+use crate::backup_control::{file_len, NativeSpaceProbe, SpaceProbe};
 use crate::ipc::backend::IpcBackend;
 use crate::ipc::business::BusinessCode;
 use crate::ipc::dto::{
@@ -117,7 +117,9 @@ impl ImportControlBackend {
     }
 
     fn db_path(&self) -> PathBuf {
-        self.data_dir.join("aether.db")
+        aether_store::read_layout(&self.data_dir)
+            .map(|layout| layout.main_db().to_path_buf())
+            .unwrap_or_else(|_| self.data_dir.join("aether.db"))
     }
 
     fn lock_active(&self) -> MutexGuard<'_, Option<ActiveJob>> {
@@ -179,10 +181,11 @@ impl ImportControlBackend {
     }
 
     fn ensure_space(&self, source_bytes: u64) -> Result<(), IpcError> {
-        let db = self.db_path();
-        let required = aether_store::backup::required_space_bytes(source_bytes, 0).saturating_add(
-            aether_store::backup::required_space_bytes(file_len(&db), file_len(&wal_path(&db))),
-        );
+        let live = aether_store::read_layout(&self.data_dir)
+            .map(|layout| aether_store::generation_live_bytes(&layout))
+            .unwrap_or_else(|_| file_len(&self.db_path()));
+        let required = aether_store::backup::required_space_bytes(source_bytes, 0)
+            .saturating_add(aether_store::backup::required_space_bytes(live, 0));
         let available = self
             .space
             .available_bytes(&self.data_dir)
@@ -202,7 +205,7 @@ impl ImportControlBackend {
         source_path: &Path,
         expected_sources: &'static [&'static str],
     ) -> Result<Value, IpcError> {
-        if aether_store::backup::read_restore_journal(&self.db_path())
+        if aether_store::read_generation_journal(&self.data_dir, "restore")
             .ok()
             .flatten()
             .is_some()

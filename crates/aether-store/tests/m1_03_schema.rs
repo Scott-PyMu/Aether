@@ -228,6 +228,13 @@ fn appendix_c_explicit_indexes_exist_with_expected_columns() {
             &["status", "priority", "queued_at"],
             false,
         ),
+        ("idx_sessions_shard_id", "sessions", &["shard_id"], false),
+        (
+            "idx_sessions_deletion_pending",
+            "sessions",
+            &["deletion_pending"],
+            false,
+        ),
     ];
 
     let mut expected_names: Vec<String> = expected

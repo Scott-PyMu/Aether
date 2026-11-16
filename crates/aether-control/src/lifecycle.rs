@@ -1785,8 +1785,7 @@ impl SessionManager {
             };
             let error = ErrorInfo {
                 code: RUN_INTERRUPTED_CODE.to_owned(),
-                message: "???????? run ???????????????? run_retry ????"
-                    .to_owned(),
+                message: "???????? run ???????????????? run_retry ????".to_owned(),
                 recoverable: true,
             };
             if let Err(failure) = self
@@ -2444,11 +2443,14 @@ impl SessionManager {
                 }
             }
         }
-        let session = self.inner.reads.session(session_id).await?.ok_or_else(|| {
-            LifecycleError::SessionNotFound {
+        let session = self
+            .inner
+            .reads
+            .session_including_pending(session_id)
+            .await?
+            .ok_or_else(|| LifecycleError::SessionNotFound {
                 session_id: session_id.clone(),
-            }
-        })?;
+            })?;
         let outcome = self
             .inner
             .write

@@ -14,7 +14,8 @@
     "0010_workflow_orchestration.sql",
     "0011_subagent_results.sql",
     "0012_attachments.sql",
-    "0013_scheduler_queue.sql"
+    "0013_scheduler_queue.sql",
+    "0014_session_shard.sql"
   ],
   "rule": "0001–0009 已发布不可修改；新约束走 0002+ 增量迁移（ADR-004）"
 }

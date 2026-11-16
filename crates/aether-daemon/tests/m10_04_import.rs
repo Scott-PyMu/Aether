@@ -26,12 +26,9 @@ const EVENT_ID: &str = "01J0000000000000000000M04E";
 
 fn seed_database(data_dir: &Path) {
     std::fs::create_dir_all(data_dir).expect("数据目录");
-    let db = data_dir.join("aether.db");
-    {
-        let store = aether_store::Store::open(&db).expect("建库/迁移");
-        drop(store);
-    }
-    let connection = rusqlite::Connection::open(&db).expect("直连");
+    let layout = aether_store::initialize_layout(data_dir, "0.1.0", 1).expect("初始化 generation");
+    let shard_id = aether_store::shard_for(SESSION_ID);
+    let connection = rusqlite::Connection::open(layout.main_db()).expect("直连主库");
     connection
         .execute_batch(
             "INSERT INTO runtimes (id, name, kind, version, created_at, updated_at) \
@@ -40,9 +37,9 @@ fn seed_database(data_dir: &Path) {
         .expect("runtime");
     connection
         .execute(
-            "INSERT INTO sessions (id, runtime_id, title, status, created_at, updated_at) \
-             VALUES (?1, 'mock', 'E2E 源会话', 'idle', 1, 1)",
-            [SESSION_ID],
+            "INSERT INTO sessions (id, runtime_id, title, status, created_at, updated_at, shard_id) \
+             VALUES (?1, 'mock', 'E2E 源会话', 'idle', 1, 1, ?2)",
+            rusqlite::params![SESSION_ID, i64::from(shard_id)],
         )
         .expect("session");
     connection
@@ -52,7 +49,9 @@ fn seed_database(data_dir: &Path) {
             rusqlite::params![USER_MESSAGE, ASSISTANT_MESSAGE, SESSION_ID],
         )
         .expect("messages");
-    connection
+    let shard_path = layout.shard_path(shard_id).expect("分片路径").to_path_buf();
+    let shard = rusqlite::Connection::open(shard_path).expect("直连分片");
+    shard
         .execute(
             "INSERT INTO events (id, session_id, run_id, runtime_id, seq, type, payload, ts, v) \
              VALUES (?1, ?2, NULL, 'mock', 1, 'log', '{\"level\":\"info\",\"message\":\"seed\"}', 1, 1)",
@@ -61,11 +60,7 @@ fn seed_database(data_dir: &Path) {
         .expect("event");
 }
 
-fn wait_import_status(
-    daemon: &mut Daemon,
-    job_id: &str,
-    terminal: &[&str],
-) -> Value {
+fn wait_import_status(daemon: &mut Daemon, job_id: &str, terminal: &[&str]) -> Value {
     let deadline = Instant::now() + FRAME_TIMEOUT;
     let mut id = 7000;
     loop {
@@ -127,7 +122,11 @@ fn daemon_export_import_restart_roundtrip() {
         .expect("dry-run job_id")
         .to_owned();
     let dry_done = wait_import_status(&mut daemon, &dry_id, &["completed", "failed"]);
-    assert_eq!(dry_done["status"], json!("completed"), "dry-run：{dry_done}");
+    assert_eq!(
+        dry_done["status"],
+        json!("completed"),
+        "dry-run：{dry_done}"
+    );
     assert_eq!(dry_done["summary"]["sessions"], json!(1));
     let after_dry = daemon.request(1001, "session_list", json!({"limit": 100}));
     assert_eq!(
@@ -166,7 +165,10 @@ fn daemon_export_import_restart_roundtrip() {
             "client_msg_id": "01J0000000000000000000M04C",
         }),
     );
-    assert!(blocked.get("error").is_some(), "维护窗口必须拒绝 session_send：{blocked}");
+    assert!(
+        blocked.get("error").is_some(),
+        "维护窗口必须拒绝 session_send：{blocked}"
+    );
     // awaiting_restart 不可取消（ADR-034 D-034-4）。
     let cancel = daemon.request(103, "import_cancel", json!({"job_id": job_id}));
     assert_eq!(
@@ -206,6 +208,22 @@ fn daemon_export_import_restart_roundtrip() {
         Some(2),
         "导入消息必须可见：{messages}"
     );
+    // 事件分片：既有会话与导入会话的事件都保留在正确分片（导入 staging 复制当前分片）。
+    let layout = aether_store::read_layout(&dirs.data_dir()).expect("generation");
+    for session in [SESSION_ID, imported.as_str()] {
+        let shard = layout
+            .shard_path(aether_store::shard_for(session))
+            .expect("分片路径");
+        let connection = rusqlite::Connection::open(shard).expect("分片");
+        let count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE session_id = ?1",
+                [session],
+                |row| row.get(0),
+            )
+            .expect("事件计数");
+        assert!(count >= 1, "会话 {session} 事件未随导入保留（count={count}）");
+    }
 
     let export_dir = dirs.root.path().join("exports-2");
     std::fs::create_dir_all(&export_dir).expect("exports-2");
@@ -287,17 +305,17 @@ fn daemon_checksum_failure_leaves_existing_data_unchanged() {
     )
     .expect("篡改");
 
-    let started = daemon.request(
-        301,
-        "session_import",
-        json!({"source_path": export_path}),
-    );
+    let started = daemon.request(301, "session_import", json!({"source_path": export_path}));
     let job_id = started["result"]["job_id"]
         .as_str()
         .expect("job_id")
         .to_owned();
     let failed = wait_import_status(&mut daemon, &job_id, &["failed", "completed"]);
-    assert_eq!(failed["status"], json!("failed"), "校验失败必须 failed：{failed}");
+    assert_eq!(
+        failed["status"],
+        json!("failed"),
+        "校验失败必须 failed：{failed}"
+    );
     assert_eq!(
         failed["error"]["code"],
         json!("import_checksum_mismatch"),

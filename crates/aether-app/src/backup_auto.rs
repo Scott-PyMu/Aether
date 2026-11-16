@@ -28,13 +28,15 @@ use aether_security::{
     BackupArtifactKey, BackupCryptoParams, SecretStore, SecretValue,
 };
 use aether_store::backup::{
-    backup_file_name_for_with_extension, cleanup_backup_temps, create_backup_staging,
-    prune_plan_for_kind, required_space_bytes, BackupRecord, ENCRYPTED_BACKUP_EXTENSION,
+    cleanup_backup_temps, prune_plan_for_kind, required_space_bytes, BackupRecord,
 };
-use aether_store::{AuditLogRecord, ReadPool, StoreCommand, WriteQueue};
+use aether_store::{
+    AuditLogRecord, ReadPool, StoreCommand, WriteQueue, BACKUP_FORMAT_SHARDED_SET,
+    BACKUP_GENERATION_DIR, MANIFEST_FILE_NAME,
+};
 use serde_json::{json, Value};
 
-use crate::backup_control::{file_len, wal_path, SpaceProbe};
+use crate::backup_control::{file_len, SpaceProbe};
 use crate::diagnostics_control::{
     default_setting_value, BACKUP_AUTO_ENABLED_KEY, BACKUP_AUTO_FREQUENCY_KEY,
     BACKUP_AUTO_RETENTION_KEY, BACKUP_ENCRYPTION_ENABLED_KEY,
@@ -331,10 +333,6 @@ impl AutoBackup {
         self.state_guard().clone()
     }
 
-    fn db_path(&self) -> PathBuf {
-        self.data_dir.join("aether.db")
-    }
-
     /// 后台调度任务（首个 tick 于 [`AUTO_BACKUP_START_DELAY`] 后执行补备检查；
     /// 退出序列由组合根经 `AppShutdown` 停止）。
     pub fn spawn(self: &Arc<Self>, handle: &tokio::runtime::Handle) -> tokio::task::JoinHandle<()> {
@@ -500,7 +498,7 @@ impl AutoBackup {
         let outcome = execute_backup(
             &self.reads,
             &self.write,
-            &self.db_path(),
+            &self.data_dir,
             &self.run_lock,
             space.as_ref(),
             &job,
@@ -723,19 +721,28 @@ pub struct BackupOutcome {
 pub async fn execute_backup(
     reads: &ReadPool,
     write: &WriteQueue,
-    db_path: &Path,
+    data_dir: &Path,
     lock: &tokio::sync::Mutex<()>,
     space: &dyn SpaceProbe,
     job: &BackupJob<'_>,
 ) -> Result<BackupOutcome, IpcError> {
     let _guard = lock.lock().await;
     let started = Instant::now();
+    // ADR-039 D-039-5：备份维护态暂停新写入并 drain 此前写入；完成快照后恢复。
+    let write_gate = write
+        .pause_and_drain()
+        .await
+        .map_err(|error| IpcError::internal(format!("备份维护态 drain 失败：{error}")))?;
 
-    // 空间护栏（ADR-003 决策 19）：可写 + 可用空间 ≥ 当前 db+wal ×1.2，不足拒绝并提示。
+    let layout = aether_store::read_layout(data_dir)
+        .map_err(|error| IpcError::internal(format!("数据目录 generation 布局无效：{error}")))?;
+    let live_bytes = aether_store::generation_live_bytes(&layout);
+
+    // 空间护栏（ADR-003 决策 19）：可写 + 可用空间 ≥ 当前 generation db+wal ×1.2。
     space.ensure_writable(job.target).map_err(|message| {
         IpcError::invalid_value(format!("{message}（backup_target_not_writable）"))
     })?;
-    let required = required_space_bytes(file_len(db_path), file_len(&wal_path(db_path)));
+    let required = required_space_bytes(live_bytes, 0);
     let available = space.available_bytes(job.target).map_err(|message| {
         IpcError::invalid_value(format!(
             "目标空间探测失败（backup_space_unknown）：{message}"
@@ -743,7 +750,7 @@ pub async fn execute_backup(
     })?;
     if available < required {
         return Err(IpcError::invalid_value(format!(
-            "目标可用空间不足（backup_space_insufficient）：可用 {available} 字节 < 需求 {required} 字节（当前 db+wal 的 1.2 倍）；请选择空间充足的目录"
+            "目标可用空间不足（backup_space_insufficient）：可用 {available} 字节 < 需求 {required} 字节（当前 generation db+wal 的 1.2 倍）；请选择空间充足的目录"
         )));
     }
 
@@ -754,59 +761,46 @@ pub async fn execute_backup(
     }
 
     let encrypted = !matches!(job.encryption, BackupEncryption::None);
-    let extension = if encrypted {
-        ENCRYPTED_BACKUP_EXTENSION
-    } else {
-        "db"
+    let artifact_mode = match job.encryption {
+        BackupEncryption::None => "none",
+        BackupEncryption::Keychain => "keychain",
+        BackupEncryption::Passphrase(_) => "passphrase",
     };
-    let file_name =
-        backup_file_name_for_with_extension(job.target, job.created_at, job.id, extension);
-    let dest = job.target.join(&file_name);
-    let staging = aether_store::backup::backup_temp_path(&dest, job.created_at, job.id);
+    let mut outcome = aether_store::create_backup_set(
+        &layout,
+        job.target,
+        job.id,
+        job.kind,
+        job.created_at,
+        env!("CARGO_PKG_VERSION"),
+        encrypted,
+        artifact_mode,
+    )
+    .map_err(|error| IpcError::internal(format!("备份写出失败：{error}")))?;
 
-    // 暂存写出（VACUUM INTO + quick_check + schema 校验 + fsync；不 rename）。
-    {
-        let staging_for_task = staging.clone();
-        let reads_for_task = reads.clone();
-        let outcome = reads_for_task
-            .with_connection(move |connection| create_backup_staging(connection, &staging_for_task))
-            .await;
-        if let Err(error) = outcome {
-            let _ = std::fs::remove_file(&staging);
-            return Err(IpcError::internal(format!("备份写出失败：{error}")));
-        }
+    if encrypted {
+        let set_root = outcome.record.path.clone();
+        encrypt_backup_set(job, &outcome.manifest, &set_root)
+            .await
+            .inspect_err(|_| {
+                let _ = std::fs::remove_dir_all(&set_root);
+            })?;
+        let (manifest, manifest_sha) =
+            aether_store::rewrite_backup_set_manifest(&set_root, true, artifact_mode).map_err(
+                |error| {
+                    let _ = std::fs::remove_dir_all(&set_root);
+                    IpcError::internal(format!("备份 manifest 重写失败：{error}"))
+                },
+            )?;
+        outcome.manifest = manifest;
+        outcome.record.manifest_sha256 = Some(manifest_sha);
+        outcome.record.size_bytes = directory_bytes(&set_root);
     }
 
-    let size_bytes = if encrypted {
-        match encrypt_staged_backup(job, &staging, &dest).await {
-            Ok(size) => size,
-            Err(error) => {
-                // 加密任一步失败：明文暂存必须清除（不产出明文/半成品）。
-                let _ = std::fs::remove_file(&staging);
-                return Err(error);
-            }
-        }
-    } else {
-        let outcome = std::fs::rename(&staging, &dest);
-        if let Err(error) = outcome {
-            let _ = std::fs::remove_file(&staging);
-            return Err(IpcError::internal(format!("备份就位失败：{error}")));
-        }
-        file_len(&dest)
-    };
-    // 暂存文件（明文）在成功路径删除；失败路径由加密分支清理。
-    let _ = std::fs::remove_file(&staging);
+    // 快照/加密完成：先恢复写队列，再登记台账（台账写入本身需要写队列）。
+    drop(write_gate);
 
-    let record = BackupRecord {
-        id: job.id.to_owned(),
-        path: dest,
-        size_bytes,
-        encrypted,
-        kind: job.kind.to_owned(),
-        created_at: job.created_at,
-    };
-
-    // 台账登记（经单写队列；AGENTS §2.4）；失败删除刚写出的产物，保持台账与磁盘一致。
+    let record = opportunity_record(&outcome);
     let record_for_task = record.clone();
     let write_for_task = write.clone();
     if let Err(error) = write_for_task
@@ -815,13 +809,13 @@ pub async fn execute_backup(
         })
         .await
     {
-        if let Err(remove_error) = std::fs::remove_file(&record.path) {
+        if let Err(remove_error) = std::fs::remove_dir_all(&record.path) {
             tracing::warn!(path = %record.path.display(), error = %remove_error, "台账登记失败后的产物清理失败");
         }
         return Err(IpcError::internal(format!("备份台账登记失败：{error}")));
     }
 
-    // 自动产物滚动（仅 `kind='auto'`；新产物已通过 quick_check 校验 → 再删最旧）。
+    // 自动产物滚动（仅 `kind='auto'`；新产物已通过 manifest/quick_check 校验 → 再删最旧）。
     let mut pruned: Vec<String> = Vec::new();
     if let Some(retention) = job.auto_retention {
         let reads_for_list = reads.clone();
@@ -835,11 +829,16 @@ pub async fn execute_backup(
                     {
                         Ok(_) => {
                             if old.path.exists() {
-                                if let Err(error) = std::fs::remove_file(&old.path) {
+                                let result = if old.path.is_dir() {
+                                    std::fs::remove_dir_all(&old.path)
+                                } else {
+                                    std::fs::remove_file(&old.path)
+                                };
+                                if let Err(error) = result {
                                     tracing::warn!(
                                         path = %old.path.display(),
                                         error = %error,
-                                        "滚动清理删除备份文件失败（台账已清理）"
+                                        "滚动清理删除备份产物失败（台账已清理）"
                                     );
                                 }
                             }
@@ -864,12 +863,21 @@ pub async fn execute_backup(
     })
 }
 
-/// 加密暂存文件 → 产物（M5-03；失败清理暂存/密文临时文件，不产生半成品）。
-async fn encrypt_staged_backup(
+fn opportunity_record(outcome: &aether_store::BackupSetOutcome) -> BackupRecord {
+    let mut record = outcome.record.clone();
+    record.format = Some(BACKUP_FORMAT_SHARDED_SET.to_owned());
+    record.set_path = Some(outcome.record.path.clone());
+    record.manifest_path = Some(outcome.record.path.join(MANIFEST_FILE_NAME));
+    record.shard_count = Some(outcome.manifest.shard_count);
+    record
+}
+
+/// 逐文件 AEBK 加密（同一密钥/模式覆盖整套；manifest 随后重写为密文哈希）。
+async fn encrypt_backup_set(
     job: &BackupJob<'_>,
-    staging: &Path,
-    dest: &Path,
-) -> Result<u64, IpcError> {
+    manifest: &aether_store::BackupSetManifest,
+    set_root: &Path,
+) -> Result<(), IpcError> {
     let key = match &job.encryption {
         BackupEncryption::None => {
             return Err(IpcError::internal("加密路径选择不一致（不变量破坏）"))
@@ -893,46 +901,55 @@ async fn encrypt_staged_backup(
             BackupArtifactKey::Passphrase { key, salt }
         }
     };
-
-    let cipher_temp = append_suffix(staging, ".cipher");
-    let _ = std::fs::remove_file(&cipher_temp);
-    let staging_for_task = staging.to_path_buf();
-    let cipher_for_task = cipher_temp.clone();
     let source_id = job.id.to_owned();
     let created_at = job.created_at;
-    let outcome = tokio::task::spawn_blocking(move || {
-        encrypt_backup_file(
-            &staging_for_task,
-            &cipher_for_task,
-            &source_id,
-            created_at,
-            &key,
-        )
+    let set_root = set_root.to_path_buf();
+    let files = manifest
+        .files
+        .iter()
+        .map(|entry| entry.path.clone())
+        .collect::<Vec<_>>();
+    tokio::task::spawn_blocking(move || -> Result<(), IpcError> {
+        let generation_root = set_root.join(BACKUP_GENERATION_DIR);
+        for relative in files {
+            let source = set_root.join(&relative);
+            let cipher = source.with_file_name(format!(
+                "{}.aebk",
+                source
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            ));
+            encrypt_backup_file(&source, &cipher, &source_id, created_at, &key).map_err(
+                |error| {
+                    IpcError::internal(format!("备份加密失败（backup_encrypt_failed）：{error}"))
+                },
+            )?;
+            std::fs::remove_file(&source)
+                .map_err(|error| IpcError::internal(format!("备份明文清理失败：{error}")))?;
+            // 确保 generation 目录结构保留（仅删除明文文件）。
+        }
+        let _ = generation_root;
+        Ok(())
     })
     .await
-    .map_err(|error| IpcError::internal(format!("备份加密任务失败：{error}")))?;
-
-    let size = match outcome {
-        Ok(size) => size,
-        Err(error) => {
-            let _ = std::fs::remove_file(&cipher_temp);
-            return Err(IpcError::internal(format!(
-                "备份加密失败（backup_encrypt_failed）：{error}"
-            )));
-        }
-    };
-    if let Err(error) = std::fs::rename(&cipher_temp, dest) {
-        let _ = std::fs::remove_file(&cipher_temp);
-        return Err(IpcError::internal(format!("加密产物就位失败：{error}")));
-    }
-    Ok(size)
+    .map_err(|error| IpcError::internal(format!("备份加密任务失败：{error}")))?
 }
 
-/// 追加路径后缀（`OsString` 级拼接，避免 lossy 转换）。
-fn append_suffix(path: &Path, suffix: &str) -> PathBuf {
-    let mut name = path.as_os_str().to_os_string();
-    name.push(suffix);
-    PathBuf::from(name)
+fn directory_bytes(path: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return 0;
+    };
+    let mut total = 0u64;
+    for entry in entries.flatten() {
+        let entry_path = entry.path();
+        if entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+            total = total.saturating_add(directory_bytes(&entry_path));
+        } else {
+            total = total.saturating_add(file_len(&entry_path));
+        }
+    }
+    total
 }
 
 #[cfg(test)]

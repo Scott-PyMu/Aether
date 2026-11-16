@@ -52,6 +52,15 @@ pub const BACKUP_TEMP_INFIX: &str = ".backup-tmp-";
 /// 加密备份产物扩展名（M5-03/ADR-020 附录 A-2：`AEBK1` 形态；未加密保持 `.db`）。
 pub const ENCRYPTED_BACKUP_EXTENSION: &str = "aebk";
 
+/// 备份完整性摘要（ADR-039 D-039-5 §4：`<record>.integrity` 可选字段）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackupIntegrity {
+    /// `ok` / `failed` / `unverified`。
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checked_at: Option<i64>,
+}
+
 /// 备份台账记录（`backups` 表 + 文件元数据；`kind` = `manual`/`auto`）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BackupRecord {
@@ -64,6 +73,20 @@ pub struct BackupRecord {
     /// 语义已按 ADR-020 修订（目录位置由 `path` 判定）。
     pub kind: String,
     pub created_at: i64,
+    /// ADR-039 D-039-5 §4：`sharded_set`（新备份）/`single_file`（旧记录）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+    /// 备份集根目录（新备份；`path` 同步指向该目录）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub set_path: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manifest_path: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manifest_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shard_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub integrity: Option<BackupIntegrity>,
 }
 
 /// 恢复候选校验结果（D13 七步第 2 步）。
@@ -1027,6 +1050,12 @@ mod tests {
             encrypted: false,
             kind: "manual".to_owned(),
             created_at,
+            format: None,
+            set_path: None,
+            manifest_path: None,
+            manifest_sha256: None,
+            shard_count: None,
+            integrity: None,
         }
     }
 

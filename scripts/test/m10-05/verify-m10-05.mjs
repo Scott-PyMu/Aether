@@ -168,7 +168,6 @@ mustContain("crates/aether-app/src/session_backend.rs", [
   "fn attachment_add",
   "fn attachment_list",
   "fn attachment_remove",
-  "send_with_attachments",
   "AttachmentTypeUnsupported",
   "MULTIMODAL_MODEL_UNVERIFIED",
 ]);

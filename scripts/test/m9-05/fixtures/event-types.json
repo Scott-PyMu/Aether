@@ -1,6 +1,6 @@
 {
   "schema": "aether.m9-05.event-types/1",
-  "source": "设计文档附录 B / aether_core::EventType",
+  "source": "设计文档附录 B / aether_core::EventType（M10 增补 ADR-031 编排 / ADR-032 子 Agent）",
   "mvp": [
     "session.created",
     "session.updated",
@@ -26,6 +26,14 @@
     "message.reasoning_delta",
     "subagent.spawned",
     "subagent.completed",
-    "workflow.*"
+    "workflow.started",
+    "workflow.node_started",
+    "workflow.node_completed",
+    "workflow.node_failed",
+    "workflow.node_cancelled",
+    "workflow.node_skipped",
+    "workflow.completed",
+    "workflow.failed",
+    "workflow.cancelled"
   ]
 }

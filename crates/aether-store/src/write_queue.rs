@@ -19,7 +19,7 @@ use aether_core::{EventEnvelope, Message, SessionId};
 use rusqlite::{params, Connection};
 use serde_json::Value;
 use tokio::runtime::Handle;
-use tokio::sync::{broadcast, mpsc, oneshot, Semaphore};
+use tokio::sync::{broadcast, mpsc, oneshot, watch, Semaphore};
 use tokio::task::JoinHandle;
 
 use crate::checkpoint::{
@@ -27,6 +27,7 @@ use crate::checkpoint::{
     WAL_FORCE_CHECKPOINT_BYTES,
 };
 use crate::error::StoreError;
+use crate::layout::{shard_for, StorageLayout};
 use crate::ops::{apply_command, StoreCommand, StoreOutcome};
 use crate::store::Store;
 
@@ -40,8 +41,10 @@ pub const FLUSH_INTERVAL: Duration = Duration::from_millis(16);
 pub const L1_THRESHOLD: usize = 1_024;
 /// L2 水位（D8：写队列 >4096 → 拒绝新 run；`storage_backpressure`）。
 pub const L2_THRESHOLD: usize = 4_096;
-/// 读连接数（D3：4 个读连接）。
+/// 读连接数（D3：主库 4 个读连接）。
 pub const READ_CONNECTION_COUNT: usize = 4;
+/// 分片读连接数（ADR-039 D-039-1：每片 1–2；主库 4 + 8×2 = 20）。
+pub const SHARD_READ_CONNECTION_COUNT: usize = 2;
 /// 关闭序列写队列 drain 上限（D2：3s；放弃 delta、保留控制事件）。
 pub const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
 /// 关闭序列读连接关闭等待上限（D2 硬超时口径；常量级参数，证据记录）。
@@ -229,6 +232,8 @@ enum WriteMessage {
         config: CheckpointConfig,
         reply: oneshot::Sender<CheckpointReport>,
     },
+    /// 维护态屏障（ADR-039 D-039-5）：FIFO 处理完此前全部写入后回执。
+    Drain { reply: oneshot::Sender<()> },
 }
 
 impl WriteMessage {
@@ -237,7 +242,7 @@ impl WriteMessage {
             Self::Events { events, .. } => events.len(),
             // 命令按 1 条计（准入水位与队列容量口径统一）。
             Self::Command { .. } => 1,
-            Self::Shutdown { .. } | Self::Checkpoint { .. } => 0,
+            Self::Shutdown { .. } | Self::Checkpoint { .. } | Self::Drain { .. } => 0,
         }
     }
 }
@@ -260,6 +265,50 @@ struct QueueCounters {
     pressure_level: AtomicUsize,
 }
 
+/// 维护态写入闸门（ADR-039 D-039-5）：暂停新写入并在 drain 后放行维护操作。
+#[derive(Debug)]
+struct WriteGate {
+    paused: watch::Sender<bool>,
+    /// 保持至少一个 receiver，避免 `watch::Sender::send` 因无订阅者失败。
+    _keepalive: watch::Receiver<bool>,
+}
+
+impl WriteGate {
+    fn new() -> Self {
+        let (paused, keepalive) = watch::channel(false);
+        Self {
+            paused,
+            _keepalive: keepalive,
+        }
+    }
+
+    async fn wait_open(&self) {
+        let mut receiver = self.paused.subscribe();
+        if *receiver.borrow() {
+            let _ = receiver.wait_for(|paused| !*paused).await;
+        }
+    }
+
+    fn pause(&self) {
+        let _ = self.paused.send(true);
+    }
+
+    fn resume(&self) {
+        let _ = self.paused.send(false);
+    }
+}
+
+/// 维护态写入闸门守卫（Drop 恢复）。
+pub struct MaintenanceWriteGuard {
+    gate: Arc<WriteGate>,
+}
+
+impl Drop for MaintenanceWriteGuard {
+    fn drop(&mut self) {
+        self.gate.resume();
+    }
+}
+
 /// 写队列句柄（克隆共享同一队列；写任务由 [`StoreRuntime`] 持有）。
 #[derive(Clone)]
 pub struct WriteQueue {
@@ -267,6 +316,7 @@ pub struct WriteQueue {
     counters: Arc<QueueCounters>,
     alerts: broadcast::Sender<WriteQueueAlert>,
     config: Arc<WriteQueueConfig>,
+    gate: Arc<WriteGate>,
 }
 
 impl WriteQueue {
@@ -282,6 +332,7 @@ impl WriteQueue {
         if events.is_empty() {
             return Err(StoreError::EmptyWriteBatch);
         }
+        self.gate.wait_open().await;
         let entries = u64::try_from(events.len()).unwrap_or(u64::MAX);
         let (reply, reply_rx) = oneshot::channel();
         self.counters
@@ -321,6 +372,7 @@ impl WriteQueue {
     /// - 命令在写任务内独立事务执行：成功 = `COMMIT` 已返回；
     /// - 与事件批次的顺序保持 FIFO（命令到达前的批次先提交）。
     pub async fn execute(&self, command: StoreCommand) -> Result<StoreOutcome, StoreError> {
+        self.gate.wait_open().await;
         let (reply, reply_rx) = oneshot::channel();
         self.counters
             .submitted_entries
@@ -396,6 +448,32 @@ impl WriteQueue {
         Ok(())
     }
 
+    /// 进入维护态：暂停新写入，FIFO drain 此前全部消息，返回 Drop 恢复守卫。
+    ///
+    /// 用于备份/恢复（ADR-039 D-039-5）：调用方持有守卫期间执行备份/恢复，
+    /// 结束时 Drop 恢复写入。drain 只保证此前消息已处理；调用方仍应在维护态
+    /// 命令层拒绝其他写命令（`MaintenanceCell`）。
+    pub async fn pause_and_drain(&self) -> Result<MaintenanceWriteGuard, StoreError> {
+        self.gate.pause();
+        let (reply, reply_rx) = oneshot::channel();
+        self.sender
+            .send(WriteMessage::Drain { reply })
+            .await
+            .map_err(|_| {
+                self.gate.resume();
+                StoreError::WriteQueueClosed
+            })?;
+        match reply_rx.await {
+            Ok(()) => Ok(MaintenanceWriteGuard {
+                gate: Arc::clone(&self.gate),
+            }),
+            Err(_) => {
+                self.gate.resume();
+                Err(StoreError::WriteQueueClosed)
+            }
+        }
+    }
+
     /// 在写连接上执行 `wal_checkpoint(TRUNCATE)`（运行期强制 checkpoint 入口；M2-06）。
     ///
     /// 读锁未释放时按 [`CheckpointConfig`] 退避重试并返回诊断（`succeeded=false` 为
@@ -437,6 +515,15 @@ pub struct ReadPool {
     connections: Arc<Vec<Arc<Mutex<Option<Connection>>>>>,
     permits: Arc<Semaphore>,
     cursor: Arc<AtomicUsize>,
+    /// ADR-039：分片读连接池（`None` = 单库模式/安全模式）。
+    shards: Option<Arc<ShardReadPools>>,
+}
+
+/// 分片读连接池（每片独立池；总数主库 4 + 8×2 = 20）。
+#[derive(Clone)]
+struct ShardReadPools {
+    pools: Arc<Vec<ReadPool>>,
+    paths: Arc<Vec<PathBuf>>,
 }
 
 impl ReadPool {
@@ -450,7 +537,73 @@ impl ReadPool {
             connections: Arc::new(connections),
             permits: Arc::new(Semaphore::new(size)),
             cursor: Arc::new(AtomicUsize::new(0)),
+            shards: None,
         })
+    }
+
+    /// 主库 + 分片读连接池（ADR-039；生成模式）。
+    fn open_with_shards(
+        path: &Path,
+        size: usize,
+        shard_paths: &[PathBuf],
+        shard_size: usize,
+    ) -> Result<Self, StoreError> {
+        let mut pool = Self::open(path, size)?;
+        let mut pools = Vec::with_capacity(shard_paths.len());
+        for shard_path in shard_paths {
+            pools.push(Self::open(shard_path, shard_size.max(1))?);
+        }
+        pool.shards = Some(Arc::new(ShardReadPools {
+            pools: Arc::new(pools),
+            paths: Arc::new(shard_paths.to_vec()),
+        }));
+        Ok(pool)
+    }
+
+    /// 分片数（单库模式 = 0）。
+    pub fn shard_count(&self) -> usize {
+        self.shards
+            .as_ref()
+            .map(|shards| shards.pools.len())
+            .unwrap_or(0)
+    }
+
+    /// 按会话稳定哈希取分片读池。
+    fn shard_pool(&self, session_id: &str) -> Option<ReadPool> {
+        let shards = self.shards.as_ref()?;
+        let index = usize::from(shard_for(session_id));
+        shards.pools.get(index).cloned()
+    }
+
+    /// 在指定分片读连接上执行查询（归档/保留/诊断逐片读取；单库模式返回错误）。
+    pub async fn with_shard_connection<T, F>(
+        &self,
+        shard_id: u8,
+        operation: F,
+    ) -> Result<T, StoreError>
+    where
+        F: FnOnce(&Connection) -> Result<T, StoreError> + Send + 'static,
+        T: Send + 'static,
+    {
+        let shards = self.shards.as_ref().ok_or_else(|| StoreError::Internal {
+            reason: "单库模式没有事件分片".to_owned(),
+        })?;
+        let pool = shards
+            .pools
+            .get(usize::from(shard_id))
+            .cloned()
+            .ok_or_else(|| StoreError::Internal {
+                reason: format!("分片 id 越界：{shard_id}"),
+            })?;
+        pool.with_connection(operation).await
+    }
+
+    /// 分片路径（单库模式为空）。
+    pub fn shard_paths(&self) -> Vec<PathBuf> {
+        self.shards
+            .as_ref()
+            .map(|shards| shards.paths.as_ref().clone())
+            .unwrap_or_default()
     }
 
     /// 只读读连接池（M9-13 R10-A：`quick_check` 失败安全模式下的维护例外）。
@@ -522,26 +675,40 @@ impl ReadPool {
     ///   尽力拆除当前空闲连接（退出优先，D2）；
     /// - 返回报告供 shadow 日志记录。
     pub async fn close(&self, timeout: Duration) -> ReadPoolCloseReport {
+        let mut report = self.close_self(timeout).await;
+        if let Some(shards) = &self.shards {
+            for pool in shards.pools.iter() {
+                let shard_report = pool.close_self(timeout).await;
+                report.connections += shard_report.connections;
+                report.closed += shard_report.closed;
+                report.timed_out |= shard_report.timed_out;
+            }
+        }
+        report
+    }
+
+    async fn close_self(&self, timeout: Duration) -> ReadPoolCloseReport {
         let total = self.connections.len();
         let mut report = ReadPoolCloseReport {
             connections: total,
             closed: 0,
             timed_out: false,
         };
-        if total == 0 {
-            return report;
-        }
-        let Ok(count) = u32::try_from(total) else {
-            report.timed_out = true;
-            report.closed = self.take_idle_connections();
-            return report;
-        };
-        match tokio::time::timeout(timeout, self.permits.clone().acquire_many_owned(count)).await {
-            Ok(Ok(permits)) => {
-                report.closed = self.take_idle_connections();
-                drop(permits);
-            }
-            _ => {
+        if total > 0 {
+            if let Ok(count) = u32::try_from(total) {
+                match tokio::time::timeout(timeout, self.permits.clone().acquire_many_owned(count))
+                    .await
+                {
+                    Ok(Ok(permits)) => {
+                        report.closed = self.take_idle_connections();
+                        drop(permits);
+                    }
+                    _ => {
+                        report.timed_out = true;
+                        report.closed = self.take_idle_connections();
+                    }
+                }
+            } else {
                 report.timed_out = true;
                 report.closed = self.take_idle_connections();
             }
@@ -562,10 +729,10 @@ impl ReadPool {
         closed
     }
 
-    /// 会话事件计数（诊断/基准）。
+    /// 会话事件计数（诊断/基准；ADR-039 按会话路由到分片）。
     pub async fn event_count(&self, session_id: &SessionId) -> Result<u64, StoreError> {
         let session = session_id.as_str().to_owned();
-        self.with_connection(move |conn| {
+        let operation = move |conn: &Connection| {
             let count: i64 = conn.query_row(
                 "SELECT COUNT(*) FROM events WHERE session_id = ?1",
                 [session.as_str()],
@@ -574,14 +741,17 @@ impl ReadPool {
             u64::try_from(count).map_err(|_| StoreError::Internal {
                 reason: format!("events 计数为负: {count}"),
             })
-        })
-        .await
+        };
+        match self.shard_pool(session_id.as_str()) {
+            Some(pool) => pool.with_connection(operation).await,
+            None => self.with_connection(operation).await,
+        }
     }
 
-    /// 会话最大 seq（M1-05 sequencer 崩溃恢复：seq = max+1）。
+    /// 会话最大 seq（M1-05 sequencer 崩溃恢复：seq = max+1；ADR-039 按会话路由）。
     pub async fn max_seq(&self, session_id: &SessionId) -> Result<Option<u64>, StoreError> {
         let session = session_id.as_str().to_owned();
-        self.with_connection(move |conn| {
+        let operation = move |conn: &Connection| {
             // 聚合查询恒返回一行；无匹配行时为 NULL。
             let max: Option<i64> = conn.query_row(
                 "SELECT MAX(seq) FROM events WHERE session_id = ?1",
@@ -597,11 +767,14 @@ impl ReadPool {
                 },
                 None => Ok(None),
             }
-        })
-        .await
+        };
+        match self.shard_pool(session_id.as_str()) {
+            Some(pool) => pool.with_connection(operation).await,
+            None => self.with_connection(operation).await,
+        }
     }
 
-    /// 补读页（升序，至多 `limit` 条；M1-05 断点续传入口）。
+    /// 补读页（升序，至多 `limit` 条；M1-05 断点续传入口；ADR-039 按会话路由）。
     ///
     /// - `after_seq = Some(last_seq)`：补读 `seq > last_seq`（UI 断点续传）；
     /// - `after_seq = None`：从会话起点读取（首屏/缓存清空后重载）。
@@ -612,11 +785,14 @@ impl ReadPool {
         limit: usize,
     ) -> Result<Vec<EventEnvelope>, StoreError> {
         let session = session_id.as_str().to_owned();
-        self.with_connection(move |conn| read_events_page(conn, &session, after_seq, limit))
-            .await
+        let operation = move |conn: &Connection| read_events_page(conn, &session, after_seq, limit);
+        match self.shard_pool(session_id.as_str()) {
+            Some(pool) => pool.with_connection(operation).await,
+            None => self.with_connection(operation).await,
+        }
     }
 
-    /// 最近一页事件（按 seq 降序取 `limit` 条后升序返回；M3-02 缓存清空后重载）。
+    /// 最近一页事件（按 seq 降序取 `limit` 条后升序返回；M3-02 缓存清空后重载；ADR-039 按会话路由）。
     ///
     /// 语义与 [`ReadPool::events_page`] 的升序输出一致；`limit` 为 0 时返回空。
     pub async fn events_latest(
@@ -625,8 +801,11 @@ impl ReadPool {
         limit: usize,
     ) -> Result<Vec<EventEnvelope>, StoreError> {
         let session = session_id.as_str().to_owned();
-        self.with_connection(move |conn| read_events_latest(conn, &session, limit))
-            .await
+        let operation = move |conn: &Connection| read_events_latest(conn, &session, limit);
+        match self.shard_pool(session_id.as_str()) {
+            Some(pool) => pool.with_connection(operation).await,
+            None => self.with_connection(operation).await,
+        }
     }
 
     /// 最近一页消息（按 seq 降序取 `limit` 条后升序返回；M3-02 工作台消息基线）。
@@ -845,6 +1024,10 @@ impl ShutdownReport {
 /// 存储运行时：单写任务（[`WriteQueue`]）+ 读连接池（[`ReadPool`]）。
 pub struct StoreRuntime {
     path: PathBuf,
+    /// ADR-039：generation 布局（`None` = 单库模式，仅供既有单库测试/工具）。
+    layout: Option<StorageLayout>,
+    /// 是否在正常关闭后写 `clean_shutdown.json`（降级/故障路径关闭）。
+    write_clean_sidecar: bool,
     queue: WriteQueue,
     reads: ReadPool,
     writer: Option<JoinHandle<()>>,
@@ -875,20 +1058,98 @@ impl StoreRuntime {
             counters: Arc::clone(&counters),
             alerts: alerts.clone(),
             config: Arc::clone(&config),
+            gate: Arc::new(WriteGate::new()),
         };
         let writer = handle.spawn(writer_loop(
             receiver,
             connection,
+            Vec::new(),
+            Vec::new(),
             Arc::clone(&config),
             Arc::clone(&counters),
             alerts,
         ));
         Ok(Self {
             path,
+            layout: None,
+            write_clean_sidecar: false,
             queue,
             reads,
             writer: Some(writer),
         })
+    }
+
+    /// 打开 generation（主库 + 8 分片）：单写任务持有每片连接；读池按会话路由。
+    ///
+    /// - 任一库 `quick_check` 失败 → 拒绝启动写运行时（`SafeModeWriteRefused`）；
+    /// - 启动断言主库 `events=0`、`sessions.shard_id`/`deletion_pending` 有效（ADR-039 D-039-6）；
+    /// - 启动时对 `deletion_pending=1` 会话执行幂等 tombstone 收尾（D-039-8）。
+    pub fn open_generation(
+        layout: StorageLayout,
+        config: WriteQueueConfig,
+        handle: &Handle,
+    ) -> Result<Self, StoreError> {
+        config.validate()?;
+        let main_store = Store::open(layout.main_db())?;
+        let (main_connection, _) = main_store.into_writer_connection()?;
+        let mut shard_connections = Vec::with_capacity(layout.shard_paths().len());
+        for (shard_id, path) in layout.shard_paths().iter().enumerate() {
+            let store = Store::open(path)?;
+            if let Some(reason) = store.safe_mode_reason() {
+                return Err(StoreError::SafeModeWriteRefused {
+                    reason: format!("分片 {shard_id} quick_check 失败：{reason}"),
+                });
+            }
+            let (connection, _) = store.into_writer_connection()?;
+            shard_connections.push(connection);
+        }
+        crate::layout::assert_invariants(&layout)?;
+        let pending = crate::layout::pending_deletions(&layout)?;
+        let reads = ReadPool::open_with_shards(
+            layout.main_db(),
+            config.read_connections,
+            layout.shard_paths(),
+            SHARD_READ_CONNECTION_COUNT,
+        )?;
+
+        let counters = Arc::new(QueueCounters::default());
+        let config = Arc::new(config);
+        let (sender, receiver) = mpsc::channel(config.capacity);
+        let (alerts, _receiver) = broadcast::channel(ALERT_CHANNEL_CAPACITY);
+        let queue = WriteQueue {
+            sender,
+            counters: Arc::clone(&counters),
+            alerts: alerts.clone(),
+            config: Arc::clone(&config),
+            gate: Arc::new(WriteGate::new()),
+        };
+        let writer = handle.spawn(writer_loop(
+            receiver,
+            main_connection,
+            shard_connections,
+            pending,
+            Arc::clone(&config),
+            Arc::clone(&counters),
+            alerts,
+        ));
+        Ok(Self {
+            path: layout.main_db().to_path_buf(),
+            layout: Some(layout),
+            write_clean_sidecar: true,
+            queue,
+            reads,
+            writer: Some(writer),
+        })
+    }
+
+    /// 关闭前禁用 `clean_shutdown.json`（降级/检查失败/故障路径；M10-10 严格 sidecar）。
+    pub fn disable_clean_sidecar(&mut self) {
+        self.write_clean_sidecar = false;
+    }
+
+    /// generation 布局（单库模式 `None`）。
+    pub fn layout(&self) -> Option<&StorageLayout> {
+        self.layout.as_ref()
     }
 
     /// 数据库路径。
@@ -1013,7 +1274,7 @@ impl StoreRuntime {
             ),
         ));
 
-        // 步骤 3：wal_checkpoint(TRUNCATE)
+        // 步骤 3：wal_checkpoint(TRUNCATE)（主库 + 全部分片）
         let step_started = std::time::Instant::now();
         let wal_before = self.wal_size_bytes();
         let (checkpoint, checkpoint_detail) = if drained {
@@ -1043,6 +1304,7 @@ impl StoreRuntime {
             )
         };
         let wal_after = self.wal_size_bytes();
+        let checkpoint_ok = checkpoint.as_ref().is_some_and(|report| report.succeeded);
         steps.push(step_record(
             ShutdownStep::WalCheckpointTruncate,
             step_started,
@@ -1066,6 +1328,13 @@ impl StoreRuntime {
             },
         ));
 
+        // ADR-039 附录 B：关闭序列完成 + drain + checkpoint 成功才写 clean sidecar。
+        if self.write_clean_sidecar && drained && checkpoint_ok {
+            if let Err(error) = self.write_clean_shutdown_sidecar() {
+                tracing::warn!(%error, "clean_shutdown.json 写入失败（下次启动全量检查）");
+            }
+        }
+
         // 步骤 5：退出
         steps.push(step_record(
             ShutdownStep::Exit,
@@ -1083,23 +1352,84 @@ impl StoreRuntime {
         })
     }
 
-    /// drain 未完成/写任务已退出时的 checkpoint 兜底：临时写连接执行后立即关闭。
+    /// drain 未完成/写任务已退出时的 checkpoint 兜底：主库 + 全部分片临时写连接执行后立即关闭。
     fn checkpoint_via_temporary_connection(
         &self,
         config: &CheckpointConfig,
         context: String,
     ) -> (Option<CheckpointReport>, String) {
-        match Store::open_writer_connection(&self.path) {
-            Ok(connection) => {
-                let report = checkpoint_truncate_with_backoff(&connection, config);
-                let detail = format!("{context}；临时写连接：{}", report.diagnostic_summary());
-                (Some(report), detail)
+        let paths: Vec<PathBuf> = match &self.layout {
+            Some(layout) => layout.all_db_paths(),
+            None => vec![self.path.clone()],
+        };
+        let mut reports = Vec::with_capacity(paths.len());
+        let mut failures = Vec::new();
+        for path in &paths {
+            match Store::open_writer_connection(path) {
+                Ok(connection) => {
+                    reports.push(checkpoint_truncate_with_backoff(&connection, config))
+                }
+                Err(error) => failures.push(format!("{}：{error}", path.display())),
             }
-            Err(error) => (
-                None,
-                format!("{context}；临时写连接打开失败，checkpoint 未执行：{error}"),
-            ),
         }
+        if reports.is_empty() {
+            return (
+                None,
+                format!(
+                    "{context}；临时写连接打开失败，checkpoint 未执行：{}",
+                    failures.join("；")
+                ),
+            );
+        }
+        let aggregate = aggregate_checkpoint_reports(&reports);
+        let detail = format!(
+            "{context}；临时写连接（{} 库）：{}{}",
+            reports.len(),
+            aggregate.diagnostic_summary(),
+            if failures.is_empty() {
+                String::new()
+            } else {
+                format!("；打开失败：{}", failures.join("；"))
+            }
+        );
+        (Some(aggregate), detail)
+    }
+
+    /// 写 `clean_shutdown.json`（M10-09：generation 匹配；M10-10 严格跳过判定）。
+    fn write_clean_shutdown_sidecar(&self) -> Result<(), StoreError> {
+        let Some(layout) = self.layout.as_ref() else {
+            return Ok(());
+        };
+        let previous = crate::layout::read_clean_shutdown(layout);
+        let clean_start_count = previous
+            .as_ref()
+            .filter(|sidecar| sidecar.generation == layout.generation())
+            .map(|sidecar| sidecar.clean_start_count.saturating_add(1))
+            .unwrap_or(0);
+        let last_full_check_at = previous
+            .as_ref()
+            .and_then(|sidecar| sidecar.last_full_check_at);
+        let mut shards = Vec::with_capacity(layout.shard_paths().len());
+        for (shard_id, path) in layout.shard_paths().iter().enumerate() {
+            let last_seq = crate::layout::shard_last_seq(path)?;
+            shards.push(crate::layout::ShardFingerprint {
+                shard_id: u8::try_from(shard_id).unwrap_or(0),
+                database: crate::layout::database_fingerprint(path, last_seq)?,
+            });
+        }
+        let sidecar = crate::layout::CleanShutdown {
+            generation: layout.generation().to_owned(),
+            app_version: env!("CARGO_PKG_VERSION").to_owned(),
+            closed_at: now_ms(),
+            close_sequence_completed: true,
+            write_queue_drained: true,
+            background_check_completed: false,
+            last_full_check_at,
+            clean_start_count,
+            main: crate::layout::database_fingerprint(layout.main_db(), None)?,
+            shards,
+        };
+        crate::layout::write_clean_shutdown(layout, &sidecar)
     }
 }
 
@@ -1129,10 +1459,20 @@ fn step_record(
 async fn writer_loop(
     mut receiver: mpsc::Receiver<WriteMessage>,
     mut connection: Connection,
+    mut shards: Vec<Connection>,
+    pending_deletions: Vec<String>,
     config: Arc<WriteQueueConfig>,
     counters: Arc<QueueCounters>,
     alerts: broadcast::Sender<WriteQueueAlert>,
 ) {
+    if !pending_deletions.is_empty() {
+        match finalize_pending_deletions(&mut connection, &mut shards, &pending_deletions) {
+            Ok(count) => tracing::info!(count, "启动恢复：完成 deletion_pending 会话删除"),
+            Err(error) => {
+                tracing::warn!(%error, "启动恢复：deletion_pending 会话删除失败（保留 tombstone 待重试）")
+            }
+        }
+    }
     // 上一轮批次收集期间到达的命令/checkpoint 消息（保持 FIFO，避免重排）。
     let mut deferred: Option<WriteMessage> = None;
     loop {
@@ -1151,15 +1491,19 @@ async fn writer_loop(
             WriteMessage::Shutdown { reply } => {
                 // M2-06：drain 已确认 → 保持写连接打开，等待关闭序列阶段 3 的 checkpoint。
                 let _ = reply.send(());
-                let _ = await_shutdown_checkpoint(connection, &mut receiver).await;
+                let _ = await_shutdown_checkpoint(connection, shards, &mut receiver).await;
                 break;
             }
             WriteMessage::Checkpoint {
                 config: checkpoint_config,
                 reply,
             } => {
-                let report = checkpoint_truncate_with_backoff(&connection, &checkpoint_config);
+                let report = checkpoint_all(&connection, &shards, &checkpoint_config);
                 let _ = reply.send(report);
+                continue;
+            }
+            WriteMessage::Drain { reply } => {
+                let _ = reply.send(());
                 continue;
             }
             WriteMessage::Command {
@@ -1170,6 +1514,7 @@ async fn writer_loop(
                 // 命令独立事务立即执行（不参与事件批次，保持到达顺序）。
                 execute_command_message(
                     &mut connection,
+                    &mut shards,
                     &counters,
                     *command,
                     reply,
@@ -1209,6 +1554,11 @@ async fn writer_loop(
                         deferred = Some(command);
                         break BatchTrigger::Command;
                     }
+                    drain @ WriteMessage::Drain { .. } => {
+                        // 维护态屏障：先提交已收集的事件批次，再回执 drain。
+                        deferred = Some(drain);
+                        break BatchTrigger::Command;
+                    }
                 },
                 Ok(None) => break BatchTrigger::Shutdown,
                 Err(_elapsed) => break BatchTrigger::Timer,
@@ -1222,7 +1572,7 @@ async fn writer_loop(
             tokio::time::sleep(config.commit_delay).await;
         }
         let started = std::time::Instant::now();
-        let outcome = commit_events_batch(&mut connection, &batch);
+        let outcome = commit_events_batch(&mut connection, &mut shards, &batch);
         let commit_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         counters.pending_batch_entries.store(0, Ordering::Release);
         counters.last_commit_ms.store(commit_ms, Ordering::Relaxed);
@@ -1231,52 +1581,77 @@ async fn writer_loop(
             .fetch_max(commit_ms, Ordering::Relaxed);
         let committed_at_ms = now_ms();
 
-        match outcome {
-            Ok(()) => {
-                counters.committed_batches.fetch_add(1, Ordering::Relaxed);
-                counters
-                    .max_batch_entries
-                    .fetch_max(batch_entries, Ordering::Relaxed);
-                let entries = u64::try_from(batch_entries).unwrap_or(u64::MAX);
-                counters
-                    .committed_entries
-                    .fetch_add(entries, Ordering::Relaxed);
-                counters
-                    .resolved_entries
-                    .fetch_add(entries, Ordering::AcqRel);
-                for message in batch {
-                    if let WriteMessage::Events {
-                        events,
-                        reply,
+        let failures = outcome;
+        if failures.iter().all(Option::is_none) {
+            counters.committed_batches.fetch_add(1, Ordering::Relaxed);
+            counters
+                .max_batch_entries
+                .fetch_max(batch_entries, Ordering::Relaxed);
+            let entries = u64::try_from(batch_entries).unwrap_or(u64::MAX);
+            counters
+                .committed_entries
+                .fetch_add(entries, Ordering::Relaxed);
+            counters
+                .resolved_entries
+                .fetch_add(entries, Ordering::AcqRel);
+            for message in batch {
+                if let WriteMessage::Events {
+                    events,
+                    reply,
+                    submitted_at_ms,
+                } = message
+                {
+                    let _ = reply.send(Ok(CommitReceipt {
+                        entries: events.len(),
+                        batch_entries,
+                        commit_ms,
+                        trigger,
                         submitted_at_ms,
-                    } = message
-                    {
-                        let _ = reply.send(Ok(CommitReceipt {
-                            entries: events.len(),
-                            batch_entries,
-                            commit_ms,
-                            trigger,
-                            submitted_at_ms,
-                            committed_at_ms,
-                        }));
-                    }
+                        committed_at_ms,
+                    }));
                 }
             }
-            Err((code, message)) => {
-                counters.failed_entries.fetch_add(
-                    u64::try_from(batch_entries).unwrap_or(u64::MAX),
-                    Ordering::AcqRel,
-                );
-                counters.resolved_entries.fetch_add(
-                    u64::try_from(batch_entries).unwrap_or(u64::MAX),
-                    Ordering::AcqRel,
-                );
-                for job in batch {
-                    if let WriteMessage::Events { reply, .. } = job {
-                        let _ = reply.send(Err(StoreError::WriteTransactionFailed {
-                            code,
-                            message: message.clone(),
-                        }));
+        } else {
+            counters.failed_entries.fetch_add(
+                u64::try_from(batch_entries).unwrap_or(u64::MAX),
+                Ordering::AcqRel,
+            );
+            counters.resolved_entries.fetch_add(
+                u64::try_from(batch_entries).unwrap_or(u64::MAX),
+                Ordering::AcqRel,
+            );
+            for job in batch {
+                if let WriteMessage::Events {
+                    events,
+                    reply,
+                    submitted_at_ms,
+                } = job
+                {
+                    let failed = if shards.is_empty() {
+                        failures.first().cloned().flatten()
+                    } else {
+                        events.iter().find_map(|event| {
+                            failures
+                                .get(usize::from(shard_for(event.session_id.as_str())))
+                                .cloned()
+                                .flatten()
+                        })
+                    };
+                    match failed {
+                        Some((code, message)) => {
+                            let _ = reply
+                                .send(Err(StoreError::WriteTransactionFailed { code, message }));
+                        }
+                        None => {
+                            let _ = reply.send(Ok(CommitReceipt {
+                                entries: events.len(),
+                                batch_entries,
+                                commit_ms,
+                                trigger,
+                                submitted_at_ms,
+                                committed_at_ms,
+                            }));
+                        }
                     }
                 }
             }
@@ -1286,7 +1661,7 @@ async fn writer_loop(
 
         if let Some(reply) = pending_shutdown.take() {
             let _ = reply.send(());
-            let _ = await_shutdown_checkpoint(connection, &mut receiver).await;
+            let _ = await_shutdown_checkpoint(connection, shards, &mut receiver).await;
             break;
         }
     }
@@ -1302,6 +1677,7 @@ async fn writer_loop(
 /// （关停后不得再产生成功收据）。
 async fn await_shutdown_checkpoint(
     connection: Connection,
+    shards: Vec<Connection>,
     receiver: &mut mpsc::Receiver<WriteMessage>,
 ) -> bool {
     loop {
@@ -1310,7 +1686,7 @@ async fn await_shutdown_checkpoint(
                 config: checkpoint_config,
                 reply,
             }) => {
-                let report = checkpoint_truncate_with_backoff(&connection, &checkpoint_config);
+                let report = checkpoint_all(&connection, &shards, &checkpoint_config);
                 let _ = reply.send(report);
                 return true;
             }
@@ -1324,6 +1700,10 @@ async fn await_shutdown_checkpoint(
                 // 重复关停标记：幂等确认（drain 已完成）。
                 let _ = reply.send(());
             }
+            Some(WriteMessage::Drain { reply }) => {
+                // 关停待命态：此前写入已 drain，直接回执。
+                let _ = reply.send(());
+            }
             None => return false,
         }
     }
@@ -1332,13 +1712,14 @@ async fn await_shutdown_checkpoint(
 /// 执行一条领域写命令并回执（单写任务内串行；成功 = `COMMIT` 已返回）。
 fn execute_command_message(
     connection: &mut Connection,
+    shards: &mut [Connection],
     counters: &QueueCounters,
     command: StoreCommand,
     reply: oneshot::Sender<Result<StoreOutcome, StoreError>>,
     _submitted_at_ms: i64,
 ) {
     let started = std::time::Instant::now();
-    let outcome = apply_command(connection, &command);
+    let outcome = apply_command_multi(connection, shards, &command);
     let commit_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     counters.last_commit_ms.store(commit_ms, Ordering::Relaxed);
     counters
@@ -1358,10 +1739,310 @@ fn execute_command_message(
     }
 }
 
-/// 单事务写入一批事件（D4 信封 9 字段 ↔ `events` 列一一对应）。
-fn commit_events_batch(
+/// 多库写命令：`DeleteSession` 走 tombstone 协议；`DeleteEventsByIds` 按分片；
+/// 其余命令仍在主库单事务执行（ADR-039 D-039-8；不做跨片事务）。
+fn apply_command_multi(
+    main: &mut Connection,
+    shards: &mut [Connection],
+    command: &StoreCommand,
+) -> Result<StoreOutcome, StoreError> {
+    match command {
+        StoreCommand::DeleteSession { id } => {
+            if shards.is_empty() {
+                apply_command(main, command)
+            } else {
+                delete_session_tombstone(main, shards, id.as_str())
+            }
+        }
+        StoreCommand::DeleteEventsByIds { .. } => {
+            // 单库模式（既有测试/工具）在主线执行；生成模式必须指定分片。
+            if shards.is_empty() {
+                apply_command(main, command)
+            } else {
+                Err(StoreError::Internal {
+                    reason: "生成模式 DeleteEventsByIds 必须使用 DeleteEventsInShard".to_owned(),
+                })
+            }
+        }
+        StoreCommand::DeleteEventsInShard { shard_id, rowids } => {
+            let connection =
+                shards
+                    .get_mut(usize::from(*shard_id))
+                    .ok_or_else(|| StoreError::Internal {
+                        reason: format!("分片 id 越界：{shard_id}"),
+                    })?;
+            apply_delete_events(connection, rowids)
+        }
+        _ => apply_command(main, command),
+    }
+}
+
+fn apply_delete_events(
     connection: &mut Connection,
+    rowids: &[i64],
+) -> Result<StoreOutcome, StoreError> {
+    if rowids.is_empty() {
+        return Ok(StoreOutcome::Applied { affected: 0 });
+    }
+    let transaction = connection.transaction()?;
+    let mut affected = 0usize;
+    for chunk in rowids.chunks(crate::ops::DELETE_EVENTS_CHUNK) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!("DELETE FROM events WHERE rowid IN ({placeholders})");
+        affected = affected
+            .saturating_add(transaction.execute(&sql, rusqlite::params_from_iter(chunk.iter()))?);
+    }
+    transaction.commit()?;
+    Ok(StoreOutcome::Applied { affected })
+}
+
+/// 会话删除 tombstone（ADR-039 D-039-8 §2）：
+/// 主库置 `deletion_pending=1` → 分片删除 events（单分片事务、幂等）→ 主库删行（级联）。
+///
+/// 任一步失败保留 tombstone，返回错误；重试/启动恢复继续；不得先删主库（孤儿事件）。
+fn delete_session_tombstone(
+    main: &mut Connection,
+    shards: &mut [Connection],
+    session_id: &str,
+) -> Result<StoreOutcome, StoreError> {
+    let (shard_id, already_pending, counts) = {
+        let transaction = main.transaction()?;
+        let row = transaction.query_row(
+            "SELECT status, shard_id, deletion_pending FROM sessions WHERE id = ?1",
+            [session_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<i64>>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        );
+        let (status, shard_id, pending) = match row {
+            Ok(values) => values,
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                return Ok(StoreOutcome::SessionNotFound);
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if pending == 0 {
+            let active_runs: i64 = transaction.query_row(
+                "SELECT COUNT(*) FROM runs WHERE session_id = ?1 AND status IN ('queued','running')",
+                [session_id],
+                |row| row.get(0),
+            )?;
+            let pending_permissions: i64 = transaction.query_row(
+                "SELECT COUNT(*) FROM permissions WHERE session_id = ?1 AND status = 'pending'",
+                [session_id],
+                |row| row.get(0),
+            )?;
+            let busy_status = matches!(
+                status.as_str(),
+                "waiting_permission" | "creating" | "running"
+            );
+            if busy_status || active_runs > 0 || pending_permissions > 0 {
+                return Ok(StoreOutcome::SessionBusy {
+                    active_runs: u64::try_from(active_runs).unwrap_or(u64::MAX),
+                    pending_permissions: u64::try_from(pending_permissions).unwrap_or(u64::MAX),
+                });
+            }
+            transaction.execute(
+                "UPDATE sessions SET deletion_pending = 1 WHERE id = ?1",
+                [session_id],
+            )?;
+        }
+        let counts = (
+            transaction.query_row(
+                "SELECT COUNT(*) FROM messages WHERE session_id = ?1",
+                [session_id],
+                |row| row.get::<_, i64>(0),
+            )?,
+            transaction.query_row(
+                "SELECT COUNT(*) FROM runs WHERE session_id = ?1",
+                [session_id],
+                |row| row.get::<_, i64>(0),
+            )?,
+            transaction.query_row(
+                "SELECT COUNT(*) FROM artifacts WHERE session_id = ?1",
+                [session_id],
+                |row| row.get::<_, i64>(0),
+            )?,
+            transaction.query_row(
+                "SELECT COUNT(*) FROM permissions WHERE session_id = ?1",
+                [session_id],
+                |row| row.get::<_, i64>(0),
+            )?,
+        );
+        transaction.commit()?;
+        let shard_id = match shard_id {
+            Some(value) => u8::try_from(value).map_err(|_| StoreError::ShardInvariant {
+                reason: format!("会话 {session_id} 的 shard_id 越界：{value}"),
+            })?,
+            None => {
+                return Err(StoreError::ShardInvariant {
+                    reason: format!("会话 {session_id} 的 shard_id 为空"),
+                })
+            }
+        };
+        (shard_id, pending == 1, counts)
+    };
+
+    let shard =
+        shards
+            .get_mut(usize::from(shard_id))
+            .ok_or_else(|| StoreError::ShardInvariant {
+                reason: format!("会话 {session_id} 指向不存在的分片 {shard_id}"),
+            })?;
+    {
+        let transaction = shard.transaction()?;
+        transaction.execute("DELETE FROM events WHERE session_id = ?1", [session_id])?;
+        transaction.commit()?;
+    }
+
+    let transaction = main.transaction()?;
+    let affected = transaction.execute(
+        "DELETE FROM sessions WHERE id = ?1 AND deletion_pending = 1",
+        [session_id],
+    )?;
+    transaction.commit()?;
+    if affected == 0 && !already_pending {
+        return Ok(StoreOutcome::SessionNotFound);
+    }
+    Ok(StoreOutcome::SessionDeleted {
+        messages: u64::try_from(counts.0).unwrap_or(u64::MAX),
+        runs: u64::try_from(counts.1).unwrap_or(u64::MAX),
+        artifacts: u64::try_from(counts.2).unwrap_or(u64::MAX),
+        permissions: u64::try_from(counts.3).unwrap_or(u64::MAX),
+        events_retained: 0,
+    })
+}
+
+/// 启动恢复：重试全部 `deletion_pending=1` 会话（幂等）。
+fn finalize_pending_deletions(
+    main: &mut Connection,
+    shards: &mut [Connection],
+    session_ids: &[String],
+) -> Result<usize, StoreError> {
+    let mut completed = 0usize;
+    for session_id in session_ids {
+        match delete_session_tombstone(main, shards, session_id) {
+            Ok(StoreOutcome::SessionDeleted { .. }) | Ok(StoreOutcome::SessionNotFound) => {
+                completed += 1;
+            }
+            Ok(other) => {
+                tracing::warn!(session_id = %session_id, outcome = ?other, "deletion_pending 收尾未完成");
+            }
+            Err(error) => {
+                tracing::warn!(session_id = %session_id, error = %error, "deletion_pending 收尾失败");
+            }
+        }
+    }
+    Ok(completed)
+}
+
+/// 逐分片 checkpoint（无跨片事务；主库 + 全部分片合计诊断）。
+fn checkpoint_all(
+    main: &Connection,
+    shards: &[Connection],
+    config: &CheckpointConfig,
+) -> CheckpointReport {
+    let mut reports = Vec::with_capacity(1 + shards.len());
+    reports.push(checkpoint_truncate_with_backoff(main, config));
+    for shard in shards {
+        reports.push(checkpoint_truncate_with_backoff(shard, config));
+    }
+    aggregate_checkpoint_reports(&reports)
+}
+
+fn aggregate_checkpoint_reports(reports: &[CheckpointReport]) -> CheckpointReport {
+    let mut aggregate = CheckpointReport {
+        attempts: 0,
+        succeeded: true,
+        busy: false,
+        frames_log: 0,
+        frames_checkpointed: 0,
+        error: None,
+        history: Vec::new(),
+        duration_ms: 0,
+    };
+    for report in reports {
+        aggregate.attempts = aggregate.attempts.max(report.attempts);
+        aggregate.succeeded &= report.succeeded;
+        aggregate.busy |= report.busy;
+        if report.frames_log >= 0 {
+            aggregate.frames_log = aggregate.frames_log.saturating_add(report.frames_log);
+        } else {
+            aggregate.frames_log = -1;
+        }
+        if report.frames_checkpointed >= 0 {
+            aggregate.frames_checkpointed = aggregate
+                .frames_checkpointed
+                .saturating_add(report.frames_checkpointed);
+        } else {
+            aggregate.frames_checkpointed = -1;
+        }
+        if aggregate.error.is_none() {
+            aggregate.error = report.error.clone();
+        }
+        aggregate.history.extend(report.history.iter().cloned());
+        aggregate.duration_ms = aggregate.duration_ms.saturating_add(report.duration_ms);
+    }
+    aggregate
+}
+
+/// 单写任务按 `session_id` 路由到分片；每片一个事务（无跨片事务）。
+///
+/// 返回每个分片的失败信息（`None` = 该片提交成功）；单库模式（`shards` 为空）
+/// 使用主库连接（既有测试/工具兼容）。
+fn commit_events_batch(
+    main: &mut Connection,
+    shards: &mut [Connection],
     batch: &[WriteMessage],
+) -> Vec<Option<(Option<i32>, String)>> {
+    let single_db = shards.is_empty();
+    let shard_count = if single_db { 1 } else { shards.len() };
+    let mut failures: Vec<Option<(Option<i32>, String)>> = vec![None; shard_count];
+    for (shard_id, failure) in failures.iter_mut().enumerate() {
+        let events: Vec<&EventEnvelope> = batch
+            .iter()
+            .filter_map(|message| match message {
+                WriteMessage::Events { events, .. } => Some(events),
+                _ => None,
+            })
+            .flatten()
+            .filter(|event| {
+                if single_db {
+                    return true;
+                }
+                usize::from(shard_for(event.session_id.as_str())) == shard_id
+            })
+            .collect();
+        if events.is_empty() {
+            continue;
+        }
+        let connection: &mut Connection = if single_db {
+            main
+        } else {
+            match shards.get_mut(shard_id) {
+                Some(connection) => connection,
+                None => {
+                    *failure = Some((None, format!("分片连接缺失：{shard_id}")));
+                    continue;
+                }
+            }
+        };
+        if let Err(error) = commit_events_to_connection(connection, &events) {
+            *failure = Some(error);
+        }
+    }
+    failures
+}
+
+fn commit_events_to_connection(
+    connection: &mut Connection,
+    events: &[&EventEnvelope],
 ) -> Result<(), (Option<i32>, String)> {
     let transaction = connection.transaction().map_err(classify_sqlite)?;
     {
@@ -1371,31 +2052,26 @@ fn commit_events_batch(
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             )
             .map_err(classify_sqlite)?;
-        for message in batch {
-            let WriteMessage::Events { events, .. } = message else {
-                continue;
-            };
-            for event in events {
-                let payload = event
-                    .payload
-                    .to_value()
-                    .map_err(|error| (None, format!("事件 payload 无法序列化: {error}")))?;
-                let seq = i64::try_from(event.seq)
-                    .map_err(|_| (None, format!("seq 超出 SQLite INTEGER 范围: {}", event.seq)))?;
-                statement
-                    .execute(params![
-                        event.id.as_str(),
-                        event.session_id.as_str(),
-                        event.run_id.as_ref().map(|id| id.as_str()),
-                        event.runtime_id.as_str(),
-                        seq,
-                        event.event_type().as_str(),
-                        payload.to_string(),
-                        event.ts,
-                        event.v,
-                    ])
-                    .map_err(classify_sqlite)?;
-            }
+        for event in events {
+            let payload = event
+                .payload
+                .to_value()
+                .map_err(|error| (None, format!("事件 payload 无法序列化: {error}")))?;
+            let seq = i64::try_from(event.seq)
+                .map_err(|_| (None, format!("seq 超出 SQLite INTEGER 范围: {}", event.seq)))?;
+            statement
+                .execute(params![
+                    event.id.as_str(),
+                    event.session_id.as_str(),
+                    event.run_id.as_ref().map(|id| id.as_str()),
+                    event.runtime_id.as_str(),
+                    seq,
+                    event.event_type().as_str(),
+                    payload.to_string(),
+                    event.ts,
+                    event.v,
+                ])
+                .map_err(classify_sqlite)?;
         }
     }
     transaction.commit().map_err(classify_sqlite)

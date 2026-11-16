@@ -154,7 +154,7 @@ mustContain("crates/aether-app/src/boot.rs", [
 ]);
 mustContain("crates/aether-app/src/ipc/dispatch.rs", [
   "MAINTENANCE_ALLOWED_COMMANDS",
-  "maintenance_reason",
+  "maintenance_state",
 ]);
 check(
   "import 命令走严格 DTO",

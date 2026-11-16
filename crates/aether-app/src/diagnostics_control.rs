@@ -168,7 +168,13 @@ impl DiagnosticsControlBackend {
     }
 
     fn db_path(&self) -> PathBuf {
-        self.data_dir.join("aether.db")
+        aether_store::read_layout(&self.data_dir)
+            .map(|layout| layout.main_db().to_path_buf())
+            .unwrap_or_else(|_| self.data_dir.join("aether.db"))
+    }
+
+    fn layout(&self) -> Option<aether_store::StorageLayout> {
+        aether_store::read_layout(&self.data_dir).ok()
     }
 
     fn wal_path(&self) -> PathBuf {
@@ -464,6 +470,42 @@ impl DiagnosticsControlBackend {
         };
 
         let security = self.security.status();
+        let storage_layout = match self.layout() {
+            Some(layout) => {
+                let mut quick_checks = Vec::new();
+                for path in layout.all_db_paths() {
+                    let summary = match aether_store::quick_check_path(&path) {
+                        Ok(report) => json!({
+                            "path": path.to_string_lossy(),
+                            "ok": report.ok,
+                            "summary": report.summary(),
+                        }),
+                        Err(error) => json!({
+                            "path": path.to_string_lossy(),
+                            "ok": false,
+                            "summary": format!("打开失败：{error}"),
+                        }),
+                    };
+                    quick_checks.push(summary);
+                }
+                json!({
+                    "generation": layout.generation(),
+                    "generation_dir": layout.generation_dir().to_string_lossy(),
+                    "shard_count": layout.shard_paths().len(),
+                    "live_bytes": aether_store::generation_live_bytes(&layout),
+                    "total_bytes": aether_store::generations_total_bytes(&layout),
+                    "generations": aether_store::generation_diagnostics(&self.data_dir),
+                    "quick_check": quick_checks,
+                    "clean_shutdown": aether_store::read_clean_shutdown(&layout).map(|sidecar| json!({
+                        "generation": sidecar.generation,
+                        "closed_at": sidecar.closed_at,
+                        "clean_start_count": sidecar.clean_start_count,
+                    })),
+                    "attachments_notice": aether_store::RESTORE_ATTACHMENTS_NOTICE,
+                })
+            }
+            None => Value::Null,
+        };
         let bundle = json!({
             "bundle_version": DIAGNOSTICS_BUNDLE_VERSION,
             "generated_at": generated_at,
@@ -484,6 +526,7 @@ impl DiagnosticsControlBackend {
                 "detail": security.detail,
             },
             "capacity": self.capacity.to_json(db_bytes, wal_bytes),
+            "storage_layout": storage_layout,
             "store": store,
             "backup_auto": backup_auto,
             "retention": retention,
@@ -602,7 +645,14 @@ impl IpcBackend for DiagnosticsControlBackend {
             .map_err(|message| {
                 IpcError::invalid_value(format!("{message}（diagnostics_target_not_writable）"))
             })?;
-        let required = required_space_bytes(file_len(&self.db_path()), file_len(&self.wal_path()));
+        let required = required_space_bytes(
+            aether_store::read_layout(&self.data_dir)
+                .map(|layout| aether_store::generation_live_bytes(&layout))
+                .unwrap_or_else(|_| {
+                    file_len(&self.db_path()).saturating_add(file_len(&self.wal_path()))
+                }),
+            0,
+        );
         let available = self
             .space
             .available_bytes(canonical_target_dir)
@@ -647,6 +697,7 @@ impl IpcBackend for DiagnosticsControlBackend {
             "health",
             "security",
             "capacity",
+            "storage_layout",
             "store",
             "backup_auto",
             "retention",

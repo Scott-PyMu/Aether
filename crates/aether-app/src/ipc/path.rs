@@ -82,6 +82,32 @@ pub fn validate_external_backup_candidate(raw: &str) -> Result<PathBuf, IpcError
     Ok(canonical)
 }
 
+/// 校验外部备份集路径（ADR-039 D-039-5 §4）：必须是含 `manifest.json` 的目录，
+/// 或文件名恰为 `manifest.json` 的文件；旧 `.db`/`.aebk` 单文件显式拒绝。
+pub fn validate_external_backup_set(raw: &str) -> Result<PathBuf, IpcError> {
+    let canonical = canonicalize_checked(raw)?;
+    if canonical.is_dir() {
+        if canonical.join("manifest.json").is_file() {
+            return Ok(canonical);
+        }
+        return Err(IpcError::invalid_value(format!(
+            "恢复候选校验失败（backup_candidate_invalid）：目录不含 manifest.json（{}）；旧单文件 .db/.aebk 不再接受，请使用整套备份或重建",
+            canonical.display()
+        )));
+    }
+    if canonical.is_file()
+        && canonical
+            .file_name()
+            .is_some_and(|name| name == "manifest.json")
+    {
+        return Ok(canonical);
+    }
+    Err(IpcError::invalid_value(format!(
+        "恢复候选校验失败（backup_candidate_invalid）：外部备份必须是含 manifest.json 的目录或 manifest.json 文件（{}）；旧单文件 .db/.aebk 不再接受",
+        canonical.display()
+    )))
+}
+
 /// 校验备份/导出外部目标目录（D13 `backup_create.target_dir`）：绝对路径、存在且为目录。
 ///
 /// 与迁移目标不同，备份产物可位于同步盘（备份到云端目录是合理用法）；本校验只做
@@ -187,7 +213,9 @@ pub fn validate_attachment_source(raw: &str) -> Result<PathBuf, IpcError> {
     let metadata = std::fs::metadata(&canonical)
         .map_err(|error| IpcError::path_rejected(format!("附件源不可访问：{error}")))?;
     if !metadata.is_file() {
-        return Err(IpcError::path_rejected("附件源必须是普通文件（不能是目录）"));
+        return Err(IpcError::path_rejected(
+            "附件源必须是普通文件（不能是目录）",
+        ));
     }
     Ok(canonical)
 }

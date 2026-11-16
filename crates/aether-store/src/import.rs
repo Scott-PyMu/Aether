@@ -23,14 +23,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::backup::{
-    execute_restore, finalize_restore, program_schema_version, required_space_bytes, RestoreFault,
-    RestoreRequest,
-};
+use crate::backup::{program_schema_version, required_space_bytes};
 use crate::error::StoreError;
+use crate::layout::{
+    self, shard_file_name, shard_for, ShardEntry, ShardsManifest, StorageLayout, EVENTS_DIR_NAME,
+    GENERATIONS_DIR_NAME, MAIN_DB_NAME, SHARDS_MANIFEST_NAME, SHARD_COUNT,
+};
 use crate::migration;
 use crate::pragma;
-use crate::store::quick_check;
+use crate::store::{quick_check, Store};
 
 /// 导入工作目录（`<data_dir>/imports`）。
 pub const IMPORT_DIR: &str = "imports";
@@ -258,7 +259,12 @@ impl ImportFailure {
 
 impl std::fmt::Display for ImportFailure {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "{}（{}）", self.message, self.kind.business_code())
+        write!(
+            formatter,
+            "{}（{}）",
+            self.message,
+            self.kind.business_code()
+        )
     }
 }
 
@@ -331,7 +337,6 @@ impl ImportSummary {
             _ => {}
         }
     }
-
 }
 
 /// 进度（`import_status`）。
@@ -609,7 +614,8 @@ pub fn has_active_job(data_dir: &Path, at_ms: i64) -> bool {
         let Ok(Some(job)) = read_job(data_dir, job_id) else {
             continue;
         };
-        if job.status.is_active() && at_ms.saturating_sub(job.updated_at) < IMPORT_STALE_HOURS * 3_600_000
+        if job.status.is_active()
+            && at_ms.saturating_sub(job.updated_at) < IMPORT_STALE_HOURS * 3_600_000
         {
             return true;
         }
@@ -641,7 +647,9 @@ fn sidecar(path: &Path, suffix: &str) -> PathBuf {
 }
 
 fn file_len(path: &Path) -> u64 {
-    fs::metadata(path).map(|metadata| metadata.len()).unwrap_or(0)
+    fs::metadata(path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0)
 }
 
 /// 清理 staging 残留（`work.db` 与侧车；保留 `job.json`）。
@@ -769,7 +777,10 @@ pub fn cleanup_imports(data_dir: &Path, at_ms: i64) -> Result<usize, ImportFailu
     Ok(removed)
 }
 
-fn read_line_limited(reader: &mut impl BufRead, max: usize) -> Result<Option<Vec<u8>>, ImportFailure> {
+fn read_line_limited(
+    reader: &mut impl BufRead,
+    max: usize,
+) -> Result<Option<Vec<u8>>, ImportFailure> {
     let mut buffer = Vec::new();
     loop {
         let available = reader.fill_buf()?;
@@ -804,7 +815,9 @@ fn trim_line_end(line: &[u8]) -> &[u8] {
 fn parse_manifest(line: &[u8], expected_sources: &[&str]) -> Result<ImportManifest, ImportFailure> {
     let line = trim_line_end(line);
     if line.is_empty() {
-        return Err(ImportFailure::invalid_format("导入文件为空（缺少 manifest 首行）"));
+        return Err(ImportFailure::invalid_format(
+            "导入文件为空（缺少 manifest 首行）",
+        ));
     }
     let text = std::str::from_utf8(line)
         .map_err(|_| ImportFailure::invalid_format("manifest 不是合法 UTF-8"))?;
@@ -930,8 +943,9 @@ fn scan_source(
         hasher.update(b"\n");
         let text = std::str::from_utf8(line)
             .map_err(|_| ImportFailure::invalid_format(format!("第 {rows} 行不是合法 UTF-8")))?;
-        let value: Value = serde_json::from_str(text)
-            .map_err(|error| ImportFailure::invalid_format(format!("第 {rows} 行 JSON 非法：{error}")))?;
+        let value: Value = serde_json::from_str(text).map_err(|error| {
+            ImportFailure::invalid_format(format!("第 {rows} 行 JSON 非法：{error}"))
+        })?;
         let kind = value
             .get("kind")
             .and_then(Value::as_str)
@@ -960,8 +974,11 @@ fn scan_source(
 }
 
 fn invalid_detail(kind: &str, line: u64, field: &str, message: impl Into<String>) -> ImportFailure {
-    ImportFailure::invalid_format(format!("第 {line} 行 {kind}.{field} 非法：{}", message.into()))
-        .with_details(json!({"line": line, "kind": kind, "field": field}))
+    ImportFailure::invalid_format(format!(
+        "第 {line} 行 {kind}.{field} 非法：{}",
+        message.into()
+    ))
+    .with_details(json!({"line": line, "kind": kind, "field": field}))
 }
 
 fn required_str<'a>(
@@ -1053,7 +1070,14 @@ const SESSION_STATUSES: [&str; 8] = [
     "cancelled",
 ];
 const MESSAGE_ROLES: [&str; 4] = ["user", "assistant", "system", "tool"];
-const RUN_STATUSES: [&str; 6] = ["queued", "running", "succeeded", "failed", "cancelled", "timeout"];
+const RUN_STATUSES: [&str; 6] = [
+    "queued",
+    "running",
+    "succeeded",
+    "failed",
+    "cancelled",
+    "timeout",
+];
 const AUDIT_ACTORS: [&str; 3] = ["user", "agent", "system"];
 const SECRET_FIELD_NAMES: [&str; 10] = [
     "api_key",
@@ -1117,7 +1141,11 @@ fn check_unknown_fields(
     }
     for key in object.keys() {
         if !whitelist.contains(&key.as_str()) {
-            warnings.push("unknown_field", line, format!("忽略未知字段 {key}（{kind}）"));
+            warnings.push(
+                "unknown_field",
+                line,
+                format!("忽略未知字段 {key}（{kind}）"),
+            );
         }
     }
     Ok(())
@@ -1177,12 +1205,7 @@ fn validate_row(
             let _ts = required_i64(value, "ts", kind, line)?;
             if let Some(client_msg_id) = optional_str(value, "client_msg_id", kind, line)? {
                 if client_msg_id.chars().count() > 128 {
-                    return Err(invalid_detail(
-                        kind,
-                        line,
-                        "client_msg_id",
-                        "超过 128 字符",
-                    ));
+                    return Err(invalid_detail(kind, line, "client_msg_id", "超过 128 字符"));
                 }
             }
         }
@@ -1312,11 +1335,7 @@ fn id_exists(conn: &Connection, kind: &str, id: &str) -> Result<bool, ImportFail
         .is_some())
 }
 
-fn mapped_id(
-    conn: &Connection,
-    kind: &str,
-    old_id: &str,
-) -> Result<Option<String>, ImportFailure> {
+fn mapped_id(conn: &Connection, kind: &str, old_id: &str) -> Result<Option<String>, ImportFailure> {
     conn.query_row(
         "SELECT new_id FROM import_id_map WHERE kind = ?1 AND old_id = ?2",
         params![kind, old_id],
@@ -1356,9 +1375,11 @@ fn insert_mapping(
 
 fn ensure_runtime(conn: &Connection, runtime_id: &str, at_ms: i64) -> Result<(), ImportFailure> {
     let exists: Option<i64> = conn
-        .query_row("SELECT 1 FROM runtimes WHERE id = ?1", [runtime_id], |row| {
-            row.get(0)
-        })
+        .query_row(
+            "SELECT 1 FROM runtimes WHERE id = ?1",
+            [runtime_id],
+            |row| row.get(0),
+        )
         .optional()?;
     if exists.is_none() {
         conn.execute(
@@ -1454,7 +1475,11 @@ fn next_seq(conn: &Connection, kind: &str, session_id: &str) -> Result<i64, Impo
     let next = match current {
         Some(value) => value,
         None => {
-            let table = if kind == "message" { "messages" } else { "events" };
+            let table = if kind == "message" {
+                "messages"
+            } else {
+                "events"
+            };
             let sql = format!("SELECT COALESCE(MAX(seq), 0) FROM {table} WHERE session_id = ?1");
             let max: i64 = conn.query_row(&sql, [session_id], |row| row.get(0))?;
             max.saturating_add(1)
@@ -1501,7 +1526,14 @@ fn process_session(
             }
         }
     };
-    insert_mapping(conn, "session", old_id, &new_id, Some(old_id), Some(&new_id))?;
+    insert_mapping(
+        conn,
+        "session",
+        old_id,
+        &new_id,
+        Some(old_id),
+        Some(&new_id),
+    )?;
 
     let runtime_id = required_str(value, "runtime_id", "session", line)?;
     ensure_runtime(conn, runtime_id, at_ms)?;
@@ -1553,12 +1585,13 @@ fn process_session(
     let updated_at = required_i64(value, "updated_at", "session", line)?;
     let closed_at = optional_i64(value, "closed_at", "session", line)?;
     provider_state_warnings(conn, config.as_deref(), model, line, warnings)?;
+    let shard_id = i64::from(crate::layout::shard_for(&new_id));
     conn.execute(
         "INSERT INTO sessions \
          (id, runtime_id, workspace_id, parent_session_id, title, status, model, system_prompt, \
           config, token_usage, created_at, updated_at, closed_at, thinking_depth, permission_mode, \
-          preset_id) \
-         VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 'workspace_write', NULL)",
+          preset_id, shard_id, deletion_pending) \
+         VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 'workspace_write', NULL, ?14, 0)",
         params![
             new_id,
             runtime_id,
@@ -1573,6 +1606,7 @@ fn process_session(
             updated_at,
             closed_at,
             thinking_depth,
+            shard_id,
         ],
     )?;
     summary.sessions = summary.sessions.saturating_add(1);
@@ -1615,7 +1649,14 @@ fn process_run(
             }
         }
     };
-    insert_mapping(conn, "run", old_id, &new_id, Some(session_old), Some(&session_new))?;
+    insert_mapping(
+        conn,
+        "run",
+        old_id,
+        &new_id,
+        Some(session_old),
+        Some(&session_new),
+    )?;
     let status = required_str(value, "status", "run", line)?;
     let input_old = optional_str(value, "input_message_id", "run", line)?;
     if let Some(input_old) = input_old {
@@ -2096,7 +2137,8 @@ fn resolve_deferred(
     begin(conn)?;
     let mut parent_rows = Vec::new();
     {
-        let mut statement = conn.prepare("SELECT session_new, parent_old FROM import_session_parents")?;
+        let mut statement =
+            conn.prepare("SELECT session_new, parent_old FROM import_session_parents")?;
         let mut rows = statement.query([])?;
         while let Some(row) = rows.next()? {
             parent_rows.push((row.get::<_, String>(0)?, row.get::<_, String>(1)?));
@@ -2253,12 +2295,274 @@ pub fn verify_staging(work_db: &Path) -> Result<StagingVerification, ImportFailu
         )));
     }
     let mut statement = connection.prepare("PRAGMA foreign_key_check")?;
-    let violations = statement.query_map([], |row| row.get::<_, String>(0))?.count();
+    let violations = statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .count();
     Ok(StagingVerification {
         bytes: file_len(work_db),
         schema_version,
         foreign_key_violations: violations,
     })
+}
+
+/// staging generation 构建结果（ADR-039 D-039-8 §3）。
+pub struct ImportGeneration {
+    pub generation: String,
+    pub path: PathBuf,
+    pub shards_sha256: String,
+}
+
+/// 由已应用导入的 `work.db` 构建多库 staging generation：
+/// 主库（sessions/messages/runs/audit）+ 8 分片 events；主库 `events` 清空。
+///
+/// 事件按 `sessions.shard_id` 路由；导入会话在 `process_session` 已写 `shard_id`。
+pub fn build_import_generation(
+    data_dir: &Path,
+    source_layout: &StorageLayout,
+    work_db: &Path,
+    generation: &str,
+    app_version: &str,
+    created_at: i64,
+) -> Result<ImportGeneration, ImportFailure> {
+    let staging = layout::staging_generation_dir(data_dir, "import", generation);
+    if staging.exists() {
+        let _ = fs::remove_dir_all(&staging);
+    }
+    fs::create_dir_all(staging.join(EVENTS_DIR_NAME))?;
+    let main_path = staging.join(MAIN_DB_NAME);
+    {
+        let connection = Connection::open_with_flags(
+            work_db,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        let main_text = main_path.to_str().ok_or_else(|| {
+            ImportFailure::internal(format!(
+                "staging 主库路径不是 UTF-8：{}",
+                main_path.display()
+            ))
+        })?;
+        connection.execute("VACUUM INTO ?1", [main_text])?;
+    }
+
+    let mut shard_paths = Vec::with_capacity(SHARD_COUNT);
+    for index in 0..SHARD_COUNT {
+        let id = u8::try_from(index).unwrap_or(0);
+        let source = source_layout
+            .shard_path(id)
+            .ok_or_else(|| ImportFailure::internal(format!("当前 generation 缺少分片 {id}")))?;
+        let path = staging.join(shard_file_name(id));
+        let source_connection = Connection::open_with_flags(
+            source,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        let target_text = path.to_str().ok_or_else(|| {
+            ImportFailure::internal(format!("staging 分片路径不是 UTF-8：{}", path.display()))
+        })?;
+        // 标准 8 分片：先从当前 generation 复制（保留既有事件），再追加导入事件。
+        source_connection.execute("VACUUM INTO ?1", [target_text])?;
+        shard_paths.push(path);
+    }
+
+    // 会话 → 分片映射（含既有会话与导入会话；缺失/越界拒绝）。
+    let session_shards: std::collections::HashMap<String, u8> = {
+        // 旧开发库/测试夹具可能未写 shard_id：staging 内按稳定哈希补齐（不改变源库；
+        // 生产 current generation 的启动不变量仍要求非空，见 `assert_invariants`）。
+        {
+            let missing: Vec<String> = {
+                let connection = Store::open_read_only(&main_path)?;
+                let mut statement =
+                    connection.prepare("SELECT id FROM sessions WHERE shard_id IS NULL")?;
+                let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+                let mut ids = Vec::new();
+                for row in rows {
+                    ids.push(row?);
+                }
+                ids
+            };
+            if !missing.is_empty() {
+                let mut writer = Store::open_writer_connection(&main_path)?;
+                let transaction = writer.transaction()?;
+                for session_id in &missing {
+                    transaction.execute(
+                        "UPDATE sessions SET shard_id = ?2 WHERE id = ?1",
+                        params![session_id, i64::from(shard_for(session_id))],
+                    )?;
+                }
+                transaction.commit()?;
+            }
+        }
+        let connection = Store::open_read_only(&main_path)?;
+        let mut statement = connection.prepare("SELECT id, shard_id FROM sessions")?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?))
+        })?;
+        let mut map = std::collections::HashMap::new();
+        for row in rows {
+            let (session_id, shard_id) = row?;
+            let shard_id = shard_id.ok_or_else(|| {
+                ImportFailure::internal(format!("会话 {session_id} 的 shard_id 为空"))
+            })?;
+            let shard_id = u8::try_from(shard_id).map_err(|_| {
+                ImportFailure::internal(format!("会话 {session_id} 的 shard_id 越界：{shard_id}"))
+            })?;
+            map.insert(session_id, shard_id);
+        }
+        map
+    };
+
+    #[allow(clippy::type_complexity)]
+    type EventRow = (
+        i64,
+        String,
+        String,
+        Option<String>,
+        String,
+        i64,
+        String,
+        String,
+        i64,
+        i64,
+    );
+
+    let mut shard_writers = Vec::with_capacity(SHARD_COUNT);
+    for path in &shard_paths {
+        shard_writers.push(Store::open_writer_connection(path)?);
+    }
+    let read_connection = Store::open_read_only(&main_path)?;
+    let mut main_writer = Store::open_writer_connection(&main_path)?;
+    let mut last_rowid = 0i64;
+    loop {
+        let rows: Vec<EventRow> = {
+            let mut statement = read_connection.prepare(
+                "SELECT rowid, id, session_id, run_id, runtime_id, seq, type, payload, ts, v \
+                 FROM events WHERE rowid > ?1 ORDER BY rowid ASC LIMIT 1000",
+            )?;
+            let mapped = statement.query_map([last_rowid], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                    row.get(9)?,
+                ))
+            })?;
+            let mut rows = Vec::new();
+            for row in mapped {
+                rows.push(row?);
+            }
+            rows
+        };
+        if rows.is_empty() {
+            break;
+        }
+        let mut per_shard: [Vec<&EventRow>; SHARD_COUNT] = std::array::from_fn(|_| Vec::new());
+        for row in &rows {
+            let shard_id = session_shards.get(&row.2).copied().ok_or_else(|| {
+                ImportFailure::internal(format!("事件 {} 的会话 {} 不存在", row.1, row.2))
+            })?;
+            per_shard[usize::from(shard_id)].push(row);
+        }
+        for (shard_id, events) in per_shard.iter().enumerate() {
+            if events.is_empty() {
+                continue;
+            }
+            let connection = shard_writers
+                .get_mut(shard_id)
+                .ok_or_else(|| ImportFailure::internal(format!("分片连接缺失：{shard_id}")))?;
+            let transaction = connection.transaction()?;
+            {
+                let mut insert = transaction.prepare(
+                    "INSERT INTO events (id, session_id, run_id, runtime_id, seq, type, payload, ts, v) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                )?;
+                for row in events {
+                    insert.execute(params![
+                        row.1, row.2, row.3, row.4, row.5, row.6, row.7, row.8, row.9
+                    ])?;
+                }
+            }
+            transaction.commit()?;
+        }
+        let ids = rows.iter().map(|row| row.0).collect::<Vec<_>>();
+        let transaction = main_writer.transaction()?;
+        for chunk in ids.chunks(1000) {
+            let placeholders = std::iter::repeat_n("?", chunk.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!("DELETE FROM events WHERE rowid IN ({placeholders})");
+            transaction.execute(&sql, rusqlite::params_from_iter(chunk.iter()))?;
+        }
+        transaction.commit()?;
+        last_rowid = rows.last().map(|row| row.0).unwrap_or(last_rowid);
+    }
+    drop(read_connection);
+    drop(main_writer);
+    drop(shard_writers);
+
+    let schema_version = program_schema_version();
+    let manifest = ShardsManifest {
+        shard_count: SHARD_COUNT,
+        shards: (0..SHARD_COUNT)
+            .map(|index| {
+                let id = u8::try_from(index).unwrap_or(0);
+                ShardEntry {
+                    id,
+                    path: shard_file_name(id),
+                    schema_version,
+                }
+            })
+            .collect(),
+        schema_version,
+        app_version: app_version.to_owned(),
+        created_at,
+    };
+    let manifest_bytes = serde_json::to_vec_pretty(&manifest)
+        .map_err(|error| ImportFailure::internal(format!("shards.json 序列化失败：{error}")))?;
+    let manifest_path = staging.join(EVENTS_DIR_NAME).join(SHARDS_MANIFEST_NAME);
+    write_file_synced(&manifest_path, &manifest_bytes)?;
+    let shards_sha256 = hex::encode(Sha256::digest(&manifest_bytes));
+
+    // 校验：主库 events=0；分片 quick_check。
+    let main_events = {
+        let connection = Store::open_read_only(&main_path)?;
+        connection.query_row("SELECT COUNT(*) FROM events", [], |row| {
+            row.get::<_, i64>(0)
+        })?
+    };
+    if main_events != 0 {
+        return Err(ImportFailure::internal(format!(
+            "staging 主库 events 非空（{main_events} 行）"
+        )));
+    }
+    for path in &shard_paths {
+        let connection = Store::open_read_only(path)?;
+        let report = quick_check(&connection);
+        if !report.ok {
+            return Err(ImportFailure::internal(format!(
+                "staging 分片 quick_check 失败（{}）：{}",
+                path.display(),
+                report.summary()
+            )));
+        }
+    }
+    Ok(ImportGeneration {
+        generation: generation.to_owned(),
+        path: staging,
+        shards_sha256,
+    })
+}
+
+fn write_file_synced(path: &Path, bytes: &[u8]) -> Result<(), ImportFailure> {
+    use std::io::Write;
+    let mut file = File::create(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    Ok(())
 }
 
 fn write_audit(
@@ -2316,6 +2620,18 @@ fn fail_job(
 /// 启动序列：应用待重启导入（原子切换；失败/中断不改变既有数据）。
 ///
 /// 返回 `Ok(None)` = 无待处理导入；`Err` = 已有作业已被标记 `failed`。
+/// 当前 generation 主库路径（无 CURRENT 时退回旧扁平布局，供测试/旧包诊断）。
+fn current_main_db(data_dir: &Path) -> PathBuf {
+    layout::read_current(data_dir)
+        .map(|pointer| {
+            data_dir
+                .join(GENERATIONS_DIR_NAME)
+                .join(pointer.generation)
+                .join(MAIN_DB_NAME)
+        })
+        .unwrap_or_else(|| data_dir.join(MAIN_DB_NAME))
+}
+
 pub fn boot_apply_pending_import<F>(
     data_dir: &Path,
     at_ms: i64,
@@ -2335,7 +2651,7 @@ where
         return Err(ImportFailure::job_not_found(&job_id));
     };
     let started = Instant::now();
-    let db_path = data_dir.join("aether.db");
+    let mut db_path = current_main_db(data_dir);
 
     // kill 后幂等：切换已完成但作业状态未落盘。
     if has_marker(&db_path, &job_id) {
@@ -2369,7 +2685,9 @@ where
 
     if job.status != ImportJobStatus::AwaitingRestart {
         let failure = if job.status == ImportJobStatus::Applying {
-            ImportFailure::internal("上次导入在切换阶段被中断（kill -9）；已清理 staging，不自动续跑")
+            ImportFailure::internal(
+                "上次导入在切换阶段被中断（kill -9）；已清理 staging，不自动续跑",
+            )
         } else {
             ImportFailure::internal(format!(
                 "导入作业状态 {} 不允许启动切换",
@@ -2393,11 +2711,13 @@ where
     // 空间检查：预期增量×1.2 + 当前 db+wal×1.2（ADR-034 D-034-2）。
     let source_path = PathBuf::from(&job.source_path);
     let source_bytes = file_len(&source_path);
-    let required = required_space_bytes(source_bytes, 0)
-        .saturating_add(required_space_bytes(
-            file_len(&db_path),
-            file_len(&sidecar(&db_path, "-wal")),
-        ));
+    let live_bytes = layout::read_existing(data_dir)
+        .map(|layout| layout::generation_live_bytes(&layout))
+        .unwrap_or_else(|_| {
+            file_len(&db_path).saturating_add(file_len(&sidecar(&db_path, "-wal")))
+        });
+    let required =
+        required_space_bytes(source_bytes, 0).saturating_add(required_space_bytes(live_bytes, 0));
     let available = available_bytes(data_dir)
         .map_err(|message| ImportFailure::internal(format!("空间探测失败：{message}")))?;
     if available < required {
@@ -2457,18 +2777,36 @@ where
                 "duration_ms": report.duration_ms,
             }),
         )?;
-        let request = RestoreRequest {
-            db_path: db_path.clone(),
-            candidate_path: work_db.clone(),
-            program_max_version: program_schema_version(),
-            now_ms: at_ms,
-            fault: RestoreFault::None,
-            scene_infix: PRE_IMPORT_INFIX,
+        let new_generation = format!("gen-{}", ulid::Ulid::new());
+        let source_layout = layout::read_existing(data_dir)?;
+        let generation = build_import_generation(
+            data_dir,
+            &source_layout,
+            &work_db,
+            &new_generation,
+            env!("CARGO_PKG_VERSION"),
+            at_ms,
+        )?;
+        let journal = layout::GenerationJournal {
+            v: layout::JOURNAL_VERSION,
+            kind: "import".to_owned(),
+            old_generation: layout::read_current(data_dir).map(|pointer| pointer.generation),
+            new_generation: new_generation.clone(),
+            shards_sha256: generation.shards_sha256,
+            backup_manifest_sha256: None,
+            phase: "staged".to_owned(),
+            requested_at: at_ms,
         };
-        execute_restore(&request, || Ok(())).map_err(|error| {
-            ImportFailure::internal(format!("staging 原子切换失败（已回滚现场）：{error}"))
-        })?;
-        let _ = finalize_restore(&db_path);
+        layout::write_generation_journal(data_dir, &journal)?;
+        let pointer = layout::commit_staged_generation(data_dir, "import", &journal, at_ms)?;
+        // 校验新 generation 布局（失败保留 journal，下次启动按 D-039-8 回滚/重试）。
+        let layout = layout::read_existing(data_dir)?;
+        layout::assert_invariants(&layout)?;
+        let _ = layout::remove_generation_journal(data_dir, "import");
+        db_path = data_dir
+            .join(GENERATIONS_DIR_NAME)
+            .join(pointer.generation)
+            .join(MAIN_DB_NAME);
         Ok(report)
     })();
 
@@ -2536,8 +2874,14 @@ pub fn job_status_value(job: &ImportJob, include_warnings: bool) -> Value {
         if !include_warnings {
             object.remove("warnings");
         }
-        object.insert("status".to_owned(), Value::String(job.status.as_str().to_owned()));
-        object.insert("mode".to_owned(), Value::String(job.mode.as_str().to_owned()));
+        object.insert(
+            "status".to_owned(),
+            Value::String(job.status.as_str().to_owned()),
+        );
+        object.insert(
+            "mode".to_owned(),
+            Value::String(job.mode.as_str().to_owned()),
+        );
     }
     value
 }

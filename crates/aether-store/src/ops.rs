@@ -23,7 +23,7 @@ use crate::error::StoreError;
 use crate::write_queue::ReadPool;
 
 /// `DeleteEventsByIds` 单条 `DELETE ... IN (...)` 的参数个数上限（语句变量有界）。
-const DELETE_EVENTS_CHUNK: usize = 1_000;
+pub(crate) const DELETE_EVENTS_CHUNK: usize = 1_000;
 
 /// run 调度元数据（M10-07/ADR-037 D-037-5：`runs` 5 列）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -587,6 +587,13 @@ pub enum StoreCommand {
         /// 待删事件行 `rowid` 列表（空列表为 no-op）。
         rowids: Vec<i64>,
     },
+    /// ADR-039 D-039-1：按分片删除事件行（保留清理逐片执行；单分片事务）。
+    DeleteEventsInShard {
+        /// 分片 id（0..7）。
+        shard_id: u8,
+        /// 待删事件行 `rowid` 列表（空列表为 no-op）。
+        rowids: Vec<i64>,
+    },
     /// M10-01/ADR-031：编排定义/运行/节点/任务写命令（单事务由
     /// [`crate::workflow::apply_command`] 执行）。
     Workflow {
@@ -749,11 +756,13 @@ pub(crate) fn apply_command(
             let config = json_text(&session.config)?;
             let token_usage = serde_json::to_string(&session.token_usage)
                 .map_err(|error| serialization_failed("sessions.token_usage", &error))?;
+            // ADR-039 D-039-1：新会话与 sessions 插入同事务写稳定分片映射。
+            let shard_id = i64::from(crate::layout::shard_for(session.id.as_str()));
             let affected = transaction
                 .execute(
                     "INSERT INTO sessions (id, runtime_id, workspace_id, parent_session_id, title, status, \
-                     model, thinking_depth, permission_mode, system_prompt, config, token_usage, created_at, updated_at, closed_at, preset_id) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                     model, thinking_depth, permission_mode, system_prompt, config, token_usage, created_at, updated_at, closed_at, preset_id, shard_id, deletion_pending) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, 0)",
                     params![
                         session.id.as_str(),
                         session.runtime_id.as_str(),
@@ -771,6 +780,7 @@ pub(crate) fn apply_command(
                         session.updated_at,
                         session.closed_at,
                         session.preset_id.as_ref().map(PresetId::as_str),
+                        shard_id,
                     ],
                 )
                 .map_err(txn_failed)?;
@@ -1788,6 +1798,10 @@ pub(crate) fn apply_command(
             transaction.commit().map_err(txn_failed)?;
             Ok(StoreOutcome::Applied { affected })
         }
+        StoreCommand::DeleteEventsInShard { .. } => Err(StoreError::Internal {
+            reason: "DeleteEventsInShard 必须在分片写任务内执行（apply_command 单库上下文）"
+                .to_owned(),
+        }),
         StoreCommand::Workflow { command } => crate::workflow::apply_command(connection, command),
         StoreCommand::Subagent { command } => crate::subagent::apply_command(connection, command),
     }
@@ -1948,6 +1962,8 @@ impl SessionQuery {
         if !self.include_children && self.parent_session_id.is_none() {
             clauses.push("parent_session_id IS NULL");
         }
+        // ADR-039 D-039-8 §2：pending 会话从 session_list 隐藏（可重复删除/启动重试）。
+        clauses.push("COALESCE(deletion_pending, 0) = 0");
         let where_clause = if clauses.is_empty() {
             String::new()
         } else {
@@ -1967,19 +1983,39 @@ impl SessionQuery {
 }
 
 impl ReadPool {
-    /// 按 id 读取会话（不存在为 `None`）。
+    /// 按 id 读取会话（不存在或 `deletion_pending=1` 为 `None`；对外隐藏 pending）。
     pub async fn session(&self, session_id: &SessionId) -> Result<Option<Session>, StoreError> {
+        self.session_with_pending(session_id, false).await
+    }
+
+    /// 按 id 读取会话（含 pending；仅删除 tombstone 重试路径）。
+    pub async fn session_including_pending(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Option<Session>, StoreError> {
+        self.session_with_pending(session_id, true).await
+    }
+
+    async fn session_with_pending(
+        &self,
+        session_id: &SessionId,
+        include_pending: bool,
+    ) -> Result<Option<Session>, StoreError> {
         let session = session_id.as_str().to_owned();
         self.with_connection(move |connection| {
+            let sql = if include_pending {
+                "SELECT id, runtime_id, workspace_id, parent_session_id, title, status, model, \
+                 system_prompt, config, token_usage, created_at, updated_at, closed_at, thinking_depth, \
+                 permission_mode, preset_id \
+                 FROM sessions WHERE id = ?1"
+            } else {
+                "SELECT id, runtime_id, workspace_id, parent_session_id, title, status, model, \
+                 system_prompt, config, token_usage, created_at, updated_at, closed_at, thinking_depth, \
+                 permission_mode, preset_id \
+                 FROM sessions WHERE id = ?1 AND COALESCE(deletion_pending, 0) = 0"
+            };
             connection
-                .query_row(
-                    "SELECT id, runtime_id, workspace_id, parent_session_id, title, status, model, \
-                     system_prompt, config, token_usage, created_at, updated_at, closed_at, thinking_depth, \
-                     permission_mode, preset_id \
-                     FROM sessions WHERE id = ?1",
-                    [session.as_str()],
-                    read_session_row,
-                )
+                .query_row(sql, [session.as_str()], read_session_row)
                 .optional()
                 .map_err(StoreError::from)
         })
@@ -2050,7 +2086,7 @@ impl ReadPool {
                         s.permission_mode, s.preset_id, r.snippet, r.source \
                    FROM ranked r \
                    JOIN sessions s ON s.id = r.session_id \
-                  WHERE r.rn = 1 \
+                  WHERE r.rn = 1 AND COALESCE(s.deletion_pending, 0) = 0 \
                   ORDER BY r.rank ASC, s.updated_at DESC, s.id DESC \
                   LIMIT ?2 OFFSET ?3",
             )?;
@@ -2343,7 +2379,10 @@ impl ReadPool {
             let mut statement = connection.prepare(
                 "SELECT id, session_id, run_id, client_msg_id, role, content, content_parts, tool_calls, \
                  parent_message_id, seq, created_at FROM messages \
-                 WHERE session_id = ?1 AND (?2 IS NULL OR seq > ?2) ORDER BY seq ASC LIMIT ?3",
+                 WHERE session_id = ?1 AND (?2 IS NULL OR seq > ?2) \
+                   AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = messages.session_id \
+                               AND COALESCE(s.deletion_pending, 0) = 0) \
+                 ORDER BY seq ASC LIMIT ?3",
             )?;
             let rows = statement.query_map(params![session, after, limit], read_message_row)?;
             let mut messages = Vec::new();
@@ -2981,6 +3020,12 @@ fn read_backup_row(row: &Row<'_>) -> rusqlite::Result<BackupRecord> {
         encrypted: row.get::<_, i64>(3)? != 0,
         kind: row.get(4)?,
         created_at: row.get(5)?,
+        format: None,
+        set_path: None,
+        manifest_path: None,
+        manifest_sha256: None,
+        shard_count: None,
+        integrity: None,
     })
 }
 

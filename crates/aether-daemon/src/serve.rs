@@ -404,6 +404,9 @@ impl DaemonServer {
                     .keychain_preflight
                     .as_ref()
                     .is_some_and(|report| report.needs_reauth());
+                if let Some(cell) = bundle.maintenance.clone() {
+                    let _ = state.install_maintenance(cell);
+                }
                 let _ = state.install_backend(bundle.backend);
                 if let Some(orchestrator) = bundle.shutdown {
                     let _ = state.install_shutdown(orchestrator);
@@ -758,7 +761,7 @@ pub fn run_stdio(bootstrap: Bootstrap, http: HttpMode) -> u8 {
         data_dir = %bootstrap.data_dir.display(),
         lock = %bootstrap.lock_path().display(),
         log = %bootstrap.log_path.display(),
-        schema_version = bootstrap.preflight.schema_version,
+        schema_version = bootstrap.preflight.main.schema_version,
         "aetherd 启动（stdio；预检通过）"
     );
 

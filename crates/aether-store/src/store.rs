@@ -110,6 +110,27 @@ impl Store {
         })
     }
 
+    /// 新装创建数据库：建表前 `auto_vacuum=INCREMENTAL`（ADR-039 D-039-4）→ 迁移 0 → 最新。
+    ///
+    /// 仅用于 generation 初始化（主库/分片库首次创建）；既有库不得重设 `auto_vacuum`。
+    pub fn create_new(path: impl AsRef<Path>) -> Result<(), StoreError> {
+        let path = path.as_ref();
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() && !parent.exists() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        let mut conn = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE
+                | OpenFlags::SQLITE_OPEN_CREATE
+                | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        pragma::apply_new_database(&conn)?;
+        migration::migrate(&mut conn)?;
+        Ok(())
+    }
+
     /// 读写打开 + PRAGMA 全集（写连接；M2-06 关闭序列的 checkpoint 兜底同样使用）。
     pub(crate) fn open_writer_connection(path: &Path) -> Result<Connection, StoreError> {
         let conn = Connection::open_with_flags(
@@ -265,6 +286,12 @@ impl Store {
     }
 }
 
+/// 只读打开并执行 `quick_check`（诊断/测试；不迁移、不写库）。
+pub fn quick_check_path(path: &Path) -> Result<IntegrityReport, StoreError> {
+    let connection = Store::open_read_only(path)?;
+    Ok(quick_check(&connection))
+}
+
 /// `PRAGMA quick_check`（D3 启动快速完整性检查）；不返回 `Err`，失败即 `ok = false`。
 pub fn quick_check(conn: &Connection) -> IntegrityReport {
     let mut messages = Vec::new();
@@ -333,10 +360,7 @@ fn export_table(
         rows: 0,
         message: error.to_string(),
     })?;
-    let columns: Vec<String> = statement
-        .column_names()
-        .map(str::to_owned)
-        .collect();
+    let columns: Vec<String> = statement.column_names().map(str::to_owned).collect();
     let mut rows = statement.query([]).map_err(|error| TableExportError {
         rows: 0,
         message: error.to_string(),

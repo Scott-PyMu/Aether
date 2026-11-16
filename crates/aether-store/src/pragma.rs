@@ -41,6 +41,14 @@ pub fn apply(conn: &Connection) -> Result<(), StoreError> {
     Ok(())
 }
 
+/// 新装数据库建表前的 PRAGMA（ADR-039 D-039-4：`auto_vacuum=INCREMENTAL` 必须在建表前设置）。
+///
+/// 仅用于首次创建 generation 内的主库/分片库；既有库不重设（避免隐式 VACUUM）。
+pub fn apply_new_database(conn: &Connection) -> Result<(), StoreError> {
+    conn.pragma_update(None, "auto_vacuum", "INCREMENTAL")?;
+    apply(conn)
+}
+
 /// 对只读连接（安全模式）执行连接级 PRAGMA。
 ///
 /// `journal_mode` 的变更需要写权限，只读连接不设置（其值由 [`PragmaSnapshot`] 断言应为 `wal`）；

@@ -23,6 +23,13 @@ export interface BackupRecord {
   /** 产物来源（ADR-020）：`manual`（手动，不自动删除）/ `auto`（自动，按保留份数滚动）。 */
   kind: string;
   created_at: number;
+  /** ADR-039 D-039-5：`sharded_set`（新备份）/`single_file`（旧记录，仅展示）。 */
+  format?: "sharded_set" | "single_file";
+  set_path?: string;
+  manifest_path?: string;
+  manifest_sha256?: string;
+  shard_count?: number;
+  integrity?: { status: "ok" | "failed" | "unverified"; checked_at?: number };
 }
 
 /** 自动备份状态（M5-02；`backup_list.auto`，ADR-018 附录 A-5 冻结 7 字段）。 */
@@ -90,20 +97,31 @@ export interface BackupCreateResult {
   pruned: string[];
 }
 
-/** 恢复来源（ADR-004：内部备份 id 或外部 `.db` 路径）。 */
+/** 恢复来源（ADR-039 D-039-5：内部备份 id / 外部备份集目录或 manifest.json）。 */
 export type BackupRestoreSource =
   | { internal: { id: string } }
   | { external: { path: string } };
 
-/** 恢复请求回执（`restart_required=true` = 已登记现场日志，待应用重启执行）。 */
+/** 恢复请求回执（`restart_required=true` = 已登记 generation journal，待应用重启执行）。 */
 export interface BackupRestoreResult {
   restoring: boolean;
   restart_required: boolean;
   source: "internal" | "external";
   candidate: {
     path: string;
+    set_path?: string;
+    manifest_path?: string;
+    manifest_sha256?: string;
     size_bytes: number;
     schema_version: number;
+    encrypted?: boolean;
+    artifact_mode?: string | null;
+    source_backup_id?: string | null;
+    format?: "sharded_set";
+    shard_count?: number;
+    generation?: string;
+    /** ADR-039 D-039-5 §5.8：附件未随库恢复提示。 */
+    attachments_notice?: string;
   };
   db_path: string;
 }

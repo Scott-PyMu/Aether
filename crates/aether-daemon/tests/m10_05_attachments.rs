@@ -30,8 +30,8 @@ fn png_header(width: u32, height: u32) -> Vec<u8> {
 
 fn seed_database(data_dir: &Path) {
     std::fs::create_dir_all(data_dir).expect("数据目录");
-    let db = data_dir.join("aether.db");
-    let store = aether_store::Store::open(&db).expect("建库/迁移");
+    let layout = aether_store::initialize_layout(data_dir, "0.1.0", 1).expect("初始化 generation");
+    let store = aether_store::Store::open(layout.main_db()).expect("建库/迁移");
     store
         .execute_write(
             "INSERT INTO runtimes (id, name, kind, version, created_at, updated_at) \
@@ -40,8 +40,9 @@ fn seed_database(data_dir: &Path) {
         .expect("runtime");
     store
         .execute_write(&format!(
-            "INSERT INTO sessions (id, runtime_id, title, status, created_at, updated_at) \
-             VALUES ('{SESSION_ID}', 'mock', 'E2E 附件会话', 'idle', 1, 1)"
+            "INSERT INTO sessions (id, runtime_id, title, status, created_at, updated_at, shard_id) \
+             VALUES ('{SESSION_ID}', 'mock', 'E2E 附件会话', 'idle', 1, 1, {shard})",
+            shard = aether_store::shard_for(SESSION_ID)
         ))
         .expect("session");
 }

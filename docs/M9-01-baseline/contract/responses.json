@@ -1215,6 +1215,106 @@
       ]
     },
     {
+      "id": "crates/aether-app/src/core_health.rs::StorageCheckSnapshot",
+      "name": "StorageCheckSnapshot",
+      "kind": "struct",
+      "source": "crates/aether-tauri/src/core_health.rs",
+      "fields": [
+        {
+          "name": "state",
+          "type": "String",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "mode",
+          "type": "String",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "write_gate",
+          "type": "String",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "main_checked",
+          "type": "bool",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "checked_shards",
+          "type": "usize",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "total_shards",
+          "type": "usize",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "started_at",
+          "type": "Option<i64>",
+          "required": false,
+          "optional_when": [
+            "type_option",
+            "skip_serializing_if"
+          ]
+        },
+        {
+          "name": "completed_at",
+          "type": "Option<i64>",
+          "required": false,
+          "optional_when": [
+            "type_option",
+            "skip_serializing_if"
+          ]
+        },
+        {
+          "name": "error",
+          "type": "Option<String>",
+          "required": false,
+          "optional_when": [
+            "type_option",
+            "skip_serializing_if"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "crates/aether-app/src/core_health.rs::MaintenanceSnapshot",
+      "name": "MaintenanceSnapshot",
+      "kind": "struct",
+      "source": "crates/aether-tauri/src/core_health.rs",
+      "fields": [
+        {
+          "name": "kind",
+          "type": "String",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "started_at",
+          "type": "i64",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "progress",
+          "type": "Option<serde_json::Value>",
+          "required": false,
+          "optional_when": [
+            "type_option",
+            "skip_serializing_if"
+          ]
+        }
+      ]
+    },
+    {
       "id": "crates/aether-app/src/core_health.rs::HealthReport",
       "name": "HealthReport",
       "kind": "struct",
@@ -1243,6 +1343,24 @@
         {
           "name": "concurrency_gate",
           "type": "Option<aether_control::ConcurrencyGateSnapshot>",
+          "required": false,
+          "optional_when": [
+            "type_option",
+            "skip_serializing_if"
+          ]
+        },
+        {
+          "name": "storage_check",
+          "type": "Option<StorageCheckSnapshot>",
+          "required": false,
+          "optional_when": [
+            "type_option",
+            "skip_serializing_if"
+          ]
+        },
+        {
+          "name": "maintenance",
+          "type": "Option<MaintenanceSnapshot>",
           "required": false,
           "optional_when": [
             "type_option",
@@ -2030,6 +2148,6 @@
   ],
   "counts": {
     "commands": 87,
-    "types": 29
+    "types": 31
   }
 }

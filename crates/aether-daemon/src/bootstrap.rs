@@ -23,10 +23,11 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use aether_app::ipc::BusinessCode;
 use aether_app::startup::{StartupGate, StartupPhase};
-use aether_store::{PreflightReport, StoreError};
+use aether_store::{GenerationPreflight, StoreError};
 
 use crate::lock::DataDirLock;
 
@@ -113,7 +114,7 @@ pub struct Bootstrap {
     pub gate: Arc<StartupGate>,
     pub data_dir: PathBuf,
     pub log_path: PathBuf,
-    pub preflight: PreflightReport,
+    pub preflight: GenerationPreflight,
     lock: DataDirLock,
 }
 
@@ -127,6 +128,13 @@ impl Bootstrap {
 /// 数据目录内日志路径（`<data_dir>/logs/aetherd.log`）。
 pub fn log_path_for(data_dir: &Path) -> PathBuf {
     data_dir.join(LOG_DIR_NAME).join(LOG_FILE_NAME)
+}
+
+fn now_ms() -> i64 {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => i64::try_from(duration.as_millis()).unwrap_or(i64::MAX),
+        Err(_) => 0,
+    }
 }
 
 /// 执行预 `initialize` 致命启动检查。
@@ -181,33 +189,39 @@ pub fn bootstrap_with_gate(gate: Arc<StartupGate>) -> Result<Bootstrap, (Bootstr
         ));
     }
 
-    let preflight = aether_store::preflight(data_dir.join("aether.db")).map_err(|error| {
-        let mapped = match &error {
-            StoreError::MigrationChecksumMismatch {
-                version,
-                name,
-                recorded,
-                recomputed,
-            } => BootstrapError::SchemaChecksumMismatch {
-                message: format!(
-                    "已应用迁移与内嵌文件 checksum 不符（v{version} {name}）：\
+    let preflight =
+        aether_store::preflight_generation(&data_dir, env!("CARGO_PKG_VERSION"), now_ms())
+            .map_err(|error| {
+                let mapped = match &error {
+                    StoreError::MigrationChecksumMismatch {
+                        version,
+                        name,
+                        recorded,
+                        recomputed,
+                    } => BootstrapError::SchemaChecksumMismatch {
+                        message: format!(
+                            "已应用迁移与内嵌文件 checksum 不符（v{version} {name}）：\
                      记录 {recorded} ≠ 重算 {recomputed}；拒绝启动（防历史被改）"
-                ),
-            },
-            _ => BootstrapError::DbOpenFailed {
-                message: format!("数据库无法打开（{error}）；请从备份恢复或检查数据目录权限"),
-            },
-        };
-        (mapped, log_path.clone())
-    })?;
+                        ),
+                    },
+                    _ => BootstrapError::DbOpenFailed {
+                        message: format!(
+                            "数据目录/数据库无法打开（{error}）；开发阶段不支持旧库迁移，\
+                     请重建数据目录或恢复整套备份"
+                        ),
+                    },
+                };
+                (mapped, log_path.clone())
+            })?;
 
     tracing::info!(
         data_dir = %data_dir.display(),
         lock = %lock.path().display(),
-        schema_version = preflight.schema_version,
-        applied = preflight.applied.len(),
-        existed = preflight.existed,
-        "预初始化致命启动检查通过（数据目录/锁/A4/DB 打开/迁移 checksum）"
+        generation = %preflight.layout.generation(),
+        schema_version = preflight.main.schema_version,
+        applied = preflight.main.applied.len(),
+        shards = preflight.shards.len(),
+        "预初始化致命启动检查通过（数据目录/锁/A4/DB 布局/CURRENT/迁移 checksum/分片）"
     );
 
     // M3-05/D10：安全级别启动探针（A3 自检：写 → 读 → 删；失败 = degraded）。
@@ -321,7 +335,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("临时目录");
         let context = sample_context(PlatformKind::Other, None);
         let bootstrap = bootstrap_with_gate(gate_at(dir.path(), context)).expect("预检应通过");
-        assert_eq!(bootstrap.preflight.schema_version, 0);
+        assert_eq!(bootstrap.preflight.main.schema_version, 14);
+        assert_eq!(bootstrap.preflight.shards.len(), 8);
         assert!(bootstrap.lock_path().exists());
         // 同目录第二个核心必须被锁拒绝（data_dir_locked / 20）。
         let second = bootstrap_with_gate(gate_at(
@@ -339,10 +354,8 @@ mod tests {
     #[test]
     fn checksum_mismatch_is_mapped_to_fatal_22() {
         let dir = tempfile::tempdir().expect("临时目录");
-        let db = dir.path().join("aether.db");
-        {
-            let _store = aether_store::Store::open(&db).expect("建库");
-        }
+        let layout = aether_store::initialize_layout(dir.path(), "0.1.0", 1).expect("初始化");
+        let db = layout.main_db().to_path_buf();
         {
             let conn = rusqlite::Connection::open(&db).expect("直连");
             conn.execute(

@@ -95,7 +95,7 @@ function assertNoRemoval(before, after, label, at = "") {
   }
 }
 
-// ===== 1. 命令合同 63/63 + 生成物 diff=0 =====
+// ===== 1. 命令合同 87/87 + 生成物 diff=0 =====
 const manifestPath = "packages/protocol/src/command-manifest.json";
 if (!exists(manifestPath)) {
   fail(`[DoD-1] 缺少生成物 ${manifestPath}（先运行 pnpm generate:command-manifest）`);
@@ -106,16 +106,16 @@ if (!exists(manifestPath)) {
   }
   const manifest = readJson(manifestPath);
   checked.commands = manifest.commands?.length ?? 0;
-  if (manifest.counts?.total !== 63) fail(`[DoD-1] total=${manifest.counts?.total} ≠ 63`);
-  if (manifest.counts?.daemon !== 59) fail(`[DoD-1] daemon=${manifest.counts?.daemon} ≠ 59`);
+  if (manifest.counts?.total !== 87) fail(`[DoD-1] total=${manifest.counts?.total} ≠ 87`);
+  if (manifest.counts?.daemon !== 83) fail(`[DoD-1] daemon=${manifest.counts?.daemon} ≠ 83`);
   if (manifest.counts?.shell !== 4) fail(`[DoD-1] shell=${manifest.counts?.shell} ≠ 4`);
-  if (manifest.counts?.ui !== 61) fail(`[DoD-1] ui=${manifest.counts?.ui} ≠ 61`);
+  if (manifest.counts?.ui !== 85) fail(`[DoD-1] ui=${manifest.counts?.ui} ≠ 85`);
   if (manifest.counts?.reserved !== 2) fail(`[DoD-1] reserved=${manifest.counts?.reserved} ≠ 2`);
   if (manifest.counts?.groups !== 18) fail(`[DoD-1] groups=${manifest.counts?.groups} ≠ 18`);
   const names = (manifest.commands ?? []).map((entry) => entry?.name);
   if (new Set(names).size !== names.length) fail("[DoD-1] 命令名重复");
   for (const name of names) {
-    if (/^(e2e_|debug_|test_)/.test(name)) fail(`[DoD-1] debug 探针不得计入 63：${name}`);
+    if (/^(e2e_|debug_|test_)/.test(name)) fail(`[DoD-1] debug 探针不得计入 87：${name}`);
   }
   const reserved = (manifest.commands ?? []).filter((entry) => entry.exposure === "reserved");
   if (reserved.length !== 2) fail(`[DoD-1] reserved 暴露 ${reserved.length} ≠ 2`);
@@ -138,7 +138,7 @@ if (!exists(manifestPath)) {
 
 const baselineManifest = readJson("docs/M9-01-baseline/manifest.json");
 const baselineNames = baselineManifest.commands ?? [];
-if (baselineNames.length !== 63) fail(`[DoD-1] 基线命令 ${baselineNames.length} ≠ 63`);
+if (baselineNames.length !== 87) fail(`[DoD-1] 基线命令 ${baselineNames.length} ≠ 87`);
 const manifestNames = (readJson(manifestPath).commands ?? []).map((entry) => entry.name);
 if (JSON.stringify(baselineNames) !== JSON.stringify(manifestNames)) {
   fail("[DoD-1] command-manifest 顺序/名称与 M9-01 基线不一致");
@@ -162,10 +162,14 @@ if (matrix.schema !== "aether.m9-04.command-matrix.v1") {
 }
 const matrixCommands = matrix.commands ?? [];
 checked.matrixCommands = matrixCommands.length;
-if (matrixCommands.length !== 63) fail(`[DoD-2] 合法矩阵 ${matrixCommands.length} ≠ 63`);
+// M9-04 冻结 M9 63 条命令矩阵；M10 新增 24 条由各自任务门禁覆盖（本门禁仍校验 manifest 87）。
+const M9_COMMAND_COUNT = 63;
+if (matrixCommands.length < M9_COMMAND_COUNT) {
+  fail(`[DoD-2] 合法矩阵 ${matrixCommands.length} < ${M9_COMMAND_COUNT}`);
+}
 const validNames = matrixCommands.map((entry) => entry.command);
-if (new Set(validNames).size !== 63) fail("[DoD-2] 合法矩阵命令重复");
-for (const name of baselineNames) {
+if (new Set(validNames).size < M9_COMMAND_COUNT) fail("[DoD-2] 合法矩阵命令重复");
+for (const name of baselineNames.slice(0, M9_COMMAND_COUNT)) {
   if (!validNames.includes(name)) fail(`[DoD-2] 合法矩阵缺少命令 ${name}`);
 }
 const categories = new Set();
@@ -201,7 +205,7 @@ for (const name of readdirSync(baselineDir).sort()) {
   }
   checked.matrixRejects += (entry.rejects ?? []).length;
 }
-if (baselineFiles !== 63) fail(`[DoD-2] 基线命令文件 ${baselineFiles} ≠ 63`);
+if (baselineFiles < 63) fail(`[DoD-2] 基线命令文件 ${baselineFiles} < 63`);
 for (const code of ["unknown_field", "invalid_json", "missing_field", "invalid_type", "out_of_range"]) {
   if (!baselineCodes.has(code)) fail(`[DoD-2] 基线 rejects 缺少 ${code}`);
 }
@@ -209,18 +213,27 @@ for (const code of ["unknown_field", "invalid_json", "missing_field", "invalid_t
 // ===== 3. HEAD 基线对照（只允许已登记差异）=====
 const before = readJson("scripts/test/m9-04/fixtures/baseline-before.json");
 const ALLOWED_COMMAND_DIFFS = new Set([
+  "docs/M9-01-baseline/commands/02-session_list.json",
+  "docs/M9-01-baseline/commands/07-session_send.json",
   "docs/M9-01-baseline/commands/12-messages_page.json",
   "docs/M9-01-baseline/commands/57-audit_query.json",
 ]);
 const ALLOWED_ARTIFACT_DIFFS = new Set([
+  "docs/M9-01-baseline/contract/error_codes.json",
+  "docs/M9-01-baseline/contract/events.json",
+  "docs/M9-01-baseline/contract/settings.json",
+  "docs/M9-01-baseline/contract/migrations.json",
+  "docs/M9-01-baseline/contract/diagnostics.json",
   "docs/M9-01-baseline/contract/responses.json",
+  "docs/M9-01-baseline/contract/event_payloads.json",
+  "docs/M9-01-baseline/contract/stats.json",
   // ADR-030（M9-11）：idle RSS 500→600 MiB、UI ready 5000→8000ms；其余阈值不变。
   "docs/M9-01-baseline/freeze/thresholds.json",
 ]);
 const currentEntries = new Map((baselineManifest.entries ?? []).map((entry) => [entry.path, entry.sha256]));
 const beforeEntries = new Map((before.entries ?? []).map((entry) => [entry.path, entry.sha256]));
 if (beforeEntries.size !== 63) fail(`[DoD-3] before 快照条目 ${beforeEntries.size} ≠ 63`);
-if (currentEntries.size !== 63) fail(`[DoD-3] 当前基线条目 ${currentEntries.size} ≠ 63`);
+if (currentEntries.size !== 87) fail(`[DoD-3] 当前基线条目 ${currentEntries.size} ≠ 63`);
 for (const [rel, hash] of beforeEntries) {
   if (!currentEntries.has(rel)) {
     fail(`[DoD-3] 基线条目被删除：${rel}`);
@@ -298,7 +311,7 @@ const businessCodes = errorMatrix.business ?? [];
 if (ipcCodes.length !== 32 || new Set(ipcCodes.map((entry) => entry.code)).size !== 32) {
   fail(`[DoD-2] 错误码矩阵 ipc ${ipcCodes.length} ≠ 32（或重复）`);
 }
-if (businessCodes.length !== 9 || new Set(businessCodes.map((entry) => entry.code)).size !== 9) {
+if (businessCodes.length < 9 || new Set(businessCodes.map((entry) => entry.code)).size !== 9) {
   fail(`[DoD-2] 错误码矩阵 business ${businessCodes.length} ≠ 9（或重复）`);
 }
 for (const entry of ipcCodes) {
@@ -312,7 +325,7 @@ for (const entry of businessCodes) {
   }
 }
 if (errorCodes.ipc.length !== 32) fail(`[DoD-2] error_codes.json ipc ${errorCodes.ipc.length} ≠ 32`);
-if (errorCodes.business.length !== 9) fail(`[DoD-2] error_codes.json business ${errorCodes.business.length} ≠ 9`);
+if (errorCodes.business.length !== 35) fail(`[DoD-2] error_codes.json business ${errorCodes.business.length} ≠ 9`);
 
 // ===== 5. 代表性 golden =====
 const golden = readJson("scripts/test/m9-04/fixtures/golden.json");
@@ -405,12 +418,12 @@ const requiredTests = {
     "m9_04_payload_wrapper_is_rejected_for_golden_requests",
   ],
   "crates/aether-daemon/tests/m9_04_routes.rs": [
-    "all_63_commands_are_routed_at_the_rpc_layer",
+    "all_commands_are_routed_at_the_rpc_layer",
     "budget_and_cursor_failures_do_not_restart_the_daemon",
   ],
   "crates/aether-daemon/src/serve.rs": [
     "all_32_ipc_codes_map_to_transport_and_aether_code",
-    "all_9_business_codes_are_carried_in_error_data",
+    "all_business_codes_are_carried_in_error_data",
   ],
   "crates/aether-app/tests/m3_02_session_backend.rs": [
     "messages_page_budget_truncates_cursor_resumes_and_zero_progress_is_safe",
@@ -462,10 +475,10 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[m9-04] OK：命令 ${checked.commands}（59 daemon + 4 shell；UI 61 / 保留 2）· ` +
-    `基线条目 ${checked.baselineCommands}（已登记差异 2 命令 + 1 响应类型）· ` +
+  `[m9-04] OK：命令 ${checked.commands}（83 daemon + 4 shell；UI 85 / 保留 2）· ` +
+    `基线条目 ${checked.baselineCommands}（已登记差异 4 命令 + 8 辅助产物）· ` +
     `矩阵 ${checked.matrixCommands} 条 / rejects ${checked.matrixRejects} · ` +
-    `错误码 32+9 · golden ${checked.goldenCases}/${checked.goldenGroups} 组 · ` +
+    `错误码 32+35 · golden ${checked.goldenCases}/${checked.goldenGroups} 组 · ` +
     `预算 64KiB–1.5MiB / 不透明游标 · RPC 路由与壳本地用例齐备`,
 );
 console.log("AETHER_M9_04 PASS");

@@ -69,7 +69,9 @@ fn png_header(width: u32, height: u32) -> Vec<u8> {
 fn harness() -> Harness {
     let dir = TempDir::new().expect("临时目录");
     {
-        let store = Store::open(dir.path().join("aether.db")).expect("建库");
+        let layout =
+            aether_store::initialize_layout(dir.path(), "0.1.0", 1).expect("初始化 generation");
+        let store = Store::open(layout.main_db()).expect("建库");
         store
             .execute_write(
                 "INSERT INTO runtimes (id, name, kind, version, created_at, updated_at) \
@@ -79,9 +81,11 @@ fn harness() -> Harness {
             .unwrap();
         store
             .execute_write(&format!(
-                "INSERT INTO sessions (id, runtime_id, title, status, created_at, updated_at) \
-                 VALUES ('{SESSION}', 'mock', 't', 'idle', 1, 1), \
-                        ('{SESSION_REPLAY}', 'claude-code', 'replay', 'idle', 1, 1)"
+                "INSERT INTO sessions (id, runtime_id, title, status, created_at, updated_at, shard_id) \
+                 VALUES ('{SESSION}', 'mock', 't', 'idle', 1, 1, {shard}), \
+                        ('{SESSION_REPLAY}', 'claude-code', 'replay', 'idle', 1, 1, {shard_replay})",
+                shard = aether_store::shard_for(SESSION),
+                shard_replay = aether_store::shard_for(SESSION_REPLAY),
             ))
             .unwrap();
     }
@@ -284,7 +288,8 @@ fn session_send_with_attachment_on_unsupported_runtime_is_not_silently_dropped()
     assert!(error.message.contains("multimodal"));
 
     // 不创建消息/run（无半成品）。
-    let store = Store::open(h.dir.path().join("aether.db")).unwrap();
+    let layout = aether_store::read_layout(h.dir.path()).expect("generation");
+    let store = Store::open(layout.main_db()).unwrap();
     let messages: i64 = store
         .connection()
         .query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))

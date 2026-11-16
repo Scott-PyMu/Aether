@@ -101,6 +101,12 @@ pub const EMBEDDED_MIGRATIONS: &[MigrationFile] = &[
         name: "0013_scheduler_queue.sql",
         bytes: include_bytes!("../../../migrations/0013_scheduler_queue.sql"),
     },
+    // ADR-039 v1.0/M10-09：会话分片映射 + 删除 tombstone（主库/分片库均完整执行）。
+    MigrationFile {
+        version: 14,
+        name: "0014_session_shard.sql",
+        bytes: include_bytes!("../../../migrations/0014_session_shard.sql"),
+    },
 ];
 
 /// 迁移文件 sha256（小写十六进制）。

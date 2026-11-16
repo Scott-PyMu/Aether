@@ -15,6 +15,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::StoreError;
+use crate::layout::{self, StorageLayout, SHARD_COUNT};
 use crate::migration::{self, AppliedMigration, EMBEDDED_MIGRATIONS};
 use crate::store::Store;
 
@@ -80,6 +81,68 @@ pub fn preflight(path: impl AsRef<Path>) -> Result<PreflightReport, StoreError> 
         existed,
         applied,
         schema_version,
+    })
+}
+
+/// generation 预检结果（ADR-039 D-039-6：主库 + 8 分片）。
+#[derive(Debug, Clone)]
+pub struct GenerationPreflight {
+    pub layout: StorageLayout,
+    pub main: PreflightReport,
+    pub shards: Vec<PreflightReport>,
+}
+
+impl GenerationPreflight {
+    /// 分片数（期望 8）。
+    pub fn shard_count(&self) -> usize {
+        self.shards.len()
+    }
+}
+
+/// generation 预检：打开/初始化布局 → 主库 + 8 分片迁移 checksum/版本校验 →
+/// 启动不变量（主库 `events=0`、`sessions.shard_id`、`deletion_pending`）。
+///
+/// 不执行 `quick_check`（`StoreRuntime::open_generation` 负责安全模式）。
+pub fn preflight_generation(
+    data_dir: impl AsRef<Path>,
+    app_version: &str,
+    now_ms: i64,
+) -> Result<GenerationPreflight, StoreError> {
+    let layout = layout::open_or_initialize(data_dir.as_ref(), app_version, now_ms)?;
+    let main = preflight(layout.main_db())?;
+    if main.schema_version != PreflightReport::program_version() {
+        return Err(StoreError::LayoutInvalid {
+            reason: format!(
+                "主库 schema v{} 与程序 v{} 不一致",
+                main.schema_version,
+                PreflightReport::program_version()
+            ),
+        });
+    }
+    let mut shards = Vec::with_capacity(SHARD_COUNT);
+    for (shard_id, path) in layout.shard_paths().iter().enumerate() {
+        let report = preflight(path)?;
+        if report.schema_version != PreflightReport::program_version() {
+            return Err(StoreError::LayoutInvalid {
+                reason: format!(
+                    "分片 {shard_id} schema v{} 与程序 v{} 不一致",
+                    report.schema_version,
+                    PreflightReport::program_version()
+                ),
+            });
+        }
+        shards.push(report);
+    }
+    if shards.len() != SHARD_COUNT {
+        return Err(StoreError::LayoutInvalid {
+            reason: format!("分片数 {}（期望 {SHARD_COUNT}）", shards.len()),
+        });
+    }
+    layout::assert_invariants(&layout)?;
+    Ok(GenerationPreflight {
+        layout,
+        main,
+        shards,
     })
 }
 

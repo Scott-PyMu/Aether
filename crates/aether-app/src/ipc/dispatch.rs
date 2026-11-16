@@ -162,17 +162,39 @@ pub const MAINTENANCE_ALLOWED_COMMANDS: &[&str] = &[
     "backup_restore",
 ];
 
+/// 备份/恢复维护态允许的命令（ADR-039 D-039-5 §2：严格 allowlist，仅健康与退出）。
+pub const BACKUP_MAINTENANCE_ALLOWED_COMMANDS: &[&str] = &["health", "app_exit"];
+
 /// 命令路由：`method` + 内层 `params` → 结果 JSON。
 ///
 /// 同步接口（DoD-2 口径）：阻塞动作（系统选择器/迁移复制）由壳层自行放到阻塞线程池
 /// 执行（Tauri：`spawn_blocking`；daemon：请求串行线程），命令语义不受影响。
 pub fn dispatch(state: &IpcState, method: &str, params: Value) -> Result<Value, IpcError> {
-    if let Some(reason) = state.maintenance_reason() {
-        if !MAINTENANCE_ALLOWED_COMMANDS.contains(&method) {
-            return Err(IpcError::core_not_ready(format!(
-                "导入维护中：{reason}；当前命令为只读窗口外操作，已拒绝"
-            ))
-            .with_business_code(super::business::BusinessCode::StorageBackpressure));
+    if let Some(maintenance) = state.maintenance_state() {
+        let allowed = if maintenance.kind == "backup" || maintenance.kind == "restore" {
+            BACKUP_MAINTENANCE_ALLOWED_COMMANDS
+        } else {
+            MAINTENANCE_ALLOWED_COMMANDS
+        };
+        if !allowed.contains(&method) {
+            let message = if maintenance.kind == "backup" || maintenance.kind == "restore" {
+                format!(
+                    "{}维护中：{}；除 health/app_exit 外全部命令拒绝",
+                    if maintenance.kind == "backup" {
+                        "备份"
+                    } else {
+                        "恢复"
+                    },
+                    maintenance.reason
+                )
+            } else {
+                format!(
+                    "导入维护中：{}；当前命令为只读窗口外操作，已拒绝",
+                    maintenance.reason
+                )
+            };
+            return Err(IpcError::core_not_ready(message)
+                .with_business_code(super::business::BusinessCode::StorageBackpressure));
         }
     }
     let payload = match method {

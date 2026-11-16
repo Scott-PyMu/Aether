@@ -16,7 +16,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use aether_store::archive::{
-    export_full_archive, export_session_archive, verify_archive_file, ArchiveReport,
+    export_full_archive, export_session_archive, export_session_archive_generation,
+    verify_archive_file, ArchiveReport,
 };
 use aether_store::import::{
     apply_source_to_staging, boot_apply_pending_import, cleanup_imports, create_staging_snapshot,
@@ -229,7 +230,9 @@ fn make_job(
 
 fn table_count(connection: &Connection, table: &str) -> i64 {
     connection
-        .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0))
+        .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+            row.get(0)
+        })
         .expect("计数")
 }
 
@@ -334,7 +337,9 @@ fn boot_apply_switches_atomically_and_is_idempotent() {
     let dir = temp_dir("boot");
     let data_dir = dir.path().join("data");
     std::fs::create_dir_all(&data_dir).expect("data");
-    let db = data_dir.join("aether.db");
+    let initial =
+        aether_store::initialize_layout(&data_dir, "0.1.0", 1).expect("初始化 generation");
+    let mut db = initial.main_db().to_path_buf();
     let exports = dir.path().join("exports");
     std::fs::create_dir_all(&exports).expect("exports");
     seed_database(&db);
@@ -353,6 +358,10 @@ fn boot_apply_switches_atomically_and_is_idempotent() {
         .expect("有待处理");
     assert!(!outcome.already_applied);
     assert!(!pending_exists(&data_dir), "切换后必须删除 pending");
+    db = aether_store::read_layout(&data_dir)
+        .expect("新 generation")
+        .main_db()
+        .to_path_buf();
     let connection = Connection::open(&db).expect("库连接");
     assert_eq!(table_count(&connection, "sessions"), 2);
     assert!(has_marker(&db, job_id));
@@ -365,13 +374,16 @@ fn boot_apply_switches_atomically_and_is_idempotent() {
         .expect("审计");
     assert_eq!(completed_audits, 1, "完成审计必须落库且幂等");
     drop(connection);
-    let pre_import: Vec<String> = std::fs::read_dir(&data_dir)
-        .expect("data dir")
+    let pre_import: Vec<String> = std::fs::read_dir(data_dir.join("generations"))
+        .expect("generations")
         .flatten()
         .map(|entry| entry.file_name().to_string_lossy().to_string())
         .filter(|name| name.contains(".pre-import-"))
         .collect();
-    assert!(!pre_import.is_empty(), "必须保留 .pre-import 现场：{pre_import:?}");
+    assert!(
+        !pre_import.is_empty(),
+        "必须保留 .pre-import 现场：{pre_import:?}"
+    );
 
     // 第二次启动：pending 已清理 → 无待处理；标记仍在（幂等）。
     let again = boot_apply_pending_import(&data_dir, 1_700_000_002_100, |_| Ok(u64::MAX))
@@ -409,10 +421,9 @@ fn preserve_conflict_is_structured_and_does_not_change_live_db() {
     let connection = Connection::open(&db).expect("库连接");
     assert_eq!(table_count(&connection, "sessions"), 1, "既有库不变");
     assert!(!pending_exists(&data_dir));
-    let job: ImportJob = serde_json::from_str(
-        &std::fs::read_to_string(job_path(&data_dir, job_id)).expect("job"),
-    )
-    .expect("job json");
+    let job: ImportJob =
+        serde_json::from_str(&std::fs::read_to_string(job_path(&data_dir, job_id)).expect("job"))
+            .expect("job json");
     assert_eq!(job.status, ImportJobStatus::Failed);
     assert_eq!(
         job.error.as_ref().map(|error| error.code.as_str()),
@@ -440,8 +451,13 @@ fn checksum_mismatch_and_tampering_are_rejected() {
         payload.join("\n")
     );
     std::fs::write(&report.path, tampered).expect("篡改");
-    let failure = validate_source(&report.path, &SESSION_IMPORT_SOURCES, &mut |_, _| {}, &|| false)
-        .expect_err("行数/哈希不一致必须失败");
+    let failure = validate_source(
+        &report.path,
+        &SESSION_IMPORT_SOURCES,
+        &mut |_, _| {},
+        &|| false,
+    )
+    .expect_err("行数/哈希不一致必须失败");
     assert_eq!(failure.kind, ImportFailureKind::ChecksumMismatch);
 }
 
@@ -464,12 +480,7 @@ fn invalid_kind_unknown_event_secret_field_and_oversized_line_are_structured() {
     // 密钥字段 → 拒绝（D10）。
     let mut session = session_row(SESSION_ID);
     session["api_key"] = json!("dummy-not-a-key");
-    write_jsonl(
-        &source,
-        "session-export",
-        Some(SESSION_ID),
-        vec![session],
-    );
+    write_jsonl(&source, "session-export", Some(SESSION_ID), vec![session]);
     let failure = validate_source(&source, &SESSION_IMPORT_SOURCES, &mut |_, _| {}, &|| false)
         .expect_err("密钥字段");
     assert_eq!(failure.kind, ImportFailureKind::InvalidFormat);
@@ -503,8 +514,10 @@ fn invalid_kind_unknown_event_secret_field_and_oversized_line_are_structured() {
     text.push_str(&"x".repeat(2 * 1024 * 1024 + 16));
     text.push('\n');
     std::fs::write(&oversized, text).expect("写超长行");
-    let failure = validate_source(&oversized, &SESSION_IMPORT_SOURCES, &mut |_, _| {}, &|| false)
-        .expect_err("超长行");
+    let failure = validate_source(&oversized, &SESSION_IMPORT_SOURCES, &mut |_, _| {}, &|| {
+        false
+    })
+    .expect_err("超长行");
     assert_eq!(failure.kind, ImportFailureKind::TooLarge);
 }
 
@@ -578,10 +591,9 @@ fn cancellation_stops_at_boundary_and_interrupted_job_is_not_resumed() {
     let connection = Connection::open(&db).expect("库");
     assert_eq!(table_count(&connection, "sessions"), 1, "既有库不变");
     assert!(!pending_exists(&data_dir));
-    let job: ImportJob = serde_json::from_str(
-        &std::fs::read_to_string(job_path(&data_dir, job_id)).expect("job"),
-    )
-    .expect("job json");
+    let job: ImportJob =
+        serde_json::from_str(&std::fs::read_to_string(job_path(&data_dir, job_id)).expect("job"))
+            .expect("job json");
     assert_eq!(job.status, ImportJobStatus::Failed);
 }
 
@@ -606,10 +618,9 @@ fn interrupted_validating_job_is_reconciled_without_pending() {
     remove_pending(&data_dir).expect("移除 pending");
     let repaired = reconcile_interrupted_imports(&data_dir, 1_700_000_008_000).expect("reconcile");
     assert_eq!(repaired, 1);
-    let job: ImportJob = serde_json::from_str(
-        &std::fs::read_to_string(job_path(&data_dir, job_id)).expect("job"),
-    )
-    .expect("job json");
+    let job: ImportJob =
+        serde_json::from_str(&std::fs::read_to_string(job_path(&data_dir, job_id)).expect("job"))
+            .expect("job json");
     assert_eq!(job.status, ImportJobStatus::Failed);
     assert_eq!(
         job.error.as_ref().map(|error| error.code.as_str()),
@@ -649,11 +660,21 @@ fn roundtrip_export_import_export_preserves_rows_and_counts() {
     let dir = temp_dir("roundtrip");
     let data_dir = dir.path().join("data");
     std::fs::create_dir_all(&data_dir).expect("data");
-    let db = data_dir.join("aether.db");
+    let initial =
+        aether_store::initialize_layout(&data_dir, "0.1.0", 1).expect("初始化 generation");
+    let db = initial.main_db().to_path_buf();
     let exports = dir.path().join("exports");
     std::fs::create_dir_all(&exports).expect("exports");
     seed_database(&db);
-    let first = export_session(&db, &exports);
+    let first = export_session_archive_generation(
+        &initial,
+        &exports,
+        SESSION_ID,
+        1_700_000_004_500,
+        &identity,
+    )
+    .expect("首导出")
+    .expect("会话存在");
     let job_id = "01J00000000000000000000J06";
     make_job(
         &data_dir,
@@ -665,6 +686,10 @@ fn roundtrip_export_import_export_preserves_rows_and_counts() {
     boot_apply_pending_import(&data_dir, 1_700_000_005_000, |_| Ok(u64::MAX))
         .expect("导入")
         .expect("有待处理");
+    let db = aether_store::read_layout(&data_dir)
+        .expect("新 generation")
+        .main_db()
+        .to_path_buf();
     let connection = Connection::open(&db).expect("库");
     let imported_id: String = connection
         .query_row(
@@ -674,8 +699,9 @@ fn roundtrip_export_import_export_preserves_rows_and_counts() {
         )
         .expect("导入会话");
     drop(connection);
-    let second = export_session_archive(
-        &Connection::open(&db).expect("只读"),
+    let layout = aether_store::read_layout(&data_dir).expect("新 generation");
+    let second = export_session_archive_generation(
+        &layout,
         &exports,
         &imported_id,
         1_700_000_006_000,
@@ -829,9 +855,11 @@ fn source_manifest_and_full_archive_are_supported() {
     // 全库归档的事件 run_id 必须映射（若源事件未带 run_id 则为 None）。
     if let Some(run_id) = event_run {
         let exists: i64 = connection
-            .query_row("SELECT COUNT(*) FROM runs WHERE id = ?1", [&run_id], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT COUNT(*) FROM runs WHERE id = ?1",
+                [&run_id],
+                |row| row.get(0),
+            )
             .expect("run exists");
         assert_eq!(exists, 1, "事件 run_id 不得悬挂");
     }

@@ -77,6 +77,16 @@ pub enum StoreError {
     InvalidShutdownConfig { reason: String },
     /// 库中事件行无法重建信封（损坏或与当前模型不兼容）。
     InvalidStoredEvent { id: String, reason: String },
+    /// 数据目录 generation 布局无效（`CURRENT` 缺失/损坏、路径越界、`shards.json` 非法等；
+    /// ADR-039 D-039-6：拒绝启动，映射 `db_open_failed`）。
+    LayoutInvalid { reason: String },
+    /// 存在 `generations/` 但没有 `CURRENT` 且无 journal：半成品 generation
+    /// （ADR-039 D-039-6/P2-4：拒绝启动并标记 `incomplete_generation`，不自动切换/删除）。
+    IncompleteGeneration { generations: Vec<PathBuf> },
+    /// generation 维护 journal 不可读/非法（恢复/导入整套切换中断）。
+    GenerationJournalInvalid { path: PathBuf, reason: String },
+    /// 跨库不变量被破坏（主库 `events` 非空、`sessions.shard_id` 越界、会话跨片等）。
+    ShardInvariant { reason: String },
     /// 内部不变量被破坏（互斥锁中毒、后台任务异常退出等）。
     Internal { reason: String },
 }
@@ -134,6 +144,10 @@ impl StoreError {
             Self::InvalidCheckpointConfig { .. } => "invalid_checkpoint_config",
             Self::InvalidShutdownConfig { .. } => "invalid_shutdown_config",
             Self::InvalidStoredEvent { .. } => "invalid_stored_event",
+            Self::LayoutInvalid { .. } => "layout_invalid",
+            Self::IncompleteGeneration { .. } => "incomplete_generation",
+            Self::GenerationJournalInvalid { .. } => "generation_journal_invalid",
+            Self::ShardInvariant { .. } => "shard_invariant",
             Self::Internal { .. } => "internal",
         }
     }
@@ -228,6 +242,29 @@ impl fmt::Display for StoreError {
             }
             Self::InvalidStoredEvent { id, reason } => {
                 write!(f, "事件行无法重建信封（id={id}）: {reason}")
+            }
+            Self::LayoutInvalid { reason } => {
+                write!(f, "数据目录 generation 布局无效（db_open_failed）：{reason}")
+            }
+            Self::IncompleteGeneration { generations } => {
+                write!(
+                    f,
+                    "半成品 generation（incomplete_generation）：缺少 CURRENT 且无 journal；\
+                     现有 generation {}；请删除半成品 generation 或重建数据目录",
+                    generations
+                        .iter()
+                        .map(|path| path.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }
+            Self::GenerationJournalInvalid { path, reason } => write!(
+                f,
+                "generation 维护 journal 不可用（{}）：{reason}",
+                path.display()
+            ),
+            Self::ShardInvariant { reason } => {
+                write!(f, "跨库不变量被破坏（db_open_failed）：{reason}")
             }
             Self::Internal { reason } => write!(f, "存储内部错误: {reason}"),
         }

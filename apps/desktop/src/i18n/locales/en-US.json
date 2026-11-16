@@ -130,7 +130,7 @@
   "backup.copies_manual_artifacts_are_not_2": "copies; manual artifacts are not auto-deleted)",
   "backup.no_backups_yet_automatic_backup": "No backups yet (automatic backup is on by default; manual backups can be created anytime)",
   "app.action.restore": "Restore",
-  "backup.external_backup_file_db": "External backup file (.db)",
+  "backup.external_backup_file_db": "External backup set (directory or manifest.json)",
   "backup.absolute_path_e_g_e_2": "Absolute path (e.g. E:\\backup\\aether-….db)",
   "backup.restore_from_external_file": "Restore from external file",
   "backup.restore_will_replace_the_current": "Restore will replace the current database with the selected backup and restart the app; confirmed messages reflect the backup time.",
@@ -834,6 +834,9 @@
   "audit.actor_user": "User",
   "audit.actor_agent": "Agent",
   "audit.actor_system": "System",
+  "backup.single_file_restore_disabled": "Legacy single-file backup: restore is disabled; use a complete backup set or rebuild",
+  "backup.restore_unavailable": "Restore unavailable",
+  "backup.attachments_not_included": "Attachments are not restored with the database; keep/restore the attachments directory separately",
   "session.mode.agent": "◈ Agent",
   "session.mode.chat": "▢ Chat"
 }

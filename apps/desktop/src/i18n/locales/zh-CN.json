@@ -130,7 +130,7 @@
   "backup.copies_manual_artifacts_are_not_2": "份；手动产物不自动删除）",
   "backup.no_backups_yet_automatic_backup": "暂无备份（自动备份默认开启，手动备份随时可创建）",
   "app.action.restore": "恢复",
-  "backup.external_backup_file_db": "外部备份文件（.db）",
+  "backup.external_backup_file_db": "外部备份集（目录或 manifest.json）",
   "backup.absolute_path_e_g_e_2": "绝对路径（例如 E:\\\\backup\\\\aether-….db）",
   "backup.restore_from_external_file": "使用外部文件恢复",
   "backup.restore_will_replace_the_current": "恢复将用所选备份替换当前数据库并重启应用；已确认消息以备份时刻为准。",
@@ -834,6 +834,9 @@
   "audit.actor_user": "用户",
   "audit.actor_agent": "Agent",
   "audit.actor_system": "系统",
+  "backup.single_file_restore_disabled": "旧单文件备份：恢复已禁用；请使用整套备份或重建",
+  "backup.restore_unavailable": "不可恢复",
+  "backup.attachments_not_included": "附件内容未随库恢复；请单独保留/恢复 attachments 目录",
   "session.mode.agent": "◈ Agent",
   "session.mode.chat": "▢ Chat"
 }

@@ -31,13 +31,9 @@ use aether_app::ipc::dto::{
     BackupCreateRequest, BackupRestoreRequest, BackupSource, ExportDiagnosticsRequest,
 };
 use aether_app::security_level::{SecurityLevelView, SecurityProbe, SECURITY_LEVEL_OS};
-use aether_control::{Clock, ManualClock, SharedClock, StorageState};
+use aether_control::{ManualClock, SharedClock, StorageState};
 use aether_security::{
     BackupCryptoParams, EncryptedFileStore, FileCryptoParams, SecretError, SecretStore, SecretValue,
-};
-use aether_store::backup::{
-    execute_restore, program_schema_version, read_restore_journal, RestoreFault, RestoreRequest,
-    RestoreStep, PRE_RESTORE_INFIX,
 };
 use aether_store::{Store, StoreCommand};
 use serde_json::{json, Value};
@@ -70,10 +66,12 @@ fn seed_database(path: &Path, rows: i64) {
             )
             .expect("插入运行时");
         for index in 0..rows {
+            let id = format!("01J{index:023}");
+            let shard = aether_store::shard_for(&id);
             connection
                 .execute_batch(&format!(
-                    "INSERT INTO sessions (id, runtime_id, title, status, created_at, updated_at) \
-                     VALUES ('01J{index:023}', 'mock', '会话 {index}', 'idle', {created}, {created});",
+                    "INSERT INTO sessions (id, runtime_id, title, status, created_at, updated_at, shard_id) \
+                     VALUES ('{id}', 'mock', '会话 {index}', 'idle', {created}, {created}, {shard});",
                     index = index,
                     created = 1_700_000_000_000i64 + index
                 ))
@@ -153,45 +151,21 @@ fn scene_snapshot(db: &Path) -> Value {
         ("db", db.to_path_buf()),
         ("wal", PathBuf::from(format!("{}-wal", db.display()))),
     ] {
-        object.insert(
-            name.to_owned(),
-            if path.exists() {
-                json!(sha256_hex(&file_bytes(&path)))
-            } else {
-                Value::Null
-            },
-        );
+        let value = if name == "db" {
+            match std::fs::read(&path) {
+                Ok(bytes) => json!(sha256_hex(&bytes)),
+                Err(_) => Value::String("unreadable".to_owned()),
+            }
+        } else {
+            // WAL 可能被 SQLite 独占/截断；用元数据大小作为「现场未被破坏」的稳定口径。
+            match std::fs::metadata(&path) {
+                Ok(metadata) => json!(metadata.len()),
+                Err(_) => Value::Null,
+            }
+        };
+        object.insert(name.to_owned(), value);
     }
     Value::Object(object)
-}
-
-fn pre_restore_files(db: &Path) -> Vec<PathBuf> {
-    let Some(dir) = db.parent() else {
-        return Vec::new();
-    };
-    let name = db
-        .file_name()
-        .map(|value| value.to_string_lossy().to_string())
-        .unwrap_or_default();
-    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
-        .map(|listing| {
-            listing
-                .flatten()
-                .map(|entry| entry.path())
-                .filter(|path| {
-                    path.file_name()
-                        .map(|file| file.to_string_lossy().starts_with(&name))
-                        .unwrap_or(false)
-                        && path
-                            .file_name()
-                            .map(|file| file.to_string_lossy().contains(PRE_RESTORE_INFIX))
-                            .unwrap_or(false)
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    files.sort();
-    files
 }
 
 fn write_evidence(name: &str, value: &Value) {
@@ -234,6 +208,28 @@ fn scan_secret_material(haystack: &[u8], needles: &[(&str, Vec<u8>)]) -> Vec<Str
         .filter(|(_, needle)| contains_bytes(haystack, needle))
         .map(|(label, _)| (*label).to_owned())
         .collect()
+}
+
+/// 扫描整套备份（递归读取全部文件；每个文件独立扫描）。
+fn scan_backup_set(root: &Path, needles: &[(&str, Vec<u8>)]) -> Vec<String> {
+    fn walk(path: &Path, needles: &[(&str, Vec<u8>)], hits: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(path) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let entry_path = entry.path();
+            if entry_path.is_dir() {
+                walk(&entry_path, needles, hits);
+            } else if let Ok(bytes) = std::fs::read(&entry_path) {
+                for hit in scan_secret_material(&bytes, needles) {
+                    hits.push(format!("{}:{hit}", entry_path.display()));
+                }
+            }
+        }
+    }
+    let mut hits = Vec::new();
+    walk(root, needles, &mut hits);
+    hits
 }
 
 /// 确定性内存密钥存储（演练不依赖外部凭证）。
@@ -326,7 +322,9 @@ impl Fixture {
 
     fn open_with_store(store: Option<Arc<MemoryStore>>) -> Self {
         let temp = tempfile::tempdir().expect("临时数据目录");
-        seed_database(&temp.path().join("aether.db"), 64);
+        let layout =
+            aether_store::initialize_layout(temp.path(), "0.1.0", 1).expect("初始化 generation");
+        seed_database(layout.main_db(), 64);
         let runtime = new_runtime();
         let handle = runtime.handle().clone();
         let boot = boot_core_full(
@@ -390,7 +388,9 @@ impl Fixture {
     }
 
     fn db_path(&self) -> PathBuf {
-        self.temp.path().join("aether.db")
+        aether_store::read_layout(self.temp.path())
+            .map(|layout| layout.main_db().to_path_buf())
+            .unwrap_or_else(|_| self.temp.path().join("aether.db"))
     }
 
     fn backups_dir(&self) -> PathBuf {
@@ -486,19 +486,26 @@ fn dod1_artifact_format_matches_adr_and_secret_scan_is_clean() {
     let keychain_record = &keychain_created["backup"];
     assert_eq!(keychain_record["encrypted"], true);
     assert_eq!(keychain_record["kind"], BACKUP_KIND_MANUAL);
-    let keychain_path = PathBuf::from(keychain_record["path"].as_str().expect("路径"));
-    assert_eq!(
-        keychain_path.extension().and_then(|value| value.to_str()),
-        Some("aebk"),
-        "加密产物扩展名"
+    let keychain_set = PathBuf::from(keychain_record["path"].as_str().expect("路径"));
+    let keychain_path = keychain_set.join("generation").join("aether.db.aebk");
+    assert!(
+        keychain_path.is_file(),
+        "加密主库产物存在于备份集 generation/"
     );
+    assert_eq!(
+        keychain_record["format"].as_str(),
+        Some("sharded_set"),
+        "备份集格式"
+    );
+    assert_eq!(keychain_record["shard_count"], 8);
 
     // 口令模式产物。
     let passphrase_created = fixture
         .create(Some(DRILL_PASSPHRASE))
         .expect("口令模式备份");
     let passphrase_record = &passphrase_created["backup"];
-    let passphrase_path = PathBuf::from(passphrase_record["path"].as_str().expect("路径"));
+    let passphrase_set = PathBuf::from(passphrase_record["path"].as_str().expect("路径"));
+    let passphrase_path = passphrase_set.join("generation").join("aether.db.aebk");
 
     // 头格式（ADR-020 附录 A-2）：magic/version/flags 恰置其一/salt 仅口令模式。
     let keychain_bytes = file_bytes(&keychain_path);
@@ -541,6 +548,14 @@ fn dod1_artifact_format_matches_adr_and_secret_scan_is_clean() {
         passphrase_hits.is_empty(),
         "口令模式产物命中：{passphrase_hits:?}"
     );
+    assert!(
+        scan_backup_set(&keychain_set, &needles).is_empty(),
+        "整套备份（主库+8 分片+manifest）不得命中密钥材料"
+    );
+    assert!(
+        scan_backup_set(&passphrase_set, &needles).is_empty(),
+        "口令模式整套备份不得命中口令/密钥材料"
+    );
 
     write_evidence(
         "dod1_artifact_format",
@@ -579,7 +594,10 @@ fn drill_roundtrip(passphrase: Option<&str>, evidence_name: &str) {
     let created = fixture.create(passphrase).expect("加密备份");
     let record = created["backup"].clone();
     assert_eq!(record["encrypted"], true, "加密标记");
-    let artifact = PathBuf::from(record["path"].as_str().expect("路径"));
+    assert_eq!(record["format"].as_str(), Some("sharded_set"));
+    assert_eq!(record["shard_count"], 8);
+    let set_root = PathBuf::from(record["path"].as_str().expect("路径"));
+    let artifact = set_root.join("generation").join("aether.db.aebk");
     let backup_id = record["id"].as_str().expect("id").to_owned();
 
     // 来源 id 与加密标记正确（产物头 = 台账 id）。
@@ -594,67 +612,54 @@ fn drill_roundtrip(passphrase: Option<&str>, evidence_name: &str) {
         }
     );
 
-    // 恢复请求（解密 → 候选校验 → 现场日志登记）。
+    // 恢复请求（整套解密到 staging generation → 校验 → 登记 generation journal）。
     let restored = fixture
         .restore_internal(&backup_id, passphrase)
         .expect("恢复请求登记");
     assert_eq!(restored["candidate"]["encrypted"], true);
     assert_eq!(restored["candidate"]["source_backup_id"], backup_id);
-    let journal = read_restore_journal(&db)
+    assert_eq!(restored["candidate"]["format"], "sharded_set");
+    assert_eq!(restored["candidate"]["shard_count"], 8);
+    let journal = aether_store::read_generation_journal(fixture.temp.path(), "restore")
         .expect("读取 journal")
         .expect("journal 存在");
-    assert_eq!(journal.status, "requested");
-    let candidate = PathBuf::from(&journal.candidate_path);
-    assert!(
-        candidate
-            .file_name()
-            .map(|name| name.to_string_lossy().contains(".restore-cand-"))
-            .unwrap_or(false),
-        "解密候选临时文件"
+    assert_eq!(journal.phase, "staged");
+    assert_eq!(journal.kind, "restore");
+    assert_eq!(
+        journal.backup_manifest_sha256.as_deref(),
+        Some(record["manifest_sha256"].as_str().unwrap_or_default())
     );
 
-    // 清库（T9 语义：删除库与侧车，模拟数据目录丢失；恢复后必须与备份时一致）。
+    // 清库（T9 语义：删除当前 generation 与 CURRENT，模拟数据目录丢失；恢复后必须与备份时一致）。
     fixture.shutdown_storage();
-    for path in [
-        db.clone(),
-        PathBuf::from(format!("{}-wal", db.display())),
-        PathBuf::from(format!("{}-shm", db.display())),
-    ] {
-        if path.exists() {
-            std::fs::remove_file(&path).expect("清库");
+    if let Some(old_generation) = journal.old_generation.as_deref() {
+        let old_dir = fixture.temp.path().join("generations").join(old_generation);
+        if old_dir.exists() {
+            std::fs::remove_dir_all(&old_dir).expect("清库 generation");
         }
     }
-    assert!(!db.exists(), "清库后库文件不存在");
+    let _ = std::fs::remove_file(fixture.temp.path().join("CURRENT"));
 
-    // 启动序列执行七步 3–6（无写者窗口）。
+    // 启动序列执行整套切换（staging → CURRENT；旧 generation 保留 `.pre-restore-*`）。
     let outcome = boot_apply_pending_restore(fixture.temp.path()).expect("启动处理恢复");
     let report = match outcome {
         aether_store::RestoreStartupOutcome::Applied(report) => report,
         other => panic!("恢复未完成：{other:?}"),
     };
     assert!(report.applied && !report.rolled_back);
-    let step_codes: Vec<&str> = report.steps.iter().map(|step| step.step.as_str()).collect();
-    assert_eq!(
-        step_codes,
-        vec![
-            "validate_candidate",
-            "stop_writes",
-            "protect_scene",
-            "place_candidate",
-            "verify"
-        ],
-        "恢复七步 2–6 逐项"
-    );
 
-    // 验收：quick_check + 行数/哈希一致。
+    // 验收：quick_check + 行数/哈希一致（新 generation 主库）。
+    let db = fixture.db_path();
     let store = Store::open(&db).expect("恢复后打开");
     assert!(store.quick_check().ok, "恢复后 quick_check");
     assert_eq!(session_count(&db), before_count, "行数一致");
     assert_eq!(fingerprint(&db), before_fingerprint, "哈希抽查一致");
-
-    // 解密候选随恢复收尾清理。
-    assert!(!candidate.exists(), "解密候选随恢复收尾清理");
-    assert!(read_restore_journal(&db).unwrap().is_none(), "journal 收尾");
+    assert!(
+        aether_store::read_generation_journal(fixture.temp.path(), "restore")
+            .unwrap()
+            .is_none(),
+        "journal 收尾"
+    );
 
     write_evidence(
         evidence_name,
@@ -665,8 +670,7 @@ fn drill_roundtrip(passphrase: Option<&str>, evidence_name: &str) {
             "artifact_encrypted": record["encrypted"],
             "artifact_mode": if passphrase.is_some() { "passphrase" } else { "keychain" },
             "source_backup_id": info.source_backup_id,
-            "candidate_path": candidate.to_string_lossy(),
-            "steps": step_codes,
+            "journal_phase": "staged",
             "fingerprint_before": before_fingerprint,
             "fingerprint_after": fingerprint(&db),
             "sessions_before": before_count,
@@ -746,7 +750,9 @@ fn dod3_wrong_credentials_reject_without_touching_scene() {
     );
 
     // 篡改产物头（flags 后一位）→ tag 校验失败；现场三件套哈希不变、无 journal。
-    let artifact = PathBuf::from(keychain_created["backup"]["path"].as_str().expect("路径"));
+    let artifact = PathBuf::from(keychain_created["backup"]["path"].as_str().expect("路径"))
+        .join("generation")
+        .join("aether.db.aebk");
     let mut tampered = file_bytes(&artifact);
     tampered[6] ^= 0x01;
     let tampered_path = fixture.backups_dir().join("tampered.aebk");
@@ -771,18 +777,23 @@ fn dod3_wrong_credentials_reject_without_touching_scene() {
 
     assert_eq!(scene_snapshot(&db), before_scene, "现场三件套不被破坏");
     assert!(
-        read_restore_journal(&db).unwrap().is_none(),
+        aether_store::read_generation_journal(fixture.temp.path(), "restore")
+            .unwrap()
+            .is_none(),
         "拒绝路径不登记 journal"
     );
 
-    // 失败不产生半成品（无 `.restore-cand-*` 残留）。
-    let residue: Vec<String> = std::fs::read_dir(fixture.temp.path())
-        .expect("目录")
-        .flatten()
-        .map(|entry| entry.file_name().to_string_lossy().to_string())
-        .filter(|name| name.contains(".restore-cand-"))
-        .collect();
-    assert!(residue.is_empty(), "无解密候选残留：{residue:?}");
+    // 失败不产生 staging 半成品（无 restore-* staging 残留）。
+    let residue: Vec<String> = std::fs::read_dir(fixture.temp.path().join("staging"))
+        .map(|listing| {
+            listing
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().to_string())
+                .filter(|name| name.starts_with("restore-"))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(residue.is_empty(), "无 staging 半成品：{residue:?}");
 
     write_evidence(
         "dod3_reject_paths",
@@ -958,10 +969,15 @@ fn dod3_auto_backup_pauses_when_key_unavailable() {
         .into_iter()
         .max_by_key(|record| record.created_at)
         .expect("产物");
-    assert!(!record.encrypted, "显式关闭加密 → P0 `.db` 形态");
+    assert!(!record.encrypted, "显式关闭加密 → 不加密整套备份");
     assert_eq!(
-        record.path.extension().and_then(|value| value.to_str()),
-        Some("db")
+        record
+            .path
+            .join("manifest.json")
+            .extension()
+            .and_then(|value| value.to_str()),
+        Some("json"),
+        "整套备份集包含 manifest.json"
     );
 
     write_evidence(
@@ -978,29 +994,14 @@ fn dod3_auto_backup_pauses_when_key_unavailable() {
     fixture.shutdown();
 }
 
-// ===== DoD4：恢复七步在加密路径的现场保护与故障回滚 =====
-
-/// 写入现场残留侧车（模拟未 checkpoint 的 `-wal`/`-shm`；库已关闭时写入）。
-fn write_dummy_sidecars(db: &Path) {
-    std::fs::write(
-        PathBuf::from(format!("{}-wal", db.display())),
-        b"drill-wal-scene",
-    )
-    .expect("wal 现场标记");
-    std::fs::write(
-        PathBuf::from(format!("{}-shm", db.display())),
-        b"drill-shm-scene",
-    )
-    .expect("shm 现场标记");
-}
+// ===== DoD4：generation 整套恢复的 staging 故障拒绝与当前库保护 =====
 
 #[test]
-fn dod4_encrypted_path_protects_scene_and_rolls_back_on_injected_failure() {
+fn dod4_generation_restore_rejects_corrupt_staging_without_touching_current() {
     let mut fixture = Fixture::open();
     let db = fixture.db_path();
     let before = fingerprint(&db);
 
-    // 加密备份 → 恢复请求（得到解密候选）；关闭存储（无写者窗口）。
     let created = fixture
         .create(Some(DRILL_PASSPHRASE))
         .expect("口令模式备份");
@@ -1008,89 +1009,48 @@ fn dod4_encrypted_path_protects_scene_and_rolls_back_on_injected_failure() {
     fixture
         .restore_internal(&backup_id, Some(DRILL_PASSPHRASE))
         .expect("恢复请求");
-    let journal = read_restore_journal(&db).expect("journal").expect("存在");
-    let candidate = PathBuf::from(&journal.candidate_path);
-    assert!(candidate.exists(), "解密候选在场");
+    let journal = aether_store::read_generation_journal(fixture.temp.path(), "restore")
+        .expect("journal")
+        .expect("存在");
+    assert_eq!(journal.phase, "staged");
     fixture.shutdown_storage();
 
-    // 故障注入（就位后失败）：现场三件套恢复原状、`.pre-restore` 不残留、journal 清理。
-    write_dummy_sidecars(&db);
-    let error = execute_restore(
-        &RestoreRequest {
-            db_path: db.clone(),
-            candidate_path: candidate.clone(),
-            program_max_version: program_schema_version(),
-            now_ms: fixture.clock.now_ms(),
-            fault: RestoreFault::FailAfter {
-                step: RestoreStep::PlaceCandidate,
-                message: "M5-03 注入：加密路径就位后失败".to_owned(),
-            },
-            scene_infix: aether_store::PRE_RESTORE_INFIX,
-        },
-        || Ok(()),
-    )
-    .unwrap_err();
-    assert!(error.to_string().contains("已回滚现场"), "{error}");
+    // 故障注入：破坏 staging 分片（quick_check/schema 校验失败）→ 启动拒绝整套切换。
+    let staging =
+        aether_store::staging_generation(fixture.temp.path(), "restore", &journal.new_generation);
+    let shard = staging.join("events").join("events-0.db");
+    std::fs::write(&shard, b"corrupted-staging-shard").expect("破坏 staging 分片");
+    let outcome = boot_apply_pending_restore(fixture.temp.path()).expect("启动处理恢复");
     assert!(
-        pre_restore_files(&db).is_empty(),
-        "回滚后 .pre-restore 已还原：{:?}",
-        pre_restore_files(&db)
+        matches!(outcome, aether_store::RestoreStartupOutcome::Failed { .. }),
+        "staging 校验失败必须拒绝：{outcome:?}"
     );
-    // 先读取还原后的侧车内容（`fingerprint` 会打开库并触碰 WAL）。
-    assert_eq!(
-        std::fs::read(PathBuf::from(format!("{}-wal", db.display()))).expect("wal 还原"),
-        b"drill-wal-scene",
-        "回滚还原 -wal 现场"
-    );
-    assert_eq!(
-        std::fs::read(PathBuf::from(format!("{}-shm", db.display()))).expect("shm 还原"),
-        b"drill-shm-scene",
-        "回滚还原 -shm 现场"
-    );
-    assert_eq!(fingerprint(&db), before, "回滚后数据一致");
-    assert!(read_restore_journal(&db).unwrap().is_none(), "journal 清理");
 
-    // 成功路径（同一解密候选）：`-wal`/`-shm` 现场改名与 `.pre-restore` 保护逐项断言。
-    write_dummy_sidecars(&db);
-    let report = execute_restore(
-        &RestoreRequest {
-            db_path: db.clone(),
-            candidate_path: candidate.clone(),
-            program_max_version: program_schema_version(),
-            now_ms: fixture.clock.now_ms() + 1,
-            fault: RestoreFault::None,
-            scene_infix: aether_store::PRE_RESTORE_INFIX,
-        },
-        || Ok(()),
-    )
-    .expect("加密路径七步成功");
-    assert!(report.applied && !report.rolled_back);
-    let scene = report.scene.clone().expect("现场保护记录");
-    let db_scene = scene.db.expect("库改名");
-    let wal_scene = scene.wal.expect("-wal 改名");
-    let shm_scene = scene.shm.expect("-shm 改名");
-    assert!(db_scene.to_string_lossy().contains(PRE_RESTORE_INFIX));
-    assert_eq!(std::fs::read(&wal_scene).unwrap(), b"drill-wal-scene");
-    assert_eq!(std::fs::read(&shm_scene).unwrap(), b"drill-shm-scene");
-    assert_eq!(pre_restore_files(&db).len(), 3, "现场三件套完整保留");
-    assert_eq!(fingerprint(&db), before, "恢复后数据一致");
-    aether_store::finalize_restore(&db).expect("journal 收尾");
-
-    // 解密候选清理（启动序列职责；此处模拟）。
-    let _ = std::fs::remove_file(&candidate);
+    // 当前 generation/CURRENT 不变；旧数据仍可打开且指纹一致。
+    let current = aether_store::read_layout(fixture.temp.path()).expect("当前布局仍有效");
+    assert_eq!(
+        current.main_db().to_path_buf(),
+        db,
+        "CURRENT 未被切换到损坏 staging"
+    );
+    assert_eq!(fingerprint(&db), before, "当前库数据不受损");
+    let pre_restore: Vec<String> = std::fs::read_dir(fixture.temp.path().join("generations"))
+        .expect("generations")
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().to_string())
+        .filter(|name| name.starts_with(".pre-restore-"))
+        .collect();
+    assert!(pre_restore.is_empty(), "失败未产生旧 generation 改名");
 
     write_evidence(
-        "dod4_scene_and_rollback",
+        "dod4_generation_rollback",
         &json!({
             "backup_id": backup_id,
-            "rollback_error": error.to_string(),
-            "rollback_pre_restore_files": 0,
-            "scene_db": db_scene.to_string_lossy(),
-            "scene_wal": wal_scene.to_string_lossy(),
-            "scene_shm": shm_scene.to_string_lossy(),
-            "pre_restore_files": pre_restore_files(&db).len(),
-            "fingerprint": fingerprint(&db),
-            "journal_finalized": read_restore_journal(&db).unwrap().is_none(),
+            "journal_phase": journal.phase,
+            "failed_outcome": format!("{outcome:?}"),
+            "fingerprint_before": before,
+            "fingerprint_after": fingerprint(&db),
+            "pre_restore": pre_restore,
         }),
     );
     fixture.shutdown();
@@ -1162,8 +1122,8 @@ fn dod5_diagnostics_audit_and_response_do_not_contain_secret_material() {
         .expect("台账");
     let passphrase_backup = backups
         .iter()
-        .find(|record| record.path.extension().and_then(|value| value.to_str()) == Some("aebk"))
-        .expect("加密产物");
+        .find(|record| record.encrypted && record.path.is_dir())
+        .expect("加密备份集");
     let response_value = fixture
         .restore_internal(&passphrase_backup.id, Some(DRILL_PASSPHRASE))
         .expect("恢复请求");

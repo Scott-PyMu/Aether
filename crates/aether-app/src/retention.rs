@@ -25,8 +25,7 @@ use std::time::Duration;
 use aether_control::SharedClock;
 use aether_security::Redactor;
 use aether_store::archive::{
-    archive_retention_batch, cleanup_archive_temps, select_retention_batch, verify_archive_file,
-    RETENTION_BATCH_MAX,
+    archive_retention_batch, cleanup_archive_temps, verify_archive_file, RETENTION_BATCH_MAX,
 };
 use aether_store::checkpoint::CheckpointConfig;
 use aether_store::{AuditLogRecord, ReadPool, StoreCommand, StoreError, WriteQueue};
@@ -356,10 +355,14 @@ impl RetentionTask {
         self.data_dir.join("archives")
     }
 
-    /// 当前 `db+wal` 总字节数（增长采样/空间回收证据）。
+    /// 当前 generation 主库 + 全部分片 `db+wal` 总字节数（容量/增长采样）。
     pub fn total_bytes(&self) -> u64 {
-        let db = self.db_path();
-        file_len(&db).saturating_add(file_len(&wal_path(&db)))
+        aether_store::read_layout(&self.data_dir)
+            .map(|layout| aether_store::generation_live_bytes(&layout))
+            .unwrap_or_else(|_| {
+                let db = self.db_path();
+                file_len(&db).saturating_add(file_len(&wal_path(&db)))
+            })
     }
 
     /// 记录一个采样点（生产 tick 自动记录；测试注入历史样本）。
@@ -555,14 +558,25 @@ impl RetentionTask {
         let mut archives = 0u64;
 
         loop {
-            let reads = self.reads.clone();
-            let batch = match reads
-                .with_connection(move |connection| {
-                    select_retention_batch(connection, cutoff, RETENTION_BATCH_MAX)
-                })
-                .await
-            {
-                Ok(batch) => batch,
+            let layout = match aether_store::read_layout(&self.data_dir) {
+                Ok(layout) => layout,
+                Err(error) => {
+                    let report = RetentionTickReport {
+                        outcome: RetentionOutcome::Failed {
+                            error: format!("generation 布局无效：{error}"),
+                        },
+                        at_ms,
+                    };
+                    self.record_failure(at_ms, &report).await;
+                    return report;
+                }
+            };
+            let batches = match aether_store::select_retention_batch_generation(
+                &layout,
+                cutoff,
+                RETENTION_BATCH_MAX,
+            ) {
+                Ok(batches) => batches,
                 Err(error) => {
                     let report = RetentionTickReport {
                         outcome: RetentionOutcome::Failed {
@@ -574,81 +588,86 @@ impl RetentionTask {
                     return report;
                 }
             };
-            if batch.is_empty() {
+            if batches.is_empty() {
                 break;
             }
-            let rowids: Vec<i64> = batch.iter().map(|row| row.rowid).collect();
-            let row_count = batch.len() as u64;
-            let archive_dir = archives_dir.clone();
-            let archive_result =
-                tokio::task::spawn_blocking(move || -> Result<PathBuf, StoreError> {
-                    let redactor = Redactor::new().map_err(|error| StoreError::Internal {
-                        reason: format!("脱敏器初始化失败：{error}"),
-                    })?;
-                    let sanitize = |value: &Value| -> Result<String, StoreError> {
-                        let redacted = redactor.redact_json(value);
-                        let line = serde_json::to_string(&redacted).map_err(|error| {
-                            StoreError::Internal {
-                                reason: format!("归档行序列化失败：{error}"),
-                            }
+            for (shard_id, batch) in batches {
+                let rowids: Vec<i64> = batch.iter().map(|row| row.rowid).collect();
+                let row_count = batch.len() as u64;
+                let archive_dir = archives_dir.clone();
+                let archive_result =
+                    tokio::task::spawn_blocking(move || -> Result<PathBuf, StoreError> {
+                        let redactor = Redactor::new().map_err(|error| StoreError::Internal {
+                            reason: format!("脱敏器初始化失败：{error}"),
                         })?;
-                        if !redactor.is_clean(&line) {
+                        let sanitize = |value: &Value| -> Result<String, StoreError> {
+                            let redacted = redactor.redact_json(value);
+                            let line =
+                                serde_json::to_string(&redacted).map_err(|error| {
+                                    StoreError::Internal {
+                                        reason: format!("归档行序列化失败：{error}"),
+                                    }
+                                })?;
+                            if !redactor.is_clean(&line) {
+                                return Err(StoreError::Internal {
+                                    reason: "归档行脱敏后仍命中密钥模式，已拒绝写出（D10）"
+                                        .to_owned(),
+                                });
+                            }
+                            Ok(line)
+                        };
+                        let report =
+                            archive_retention_batch(&archive_dir, &batch, at_ms, &sanitize)?;
+                        let verification = verify_archive_file(&report.path)?;
+                        if !verification.matches {
                             return Err(StoreError::Internal {
-                                reason: "归档行脱敏后仍命中密钥模式，已拒绝写出（D10）".to_owned(),
+                                reason: format!(
+                                    "归档产物校验失败（rows={} vs {}；sha256 不一致），跳过该批清理",
+                                    verification.rows, verification.manifest.rows
+                                ),
                             });
                         }
-                        Ok(line)
-                    };
-                    let report = archive_retention_batch(&archive_dir, &batch, at_ms, &sanitize)?;
-                    let verification = verify_archive_file(&report.path)?;
-                    if !verification.matches {
-                        return Err(StoreError::Internal {
-                            reason: format!(
-                                "归档产物校验失败（rows={} vs {}；sha256 不一致），跳过该批清理",
-                                verification.rows, verification.manifest.rows
-                            ),
-                        });
-                    }
-                    Ok(report.path)
-                })
-                .await
-                .map_err(|error| StoreError::Internal {
-                    reason: format!("归档任务异常退出：{error}"),
-                })
-                .and_then(|result| result);
+                        Ok(report.path)
+                    })
+                    .await
+                    .map_err(|error| StoreError::Internal {
+                        reason: format!("归档任务异常退出：{error}"),
+                    })
+                    .and_then(|result| result);
 
-            let archive_path = match archive_result {
-                Ok(path) => path,
-                Err(error) => {
+                let archive_path = match archive_result {
+                    Ok(path) => path,
+                    Err(error) => {
+                        let report = RetentionTickReport {
+                            outcome: RetentionOutcome::Failed {
+                                error: format!("归档失败，跳过该批清理：{error}"),
+                            },
+                            at_ms,
+                        };
+                        self.record_failure(at_ms, &report).await;
+                        return report;
+                    }
+                };
+
+                let write = self.write.clone();
+                if let Err(error) = write
+                    .execute(StoreCommand::DeleteEventsInShard { shard_id, rowids })
+                    .await
+                {
                     let report = RetentionTickReport {
                         outcome: RetentionOutcome::Failed {
-                            error: format!("归档失败，跳过该批清理：{error}"),
+                            error: format!(
+                                "已归档但删除失败（下轮重试；归档 {archive_path:?}）：{error}"
+                            ),
                         },
                         at_ms,
                     };
                     self.record_failure(at_ms, &report).await;
                     return report;
                 }
-            };
-
-            let write = self.write.clone();
-            if let Err(error) = write
-                .execute(StoreCommand::DeleteEventsByIds { rowids })
-                .await
-            {
-                let report = RetentionTickReport {
-                    outcome: RetentionOutcome::Failed {
-                        error: format!(
-                            "已归档但删除失败（下轮重试；归档 {archive_path:?}）：{error}"
-                        ),
-                    },
-                    at_ms,
-                };
-                self.record_failure(at_ms, &report).await;
-                return report;
+                cleaned_rows = cleaned_rows.saturating_add(row_count);
+                archives = archives.saturating_add(1);
             }
-            cleaned_rows = cleaned_rows.saturating_add(row_count);
-            archives = archives.saturating_add(1);
             tokio::task::yield_now().await;
         }
 

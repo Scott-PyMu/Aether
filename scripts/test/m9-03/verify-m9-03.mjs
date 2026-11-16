@@ -201,7 +201,7 @@ if (!/pub const COMMANDS: &\[&str\] = &\[/.test(dispatchSource)) {
   fail("[DoD-2] 未找到 aether-app::COMMANDS 清单");
 }
 if (!/pub const SHELL_COMMANDS: &\[&str\] = &\[/.test(dispatchSource)) {
-  fail("[DoD-2] 未找到壳本地命令清单（59/4 路由口径）");
+  fail("[DoD-2] 未找到壳本地命令清单（83/4 路由口径）");
 }
 if (dispatchSource.includes("payload`") && dispatchSource.includes("parse_payload")) {
   fail("[DoD-2] 命令层不得保留 `{payload}` 包装解析");
@@ -296,7 +296,7 @@ for (const business of [
 ]) {
   if (!bootstrapSource.includes(business)) fail(`[DoD-5] 启动失败缺业务码 ${business}`);
 }
-if (!/aether_store::preflight/.test(bootstrapSource)) {
+if (!/aether_store::preflight(_generation)?/.test(bootstrapSource)) {
   fail("[DoD-5] 预检必须调用DB 打开 + 迁移 checksum 校验（aether_store::preflight）");
 }
 const storeLib = read("crates/aether-store/src/lib.rs");
@@ -335,7 +335,7 @@ if (!businessMatch) {
         `JSON ${jsonCodes.join(",")}`,
     );
   }
-  if (jsonCodes.length !== 9) fail(`[DoD-4] business 必须 9 项，实际 ${jsonCodes.length}`);
+  if (jsonCodes.length !== 35) fail(`[DoD-4] business 必须 35 项，实际 ${jsonCodes.length}`);
 }
 const packageJson = readJson("package.json");
 if (!packageJson.scripts?.["verify:error-codes"]?.includes("--business-set")) {
@@ -462,6 +462,6 @@ console.log(
   `[m9-03] OK：rpc 源文件 ${checked.rpcSources}（叶子）· daemon 源文件 ${checked.daemonSources}` +
     `（无 tauri）· 传输码 12 · DaemonPhase 8+2 保留 · 退出码 0/10/20/21/22/23/24 ·` +
     ` fixture ${checked.fixtureLines} 行/${checked.fixtureCases} 用例 · 进程级用例 ${checked.testCases} ·` +
-    ` 业务码 9 与生成物一致`,
+    ` 业务码 35 与生成物一致`,
 );
 console.log("AETHER_M9_03 PASS");

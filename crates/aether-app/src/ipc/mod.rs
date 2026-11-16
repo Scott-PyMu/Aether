@@ -37,6 +37,42 @@ use crate::startup::StartupGate;
 ///
 /// `backend` 为 `OnceLock`：生产启动在 Builder 阶段先以「延迟注入」构造
 /// （窗口加载期状态必须可用——`startup_*` 门命令不依赖后端），
+/// 维护态（ADR-039 D-039-5 §2）：备份/恢复独占；除 `health`/`app_exit` 外拒绝。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MaintenanceState {
+    /// `backup` / `restore`（导入维护窗口沿用 `IpcBackend::maintenance_state`）。
+    pub kind: String,
+    /// 面向 UI 的原因文本（不含密钥）。
+    pub reason: String,
+}
+
+/// 维护态共享单元（组合根注入 IpcState 与备份后端）。
+#[derive(Debug, Default)]
+pub struct MaintenanceCell {
+    state: std::sync::Mutex<Option<MaintenanceState>>,
+}
+
+impl MaintenanceCell {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn set(&self, state: Option<MaintenanceState>) {
+        let mut slot = match self.state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *slot = state;
+    }
+
+    pub fn get(&self) -> Option<MaintenanceState> {
+        match self.state.lock() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+}
+
 /// 单实例插件初始化之后由 `setup` 打开存储并注入真实后端（ADR-007；
 /// T12 语义要求第二实例在 `setup` 前退出、不建写连接）。
 ///
@@ -58,6 +94,8 @@ struct IpcStateInner {
     shutdown: OnceLock<Arc<AppShutdown>>,
     /// M2-08 `ExitRequested` 防重入阶段。
     exit: ExitFlag,
+    /// ADR-039 D-039-5：备份/恢复维护态（组合根注入；未注入 → 仅导入维护态可见）。
+    maintenance: OnceLock<Arc<MaintenanceCell>>,
 }
 
 impl IpcState {
@@ -118,6 +156,7 @@ impl IpcState {
                 shell: OnceLock::new(),
                 shutdown: OnceLock::new(),
                 exit: ExitFlag::new(),
+                maintenance: OnceLock::new(),
             }),
         }
     }
@@ -180,13 +219,32 @@ impl IpcState {
         self.inner.picker.get().cloned()
     }
 
-    /// 维护窗口原因（M10-04/ADR-034）：后端未注入/启动门未 Ready 时不阻断命令层
-    /// 既有语义（`startup_*` 保持可达）；仅在后端可用时透传维护状态。
-    pub fn maintenance_reason(&self) -> Option<String> {
+    /// 注入备份/恢复维护态共享单元（ADR-039 D-039-5；仅首次生效）。
+    pub fn install_maintenance(&self, cell: Arc<MaintenanceCell>) -> bool {
+        self.inner.maintenance.set(cell).is_ok()
+    }
+
+    /// 当前维护态（优先共享单元；否则后端导入维护窗口）。
+    pub fn maintenance_state(&self) -> Option<MaintenanceState> {
+        if let Some(cell) = self.inner.maintenance.get() {
+            if let Some(state) = cell.get() {
+                return Some(state);
+            }
+        }
         self.inner
             .backend
             .get()
             .and_then(|backend| backend.maintenance_state())
+            .map(|reason| MaintenanceState {
+                kind: "import".to_owned(),
+                reason,
+            })
+    }
+
+    /// 维护窗口原因（M10-04/ADR-034）：后端未注入/启动门未 Ready 时不阻断命令层
+    /// 既有语义（`startup_*` 保持可达）；仅在后端可用时透传维护状态。
+    pub fn maintenance_reason(&self) -> Option<String> {
+        self.maintenance_state().map(|state| state.reason)
     }
 
     /// 业务命令入口：启动门未 Ready 时阻断（主界面不可达的命令层兜底）；
