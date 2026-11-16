@@ -93,7 +93,48 @@
   "unverified": [
     "macOS/Linux local startup/backup execution (CI matrix wired only)",
     "release daemon + real Electron 3-run startup (this run uses debug daemon)",
-    "weekly integrity_check / 20-start full check scheduler",
-    "restore process kill injection and Windows ReplaceFileW failure injection"
-  ]
+    "weekly integrity_check / 20-start full check scheduler"
+  ],
+  "faultInjections": {
+    "backupUnderWritePressure": "pass",
+    "restoreProcessKill": "pass",
+    "windowsCurrentReplacementFailure": "pass",
+    "walSidecarInvalidation": "pass"
+  },
+  "quickCheckDiagnosis": {
+    "sequentialPassMs": [
+      [
+        13630.99,
+        12127.54,
+        13420.02,
+        13059.23,
+        12738.26,
+        12596.67,
+        12252.6,
+        12487.76
+      ],
+      [
+        11657.55,
+        9926.39,
+        12354.93,
+        11714.05,
+        11800.06,
+        12656.32,
+        11769.95,
+        11417.83
+      ]
+    ],
+    "parallelPerShardMs": [
+      30861.39,
+      28314.68,
+      31675.68,
+      30865.77,
+      30268.9,
+      31492.81,
+      24548.45,
+      10744.69
+    ],
+    "parallelWallMs": 31690.57,
+    "conclusion": "8 并发 quick_check 共享磁盘/CPU，总吞吐不随并发线性扩展；冷热缓存差异 + 后台写/UI I/O 竞争导致 23-35s 波动"
+  }
 }

@@ -18,7 +18,10 @@ use aether_store::layout::{
     read_current, read_existing as read_layout, shard_for, write_current, StorageLayout,
     CLEAN_SHUTDOWN_NAME, SHARD_COUNT,
 };
-use aether_store::{Store, StoreCommand, StoreRuntime, WriteQueueConfig};
+use aether_store::{
+    create_backup_set, replace_file_atomic, validate_backup_set, Store, StoreCommand, StoreRuntime,
+    WriteQueueConfig,
+};
 use rusqlite::Connection;
 
 const SESSION_A: &str = "01J8ZQ00000000000000000001";
@@ -489,6 +492,72 @@ fn maintenance_pause_blocks_writes_until_resume() {
         .expect("shard")
         .to_path_buf();
     assert_eq!(count_events(&shard, SESSION_A), 1);
+}
+
+#[cfg(windows)]
+#[allow(clippy::permissions_set_readonly_false)]
+#[test]
+fn current_replacement_failure_keeps_old_pointer() {
+    let dir = tempfile::tempdir().expect("temp");
+    let destination = dir.path().join("CURRENT");
+    let temporary = dir.path().join("CURRENT.tmp");
+    std::fs::write(&destination, b"old").expect("old");
+    std::fs::write(&temporary, b"new").expect("tmp");
+    let mut permissions = std::fs::metadata(&destination)
+        .expect("metadata")
+        .permissions();
+    permissions.set_readonly(true);
+    std::fs::set_permissions(&destination, permissions).expect("readonly");
+    let result = replace_file_atomic(&temporary, &destination);
+    let mut permissions = std::fs::metadata(&destination)
+        .expect("metadata2")
+        .permissions();
+    permissions.set_readonly(false);
+    std::fs::set_permissions(&destination, permissions).expect("writable");
+    assert!(result.is_err(), "只读 CURRENT 的替换必须失败");
+    assert_eq!(std::fs::read(&destination).expect("old content"), b"old");
+}
+
+#[test]
+fn backup_under_write_pressure_drains_and_preserves_events() {
+    let dir = tempfile::tempdir().expect("temp");
+    let layout = initialize_layout(dir.path(), "0.1.0", 1).expect("init");
+    seed_session(&layout, SESSION_A);
+    let (storage, runtime) = runtime_for(layout.clone());
+    let queue = storage.queue().clone();
+    let target = dir.path().join("backups");
+    runtime.block_on(async {
+        let writer = tokio::spawn(async move {
+            for seq in 1..=500u64 {
+                queue.append_events(vec![event(SESSION_A, seq)]).await.expect("write");
+                tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+            }
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let gate = storage.queue().pause_and_drain().await.expect("pause");
+        assert_eq!(storage.queue().depth(), 0, "drain 后队列深度必须为 0");
+        let outcome = create_backup_set(
+            &layout,
+            &target,
+            "01J8ZQ0000000000000000BK01",
+            "manual",
+            1_794_800_000_000,
+            "0.1.0",
+            false,
+            "none",
+        )
+        .expect("backup under write pressure");
+        assert_eq!(outcome.manifest.shard_count, 8);
+        validate_backup_set(&target.join("01J8ZQ0000000000000000BK01")).expect("validate");
+        drop(gate);
+        writer.await.expect("writer");
+        storage.shutdown().await.expect("shutdown");
+    });
+    let shard = layout
+        .shard_path(shard_for(SESSION_A))
+        .expect("shard")
+        .to_path_buf();
+    assert_eq!(count_events(&shard, SESSION_A), 500);
 }
 
 #[test]

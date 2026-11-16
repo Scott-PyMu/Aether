@@ -44,7 +44,11 @@
     "legacy_single_file_backup_rejected": true,
     "restore_staging_corruption_rejected": true,
     "restore_staging_partial_cleanup": true,
-    "startup_pending_deletion_recovery": true
+    "startup_pending_deletion_recovery": true,
+    "backup_under_write_pressure": true,
+    "restore_process_kill": true,
+    "windows_current_replacement_failure": true,
+    "wal_nonzero_sidecar_invalidation": true
   },
   "contract": {
     "commands_implemented": 87,

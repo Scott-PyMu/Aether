@@ -17,6 +17,14 @@ const json = (relative) => JSON.parse(read(relative));
 
 const metrics = json("docs/M10-10-metrics.json");
 check("证据存在 docs/M10-10-证据.md", existsSync(path.join(root, "docs/M10-10-证据.md")));
+check(
+  "恢复 kill 故障注入测试存在",
+  existsSync(path.join(root, "crates/aether-store/tests/m10_10_restore_kill.rs")),
+);
+check(
+  "quick_check 波动诊断测试存在",
+  existsSync(path.join(root, "crates/aether-app/tests/m10_10_check_diag.rs")),
+);
 check("metrics task=M10-10", metrics.task === "M10-10");
 check("core initialize ≤1.5s", metrics.core.initializeMs <= 1500);
 check("core storageCheck ≤30s", metrics.core.storageCheckMs <= 30000);
@@ -54,6 +62,7 @@ const run = (args) => {
   check(`cargo ${args.join(" ")}`, result.status === 0);
 };
 run(["test", "-p", "aether-store", "--test", "m10_09_sharding", "-j", "1", "--", "--test-threads=1"]);
+run(["test", "-p", "aether-store", "--test", "m10_10_restore_kill", "-j", "1", "--", "--test-threads=1"]);
 run(["test", "-p", "aether-app", "--test", "m5_03_encrypted_backup", "-j", "1", "--", "--test-threads=1"]);
 const dataDir = process.env.AETHER_M10_10_DATA_DIR;
 if (dataDir && existsSync(dataDir)) {
