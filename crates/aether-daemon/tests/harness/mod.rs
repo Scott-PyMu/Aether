@@ -54,7 +54,17 @@ pub struct TestDirs {
 
 impl TestDirs {
     pub fn new() -> Self {
-        let root = tempfile::tempdir().expect("临时目录");
+        // CI Windows 的 %TEMP% 可能含 8.3 短路径（RUNNER~1），产品路径校验会按设计拒绝。
+        // 测试临时目录放到工作区 target/ 下，使用长路径，避免把环境差异误判为产品缺陷。
+        let base = std::env::current_dir()
+            .expect("current dir")
+            .join("target")
+            .join("aether-test-tmp");
+        std::fs::create_dir_all(&base).expect("测试临时根目录");
+        let root = tempfile::Builder::new()
+            .prefix("aether-daemon-test-")
+            .tempdir_in(&base)
+            .expect("临时目录");
         std::fs::create_dir_all(root.path().join("registry")).expect("注册目录");
         Self { root }
     }
