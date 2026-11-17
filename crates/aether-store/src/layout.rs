@@ -655,13 +655,14 @@ pub fn read_clean_shutdown(layout: &StorageLayout) -> Option<CleanShutdown> {
 
 /// M10-10 严格 sidecar 匹配：generation / 版本 / 关闭阶段 + 主库与每片指纹全部一致。
 ///
-/// 仅用于决定是否跳过后台 `quick_check`；不修改任何文件。指纹不匹配（含 WAL 非 0、
-/// 上次异常退出、版本升级、恢复/导入）返回 `false`，调用方必须走后台检查。
+/// 仅用于决定是否跳过启动 `quick_check`；不修改任何文件。指纹不匹配（含 WAL 非 0、
+/// 上次异常退出、版本升级、恢复/导入）返回 `false`，调用方必须走全量并行检查
+/// （ADR-039 v1.0 D-039-2；ADR-040 仍为 Proposed，未实施选择性检查）。
 pub fn clean_shutdown_is_strict(layout: &StorageLayout, app_version: &str) -> bool {
     plan_startup_checks(layout, app_version).strict_ok
 }
 
-/// 启动检查计划（M10-10 选择性脏分片；ADR-040 草案）。
+/// 启动检查计划（ADR-039 v1.0 D-039-2：全匹配跳过；任一不匹配 = 主库 + 全部分片）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StartupCheckPlan {
     /// 全部指纹匹配：无需启动 quick_check（周检另行触发）。
@@ -670,24 +671,28 @@ pub struct StartupCheckPlan {
     pub main: bool,
     /// 需要检查的分片 id（0..8）。
     pub shards: Vec<u8>,
-    /// 无法做选择性判断，退化为主库 + 全部分片。
+    /// 非严格匹配时固定为主库 + 全部分片（保留字段以区分「无检查」与「全量检查」）。
     pub full_fallback: bool,
     pub reason: String,
 }
 
-/// 计算启动检查范围：sidecar 完整且仅部分分片指纹变化时，只检查变化分片；
-/// sidecar 缺失/版本或关闭阶段不完整时退化为全量。
+fn full_startup_plan(layout: &StorageLayout, reason: &str) -> StartupCheckPlan {
+    StartupCheckPlan {
+        strict_ok: false,
+        main: true,
+        shards: (0..layout.shard_paths().len())
+            .filter_map(|id| u8::try_from(id).ok())
+            .collect(),
+        full_fallback: true,
+        reason: reason.to_owned(),
+    }
+}
+
+/// 计算启动检查范围：sidecar 完整且主库/每片指纹全部匹配时跳过；
+/// 否则按 ADR-039 D-039-2 检查主库 + 全部分片。
 pub fn plan_startup_checks(layout: &StorageLayout, app_version: &str) -> StartupCheckPlan {
     let Some(sidecar) = read_clean_shutdown(layout) else {
-        return StartupCheckPlan {
-            strict_ok: false,
-            main: true,
-            shards: (0..layout.shard_paths().len())
-                .filter_map(|id| u8::try_from(id).ok())
-                .collect(),
-            full_fallback: true,
-            reason: "sidecar_missing".to_owned(),
-        };
+        return full_startup_plan(layout, "sidecar_missing");
     };
     if sidecar.generation != layout.generation()
         || sidecar.app_version != app_version
@@ -696,15 +701,7 @@ pub fn plan_startup_checks(layout: &StorageLayout, app_version: &str) -> Startup
         || !sidecar.background_check_completed
         || sidecar.shards.len() != layout.shard_paths().len()
     {
-        return StartupCheckPlan {
-            strict_ok: false,
-            main: true,
-            shards: (0..layout.shard_paths().len())
-                .filter_map(|id| u8::try_from(id).ok())
-                .collect(),
-            full_fallback: true,
-            reason: "sidecar_not_strict".to_owned(),
-        };
+        return full_startup_plan(layout, "sidecar_not_strict");
     }
     let main_mismatch = !FingerprintStats::read(layout.main_db()).matches(&sidecar.main);
     let mut mismatched = Vec::new();
@@ -717,6 +714,7 @@ pub fn plan_startup_checks(layout: &StorageLayout, app_version: &str) -> Startup
             .iter()
             .find(|entry| entry.shard_id == shard_id_u8)
         else {
+            mismatched.push(shard_id_u8);
             continue;
         };
         if !FingerprintStats::read(path).matches(&expected.database) {
@@ -732,14 +730,7 @@ pub fn plan_startup_checks(layout: &StorageLayout, app_version: &str) -> Startup
             reason: "sidecar_strict".to_owned(),
         };
     }
-    StartupCheckPlan {
-        strict_ok: false,
-        // 主库很小；有任一脏分片时顺带检查主库（约毫秒级）。
-        main: true,
-        shards: mismatched,
-        full_fallback: false,
-        reason: "dirty_shards".to_owned(),
-    }
+    full_startup_plan(layout, "fingerprint_mismatch")
 }
 
 /// 严格 sidecar 的快速文件指纹（不打开 SQLite）。

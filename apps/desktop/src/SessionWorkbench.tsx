@@ -459,6 +459,10 @@ export function SessionWorkbench({
   // M3-06：存储降级（只读）联动——发送入口禁用；修复 + 重启前不得恢复。
   const storageHealth = useStorageHealth();
   const degraded = storageHealth.status === "degraded";
+  // M10-10/ADR-039 D-039-5：备份/恢复维护态下写入与新任务同样不可用，
+  // 但不得显示为 persist_degraded（S-08）；维护态由 S-06 承接。
+  const maintenance = storageHealth.report?.maintenance !== undefined;
+  const writesBlocked = degraded || maintenance;
   // M3-06 `storage-backpressure-notice`（D8/ADR-004 临时背压，与 persist_degraded 区分）：
   // - scope=run：写队列 > L2（4096）→ 新 run 被拒，队列回落（≤1024）自动解除；
   // - scope=adapter：适配器 `degraded + status_reason=storage_backpressure` 隔离中，
@@ -602,11 +606,11 @@ export function SessionWorkbench({
     [runtimes, activeSession],
   );
   const pauseSupported = supportsPauseResume(activeSessionRuntime);
-  /** 暂停/恢复入口置灰：无会话 / 能力未声明 / 降级 / 状态不可暂停（creating/终态）。 */
+  /** 暂停/恢复入口置灰：无会话 / 能力未声明 / 降级或维护 / 状态不可暂停（creating/终态）。 */
   const pauseDisabled =
     !activeSession ||
     !pauseSupported ||
-    degraded ||
+    writesBlocked ||
     (activeSession.status !== "paused" &&
       activeSession.status !== "idle" &&
       activeSession.status !== "running" &&
@@ -2491,7 +2495,7 @@ export function SessionWorkbench({
                           data-run-id={bubble.runId}
                           // M7-03/ADR-017：paused 态 `run_retry` 被拒（session_paused）→ 入口禁用。
                           disabled={
-                            degraded ||
+                            writesBlocked ||
                             retryingRunId !== null ||
                             activeSession?.status === "paused" ||
                             (activeRequiresProvider &&
@@ -2750,7 +2754,7 @@ export function SessionWorkbench({
               placeholder={t("session.type_a_message_to_reference")}
               value={draft}
               // M7-03/ADR-017：paused 态发送被拒（session_paused，草稿保留；UI-UX §3.3）。
-              disabled={!activeSessionId || degraded || activeSession?.status === "paused"}
+              disabled={!activeSessionId || writesBlocked || activeSession?.status === "paused"}
               onChange={(event) => setDraft(event.target.value)}
               onPaste={onComposerPaste}
               onKeyDown={(event) => {
@@ -2863,7 +2867,7 @@ export function SessionWorkbench({
                 sessionId={activeSessionId}
                 value={activeSessionId ? permissionMode : null}
                 onChange={(mode) => void onChangePermissionMode(mode)}
-                disabled={degraded}
+                disabled={writesBlocked}
               />
               <button
                 type="button"
@@ -2877,7 +2881,7 @@ export function SessionWorkbench({
                 aria-label={t("session.add_image_attachment")}
                 disabled={
                   !activeSessionId ||
-                  degraded ||
+                  writesBlocked ||
                   !runtimeSupportsMultimodal(activeSessionRuntime?.capabilities)
                 }
                 onClick={() => void onPickAttachment()}
@@ -3011,7 +3015,7 @@ export function SessionWorkbench({
                 onProviderChange={onModelProviderChange}
                 providerValue={selectedProviderId}
                 sessionModel={activeSession?.model ?? null}
-                disabled={degraded}
+                disabled={writesBlocked}
               />
               <button
                 type="button"
@@ -3021,7 +3025,7 @@ export function SessionWorkbench({
                 title={t("app.action.send")}
                 disabled={
                   !activeSessionId ||
-                  degraded ||
+                  writesBlocked ||
                   sending ||
                   (draft.trim().length === 0 &&
                     !pendingAttachments.some((item) => item.state === "ready")) ||
@@ -3075,6 +3079,16 @@ export function SessionWorkbench({
                 {t("session.storage_degraded_read_only_sending")}
               </p>
             ) : null}
+            {maintenance && !degraded ? (
+              // M10-10：维护态不是降级；仅提示写入暂不可用（S-06）。
+              <p
+                className="composer-degraded-hint"
+                data-testid="composer-maintenance-hint"
+                role="status"
+              >
+                {t("session.maintenance_writes_paused")}
+              </p>
+            ) : null}
           </div>
           </div>
 
@@ -3100,7 +3114,7 @@ export function SessionWorkbench({
               historyLimit={historyLimit}
               streamItemHeight={streamItemHeight}
               streamHeight={streamHeight}
-              degraded={degraded}
+              degraded={writesBlocked}
               onError={reportError}
               onRefreshSessions={refreshSessions}
             />

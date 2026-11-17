@@ -53,12 +53,41 @@ export interface ConcurrencyGate {
   starvation_guard?: number;
 }
 
+/**
+ * `health.storage_check`（M10-10；ADR-039 D-039-5）。
+ *
+ * `state=checking` 不是降级：读/UI 可用，`write_gate=checking` 时事件写入被拒绝；
+ * 失败才进入 `persist_degraded`/S-08。`mode=background` 不关闭写门。
+ */
+export interface StorageCheck {
+  state: "checking" | "ok" | "failed";
+  mode: "startup" | "background";
+  write_gate: "checking" | "open";
+  main_checked: boolean;
+  checked_shards: number;
+  total_shards: number;
+  started_at?: number;
+  completed_at?: number;
+  error?: string;
+}
+
+/** `health.maintenance`（备份/恢复维护态；除 health/app_exit 外命令拒绝）。 */
+export interface MaintenanceSnapshot {
+  kind: string;
+  started_at: number;
+  progress?: unknown;
+}
+
 export interface HealthReport {
   storage_state: StorageState;
   write_queue_depth: number;
   runtimes: RuntimeSummary[] | null;
   /** M7-02/ADR-022：并发闸门快照（未接线省略）。 */
   concurrency_gate?: ConcurrencyGate;
+  /** M10-10：启动/周期检查状态（M10-09 起固定存在；缺省按未接线处理）。 */
+  storage_check?: StorageCheck;
+  /** M10-10：备份/恢复维护态（进行中才有）。 */
+  maintenance?: MaintenanceSnapshot;
   ts: number;
   degrade_trigger?: string;
   degraded_since_ms?: number;

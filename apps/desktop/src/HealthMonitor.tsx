@@ -64,6 +64,102 @@ export function HealthMonitor({ onOpenDiagnostics }: HealthMonitorProps = {}) {
     );
   }
 
+  // M10-10 / ADR-039 D-039-5：维护态（备份/恢复）不是降级；S-06 展示维护原因，
+  // 不显示 S-08 只读横幅。其他功能由 App/工作台按维护态禁用。
+  const maintenance = report?.maintenance;
+  if (maintenance) {
+    return (
+      <section
+        className="health-maintenance"
+        data-testid="storage-maintenance"
+        data-kind={maintenance.kind}
+        role="status"
+      >
+        <p className="health-title">{t("health.storage_maintenance_active")}</p>
+        <p className="health-detail">
+          {t("health.storage_maintenance_detail", { p0: maintenance.kind })}
+        </p>
+      </section>
+    );
+  }
+
+  const storageCheck = report?.storage_check;
+  // 检查中优先于降级：校验期间写门 checking 不是 persist_degraded（S-00 进度）。
+  if (storageCheck?.state === "checking") {
+    const mainState = storageCheck.main_checked
+      ? t("health.storage_check_main_done")
+      : t("health.storage_check_main_checking");
+    return (
+      <section
+        className="health-checking"
+        data-testid="storage-check-progress"
+        data-state={storageCheck.state}
+        data-mode={storageCheck.mode}
+        data-main-checked={storageCheck.main_checked ? "1" : "0"}
+        data-checked-shards={storageCheck.checked_shards}
+        data-total-shards={storageCheck.total_shards}
+        role="status"
+        aria-live="polite"
+      >
+        <p className="health-title">{t("health.storage_check_in_progress")}</p>
+        <p className="health-detail">
+          {t("health.storage_check_progress", {
+            p0: storageCheck.checked_shards,
+            p1: storageCheck.total_shards,
+            p2: mainState,
+          })}
+        </p>
+        <p className="health-detail">{t("health.storage_check_writes_paused")}</p>
+      </section>
+    );
+  }
+
+  // 检查失败才进入 S-08；主库失败使用独立文案（UI-UX v0.20）。
+  if (storageCheck?.state === "failed") {
+    const title = storageCheck.main_checked
+      ? t("health.storage_check_failed")
+      : t("health.storage_check_main_failed");
+    return (
+      <section
+        className="health-degraded"
+        data-testid="storage-degraded"
+        data-source="storage_check"
+        data-main-checked={storageCheck.main_checked ? "1" : "0"}
+        role="alert"
+      >
+        <p className="health-title">{title}</p>
+        <p className="health-detail">
+          {storageCheck.error ?? report?.detail ?? t("health.storage_check_failed")}
+        </p>
+        <p className="health-recovery-hint" data-testid="storage-degraded-hint">
+          {t("health.recovery_fix_the_disk_directory")}
+        </p>
+        <button
+          type="button"
+          data-testid="storage-degraded-restart"
+          onClick={onRestart}
+          disabled={restartPending}
+        >
+          {t("health.restart_app")}
+        </button>
+        {onOpenDiagnostics ? (
+          <button
+            type="button"
+            data-testid="storage-degraded-diagnostics"
+            onClick={onOpenDiagnostics}
+          >
+            {t("app.action.export_diagnostics")}
+          </button>
+        ) : null}
+        {restartError ? (
+          <p className="health-error" data-testid="storage-degraded-restart-error">
+            {restartError}
+          </p>
+        ) : null}
+      </section>
+    );
+  }
+
   if (status === "degraded") {
     const trigger = report?.degrade_trigger ?? "unknown";
     return (

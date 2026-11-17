@@ -35,7 +35,10 @@ function parseArgs(argv) {
       process.env.AETHER_M10_10_DATA_DIR ??
       path.join(os.tmpdir(), "opencode", "m10-09", "generation"),
     out: path.join(repoRoot, "dist-out", "m10-10", "results"),
+    profile: process.env.AETHER_PROFILE ?? "debug",
     runs: 3,
+    warmup: 1,
+    invalidateSidecar: false,
     timeoutMs: 180_000,
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -52,15 +55,29 @@ function parseArgs(argv) {
       case "--out":
         options.out = path.resolve(repoRoot, next());
         break;
+      case "--profile":
+        options.profile = next();
+        break;
+      case "--release":
+        options.profile = "release";
+        break;
       case "--runs":
         options.runs = Number(next());
+        break;
+      case "--warmup":
+        options.warmup = Number(next());
+        break;
+      case "--invalidate-sidecar":
+        options.invalidateSidecar = true;
         break;
       case "--timeout-ms":
         options.timeoutMs = Number(next());
         break;
       case "--help":
       case "-h":
-        console.log("用法：node scripts/test/m10-10/startup-e2e.mjs [--dataset DIR] [--runs N] [--timeout-ms N]");
+        console.log(
+          "用法：node scripts/test/m10-10/startup-e2e.mjs [--dataset DIR] [--runs N] [--warmup N] [--profile debug|release] [--release] [--invalidate-sidecar] [--timeout-ms N]",
+        );
         process.exit(0);
         break;
       default:
@@ -68,6 +85,9 @@ function parseArgs(argv) {
     }
   }
   if (!Number.isInteger(options.runs) || options.runs < 1) throw new Error("--runs 必须 ≥1");
+  if (!Number.isInteger(options.warmup) || options.warmup < 0) {
+    throw new Error("--warmup 必须 ≥0");
+  }
   return options;
 }
 
@@ -146,12 +166,14 @@ async function runOnce(options, runIndex) {
   const daemonPath = path.join(
     repoRoot,
     "target",
-    "debug",
+    options.profile,
     process.platform === "win32" ? "aetherd.exe" : "aetherd",
   );
   if (!existsSync(electronPath)) throw new Error(`Electron 不存在：${electronPath}`);
   if (!existsSync(daemonPath)) {
-    throw new Error(`aetherd 不存在：${daemonPath}（先 cargo build -p aether-daemon）`);
+    throw new Error(
+      `aetherd 不存在：${daemonPath}（先 cargo build -p aether-daemon --profile ${options.profile}）`,
+    );
   }
   if (!existsSync(path.join(desktopRoot, "dist", "index.html"))) {
     throw new Error("renderer 构建产物不存在（先 pnpm build:desktop）");
@@ -171,7 +193,9 @@ async function runOnce(options, runIndex) {
     AETHER_SKIP_KEYCHAIN_PREFLIGHT: "1",
     AETHERD_BIN: daemonPath,
   };
-  console.log(`[m10-10-startup] run ${runIndex}: 真实 daemon + 5GB 数据集（${options.dataset}）`);
+  console.log(
+    `[m10-10-startup] ${runIndex === 0 ? "warmup" : `run ${runIndex}`}: 真实 daemon + 5GB 数据集（${options.dataset}）`,
+  );
   const app = await _electron.launch({
     executablePath: electronPath,
     args: [...(noSandbox ? ["--no-sandbox"] : []), repoRoot],
@@ -194,18 +218,32 @@ async function runOnce(options, runIndex) {
           const hook = globalThis.__aetherShell;
           return hook && typeof hook.snapshot === "function" ? hook.snapshot() : null;
         });
-        return snapshot?.uiReadyAt ? snapshot : null;
+        // 等首屏 + 写门开放/检查完成，保证 writesEnabledAt/storageCheckCompletedAt
+        // 不是“尚未观测到”的 null（干净启动应 ≤1.5s；异常启动 = 检查完成）。
+        return snapshot?.uiReadyAt && snapshot?.writesEnabledAt ? snapshot : null;
       },
       options.timeoutMs,
-      "uiReadyAt（首个 health 成功）",
+      "uiReadyAt + writesEnabledAt（首个 health/检查完成）",
     );
     const windowMs = timing.windowShownAt === null ? null : timing.windowShownAt - timing.startedAt;
     const uiMs = timing.uiReadyAt === null ? null : timing.uiReadyAt - timing.startedAt;
+    const mainInteractiveMs =
+      timing.mainInteractiveAt === null ? null : timing.mainInteractiveAt - timing.startedAt;
+    const writesEnabledMs =
+      timing.writesEnabledAt === null ? null : timing.writesEnabledAt - timing.startedAt;
+    const storageCheckCompletedMs =
+      timing.storageCheckCompletedAt === null
+        ? null
+        : timing.storageCheckCompletedAt - timing.startedAt;
     const result = {
       run: runIndex,
       at: new Date().toISOString(),
+      profile: options.profile,
       windowShownMs: toNumberOrNull(windowMs),
       uiReadyMs: toNumberOrNull(uiMs),
+      mainInteractiveMs: toNumberOrNull(mainInteractiveMs),
+      writesEnabledMs: toNumberOrNull(writesEnabledMs),
+      storageCheckCompletedMs: toNumberOrNull(storageCheckCompletedMs),
       initializeMs: timing.initializeMs,
       withinTarget: timing.withinTarget,
       daemonSpawnCount: timing.daemonSpawnCount,
@@ -217,8 +255,10 @@ async function runOnce(options, runIndex) {
       daemonLog: safeRel(timing.daemonLogPath),
     };
     console.log(
-      `TIMING run=${runIndex} windowShownMs=${result.windowShownMs} uiReadyMs=${result.uiReadyMs} ` +
-        `initializeMs=${result.initializeMs} daemonEverReady=${result.daemonEverReady}`,
+      `TIMING ${runIndex === 0 ? "warmup" : `run=${runIndex}`} windowShownMs=${result.windowShownMs} uiReadyMs=${result.uiReadyMs} ` +
+        `mainInteractiveMs=${result.mainInteractiveMs} writesEnabledMs=${result.writesEnabledMs} ` +
+        `storageCheckCompletedMs=${result.storageCheckCompletedMs} initializeMs=${result.initializeMs} ` +
+        `daemonEverReady=${result.daemonEverReady}`,
     );
     return result;
   } finally {
@@ -240,20 +280,38 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   ensureDir(options.out);
   const { manifest, rows, generation } = dataSetSummary(options.dataset);
+  if (options.invalidateSidecar) {
+    const sidecar = path.join(
+      options.dataset,
+      "generations",
+      generation,
+      "clean_shutdown.json",
+    );
+    rmSync(sidecar, { force: true });
+    console.log(`[m10-10-startup] 已失效 sidecar：${sidecar}（异常启动路径）`);
+  }
   console.log(
     `[m10-10-startup] 数据集：${rows.toLocaleString()} 行 / sha256=${String(manifest.sha256).slice(0, 16)}… / ` +
       `machine=${manifest.machine?.diskBusType ?? "unknown"}`,
   );
   const runs = [];
+  let warmup = null;
+  if (options.warmup > 0) {
+    warmup = await runOnce(options, 0);
+  }
   for (let index = 1; index <= options.runs; index += 1) {
     runs.push(await runOnce(options, index));
   }
   const windowSamples = runs.map((entry) => entry.windowShownMs);
   const uiSamples = runs.map((entry) => entry.uiReadyMs);
+  const mainInteractiveSamples = runs.map((entry) => entry.mainInteractiveMs);
+  const writesEnabledSamples = runs.map((entry) => entry.writesEnabledMs);
+  const storageCheckSamples = runs.map((entry) => entry.storageCheckCompletedMs);
   const budgetMs = 1500;
   const result = {
     task: "M10-10",
     adr: "ADR-039 v1.0 D-039-3",
+    profile: options.profile,
     dataset: {
       dir: safeRel(options.dataset),
       generation,
@@ -263,8 +321,12 @@ async function main() {
     },
     machine: manifest.machine,
     runs,
+    warmup,
     windowShownMs: summarize(windowSamples),
     uiReadyMs: summarize(uiSamples),
+    mainInteractiveMs: summarize(mainInteractiveSamples),
+    writesEnabledMs: summarize(writesEnabledSamples),
+    storageCheckCompletedMs: summarize(storageCheckSamples),
     budgetMs,
     exceedsBudget: runs.some(
       (entry) =>

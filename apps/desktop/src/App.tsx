@@ -8,6 +8,7 @@ import { BackupPage } from "./BackupPage";
 import { DiagnosticsPage } from "./DiagnosticsPage";
 import { EventBridgeIndicator } from "./EventBridgeIndicator";
 import { HealthMonitor } from "./HealthMonitor";
+import { useStorageHealth } from "./healthBus";
 import { SessionWorkbench } from "./SessionWorkbench";
 import { SettingsPage } from "./SettingsPage";
 import { fetchStartup, type StartupSnapshot } from "./startup";
@@ -34,6 +35,8 @@ type AppView =
 export function App() {
   const [startup, setStartup] = useState<StartupSnapshot | null>(null);
   const [view, setView] = useState<AppView>("workbench");
+  /** M10-10/ADR-039：备份/恢复维护态由健康轮询总线共享（S-06 展示）。 */
+  const storageHealth = useStorageHealth();
   /** M10-06/ADR-036：订阅外观状态；语言/主题切换触发整棵 UI 重渲染（不重载数据）。 */
   const { locale: activeLocale, theme: activeTheme } = useAppearance();
   /**
@@ -92,7 +95,10 @@ export function App() {
           }
         />
         {view === "backup" ? (
-          <BackupPage onBack={() => setView("workbench")} />
+          <BackupPage
+            maintenance={storageHealth.report?.maintenance ?? null}
+            onBack={() => setView("workbench")}
+          />
         ) : null}
         {view === "diagnostics" ? (
           <DiagnosticsPage onBack={() => setView("workbench")} />

@@ -141,6 +141,12 @@ interface ShellRuntime {
   windowShownAt: number | null;
   startupPageVisibleAt: number | null;
   uiReadyAt: number | null;
+  /** M10-10：主界面可交互（首个 health/壳层 ready；不等待 quick_check）。 */
+  mainInteractiveAt: number | null;
+  /** M10-10：写门 open（干净启动 = 首屏；异常启动 = 检查完成）。 */
+  writesEnabledAt: number | null;
+  /** M10-10：主库 + 分片检查完成（health.storage_check 终态）。 */
+  storageCheckCompletedAt: number | null;
   sessionCreateMs: number | null;
   daemonSpawnedAt: number | null;
   daemonSpawnCount: number;
@@ -177,9 +183,9 @@ const hardenedContents = new WeakSet<WebContents>();
 /**
  * 启动页揭示宽限：窗口 ready-to-show 后先不显示，等主 renderer 加载完成直接显示主 UI；
  * 若启动超过该预算（自进程启动计时），才显示 S-00 启动页，避免正常启动闪一下。
- * 取值与 M9 窗口可见预算一致（≤1.5s）。
+ * ADR-039 v1.0 §6.4 冻结值：`STARTUP_REVEAL_GRACE_MS=1300`（窗口可见预算 ≤1.5s）。
  */
-const STARTUP_REVEAL_GRACE_MS = 1_500;
+const STARTUP_REVEAL_GRACE_MS = 1_300;
 let startupRevealTimer: ReturnType<typeof setTimeout> | null = null;
 let startupRevealWindow: BrowserWindow | null = null;
 
@@ -267,6 +273,9 @@ const runtime: ShellRuntime = {
   windowShownAt: null,
   startupPageVisibleAt: null,
   uiReadyAt: null,
+  mainInteractiveAt: null,
+  writesEnabledAt: null,
+  storageCheckCompletedAt: null,
   sessionCreateMs: null,
   daemonSpawnedAt: null,
   daemonSpawnCount: 0,
@@ -719,6 +728,7 @@ async function startDaemonForWindow(
     // 后主动补一次 ready 标记（health 后端此时已可响应，检查仍在后台进行）。
     if (runtime.uiReadyAt === null) {
       runtime.uiReadyAt = Date.now();
+      runtime.mainInteractiveAt = runtime.uiReadyAt;
       runtime.logger.log("info", "ui.ready", {
         uiReadyMs: runtime.uiReadyAt - runtime.startedAt,
         source: "shell",
@@ -1481,8 +1491,33 @@ async function dispatchRpc(method: string, params: unknown): Promise<unknown> {
     }
     const requestStartedAt = Date.now();
     const result = await client.request(method, params);
+    if (method === "health") {
+      // M10-10：不阻塞首屏，但记录写门开放与检查完成时间（干净启动 = 首屏；
+      // 异常启动 = 检查完成）。字段缺失（旧后端/降级）不臆造时间。
+      const report = result as {
+        storage_check?: { state?: string; write_gate?: string };
+      } | null;
+      const check = report?.storage_check;
+      if (check?.write_gate === "open" && runtime.writesEnabledAt === null) {
+        runtime.writesEnabledAt = Date.now();
+        runtime.logger.log("info", "startup.writes_enabled", {
+          writesEnabledMs: runtime.writesEnabledAt - runtime.startedAt,
+        });
+      }
+      if (
+        (check?.state === "ok" || check?.state === "failed") &&
+        runtime.storageCheckCompletedAt === null
+      ) {
+        runtime.storageCheckCompletedAt = Date.now();
+        runtime.logger.log("info", "startup.storage_check_completed", {
+          storageCheckCompletedMs: runtime.storageCheckCompletedAt - runtime.startedAt,
+          state: check?.state,
+        });
+      }
+    }
     if (method === "health" && runtime.uiReadyAt === null) {
       runtime.uiReadyAt = Date.now();
+      runtime.mainInteractiveAt = runtime.uiReadyAt;
       runtime.logger.log("info", "ui.ready", {
         uiReadyMs: runtime.uiReadyAt - runtime.startedAt,
       });
@@ -1754,6 +1789,9 @@ function installE2EHook(): void {
       windowShownAt: runtime.windowShownAt,
       startupPageVisibleAt: runtime.startupPageVisibleAt,
       uiReadyAt: runtime.uiReadyAt,
+      mainInteractiveAt: runtime.mainInteractiveAt,
+      writesEnabledAt: runtime.writesEnabledAt,
+      storageCheckCompletedAt: runtime.storageCheckCompletedAt,
       sessionCreateMs: runtime.sessionCreateMs,
       daemonSpawnedAt: runtime.daemonSpawnedAt,
       daemonPid: runtime.client?.pid ?? null,

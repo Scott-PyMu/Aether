@@ -1209,14 +1209,22 @@ impl StoreRuntime {
         ));
         let sidecar = crate::layout::read_clean_shutdown(&layout)
             .filter(|sidecar| sidecar.generation == layout.generation());
+        // ADR-039 D-039-2 / P2-3：`clean_start_count` 仅在「干净启动且 sidecar 全匹配」
+        // 时 +1；异常启动/sidecar 不匹配/版本升级/恢复/导入后重置为 0。
+        let strict_start = crate::layout::plan_startup_checks(&layout, env!("CARGO_PKG_VERSION"))
+            .strict_ok;
         let last_full_check_at = sidecar
             .as_ref()
             .and_then(|sidecar| sidecar.last_full_check_at)
             .unwrap_or(0);
-        let clean_start_count = sidecar
-            .as_ref()
-            .map(|sidecar| sidecar.clean_start_count.saturating_add(1))
-            .unwrap_or(0);
+        let clean_start_count = if strict_start {
+            sidecar
+                .as_ref()
+                .map(|sidecar| sidecar.clean_start_count.saturating_add(1))
+                .unwrap_or(0)
+        } else {
+            0
+        };
         Ok(Self {
             path: layout.main_db().to_path_buf(),
             layout: Some(layout),

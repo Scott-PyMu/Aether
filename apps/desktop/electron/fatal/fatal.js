@@ -51,6 +51,9 @@ async function loadState() {
     setText(reason, REASON_LABELS[state.reason] ?? state.reason);
     const detail = typeof state.message === "string" ? state.message : "";
     if (state.reason === "db_open_failed" && detail.includes("incomplete_generation")) {
+      if (root) {
+        root.dataset.status = "incomplete_generation";
+      }
       setText(
         message,
         `${detail}\n提示：删除半成品 generation 或重建数据目录；不会自动切换/删除。`,

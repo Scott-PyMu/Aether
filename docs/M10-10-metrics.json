@@ -3,174 +3,258 @@
   "adr": "ADR-039 v1.0 D-039-2/D-039-3/D-039-5",
   "recorded_at": "2026-11-16",
   "platform": {
-    "os": "windows",
-    "arch": "x86_64",
-    "daemon_profile": "debug",
-    "electron": "45.0.0",
+    "os": "win32",
+    "arch": "x64",
+    "daemon_profile": "release",
+    "electron": "fixed E2E Electron",
     "dataset": "M10-08 standard 20,000,000 rows / 5.22 GiB / 100 sessions",
     "generation": "gen-01J8ZQ00000000000000000001",
-    "generation_dataset_dir": "%TEMP%/opencode/m10-09/generation"
+    "machine": {
+      "os": "win32 10.0.26200",
+      "platform": "win32",
+      "arch": "x64",
+      "cpu": "13th Gen Intel(R) Core(TM) i5-13400",
+      "cores": 16,
+      "ramBytes": 16775471104,
+      "node": "v24.14.1",
+      "volume": "E:\\",
+      "fileSystem": "NTFS",
+      "diskModel": "WDC WD20EZBX-08AYR",
+      "diskBusType": "SATA",
+      "freeBytes": 680627019776
+    },
+    "node": "v24.14.1"
+  },
+  "device": {
+    "class": "ssd",
+    "concurrency": 4,
+    "source": "auto",
+    "note": "sysinfo DiskKind；Windows 无安全 FFI 读取 NVMe BusType，NVMe 可用 AETHER_STORAGE_DEVICE=nvme 覆盖"
   },
   "core": {
-    "initializeMs": 210.3158,
-    "storageCheckMs": 15676.3964,
-    "secondInitializeMs": 515.1379,
-    "secondStorageCheckMs": 0.305,
+    "initializeMs": 199.0982,
+    "storageCheckMs": 16207.835299999999,
+    "secondInitializeMs": 131.52179999999998,
+    "secondStorageCheckMs": 0.1394,
     "initialStorageCheck": {
-      "state": "checking",
-      "mode": "startup",
-      "write_gate": "checking",
-      "main_checked": false,
       "checked_shards": 0,
-      "total_shards": 8
+      "main_checked": false,
+      "mode": "startup",
+      "started_at": 1794839924519,
+      "state": "checking",
+      "total_shards": 8,
+      "write_gate": "checking"
     },
     "finalStorageCheck": {
-      "state": "ok",
-      "mode": "startup",
-      "write_gate": "open",
-      "main_checked": true,
       "checked_shards": 8,
-      "total_shards": 8
+      "completed_at": 1794839940728,
+      "main_checked": true,
+      "mode": "startup",
+      "started_at": 1794839924519,
+      "state": "ok",
+      "total_shards": 8,
+      "write_gate": "open"
     },
-    "strictSidecar": {
-      "backgroundCheckCompleted": true,
-      "secondCheckMs": 0.305
+    "storageCheckDiagnostics": {
+      "concurrency": 4,
+      "device": "ssd",
+      "failure_count": 0,
+      "main_ms": 52.498999999999995,
+      "main_ok": true,
+      "mode": "startup",
+      "shards": [
+        {
+          "ms": 5571.2462,
+          "ok": true,
+          "shard_id": 1
+        },
+        {
+          "ms": 7075.090099999999,
+          "ok": true,
+          "shard_id": 3
+        },
+        {
+          "ms": 7187.143800000001,
+          "ok": true,
+          "shard_id": 0
+        },
+        {
+          "ms": 7469.2697,
+          "ok": true,
+          "shard_id": 2
+        },
+        {
+          "ms": 8171.8146,
+          "ok": true,
+          "shard_id": 4
+        },
+        {
+          "ms": 7036.6861,
+          "ok": true,
+          "shard_id": 6
+        },
+        {
+          "ms": 7545.156300000001,
+          "ok": true,
+          "shard_id": 7
+        },
+        {
+          "ms": 8126.422,
+          "ok": true,
+          "shard_id": 5
+        }
+      ]
     },
     "storageCheckSamplesMs": [
-      15676.3964,
-      15934.3284
+      16207.835299999999
     ],
     "storageCheckTargetMet": true,
-    "storageCheckHardMet": true,
-    "storageCheckNote": "mmap_size=512MiB + 选择性/周期检查；两次 15.68s/15.93s"
+    "storageCheckHardMet": true
   },
   "electron": {
+    "profile": "release",
     "runs": 3,
     "windowShownMs": {
-      "min": 1001,
-      "p50": 1024,
-      "p95": 1482.1,
-      "max": 1533
+      "count": 3,
+      "min": 501,
+      "p50": 503,
+      "p95": 510.2,
+      "p99": 510.84,
+      "max": 511,
+      "mean": 505
     },
     "uiReadyMs": {
-      "min": 539,
-      "p50": 984,
-      "p95": 1925.4,
-      "max": 2030
+      "count": 3,
+      "min": 448,
+      "p50": 464,
+      "p95": 475.7,
+      "p99": 476.74,
+      "max": 477,
+      "mean": 463
+    },
+    "mainInteractiveMs": {
+      "count": 3,
+      "min": 448,
+      "p50": 464,
+      "p95": 475.7,
+      "p99": 476.74,
+      "max": 477,
+      "mean": 463
+    },
+    "writesEnabledMs": {
+      "count": 3,
+      "min": 519,
+      "p50": 525,
+      "p95": 536.7,
+      "p99": 537.74,
+      "max": 538,
+      "mean": 527.333
+    },
+    "storageCheckCompletedMs": {
+      "count": 3,
+      "min": 519,
+      "p50": 526,
+      "p95": 537.7,
+      "p99": 538.74,
+      "max": 539,
+      "mean": 528
     },
     "initializeMs": [
-      516,
-      164,
-      140
+      115,
+      115,
+      133
     ],
     "budgetMs": 1500,
-    "withinBudget": true,
     "withinBudgetP50": true,
-    "withinBudgetP95": false
+    "withinBudgetAll": true
+  },
+  "concurrencyMatrix": {
+    "mainMs": 48.739900000000006,
+    "levels": [
+      {
+        "concurrency": 2,
+        "wallMs": 26009.5446,
+        "perShardMs": [
+          5379.2923,
+          4635.195,
+          6401.28,
+          5917.0796,
+          7848.407200000001,
+          7931.2198,
+          6474.235000000001,
+          6761.5837
+        ],
+        "failureCount": 0
+      },
+      {
+        "concurrency": 4,
+        "wallMs": 16448.3286,
+        "perShardMs": [
+          8233.4047,
+          7150.813099999999,
+          8587.3599,
+          4502.12,
+          8448.555900000001,
+          8546.9655,
+          7545.9339,
+          7860.428900000001
+        ],
+        "failureCount": 0
+      },
+      {
+        "concurrency": 8,
+        "wallMs": 8464.6509,
+        "perShardMs": [
+          7885.1622,
+          7700.5533000000005,
+          4977.724399999999,
+          8464.182499999999,
+          1933.9718,
+          2036.9069999999997,
+          1775.9067,
+          1797.5862
+        ],
+        "failureCount": 0
+      }
+    ],
+    "note": "2/4/8 落盘；自适应规则 NVMe 8 / SATA SSD 4 / HDD 2（未知默认 4）"
   },
   "backupRestore": {
     "backup_ms": 182179.8062,
-    "validate_ms": 132594.6582,
-    "stage_restore_ms": 74826.4574,
     "backup_set_bytes": 5573272402,
-    "manifest_files": 10,
-    "shard_count": 8,
     "budgets_ms": {
       "backup": 600000,
       "restore": 900000
     },
-    "withinBudget": true
+    "generation": "gen-01J8ZQ00000000000000000001",
+    "manifest_files": 10,
+    "shard_count": 8,
+    "stage_restore_ms": 74826.4574,
+    "task": "M10-10",
+    "validate_ms": 132594.6582
   },
   "targets": {
     "initializeMs_1500": true,
     "windowShownMs_1500": true,
     "uiReadyMs_1500": true,
+    "mainInteractiveMs_1500": true,
+    "writesEnabledMs_1500": true,
     "storageCheckTargetMs_25000": true,
     "storageCheckHardMs_30000": true,
     "backup_600s": true,
     "restore_900s": true
   },
   "unverified": [
-    "macOS/Linux M10-10 Electron startup not run (M10-09 sharding CI matrix passed)",
-    "release daemon + real Electron 3-run startup (this run uses debug daemon)"
+    "macOS/Linux M10-10 Electron startup not run on this machine (M10-09 sharding CI matrix passed)",
+    "Windows NVMe BusType auto-detection not available without unsafe FFI; use AETHER_STORAGE_DEVICE=nvme for 8-way runs",
+    "Windows ReplaceFileW direct API call not implemented (workspace unsafe_code=forbid); std::fs::rename MoveFileExW path failure was injected"
   ],
   "faultInjections": {
     "backupUnderWritePressure": "pass",
     "restoreProcessKill": "pass",
     "windowsCurrentReplacementFailure": "pass",
-    "walSidecarInvalidation": "pass"
-  },
-  "quickCheckDiagnosis": {
-    "sequentialPassMs": [
-      [
-        13630.99,
-        12127.54,
-        13420.02,
-        13059.23,
-        12738.26,
-        12596.67,
-        12252.6,
-        12487.76
-      ],
-      [
-        11657.55,
-        9926.39,
-        12354.93,
-        11714.05,
-        11800.06,
-        12656.32,
-        11769.95,
-        11417.83
-      ]
-    ],
-    "parallelPerShardMs": [
-      30861.39,
-      28314.68,
-      31675.68,
-      30865.77,
-      30268.9,
-      31492.81,
-      24548.45,
-      10744.69
-    ],
-    "parallelWallMs": 31690.57,
-    "conclusion": "8 并发共享磁盘/CPU；mmap_size=512MiB 将并行墙钟从 31.69s 降至 10.64s，产品 storageCheck 降至 15.78/15.93s；冷热缓存/后台 I/O 仍有约 1s 波动",
-    "mmapSizeBytes": 536870912,
-    "parallelWallMsAfterMmap": 10637.97,
-    "sequentialPassMsAfterMmap": [
-      [
-        6148.74,
-        6589.94,
-        7749.95,
-        6468.91,
-        6464.11,
-        8255.83,
-        4938.11,
-        5775.19
-      ],
-      [
-        7394.8,
-        5608.68,
-        7842.81,
-        6640.41,
-        6742.58,
-        6940.8,
-        5905.27,
-        5845.48
-      ]
-    ]
-  },
-  "selectiveCheck": {
-    "plan": "sidecar fingerprints: schema/header/file/wal/mtime; dirty shards only",
-    "test": "m10_09_sharding selective_check_plan_only_marks_dirty_shards",
-    "dirtyShardsDetected": 1,
-    "fullFallbackOnMissingSidecar": true,
-    "adr": "ADR-040 proposed"
-  },
-  "periodicFullCheck": {
-    "test": "m10_10_periodic periodic_full_integrity_check_after_20_starts",
-    "trigger": "clean_start_count >= 20 or 7 days",
-    "reset": "last_full_check_at set; clean_start_count=0",
-    "integrity": "PRAGMA integrity_check (main + all shards, background)"
+    "walSidecarInvalidation": "pass",
+    "corruptedShardPage": "pass",
+    "cleanStartCountReset": "pass"
   }
 }

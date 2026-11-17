@@ -9,7 +9,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
-use aether_app::core_health::{boot_core_full, StaticRuntimeSummaries};
+use aether_app::core_health::{boot_core_full, startup_check_profile, StaticRuntimeSummaries};
 use aether_store::{read_layout, SHARD_COUNT};
 
 #[test]
@@ -18,7 +18,7 @@ fn startup_defers_quick_check_and_completes_within_budget() {
     let data_dir = std::env::var("AETHER_M10_10_DATA_DIR")
         .unwrap_or_else(|_| "dist-out/m10-09/generation".to_owned());
     let out = std::env::var("AETHER_M10_10_OUT")
-        .unwrap_or_else(|_| "dist-out/m10-10/startup-core.json".to_owned());
+        .unwrap_or_else(|_| "../../dist-out/m10-10/startup-core.json".to_owned());
     let layout = read_layout(Path::new(&data_dir)).expect("generation layout");
     aether_store::invalidate_clean_shutdown(&layout).expect("invalidate sidecar");
 
@@ -49,6 +49,18 @@ fn startup_defers_quick_check_and_completes_within_budget() {
     assert!(check.main_checked);
     assert_eq!(check.checked_shards, SHARD_COUNT);
     assert_eq!(check.total_shards, SHARD_COUNT);
+    let diagnostics = boot.storage_check.diagnostics();
+    assert_eq!(diagnostics.failure_count, 0);
+    assert_eq!(diagnostics.shards.len(), SHARD_COUNT);
+    assert!(diagnostics.main_ms.is_some(), "必须记录主库检查耗时");
+    assert!(diagnostics.main_ok.unwrap_or(false), "主库检查必须通过");
+    let profile = startup_check_profile(Path::new(&data_dir));
+    assert_eq!(diagnostics.device, profile.device.code());
+    assert_eq!(diagnostics.concurrency, profile.concurrency);
+    assert!(
+        (2..=8).contains(&profile.concurrency),
+        "并发必须落在 ADR-039 范围 2..=8：{profile:?}"
+    );
     assert!(
         initial_check.state == "checking" || initial_check.state == "ok",
         "返回 health 时检查状态必须可观测：{}",
@@ -80,7 +92,13 @@ fn startup_defers_quick_check_and_completes_within_budget() {
     let second_check = second_report.storage_check.expect("second storage_check");
     assert_eq!(second_check.state, "ok");
     assert_eq!(second_check.write_gate, "open");
+    // ADR-039 D-039-2 / P2-3：干净启动且 sidecar 全匹配时 clean_start_count +1。
     let second_storage = second.storage.take().expect("second storage");
+    assert_eq!(
+        second_storage.clean_start_count(),
+        1,
+        "严格 sidecar 启动必须使 clean_start_count=1"
+    );
     runtime
         .block_on(second_storage.shutdown())
         .expect("second shutdown");
@@ -118,15 +136,26 @@ fn startup_defers_quick_check_and_completes_within_budget() {
         "secondInitializeMs": second_initialize_ms,
         "secondStorageCheckMs": second_check_ms,
         "secondStorageCheck": second_check,
+        "storageCheckDiagnostics": diagnostics,
+        "startupCheckProfile": profile,
         "budgets": { "initializeMs": 1500, "storageCheckMs": 30000 }
     });
     if let Some(parent) = Path::new(&out).parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     std::fs::write(&out, serde_json::to_vec_pretty(&result).expect("json")).expect("write result");
-    println!("M10-10_STARTUP {}", serde_json::to_string(&result).expect("json"));
-    assert!(initialize_ms <= 1500.0, "initializeMs {initialize_ms} > 1500");
-    assert!(storage_check_ms <= 30_000.0, "storageCheckMs {storage_check_ms} > 30000");
+    println!(
+        "M10-10_STARTUP {}",
+        serde_json::to_string(&result).expect("json")
+    );
+    assert!(
+        initialize_ms <= 1500.0,
+        "initializeMs {initialize_ms} > 1500"
+    );
+    assert!(
+        storage_check_ms <= 30_000.0,
+        "storageCheckMs {storage_check_ms} > 30000"
+    );
     assert!(
         second_initialize_ms <= 1500.0,
         "secondInitializeMs {second_initialize_ms} > 1500"

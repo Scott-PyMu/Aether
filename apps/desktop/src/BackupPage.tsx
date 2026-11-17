@@ -46,6 +46,7 @@ import {
   type SettingsIpc,
 } from "./settings";
 import { describeIpcError, ipcErrorCode } from "./startup";
+import type { MaintenanceSnapshot } from "./health";
 import { formatDateTime, t } from "./i18n";
 
 export interface BackupPageProps {
@@ -57,6 +58,8 @@ export interface BackupPageProps {
   archive?: ArchiveIpc;
   /** 导入 IPC（M10-04/ADR-034；缺省 = 生产实现）。 */
   importer?: ImportIpc;
+  /** M10-10/ADR-039：`health.maintenance` 维护态（S-06）。 */
+  maintenance?: MaintenanceSnapshot | null;
   /** 返回工作台（`overlay-back`）。 */
   onBack: () => void;
 }
@@ -93,6 +96,7 @@ export function BackupPage({
   settings = productionSettingsIpc,
   archive = productionArchiveIpc,
   importer = productionImportIpc,
+  maintenance = null,
   onBack,
 }: BackupPageProps) {
   const [backups, setBackups] = useState<BackupRecord[]>([]);
@@ -390,6 +394,17 @@ export function BackupPage({
             {t("app.action.back_to_workbench")}
           </button>
         </header>
+
+        {maintenance ? (
+          <p
+            className="backup-maintenance"
+            data-testid="backup-maintenance"
+            data-kind={maintenance.kind}
+            role="status"
+          >
+            {t("health.storage_maintenance_detail", { p0: maintenance.kind })}
+          </p>
+        ) : null}
 
         <p
           className="capacity-status"

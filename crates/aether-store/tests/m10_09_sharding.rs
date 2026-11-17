@@ -519,7 +519,7 @@ fn current_replacement_failure_keeps_old_pointer() {
 }
 
 #[test]
-fn selective_check_plan_only_marks_dirty_shards() {
+fn mismatch_check_plan_covers_main_and_all_shards() {
     let dir = tempfile::tempdir().expect("temp");
     let layout = initialize_layout(dir.path(), "0.1.0", 1).expect("init");
     seed_session(&layout, SESSION_A);
@@ -549,9 +549,14 @@ fn selective_check_plan_only_marks_dirty_shards() {
     connection.close().expect("close");
     let plan = plan_startup_checks(&layout, "0.1.0");
     assert!(!plan.strict_ok);
-    assert!(plan.main, "出现脏分片时附带主库检查");
-    assert_eq!(plan.shards, vec![shard_id]);
-    assert!(!plan.full_fallback);
+    // ADR-039 v1.0 D-039-2：任一指纹不匹配 → 主库 + 全部分片（不做选择性检查）。
+    assert!(plan.main, "出现脏分片时必须检查主库");
+    assert_eq!(
+        plan.shards,
+        (0..8).collect::<Vec<u8>>(),
+        "出现脏分片时必须检查全部分片"
+    );
+    assert!(plan.full_fallback);
 }
 
 #[test]
@@ -559,6 +564,7 @@ fn periodic_full_check_due_after_20_starts_and_resets() {
     let dir = tempfile::tempdir().expect("temp");
     let layout = initialize_layout(dir.path(), "0.1.0", 1).expect("init");
     let (storage, runtime) = runtime_for(layout.clone());
+    storage.mark_background_check_completed();
     runtime.block_on(async { storage.shutdown().await.expect("shutdown") });
     let mut sidecar = aether_store::read_clean_shutdown(&layout).expect("sidecar");
     sidecar.clean_start_count = 19;

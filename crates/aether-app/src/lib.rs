@@ -55,6 +55,7 @@ pub mod session_backend;
 pub mod shell_host;
 pub mod shutdown;
 pub mod startup;
+pub mod storage_check;
 pub mod subagent;
 pub mod workflow;
 

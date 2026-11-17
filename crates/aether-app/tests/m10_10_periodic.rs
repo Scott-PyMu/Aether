@@ -7,7 +7,9 @@ use std::time::{Duration, Instant};
 
 use aether_app::core_health::{boot_core_full, StaticRuntimeSummaries};
 use aether_store::layout::initialize as initialize_layout;
-use aether_store::{read_clean_shutdown, read_layout, write_clean_shutdown, StoreRuntime, WriteQueueConfig};
+use aether_store::{
+    read_clean_shutdown, read_layout, write_clean_shutdown, StoreRuntime, WriteQueueConfig,
+};
 
 #[test]
 fn periodic_full_integrity_check_after_20_starts() {
