@@ -394,7 +394,29 @@
     "pnpm_typecheck": "pass",
     "pnpm_build": "pass",
     "verify_m10_03": "pass 94/94",
-    "electron_matrix": "pass (3 runs/cell; release aetherd + real Electron; dirty1 cold-first uiReady 1895ms one-off)"
+    "electron_matrix": "pass (3 runs/cell; release aetherd + real Electron; dirty1 cold-first uiReady 1895ms one-off)",
+    "ci": {
+      "runs": {
+        "ci": "44332199127",
+        "package": "44320761193"
+      },
+      "pass": [
+        "M9-12 Rust build/test/clippy/deny",
+        "M9-14 G8",
+        "M9-12 Playwright Electron E2E (Windows/macOS)",
+        "M10-09 (macOS/Windows/Ubuntu)",
+        "M10-03 (Windows/Ubuntu)",
+        "M10-11 (Windows/macOS/Ubuntu)"
+      ],
+      "failNonM10_14": [
+        "M9-13 Windows (local verify:m9-13 134 PASS)",
+        "M10-07 Windows (local verify:m10-07 116/116 PASS)",
+        "M9-12 MSI smoke",
+        "M9-12 DMG smoke (macOS)",
+        "M9-12 Linux build+xvfb"
+      ],
+      "notes": "macOS/Linux functional E2E passed; packaging/signing/perf jobs failed on CI infra; macOS DMG skipped for m9-11-package per ADR-030 v0.2"
+    }
   },
   "prerequisiteFix": {
     "file": "crates/aether-store/src/archive.rs",
