@@ -235,6 +235,15 @@ async function runOnce(options, runIndex) {
       timing.storageCheckCompletedAt === null
         ? null
         : timing.storageCheckCompletedAt - timing.startedAt;
+    const startupCheckCompletedMs =
+      timing.startupCheckCompletedAt === null || timing.startupCheckCompletedAt === undefined
+        ? storageCheckCompletedMs
+        : timing.startupCheckCompletedAt - timing.startedAt;
+    const fullCoverageCheckCompletedMs =
+      timing.fullCoverageCheckCompletedAt === null ||
+      timing.fullCoverageCheckCompletedAt === undefined
+        ? null
+        : timing.fullCoverageCheckCompletedAt - timing.startedAt;
     const result = {
       run: runIndex,
       at: new Date().toISOString(),
@@ -243,6 +252,10 @@ async function runOnce(options, runIndex) {
       uiReadyMs: toNumberOrNull(uiMs),
       mainInteractiveMs: toNumberOrNull(mainInteractiveMs),
       writesEnabledMs: toNumberOrNull(writesEnabledMs),
+      startupCheckCompletedMs: toNumberOrNull(startupCheckCompletedMs),
+      fullCoverageCheckCompletedMs: toNumberOrNull(fullCoverageCheckCompletedMs),
+      backgroundFullCheckDurationMs: toNumberOrNull(timing.backgroundFullCheckDurationMs),
+      periodicFullCheckDurationMs: toNumberOrNull(timing.periodicFullCheckDurationMs),
       storageCheckCompletedMs: toNumberOrNull(storageCheckCompletedMs),
       initializeMs: timing.initializeMs,
       withinTarget: timing.withinTarget,
@@ -257,6 +270,8 @@ async function runOnce(options, runIndex) {
     console.log(
       `TIMING ${runIndex === 0 ? "warmup" : `run=${runIndex}`} windowShownMs=${result.windowShownMs} uiReadyMs=${result.uiReadyMs} ` +
         `mainInteractiveMs=${result.mainInteractiveMs} writesEnabledMs=${result.writesEnabledMs} ` +
+        `startupCheckCompletedMs=${result.startupCheckCompletedMs} ` +
+        `fullCoverageCheckCompletedMs=${result.fullCoverageCheckCompletedMs} ` +
         `storageCheckCompletedMs=${result.storageCheckCompletedMs} initializeMs=${result.initializeMs} ` +
         `daemonEverReady=${result.daemonEverReady}`,
     );

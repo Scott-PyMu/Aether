@@ -1,0 +1,81 @@
+{
+  "task": "M10-14-level2",
+  "adr": "ADR-039 v1.0 fixed behavior fixture (amended by ADR-040 v1.0)",
+  "source_short": "11cb438",
+  "source_commit": "11cb4380242b15b3ee9d32f458d8576ecf29521b",
+  "cases": [
+    {
+      "name": "strict_sidecar",
+      "fingerprints": "match",
+      "expected": {
+        "strict_ok": true,
+        "main": false,
+        "shards": [],
+        "full_fallback": false
+      }
+    },
+    {
+      "name": "mismatch_1_shard",
+      "fingerprints": "shard_0",
+      "expected": {
+        "strict_ok": false,
+        "main": true,
+        "shards": [0, 1, 2, 3, 4, 5, 6, 7],
+        "full_fallback": true
+      }
+    },
+    {
+      "name": "mismatch_main_only",
+      "fingerprints": "main",
+      "expected": {
+        "strict_ok": false,
+        "main": true,
+        "shards": [0, 1, 2, 3, 4, 5, 6, 7],
+        "full_fallback": true
+      }
+    },
+    {
+      "name": "sidecar_missing",
+      "fingerprints": "sidecar_missing",
+      "expected": {
+        "strict_ok": false,
+        "main": true,
+        "shards": [0, 1, 2, 3, 4, 5, 6, 7],
+        "full_fallback": true
+      }
+    },
+    {
+      "name": "old_sidecar_missing_format_version",
+      "fingerprints": "old_format",
+      "expected": {
+        "strict_ok": false,
+        "main": true,
+        "shards": [0, 1, 2, 3, 4, 5, 6, 7],
+        "full_fallback": true
+      }
+    },
+    {
+      "name": "background_check_completed_false",
+      "fingerprints": "background_false",
+      "expected": {
+        "strict_ok": false,
+        "main": true,
+        "shards": [0, 1, 2, 3, 4, 5, 6, 7],
+        "full_fallback": true
+      }
+    }
+  ],
+  "health_v1": {
+    "state": "ok",
+    "mode": "startup",
+    "write_gate": "open",
+    "main_checked": true,
+    "checked_shards": 8,
+    "total_shards": 8
+  },
+  "metrics_v1": {
+    "storageCheckCompletedAt": 526,
+    "deprecated": true,
+    "metric_semantics": "adr039_ambiguous"
+  }
+}

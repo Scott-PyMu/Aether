@@ -16,6 +16,9 @@ authors.workspace = true
 # debug 构建不启用该 feature，环境变量被忽略。
 [features]
 test-hooks = []
+# ADR-040 §7.1：Level 1/2 回退演练（转发到 aether-store 编译期常量）。
+startup-check-level1 = ["aether-store/startup-check-level1"]
+startup-check-legacy = ["aether-store/startup-check-legacy"]
 
 [dependencies]
 aether-core.workspace = true

@@ -54,18 +54,26 @@ export interface ConcurrencyGate {
 }
 
 /**
- * `health.storage_check`（M10-10；ADR-039 D-039-5）。
+ * `health.storage_check`（M10-10 / ADR-040 D-040-4）。
  *
  * `state=checking` 不是降级：读/UI 可用，`write_gate=checking` 时事件写入被拒绝；
  * 失败才进入 `persist_degraded`/S-08。`mode=background` 不关闭写门。
+ *
+ * v2（`contract_version=2`）：`checked_shards` 只计本轮实际完成分片；
+ * `state=ok` 只表示本轮计划完成，不必然全量覆盖（看 `full_coverage`）。
+ * 旧 daemon 缺少 `contract_version`/新字段时按 v1/unknown 处理，不得推断全量。
  */
 export interface StorageCheck {
+  contract_version?: number;
   state: "checking" | "ok" | "failed";
   mode: "startup" | "background";
   write_gate: "checking" | "open";
   main_checked: boolean;
   checked_shards: number;
   total_shards: number;
+  planned_shards?: number;
+  skipped_shards?: number;
+  full_coverage?: boolean;
   started_at?: number;
   completed_at?: number;
   error?: string;

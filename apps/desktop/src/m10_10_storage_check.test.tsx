@@ -44,12 +44,16 @@ describe("M10-10 存储校验/维护 UI（S-00/S-06/S-08）", () => {
           runtimes: null,
           ts: 1,
           storage_check: {
+            contract_version: 2,
             state: "checking",
             mode: "startup",
             write_gate: "checking",
             main_checked: false,
             checked_shards: 3,
             total_shards: 8,
+            planned_shards: 6,
+            skipped_shards: 2,
+            full_coverage: false,
           },
         },
       }),
@@ -58,7 +62,9 @@ describe("M10-10 存储校验/维护 UI（S-00/S-06/S-08）", () => {
     const progress = screen.getByTestId("storage-check-progress");
     expect(progress.textContent).toContain("3/8");
     expect(progress.textContent).toContain("主库校验中");
+    expect(progress.textContent).toContain("已跳过 2 个未变化分片");
     expect(progress.getAttribute("data-state")).toBe("checking");
+    expect(progress.getAttribute("data-contract-version")).toBe("2");
     expect(progress.getAttribute("data-main-checked")).toBe("0");
     expect(screen.queryByTestId("storage-degraded")).toBeNull();
     expect(screen.queryByTestId("health-normal")).toBeNull();
@@ -74,12 +80,16 @@ describe("M10-10 存储校验/维护 UI（S-00/S-06/S-08）", () => {
           runtimes: null,
           ts: 1,
           storage_check: {
+            contract_version: 2,
             state: "checking",
             mode: "startup",
             write_gate: "checking",
             main_checked: true,
             checked_shards: 5,
             total_shards: 8,
+            planned_shards: 7,
+            skipped_shards: 1,
+            full_coverage: false,
           },
         },
       }),
@@ -117,6 +127,97 @@ describe("M10-10 存储校验/维护 UI（S-00/S-06/S-08）", () => {
     expect(banner.getAttribute("data-source")).toBe("storage_check");
     expect(banner.textContent).toContain("主库校验失败");
     expect(banner.textContent).toContain("quick_check 失败：主库损坏");
+  });
+
+  it("仅主库变化：0/8 + 已跳过 8，不显示 8/8 完成", () => {
+    pollingMock.mockReturnValue(
+      state({
+        status: "normal",
+        report: {
+          storage_state: "normal",
+          write_queue_depth: 0,
+          runtimes: null,
+          ts: 1,
+          storage_check: {
+            contract_version: 2,
+            state: "checking",
+            mode: "startup",
+            write_gate: "checking",
+            main_checked: false,
+            checked_shards: 0,
+            total_shards: 8,
+            planned_shards: 0,
+            skipped_shards: 8,
+            full_coverage: false,
+          },
+        },
+      }),
+    );
+    render(<HealthMonitor />);
+    const progress = screen.getByTestId("storage-check-progress");
+    expect(progress.textContent).toContain("0/8");
+    expect(progress.textContent).toContain("已跳过 8 个未变化分片");
+    expect(progress.textContent).not.toContain("8/8");
+    expect(progress.getAttribute("data-full-coverage")).toBe("0");
+  });
+
+  it("旧 daemon（无 contract_version/新字段）：沿用 x/8，不显示已跳过/不声称全量", () => {
+    pollingMock.mockReturnValue(
+      state({
+        status: "normal",
+        report: {
+          storage_state: "normal",
+          write_queue_depth: 0,
+          runtimes: null,
+          ts: 1,
+          storage_check: {
+            state: "checking",
+            mode: "startup",
+            write_gate: "checking",
+            main_checked: false,
+            checked_shards: 2,
+            total_shards: 8,
+          },
+        },
+      }),
+    );
+    render(<HealthMonitor />);
+    const progress = screen.getByTestId("storage-check-progress");
+    expect(progress.textContent).toContain("2/8");
+    expect(progress.textContent).not.toContain("已跳过");
+    expect(progress.getAttribute("data-contract-version")).toBe("1");
+    expect(progress.getAttribute("data-full-coverage")).toBe("");
+  });
+
+  it("选择性检查完成（ok/full_coverage=false）不显示 8/8 假完成", () => {
+    pollingMock.mockReturnValue(
+      state({
+        status: "normal",
+        report: {
+          storage_state: "normal",
+          write_queue_depth: 0,
+          runtimes: null,
+          ts: 1,
+          storage_check: {
+            contract_version: 2,
+            state: "ok",
+            mode: "startup",
+            write_gate: "open",
+            main_checked: true,
+            checked_shards: 2,
+            total_shards: 8,
+            planned_shards: 2,
+            skipped_shards: 6,
+            full_coverage: false,
+          },
+        },
+      }),
+    );
+    render(<HealthMonitor />);
+    const normal = screen.getByTestId("health-normal");
+    expect(normal.textContent).not.toContain("8/8");
+    expect(screen.queryByTestId("storage-check-progress")).toBeNull();
+    expect(screen.queryByTestId("storage-degraded")).toBeNull();
   });
 
   it("维护态：显示 S-06 维护提示，不显示降级横幅", () => {

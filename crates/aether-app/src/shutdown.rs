@@ -96,6 +96,17 @@ impl StorageSlot {
             .map(|metadata| metadata.len())
             .unwrap_or(0)
     }
+
+    /// ADR-040 D-040-3 §4：检查未在 grace 内收口 → 本次关闭不写 clean sidecar。
+    pub fn disable_clean_sidecar(&self) {
+        let mut guard = match self.cell.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some(runtime) = guard.as_mut() {
+            runtime.disable_clean_sidecar();
+        }
+    }
 }
 
 /// 单个适配器的终止结果（平台机制序列作为断言/归档证据）。
@@ -191,8 +202,12 @@ pub struct AppShutdown {
     session_manager: Mutex<Option<aether_control::SessionManager>>,
     /// 权限服务（M3-03）：退出时停止 300s 超时巡检后台任务。
     permission_service: Mutex<Option<aether_control::PermissionService>>,
+    /// ADR-040 D-040-3 §5：运行期检查调度器/检查单元（退出取消 + grace）。
+    storage_check: Mutex<Option<(Arc<crate::core_health::StorageCheckCell>, JoinHandle<()>)>>,
     handle: tokio::runtime::Handle,
     budget: Duration,
+    /// ADR-040 D-040-3 §5：检查收口 grace（默认 5s；测试可缩短）。
+    check_grace_ms: std::sync::atomic::AtomicU64,
 }
 
 impl AppShutdown {
@@ -210,8 +225,13 @@ impl AppShutdown {
             monitors: Mutex::new(monitors),
             session_manager: Mutex::new(None),
             permission_service: Mutex::new(None),
+            storage_check: Mutex::new(None),
             handle,
             budget: APP_EXIT_BUDGET,
+            check_grace_ms: std::sync::atomic::AtomicU64::new(
+                u64::try_from(crate::storage_check::SHUTDOWN_CHECK_GRACE.as_millis())
+                    .unwrap_or(5_000),
+            ),
         })
     }
 
@@ -233,6 +253,19 @@ impl AppShutdown {
         *slot = Some(service);
     }
 
+    /// ADR-040 D-040-3 §5：接线运行期检查调度器（退出取消/grace/sidecar false）。
+    pub fn install_storage_check(
+        &self,
+        cell: Arc<crate::core_health::StorageCheckCell>,
+        scheduler: JoinHandle<()>,
+    ) {
+        let mut slot = match self.storage_check.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *slot = Some((cell, scheduler));
+    }
+
     /// 追加监控任务（M5-02：自动备份调度器随退出序列停止，退出期间不再触达写队列）。
     ///
     /// 与 `new` 传入的 monitors 同域（`run` 首段统一 `abort`）；可在构造后任意时刻接入。
@@ -242,6 +275,14 @@ impl AppShutdown {
             Err(poisoned) => poisoned.into_inner(),
         };
         monitors.push((name.into(), handle));
+    }
+
+    /// ADR-040 D-040-3 §5：检查收口 grace（测试注入；生产默认 5s）。
+    pub fn install_check_grace(&self, grace: Duration) {
+        self.check_grace_ms.store(
+            u64::try_from(grace.as_millis()).unwrap_or(u64::MAX),
+            Ordering::Release,
+        );
     }
 
     /// 退出预算（测试可观测）。
@@ -262,6 +303,35 @@ impl AppShutdown {
             };
             for (_, handle) in monitors.drain(..) {
                 handle.abort();
+            }
+        }
+
+        // 0.2 ADR-040 D-040-3 §5：取消运行期/后台检查并等待 grace；
+        //     未收口 → 本次关闭不写 clean sidecar（下次启动全量回退）。
+        let check_completed = {
+            let taken = {
+                let mut slot = match self.storage_check.lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                slot.take()
+            };
+            match taken {
+                Some((cell, scheduler)) => {
+                    scheduler.abort();
+                    let grace = Duration::from_millis(self.check_grace_ms.load(Ordering::Acquire));
+                    let completed = cell.shutdown_cancel(grace).await;
+                    if !completed {
+                        cell.abandon_in_progress();
+                    }
+                    completed
+                }
+                None => true,
+            }
+        };
+        if !check_completed {
+            if let Some(slot) = &self.storage {
+                slot.disable_clean_sidecar();
             }
         }
 

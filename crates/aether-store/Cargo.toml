@@ -8,6 +8,11 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+# ADR-040 §7.1 Level 1/2 回退演练：编译期关闭选择性启动检查（不是设置键/用户开关）。
+startup-check-level1 = []
+startup-check-legacy = []
+
 [dependencies]
 aether-core.workspace = true
 # 设计 D3：rusqlite（bundled SQLite）单文件库；M1-03 起为正式依赖（迁移框架/启动自检）。

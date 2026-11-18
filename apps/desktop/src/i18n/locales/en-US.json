@@ -190,6 +190,8 @@
   "health.fetching_core_health": "Fetching core health…",
   "health.storage_check_in_progress": "Validating data (startup self-check)",
   "health.storage_check_progress": "Checked {p0}/{p1} shards ({p2}).",
+  "health.storage_check_progress_v2": "Checked {p0}/{p1} shards ({p2}; skipped {p3} unchanged shards).",
+  "health.storage_check_progress_v2_no_skip": "Checked {p0}/{p1} shards ({p2}).",
   "health.storage_check_main_checking": "main database check in progress",
   "health.storage_check_main_done": "main database check completed",
   "health.storage_check_writes_paused": "Writes and new tasks are paused during validation; reads and the UI remain available.",

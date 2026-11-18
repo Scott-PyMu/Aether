@@ -1221,6 +1221,12 @@
       "source": "crates/aether-tauri/src/core_health.rs",
       "fields": [
         {
+          "name": "contract_version",
+          "type": "u32",
+          "required": true,
+          "optional_when": []
+        },
+        {
           "name": "state",
           "type": "String",
           "required": true,
@@ -1253,6 +1259,24 @@
         {
           "name": "total_shards",
           "type": "usize",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "planned_shards",
+          "type": "usize",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "skipped_shards",
+          "type": "usize",
+          "required": true,
+          "optional_when": []
+        },
+        {
+          "name": "full_coverage",
+          "type": "bool",
           "required": true,
           "optional_when": []
         },

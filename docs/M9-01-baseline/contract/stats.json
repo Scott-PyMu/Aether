@@ -10,7 +10,7 @@
   },
   "frontend": {
     "source_files": 64,
-    "test_files": 55,
+    "test_files": 56,
     "invoke_call_sites": 0,
     "invoke_files": 0
   },
@@ -22,7 +22,7 @@
   "core": {
     "lines": 2764,
     "files": 8,
-    "rust_test_files": 106
+    "rust_test_files": 123
   },
   "method": {
     "commands": "crates/aether-app/src/ipc/dispatch.rs › pub const COMMANDS: &[&str]",

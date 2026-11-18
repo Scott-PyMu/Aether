@@ -4,9 +4,76 @@
 //! 不包含本文件）；`core_health` 重新导出供测试/证据使用。
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
 use serde::Serialize;
 use sysinfo::{DiskKind, Disks};
+
+/// `health.storage_check` 契约版本（ADR-040 D-040-4：2=ADR-040；缺失/1=ADR-039）。
+pub const STORAGE_CHECK_CONTRACT_VERSION: u32 = 2;
+/// 运行期周期检查轮询兜底（ADR-040 D-040-3 §5：默认 1 小时；内部常量，不是设置键）。
+pub const PERIODIC_CHECK_POLL: Duration = Duration::from_secs(60 * 60);
+/// 周期完整检查超时（ADR-040 D-040-3 §5：暂定 30 分钟；按 5.22 GiB P99 证据调整）。
+pub const PERIODIC_CHECK_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+/// 调度器监督重启退避（ADR-040 D-040-3 §5：1s/5s/30s）。
+pub const SCHEDULER_RESTART_BACKOFF: [Duration; 3] = [
+    Duration::from_secs(1),
+    Duration::from_secs(5),
+    Duration::from_secs(30),
+];
+/// 连续监督失败判定窗口（ADR-040 D-040-3 §5：连续 3 次/5 分钟内无法恢复 → 降级）。
+pub const SCHEDULER_FAILURE_WINDOW: Duration = Duration::from_secs(5 * 60);
+/// shutdown/app_exit 等待检查收口的 grace（ADR-040 D-040-3 §5）。
+pub const SHUTDOWN_CHECK_GRACE: Duration = Duration::from_secs(5);
+/// 运行期检查并发上限（ADR-040 D-040-3 §5：`min(startup_profile.concurrency, 2)`）。
+pub const RUNTIME_CHECK_MAX_CONCURRENCY: usize = 2;
+
+/// 导入维护窗口的只读来源（`import_control.rs` 持有/复位；调度器只读）。
+pub trait ImportActivitySource: Send + Sync + 'static {
+    fn import_in_progress(&self) -> bool;
+}
+
+/// 备份/恢复维护态的只读来源（`health.maintenance` 同源）。
+pub trait MaintenanceActivitySource: Send + Sync + 'static {
+    fn maintenance_active(&self) -> bool;
+}
+
+impl MaintenanceActivitySource for crate::ipc::MaintenanceCell {
+    fn maintenance_active(&self) -> bool {
+        self.get().is_some()
+    }
+}
+
+/// `import_control.rs` 的导入活动标志（ADR-040 D-040-3 §5 / §4.1）。
+#[derive(Debug, Default)]
+pub struct ImportActivity {
+    active: AtomicBool,
+}
+
+impl ImportActivity {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn set(&self, active: bool) {
+        self.active.store(active, Ordering::Release);
+    }
+
+    pub fn clear(&self) {
+        self.set(false);
+    }
+}
+
+impl ImportActivitySource for ImportActivity {
+    fn import_in_progress(&self) -> bool {
+        self.active.load(Ordering::Acquire)
+    }
+}
+
+/// 便捷句柄（`Arc` 共享；`ImportControlBackend` 与调度器共用一个实例）。
+pub type ImportActivityHandle = Arc<ImportActivity>;
 
 /// 设备类型（ADR-039 v1.0 D-039-3：NVMe 8 / SATA SSD 4 / HDD 2）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

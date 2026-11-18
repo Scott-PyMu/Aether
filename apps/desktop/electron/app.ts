@@ -145,7 +145,15 @@ interface ShellRuntime {
   mainInteractiveAt: number | null;
   /** M10-10：写门 open（干净启动 = 首屏；异常启动 = 检查完成）。 */
   writesEnabledAt: number | null;
-  /** M10-10：主库 + 分片检查完成（health.storage_check 终态）。 */
+  /** ADR-040 D-040-4 §4：启动阻塞检查计划完成（write_gate=open）时间。 */
+  startupCheckCompletedAt: number | null;
+  /** ADR-040 D-040-4 §4：任一轮 full_coverage=true 检查完成时间（信息性）。 */
+  fullCoverageCheckCompletedAt: number | null;
+  /** ADR-040 D-040-4 §4：后台全量 quick_check 耗时（health 起止差）。 */
+  backgroundFullCheckDurationMs: number | null;
+  /** ADR-040 D-040-4 §4：周期完整 integrity_check 耗时（证据/日志口径）。 */
+  periodicFullCheckDurationMs: number | null;
+  /** ADR-039 历史别名（= startupCheckCompletedAt；deprecated）。 */
   storageCheckCompletedAt: number | null;
   sessionCreateMs: number | null;
   daemonSpawnedAt: number | null;
@@ -275,6 +283,10 @@ const runtime: ShellRuntime = {
   uiReadyAt: null,
   mainInteractiveAt: null,
   writesEnabledAt: null,
+  startupCheckCompletedAt: null,
+  fullCoverageCheckCompletedAt: null,
+  backgroundFullCheckDurationMs: null,
+  periodicFullCheckDurationMs: null,
   storageCheckCompletedAt: null,
   sessionCreateMs: null,
   daemonSpawnedAt: null,
@@ -1492,27 +1504,60 @@ async function dispatchRpc(method: string, params: unknown): Promise<unknown> {
     const requestStartedAt = Date.now();
     const result = await client.request(method, params);
     if (method === "health") {
-      // M10-10：不阻塞首屏，但记录写门开放与检查完成时间（干净启动 = 首屏；
-      // 异常启动 = 检查完成）。字段缺失（旧后端/降级）不臆造时间。
+      // M10-10/ADR-040：不阻塞首屏，但记录启动写门、启动计划完成与全量覆盖完成时间。
+      // 字段缺失（旧后端/降级）不臆造时间；`storageCheckCompletedAt` 仅历史别名。
       const report = result as {
-        storage_check?: { state?: string; write_gate?: string };
+        storage_check?: {
+          contract_version?: number;
+          state?: string;
+          mode?: string;
+          write_gate?: string;
+          full_coverage?: boolean;
+          started_at?: number;
+          completed_at?: number;
+        };
       } | null;
       const check = report?.storage_check;
       if (check?.write_gate === "open" && runtime.writesEnabledAt === null) {
         runtime.writesEnabledAt = Date.now();
+        runtime.startupCheckCompletedAt = runtime.writesEnabledAt;
+        runtime.storageCheckCompletedAt = runtime.startupCheckCompletedAt;
         runtime.logger.log("info", "startup.writes_enabled", {
           writesEnabledMs: runtime.writesEnabledAt - runtime.startedAt,
         });
+        runtime.logger.log("info", "startup.check_completed", {
+          startupCheckCompletedMs: runtime.startupCheckCompletedAt - runtime.startedAt,
+          contractVersion: check?.contract_version,
+        });
+      }
+      if (check?.state === "ok" && check?.full_coverage === true) {
+        if (runtime.fullCoverageCheckCompletedAt === null) {
+          runtime.fullCoverageCheckCompletedAt = Date.now();
+          runtime.logger.log("info", "startup.full_coverage_completed", {
+            fullCoverageCheckCompletedMs:
+              runtime.fullCoverageCheckCompletedAt - runtime.startedAt,
+            mode: check?.mode,
+          });
+        }
+        if (
+          check.mode === "background" &&
+          typeof check.started_at === "number" &&
+          typeof check.completed_at === "number"
+        ) {
+          const duration = check.completed_at - check.started_at;
+          if (runtime.backgroundFullCheckDurationMs === null) {
+            runtime.backgroundFullCheckDurationMs = duration;
+          }
+          // 运行期周期检查与启动后台 quick_check 在 health 契约中同为 mode=background；
+          // 周期耗时由 M10-14 证据/指标文件记录（不伪造第二个别名）。
+          runtime.logger.log("info", "startup.background_full_check", { durationMs: duration });
+        }
       }
       if (
         (check?.state === "ok" || check?.state === "failed") &&
         runtime.storageCheckCompletedAt === null
       ) {
         runtime.storageCheckCompletedAt = Date.now();
-        runtime.logger.log("info", "startup.storage_check_completed", {
-          storageCheckCompletedMs: runtime.storageCheckCompletedAt - runtime.startedAt,
-          state: check?.state,
-        });
       }
     }
     if (method === "health" && runtime.uiReadyAt === null) {
@@ -1791,6 +1836,10 @@ function installE2EHook(): void {
       uiReadyAt: runtime.uiReadyAt,
       mainInteractiveAt: runtime.mainInteractiveAt,
       writesEnabledAt: runtime.writesEnabledAt,
+      startupCheckCompletedAt: runtime.startupCheckCompletedAt,
+      fullCoverageCheckCompletedAt: runtime.fullCoverageCheckCompletedAt,
+      backgroundFullCheckDurationMs: runtime.backgroundFullCheckDurationMs,
+      periodicFullCheckDurationMs: runtime.periodicFullCheckDurationMs,
       storageCheckCompletedAt: runtime.storageCheckCompletedAt,
       sessionCreateMs: runtime.sessionCreateMs,
       daemonSpawnedAt: runtime.daemonSpawnedAt,

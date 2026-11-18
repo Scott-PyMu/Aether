@@ -1296,6 +1296,20 @@ impl StoreRuntime {
             .store(true, Ordering::Release);
     }
 
+    /// 全量覆盖检查完成标志（历史字段名 `background_check_completed`；ADR-040 D-040-3 §2）。
+    ///
+    /// 语义 = 全量覆盖检查完成（全量回退启动检查 / 后台全量 / 周期完整），
+    /// **选择性启动检查通过不得置位**。
+    pub fn background_check_completed(&self) -> bool {
+        self.background_check_completed.load(Ordering::Acquire)
+    }
+
+    /// 显式设置全量覆盖检查完成标志（取消/超时/失败路径置 `false`）。
+    pub fn set_background_check_completed(&self, value: bool) {
+        self.background_check_completed
+            .store(value, Ordering::Release);
+    }
+
     /// 上次完整 `integrity_check` 时间（0 = 从未）。
     pub fn last_full_check_at(&self) -> Option<i64> {
         let value = self.last_full_check_at.load(Ordering::Acquire);
@@ -1307,13 +1321,17 @@ impl StoreRuntime {
         self.clean_start_count.load(Ordering::Acquire)
     }
 
-    /// 周检（7 天）或 20 次启动触发完整 `integrity_check`。
+    /// 周检（7 天）/ 20 次启动 / `last_full_check_at=None` 基线触发完整 `integrity_check`。
+    ///
+    /// ADR-040 D-040-3 §3：`None` 视为 baseline pending（任意启动路径都应调度一次基线）。
     pub fn full_check_due(&self, now_ms: i64) -> bool {
         if self.clean_start_count() >= 20 {
             return true;
         }
-        self.last_full_check_at()
-            .is_some_and(|last| now_ms.saturating_sub(last) >= 7 * 24 * 60 * 60 * 1000)
+        match self.last_full_check_at() {
+            None => true,
+            Some(last) => now_ms.saturating_sub(last) >= 7 * 24 * 60 * 60 * 1000,
+        }
     }
 
     /// 完整检查成功：记录时间并重置 20 次计数。
@@ -1586,6 +1604,7 @@ impl StoreRuntime {
             });
         }
         let sidecar = crate::layout::CleanShutdown {
+            format_version: crate::layout::SIDECAR_FORMAT_VERSION,
             generation: layout.generation().to_owned(),
             app_version: env!("CARGO_PKG_VERSION").to_owned(),
             closed_at: now_ms(),

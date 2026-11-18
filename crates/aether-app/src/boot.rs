@@ -81,6 +81,11 @@ pub fn build_backend(
     let handle = runtime.clone();
     // ADR-039 D-039-5：备份/恢复维护态（组合根与 IpcState 共享）。
     let maintenance = std::sync::Arc::new(ipc::MaintenanceCell::new());
+    // ADR-040 D-040-3 §5：导入维护窗口标志（导入装饰器持有/复位；运行期检查只读）。
+    let import_activity = std::sync::Arc::new(crate::storage_check::ImportActivity::new());
+    // M10-14：启动检查单元与运行期调度器（退出编排取消/grace/sidecar false）。
+    let mut storage_check_cell: Option<std::sync::Arc<core_health::StorageCheckCell>> = None;
+    let mut scheduler_task: Option<tokio::task::JoinHandle<()>> = None;
 
     // M3-04（D13 七步第 3–6 步）：待处理恢复在存储打开**之前**执行（无写者窗口）；
     // 中断（kill -9）遗留的现场日志在此回滚（DoD4）。结果在核心启动后写审计。
@@ -194,8 +199,14 @@ pub fn build_backend(
                     write,
                     pipeline,
                     storage_check,
-                    ..
+                    storage_check_task: _storage_check_task,
+                    scheduler_task: task,
                 } = boot;
+                // ADR-040 D-040-3 §5：调度器只读导入/维护窗口；退出编排接管 scheduler。
+                storage_check.install_import_activity(import_activity.clone());
+                storage_check.install_maintenance(maintenance.clone());
+                storage_check_cell = Some(std::sync::Arc::clone(&storage_check));
+                scheduler_task = Some(task);
                 // M10-10：health.maintenance 与备份/恢复维护态共享同一 cell。
                 let core = core.with_maintenance_cell(std::sync::Arc::clone(&maintenance));
                 // M3-04（D13 第 7 步）：恢复请求/启动处理结果写审计（无待处理恢复则跳过）。
@@ -605,6 +616,10 @@ pub fn build_backend(
         if let Some(service) = &permission_service {
             orchestrator.install_permission_service(service.clone());
         }
+        // ADR-040 D-040-3 §5：运行期检查调度器/检查单元纳入退出编排。
+        if let (Some(cell), Some(task)) = (&storage_check_cell, scheduler_task.take()) {
+            orchestrator.install_storage_check(std::sync::Arc::clone(cell), task);
+        }
         Some(orchestrator)
     } else {
         None
@@ -804,13 +819,16 @@ pub fn build_backend(
         };
     // M10-04/ADR-034：导入命令面装饰器（最外层）。
     let backend: std::sync::Arc<dyn ipc::IpcBackend> = match write_for_import {
-        Some(write) => std::sync::Arc::new(import_control::ImportControlBackend::new(
-            backend,
-            data_dir.clone(),
-            write,
-            handle.clone(),
-            std::sync::Arc::new(aether_control::SystemClock),
-        )),
+        Some(write) => std::sync::Arc::new(
+            import_control::ImportControlBackend::new(
+                backend,
+                data_dir.clone(),
+                write,
+                handle.clone(),
+                std::sync::Arc::new(aether_control::SystemClock),
+            )
+            .with_import_activity(import_activity),
+        ),
         None => backend,
     };
     BackendBundle {

@@ -88,6 +88,8 @@ pub struct ImportControlBackend {
     clock: SharedClock,
     space: Arc<dyn SpaceProbe>,
     active: Arc<Mutex<Option<ActiveJob>>>,
+    /// ADR-040 D-040-3 §5：导入维护窗口标志（运行期检查调度器只读）。
+    activity: Arc<crate::storage_check::ImportActivity>,
 }
 
 impl ImportControlBackend {
@@ -106,7 +108,18 @@ impl ImportControlBackend {
             clock,
             space: Arc::new(NativeSpaceProbe),
             active: Arc::new(Mutex::new(None)),
+            activity: Arc::new(crate::storage_check::ImportActivity::new()),
         }
+    }
+
+    /// ADR-040 D-040-3 §5：共享导入维护窗口标志（调度器只读；组合根接线）。
+    #[must_use]
+    pub fn with_import_activity(
+        mut self,
+        activity: Arc<crate::storage_check::ImportActivity>,
+    ) -> Self {
+        self.activity = activity;
+        self
     }
 
     /// 注入空间探针（测试/故障注入）。
@@ -170,14 +183,18 @@ impl ImportControlBackend {
     }
 
     fn finish_active(&self, job_id: &str) {
-        let mut slot = self.lock_active();
-        let matches = slot
-            .as_ref()
-            .and_then(|active| active.job.lock().ok().map(|job| job.job_id == job_id))
-            .unwrap_or(false);
-        if matches {
-            *slot = None;
+        {
+            let mut slot = self.lock_active();
+            let matches = slot
+                .as_ref()
+                .and_then(|active| active.job.lock().ok().map(|job| job.job_id == job_id))
+                .unwrap_or(false);
+            if matches {
+                *slot = None;
+            }
         }
+        // 维护窗口标志：pending（真实导入待重启）仍视为进行中；否则复位。
+        self.activity.set(import::pending_exists(&self.data_dir));
     }
 
     fn ensure_space(&self, source_bytes: u64) -> Result<(), IpcError> {
@@ -273,6 +290,9 @@ impl ImportControlBackend {
             job: Arc::clone(&shared),
             cancel: Arc::clone(&cancel),
         });
+        // ADR-040 D-040-3 §5：导入 Staging/Validating/Applying/AwaitingRestart 期间
+        // 运行期检查必须延后（不得对 staging generation 执行检查）。
+        self.activity.set(true);
         let this = self.clone();
         let source = source_path.to_path_buf();
         self.handle.spawn(async move {

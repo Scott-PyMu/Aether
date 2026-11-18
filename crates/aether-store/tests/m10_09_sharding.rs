@@ -352,7 +352,10 @@ fn current_and_shards_integrity_are_fail_closed() {
     let mut pointer = read_current(dir3.path()).expect("CURRENT3");
     pointer.format_version = 2;
     write_current(dir3.path(), &pointer).expect("write3");
-    assert!(read_layout(dir3.path()).is_err(), "format_version 不支持拒绝");
+    assert!(
+        read_layout(dir3.path()).is_err(),
+        "format_version 不支持拒绝"
+    );
 
     // 删除一个分片 → 拒绝打开。
     let dir2 = tempfile::tempdir().expect("temp2");
@@ -519,7 +522,7 @@ fn current_replacement_failure_keeps_old_pointer() {
 }
 
 #[test]
-fn mismatch_check_plan_covers_main_and_all_shards() {
+fn mismatch_check_plan_is_selective_for_changed_shard() {
     let dir = tempfile::tempdir().expect("temp");
     let layout = initialize_layout(dir.path(), "0.1.0", 1).expect("init");
     seed_session(&layout, SESSION_A);
@@ -549,14 +552,16 @@ fn mismatch_check_plan_covers_main_and_all_shards() {
     connection.close().expect("close");
     let plan = plan_startup_checks(&layout, "0.1.0");
     assert!(!plan.strict_ok);
-    // ADR-039 v1.0 D-039-2：任一指纹不匹配 → 主库 + 全部分片（不做选择性检查）。
+    // ADR-040 D-040-1：任一指纹变化 → 主库必查；分片仅检查指纹变化项。
     assert!(plan.main, "出现脏分片时必须检查主库");
     assert_eq!(
         plan.shards,
-        (0..8).collect::<Vec<u8>>(),
-        "出现脏分片时必须检查全部分片"
+        vec![shard_id],
+        "只有指纹变化的分片进入启动计划"
     );
-    assert!(plan.full_fallback);
+    assert!(!plan.full_fallback, "单个脏分片不是全量回退");
+    assert_eq!(plan.skipped_shards(8), 7);
+    assert!(!plan.full_coverage());
 }
 
 #[test]
@@ -593,7 +598,10 @@ fn backup_under_write_pressure_drains_and_preserves_events() {
     runtime.block_on(async {
         let writer = tokio::spawn(async move {
             for seq in 1..=500u64 {
-                queue.append_events(vec![event(SESSION_A, seq)]).await.expect("write");
+                queue
+                    .append_events(vec![event(SESSION_A, seq)])
+                    .await
+                    .expect("write");
                 tokio::time::sleep(std::time::Duration::from_millis(2)).await;
             }
         });

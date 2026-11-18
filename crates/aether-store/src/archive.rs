@@ -1370,8 +1370,9 @@ mod tests {
         let ids: Vec<&str> = batch.iter().map(|row| row.id.as_str()).collect();
         assert_eq!(
             ids,
-            vec!["e1", "e2", "e3"],
-            "仅白名单类型且 ts < cutoff（e4/e6/e7/e8/e9/e10 保留）"
+            vec!["e3", "e1", "e2"],
+            "仅白名单类型且 ts < cutoff（e4/e6/e7/e8/e9/e10 保留）；\
+             ADR-039 D-039-4 选批顺序为 (type, ts) 升序：log → message.delta → usage"
         );
         // limit 约束。
         let limited = select_retention_batch(&connection, 500, 2).unwrap();

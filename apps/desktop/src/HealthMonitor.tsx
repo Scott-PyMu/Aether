@@ -89,6 +89,32 @@ export function HealthMonitor({ onOpenDiagnostics }: HealthMonitorProps = {}) {
     const mainState = storageCheck.main_checked
       ? t("health.storage_check_main_done")
       : t("health.storage_check_main_checking");
+    // ADR-040 D-040-4 §3：v2 = x/8 + 已跳过 N 个未变化分片；旧 daemon 沿用 x/8，
+    // 不显示“已跳过/本次检查”，不得声称全量覆盖。
+    const v2 = storageCheck.contract_version === 2;
+    const skippedShards =
+      v2 && typeof storageCheck.skipped_shards === "number"
+        ? storageCheck.skipped_shards
+        : null;
+    const progressText =
+      skippedShards === null
+        ? t("health.storage_check_progress", {
+            p0: storageCheck.checked_shards,
+            p1: storageCheck.total_shards,
+            p2: mainState,
+          })
+        : skippedShards > 0
+          ? t("health.storage_check_progress_v2", {
+              p0: storageCheck.checked_shards,
+              p1: storageCheck.total_shards,
+              p2: mainState,
+              p3: skippedShards,
+            })
+          : t("health.storage_check_progress_v2_no_skip", {
+              p0: storageCheck.checked_shards,
+              p1: storageCheck.total_shards,
+              p2: mainState,
+            });
     return (
       <section
         className="health-checking"
@@ -98,17 +124,21 @@ export function HealthMonitor({ onOpenDiagnostics }: HealthMonitorProps = {}) {
         data-main-checked={storageCheck.main_checked ? "1" : "0"}
         data-checked-shards={storageCheck.checked_shards}
         data-total-shards={storageCheck.total_shards}
+        data-contract-version={storageCheck.contract_version ?? 1}
+        data-planned-shards={storageCheck.planned_shards ?? ""}
+        data-skipped-shards={storageCheck.skipped_shards ?? ""}
+        data-full-coverage={
+          storageCheck.full_coverage === undefined
+            ? ""
+            : storageCheck.full_coverage
+              ? "1"
+              : "0"
+        }
         role="status"
         aria-live="polite"
       >
         <p className="health-title">{t("health.storage_check_in_progress")}</p>
-        <p className="health-detail">
-          {t("health.storage_check_progress", {
-            p0: storageCheck.checked_shards,
-            p1: storageCheck.total_shards,
-            p2: mainState,
-          })}
-        </p>
+        <p className="health-detail">{progressText}</p>
         <p className="health-detail">{t("health.storage_check_writes_paused")}</p>
       </section>
     );

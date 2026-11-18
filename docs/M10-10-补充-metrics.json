@@ -1,0 +1,1102 @@
+{
+  "task": "M10-14",
+  "adr": "ADR-040 v1.0 D-040-1..D-040-5",
+  "recorded_at": "2026-11-18",
+  "platform": {
+    "os": "win32",
+    "arch": "x64",
+    "daemon_profile": "release (performance matrix) / debug (correctness)",
+    "dataset": "M10-09 standard generation 5.22 GiB / 8 shards (copied for cold cells)"
+  },
+  "baseline": {
+    "file": "scripts/test/m10-10/adr039-baseline.json",
+    "sha256": "2ddcdaeab6eef13074eddbb9bbc6fbff74743c588b82006ccdf49668ef60c957",
+    "source_commit": "11cb4380242b15b3ee9d32f458d8576ecf29521b",
+    "source_short": "11cb438",
+    "files": 6,
+    "verify": "PASS"
+  },
+  "contract": {
+    "commands": 87,
+    "daemon_commands": 83,
+    "shell_commands": 4,
+    "ipc_error_codes": 32,
+    "business_codes": 35,
+    "settings": 11,
+    "migrations": 14,
+    "events": 0,
+    "migration_0014": "sessions.shard_id + deletion_pending",
+    "generated_check": "protocol check diff=0"
+  },
+  "correctness": {
+    "m10_14_plan": {
+      "passed": 6,
+      "failed": 0
+    },
+    "m10_14_startup": {
+      "passed": 3,
+      "failed": 0
+    },
+    "m10_14_periodic": {
+      "passed": 7,
+      "failed": 0
+    },
+    "m10_14_lifecycle": {
+      "passed": 6,
+      "failed": 0,
+      "realPanicInjection": "pass"
+    },
+    "m10_14_flags": {
+      "passed": 3,
+      "failed": 0
+    },
+    "m10_14_fault": {
+      "passed": 2,
+      "failed": 0
+    },
+    "m10_14_level1": {
+      "passed": 1,
+      "failed": 0
+    },
+    "m10_09_sharding": {
+      "passed": 16,
+      "failed": 0
+    },
+    "m10_10_storage_check_ui": {
+      "passed": 8,
+      "failed": 0
+    },
+    "m10_10_fault_regression": {
+      "passed": 1,
+      "failed": 0
+    },
+    "m10_10_clean_start_regression": {
+      "passed": 1,
+      "failed": 0
+    },
+    "m10_10_periodic_regression": {
+      "passed": 1,
+      "failed": 0
+    }
+  },
+  "faultInjections": {
+    "cleanFingerprintShardPageCorruption": "pass",
+    "cleanFingerprintMainPageCorruption": "pass",
+    "sidecarFormatVersionMissing": "pass",
+    "backgroundCheckCompletedFalse": "pass",
+    "walNotCheckpointed": "pass",
+    "schemaVersionMismatch": "pass",
+    "shardSetMismatch": "pass",
+    "mainFingerprintMissing": "pass",
+    "mainOnlyDirty": "pass",
+    "dirty1_2_4_8": "pass",
+    "selectiveImmediateClose": "pass",
+    "runtime7Days": "pass",
+    "noneBaseline": "pass",
+    "clockForwardJump": "pass",
+    "clockBackwardJump": "pass",
+    "maintenanceDeferral": "pass",
+    "importWindowDeferral": "pass",
+    "schedulerExitRestart": "pass",
+    "schedulerSupervisionDegrade": "pass",
+    "periodicTimeoutLateResultDiscard": "pass",
+    "appExitShutdownGraceSidecarFalse": "pass",
+    "realRustPanicInjection": "pass"
+  },
+  "performance": {
+    "authoritative": {
+      "device": "nvme",
+      "concurrency": 8,
+      "source": "sysinfo Windows 无法安全读取 BusType；按 M10-10 已知限制用 AETHER_STORAGE_DEVICE=nvme",
+      "dataset": "M10-09 generation 5.22 GiB / 8 shards",
+      "runs_per_cell": 5,
+      "matrix": {
+        "1": {
+          "cold": {
+            "count": 5,
+            "min": 5838.2171,
+            "p50": 6294.471500000001,
+            "p95": 10532.3112,
+            "max": 10532.3112,
+            "mean": 7437.301420000001
+          },
+          "hot": {
+            "count": 5,
+            "min": 2098.8978,
+            "p50": 2110.6403,
+            "p95": 2124.7739,
+            "max": 2124.7739,
+            "mean": 2110.21984
+          },
+          "failures": 0
+        },
+        "2": {
+          "cold": {
+            "count": 5,
+            "min": 5578.4718,
+            "p50": 6050.803,
+            "p95": 7080.1903,
+            "max": 7080.1903,
+            "mean": 6241.56832
+          },
+          "hot": {
+            "count": 5,
+            "min": 2148.6094,
+            "p50": 2184.8911000000003,
+            "p95": 2201.3664,
+            "max": 2201.3664,
+            "mean": 2180.9847999999997
+          },
+          "failures": 0
+        },
+        "4": {
+          "cold": {
+            "count": 5,
+            "min": 8144.383100000001,
+            "p50": 10143.986,
+            "p95": 10705.932799999999,
+            "max": 10705.932799999999,
+            "mean": 9598.255599999999
+          },
+          "hot": {
+            "count": 5,
+            "min": 2364.8253,
+            "p50": 2437.2850000000003,
+            "p95": 3702.2982,
+            "max": 3702.2982,
+            "mean": 2706.68862
+          },
+          "failures": 0
+        },
+        "8": {
+          "cold": {
+            "count": 5,
+            "min": 11010.5316,
+            "p50": 15293.519,
+            "p95": 16820.2662,
+            "max": 16820.2662,
+            "mean": 14191.992900000001
+          },
+          "hot": {
+            "count": 5,
+            "min": 8428.548299999999,
+            "p50": 14180.697699999999,
+            "p95": 16600.6999,
+            "max": 16600.6999,
+            "mean": 13064.027339999999
+          },
+          "failures": 0
+        }
+      },
+      "gains": {
+        "1": {
+          "hot": 0.8511610398407972,
+          "cold": 0.5884222918217841
+        },
+        "2": {
+          "hot": 0.8459249928161151,
+          "cold": 0.6043550866219867
+        },
+        "4": {
+          "hot": 0.8281265808240168,
+          "cold": 0.33671341435545343
+        }
+      },
+      "note": "冷=复制 generation 后首次启动；热=紧接第二次；release aether-app 启动路径（与 daemon 共用 boot_core_full）"
+    },
+    "sataSsd4": {
+      "device": "ssd",
+      "concurrency": 4,
+      "source": "auto（sysinfo DiskKind=SSD；NVMe 未识别）",
+      "runs_per_cell": "dirty1=3；dirty2/4/8=5",
+      "matrix": {
+        "1": {
+          "cold": {
+            "count": 3,
+            "min": 5612.5425,
+            "p50": 7195.7987,
+            "p95": 8718.8702,
+            "max": 8718.8702,
+            "mean": 7175.737133333333
+          },
+          "hot": {
+            "count": 3,
+            "min": 2111.8988,
+            "p50": 2127.3034000000002,
+            "p95": 2152.4989,
+            "max": 2152.4989,
+            "mean": 2130.5670333333333
+          },
+          "failures": 0
+        },
+        "2": {
+          "cold": {
+            "count": 5,
+            "min": 7348.6632,
+            "p50": 7616.3689,
+            "p95": 8548.8424,
+            "max": 8548.8424,
+            "mean": 7722.94798
+          },
+          "hot": {
+            "count": 5,
+            "min": 2189.6436000000003,
+            "p50": 2227.4558,
+            "p95": 2252.3979999999997,
+            "max": 2252.3979999999997,
+            "mean": 2220.91896
+          },
+          "failures": 0
+        },
+        "4": {
+          "cold": {
+            "count": 5,
+            "min": 10320.5963,
+            "p50": 13395.7866,
+            "p95": 17710.7782,
+            "max": 17710.7782,
+            "mean": 13482.721119999998
+          },
+          "hot": {
+            "count": 5,
+            "min": 2378.4751,
+            "p50": 2408.3387,
+            "p95": 8389.3459,
+            "max": 8389.3459,
+            "mean": 3601.7835800000003
+          },
+          "failures": 0
+        },
+        "8": {
+          "cold": {
+            "count": 5,
+            "min": 21337.2219,
+            "p50": 25935.649999999998,
+            "p95": 39950.683300000004,
+            "max": 39950.683300000004,
+            "mean": 29090.639880000002
+          },
+          "hot": {
+            "count": 5,
+            "min": 20569.6127,
+            "p50": 23573.7299,
+            "p95": 24425.0755,
+            "max": 24425.0755,
+            "mean": 23017.260839999995
+          },
+          "failures": 0
+        }
+      },
+      "note": "实际磁盘为 NVMe；4 并发是 Windows 误判配置，作为 SATA SSD/低并发边界。dirty8 冷 P95 39950.68ms >30000ms → SATA SSD 边界 no-go。"
+    },
+    "hddSmoke": {
+      "device": "hdd",
+      "concurrency": 2,
+      "volume": "E: WDC WD20EZBX-08AYR SATA HDD",
+      "samples": [
+        {
+          "dirty": 1,
+          "cold": true,
+          "startupCheckCompletedAtMs": 25733.8331
+        },
+        {
+          "dirty": 1,
+          "cold": false,
+          "startupCheckCompletedAtMs": 93526.4431
+        }
+      ],
+      "note": "HDD 冒烟不满足 25s 目标（热 93.5s）；作为支持边界/回退建议，不作为 NVMe 参考矩阵。"
+    },
+    "mainOnly": {
+      "runs": 1,
+      "startupCheckCompletedAtMs": 1217.4437,
+      "planned_shards": 0,
+      "skipped_shards": 8,
+      "mainMs": 32.2061,
+      "note": "main-only 1.22s，低于全量回退 hot P50 14180.70ms"
+    },
+    "periodicIntegrity": {
+      "check": "integrity_check sequential all dbs",
+      "failures": 0,
+      "periodicCheckTimeoutMs": 1800000,
+      "runs": 3,
+      "samplesMs": [
+        244887.2577,
+        245181.5796,
+        246883.8813
+      ],
+      "task": "M10-14",
+      "totalBytes": 5642182656
+    },
+    "noGoEvaluation": {
+      "dirty1_2_gain_ge_30pct": true,
+      "dirty4_gain_ge_10pct": true,
+      "dirty1_2_4_p95_le_25s": true,
+      "dirty8_p95_le_30s": true,
+      "main_only_not_higher_than_full": true,
+      "periodic_timeout_gt_p99": true,
+      "verdict": "NVMe 8 并发：全部阈值通过（Go）。SATA SSD 4 并发 dirty8 冷 P95 39950.68ms >30000ms；HDD 冒烟 hot 93526ms >25000ms —— 作为支持边界记录，需产品/QA 在 G13 决定是否限定最低硬件或另立 ADR。"
+    },
+    "periodicFullCheckDurationMs": {
+      "samplesMs": [
+        244887.2577,
+        245181.5796,
+        246883.8813
+      ],
+      "p50": 245181.5796,
+      "p95": 246883.8813,
+      "max": 246883.8813,
+      "note": "顺序 integrity_check 保守上界；运行期并发 min(profile,2)"
+    },
+    "backgroundFullCheckDurationMs": {
+      "value": null,
+      "note": "M10-14 未单独测量后台全量 quick_check 耗时；M10-10 ADR-039 参考 16207.84ms（SSD 4 并发），启动矩阵 dirty8 全量回退已覆盖同类检查"
+    }
+  },
+  "mainCapacity": {
+    "mainBytes": 6332416,
+    "totalBytes": 5642182656,
+    "mainRatio": 0.001122334455667789,
+    "mainQuickCheckMs": {
+      "samples": 40,
+      "p50": 27.5373,
+      "p95": 96.5886,
+      "max": 487.2371
+    },
+    "note": "主库不假设很小；始终纳入计划"
+  },
+  "rollback": {
+    "level1": "PASS (pnpm verify:m10-14:level1)",
+    "level2": "PASS (fixed ADR-039 fixture behavior + verify:m10-10 baseline)",
+    "level2_note": "旧 11cb438 完整二进制未重建；按 ADR-040 §4.1.2 允许固定 fixture 行为测试替代，未使用纯静态快照"
+  },
+  "unverified": [
+    "macOS/Linux 未在本机执行",
+    "HDD integrity_check P99 未实测；PERIODIC_CHECK_TIMEOUT_MS=30min 覆盖 NVMe 顺序最大 246.9s（约 7 倍余量）",
+    "OS 页缓存未清理（冷缓存以复制 generation 近似）",
+    "mtime 假阳性率未做 20 次/3 天专项统计",
+    "SATA SSD 4/HDD 支持边界：按用户裁定留到 G13 验收决定（数据见 performance.sataSsd4 / hddSmoke）",
+    "verify:m10-00 在 HEAD 已因文档冻结清单 v1.35/v0.14/v0.20 与当前 v1.36/v0.15/v0.21 及 README/AGENTS 哈希漂移失败；M10-14 未修改冻结清单/校验脚本，需 M10-13/G13 处理"
+  ],
+  "verification": {
+    "clippy": "pass",
+    "deny": "pass (duplicate warnings only)",
+    "protocol_check": "pass",
+    "error_codes": "pass",
+    "m1_03": "pass",
+    "m9_01_baseline": "pass",
+    "verify_m10_10": "pass (ADR-039 baseline)",
+    "verify_m10_14": "pass",
+    "level1": "pass",
+    "level2": "pass",
+    "cargo_test_workspace": "pass (second full run; m2_09_oom flaked once under machine load, solo pass)",
+    "pnpm_test": "pass (desktop 432/432, adapter-sdk 65, protocol 10, adapters 36/38/51/56/4)",
+    "pnpm_typecheck": "pass",
+    "pnpm_build": "pass",
+    "verify_m10_03": "pass 94/94",
+    "electron_matrix": "pass (3 runs/cell; release aetherd + real Electron; dirty1 cold-first uiReady 1895ms one-off)"
+  },
+  "prerequisiteFix": {
+    "file": "crates/aether-store/src/archive.rs",
+    "test": "retention_batch_selection_honors_whitelist_and_window",
+    "change": "expected order e1,e2,e3 -> e3,e1,e2 to match M10-11 (type, ts) ORDER BY",
+    "scope": "test expectation only; no query/DoD change",
+    "reason": "HEAD pre-existing failure blocked cargo test --workspace"
+  },
+  "electronMatrix": {
+    "profile": "release",
+    "runs_per_cell": 3,
+    "dataset": "C:\\Users\\Lenovo\\AppData\\Local\\Temp\\opencode\\m10-14-work\\base",
+    "matrix": {
+      "1": {
+        "runs": [
+          {
+            "dirty": 1,
+            "run": 1,
+            "coldFirst": true,
+            "windowShownMs": 1396,
+            "uiReadyMs": 1895,
+            "mainInteractiveMs": 1895,
+            "writesEnabledMs": 12084,
+            "startupCheckCompletedMs": 12084,
+            "fullCoverageCheckCompletedMs": null,
+            "storageCheckCompletedMs": 12084,
+            "health": {
+              "contract_version": 2,
+              "state": "ok",
+              "mode": "startup",
+              "write_gate": "open",
+              "main_checked": true,
+              "checked_shards": 1,
+              "total_shards": 8,
+              "planned_shards": 1,
+              "skipped_shards": 7,
+              "full_coverage": false
+            },
+            "initializeMs": 445,
+            "daemonEverReady": true,
+            "fatal": null
+          },
+          {
+            "dirty": 1,
+            "run": 2,
+            "coldFirst": false,
+            "windowShownMs": 620,
+            "uiReadyMs": 530,
+            "mainInteractiveMs": 530,
+            "writesEnabledMs": 5549,
+            "startupCheckCompletedMs": 5549,
+            "fullCoverageCheckCompletedMs": null,
+            "storageCheckCompletedMs": 5549,
+            "health": {
+              "contract_version": 2,
+              "state": "ok",
+              "mode": "startup",
+              "write_gate": "open",
+              "main_checked": true,
+              "checked_shards": 1,
+              "total_shards": 8,
+              "planned_shards": 1,
+              "skipped_shards": 7,
+              "full_coverage": false
+            },
+            "initializeMs": 140,
+            "daemonEverReady": true,
+            "fatal": null
+          },
+          {
+            "dirty": 1,
+            "run": 3,
+            "coldFirst": false,
+            "windowShownMs": 704,
+            "uiReadyMs": 620,
+            "mainInteractiveMs": 620,
+            "writesEnabledMs": 5750,
+            "startupCheckCompletedMs": 5750,
+            "fullCoverageCheckCompletedMs": null,
+            "storageCheckCompletedMs": 5750,
+            "health": {
+              "contract_version": 2,
+              "state": "ok",
+              "mode": "startup",
+              "write_gate": "open",
+              "main_checked": true,
+              "checked_shards": 1,
+              "total_shards": 8,
+              "planned_shards": 1,
+              "skipped_shards": 7,
+              "full_coverage": false
+            },
+            "initializeMs": 198,
+            "daemonEverReady": true,
+            "fatal": null
+          }
+        ],
+        "startupCheckCompletedMs": {
+          "count": 3,
+          "min": 5549,
+          "p50": 5750,
+          "p95": 11450.6,
+          "p99": 11957.32,
+          "max": 12084,
+          "mean": 7794.333
+        },
+        "uiReadyMs": {
+          "count": 3,
+          "min": 530,
+          "p50": 620,
+          "p95": 1767.5,
+          "p99": 1869.5,
+          "max": 1895,
+          "mean": 1015
+        },
+        "windowShownMs": {
+          "count": 3,
+          "min": 620,
+          "p50": 704,
+          "p95": 1396,
+          "max": 1396,
+          "mean": 906.6666666666666
+        },
+        "writesEnabledMs": {
+          "count": 3,
+          "min": 5549,
+          "p50": 5750,
+          "p95": 11450.6,
+          "p99": 11957.32,
+          "max": 12084,
+          "mean": 7794.333
+        },
+        "health": [
+          {
+            "contract_version": 2,
+            "state": "ok",
+            "mode": "startup",
+            "write_gate": "open",
+            "main_checked": true,
+            "checked_shards": 1,
+            "total_shards": 8,
+            "planned_shards": 1,
+            "skipped_shards": 7,
+            "full_coverage": false
+          },
+          {
+            "contract_version": 2,
+            "state": "ok",
+            "mode": "startup",
+            "write_gate": "open",
+            "main_checked": true,
+            "checked_shards": 1,
+            "total_shards": 8,
+            "planned_shards": 1,
+            "skipped_shards": 7,
+            "full_coverage": false
+          },
+          {
+            "contract_version": 2,
+            "state": "ok",
+            "mode": "startup",
+            "write_gate": "open",
+            "main_checked": true,
+            "checked_shards": 1,
+            "total_shards": 8,
+            "planned_shards": 1,
+            "skipped_shards": 7,
+            "full_coverage": false
+          }
+        ]
+      },
+      "2": {
+        "runs": [
+          {
+            "dirty": 2,
+            "run": 1,
+            "coldFirst": true,
+            "windowShownMs": 736,
+            "uiReadyMs": 682,
+            "mainInteractiveMs": 682,
+            "writesEnabledMs": 10718,
+            "startupCheckCompletedMs": 10718,
+            "fullCoverageCheckCompletedMs": null,
+            "storageCheckCompletedMs": 10718,
+            "health": {
+              "contract_version": 2,
+              "state": "ok",
+              "mode": "startup",
+              "write_gate": "open",
+              "main_checked": true,
+              "checked_shards": 2,
+              "total_shards": 8,
+              "planned_shards": 2,
+              "skipped_shards": 6,
+              "full_coverage": false
+            },
+            "initializeMs": 259,
+            "daemonEverReady": true,
+            "fatal": null
+          },
+          {
+            "dirty": 2,
+            "run": 2,
+            "coldFirst": false,
+            "windowShownMs": 703,
+            "uiReadyMs": 633,
+            "mainInteractiveMs": 633,
+            "writesEnabledMs": 5657,
+            "startupCheckCompletedMs": 5657,
+            "fullCoverageCheckCompletedMs": null,
+            "storageCheckCompletedMs": 5657,
+            "health": {
+              "contract_version": 2,
+              "state": "ok",
+              "mode": "startup",
+              "write_gate": "open",
+              "main_checked": true,
+              "checked_shards": 2,
+              "total_shards": 8,
+              "planned_shards": 2,
+              "skipped_shards": 6,
+              "full_coverage": false
+            },
+            "initializeMs": 244,
+            "daemonEverReady": true,
+            "fatal": null
+          },
+          {
+            "dirty": 2,
+            "run": 3,
+            "coldFirst": false,
+            "windowShownMs": 653,
+            "uiReadyMs": 602,
+            "mainInteractiveMs": 602,
+            "writesEnabledMs": 5708,
+            "startupCheckCompletedMs": 5708,
+            "fullCoverageCheckCompletedMs": null,
+            "storageCheckCompletedMs": 5708,
+            "health": {
+              "contract_version": 2,
+              "state": "ok",
+              "mode": "startup",
+              "write_gate": "open",
+              "main_checked": true,
+              "checked_shards": 2,
+              "total_shards": 8,
+              "planned_shards": 2,
+              "skipped_shards": 6,
+              "full_coverage": false
+            },
+            "initializeMs": 149,
+            "daemonEverReady": true,
+            "fatal": null
+          }
+        ],
+        "startupCheckCompletedMs": {
+          "count": 3,
+          "min": 5657,
+          "p50": 5708,
+          "p95": 10217,
+          "p99": 10617.8,
+          "max": 10718,
+          "mean": 7361
+        },
+        "uiReadyMs": {
+          "count": 3,
+          "min": 602,
+          "p50": 633,
+          "p95": 677.1,
+          "p99": 681.02,
+          "max": 682,
+          "mean": 639
+        },
+        "windowShownMs": {
+          "count": 3,
+          "min": 653,
+          "p50": 703,
+          "p95": 736,
+          "max": 736,
+          "mean": 697.3333333333334
+        },
+        "writesEnabledMs": {
+          "count": 3,
+          "min": 5657,
+          "p50": 5708,
+          "p95": 10217,
+          "p99": 10617.8,
+          "max": 10718,
+          "mean": 7361
+        },
+        "health": [
+          {
+            "contract_version": 2,
+            "state": "ok",
+            "mode": "startup",
+            "write_gate": "open",
+            "main_checked": true,
+            "checked_shards": 2,
+            "total_shards": 8,
+            "planned_shards": 2,
+            "skipped_shards": 6,
+            "full_coverage": false
+          },
+          {
+            "contract_version": 2,
+            "state": "ok",
+            "mode": "startup",
+            "write_gate": "open",
+            "main_checked": true,
+            "checked_shards": 2,
+            "total_shards": 8,
+            "planned_shards": 2,
+            "skipped_shards": 6,
+            "full_coverage": false
+          },
+          {
+            "contract_version": 2,
+            "state": "ok",
+            "mode": "startup",
+            "write_gate": "open",
+            "main_checked": true,
+            "checked_shards": 2,
+            "total_shards": 8,
+            "planned_shards": 2,
+            "skipped_shards": 6,
+            "full_coverage": false
+          }
+        ]
+      },
+      "4": {
+        "runs": [
+          {
+            "dirty": 4,
+            "run": 1,
+            "coldFirst": true,
+            "windowShownMs": 738,
+            "uiReadyMs": 679,
+            "mainInteractiveMs": 679,
+            "writesEnabledMs": 10708,
+            "startupCheckCompletedMs": 10708,
+            "fullCoverageCheckCompletedMs": null,
+            "storageCheckCompletedMs": 10708,
+            "health": {
+              "contract_version": 2,
+              "state": "ok",
+              "mode": "startup",
+              "write_gate": "open",
+              "main_checked": true,
+              "checked_shards": 4,
+              "total_shards": 8,
+              "planned_shards": 4,
+              "skipped_shards": 4,
+              "full_coverage": false
+            },
+            "initializeMs": 280,
+            "daemonEverReady": true,
+            "fatal": null
+          },
+          {
+            "dirty": 4,
+            "run": 2,
+            "coldFirst": false,
+            "windowShownMs": 778,
+            "uiReadyMs": 720,
+            "mainInteractiveMs": 720,
+            "writesEnabledMs": 5843,
+            "startupCheckCompletedMs": 5843,
+            "fullCoverageCheckCompletedMs": null,
+            "storageCheckCompletedMs": 5843,
+            "health": {
+              "contract_version": 2,
+              "state": "ok",
+              "mode": "startup",
+              "write_gate": "open",
+              "main_checked": true,
+              "checked_shards": 4,
+              "total_shards": 8,
+              "planned_shards": 4,
+              "skipped_shards": 4,
+              "full_coverage": false
+            },
+            "initializeMs": 260,
+            "daemonEverReady": true,
+            "fatal": null
+          },
+          {
+            "dirty": 4,
+            "run": 3,
+            "coldFirst": false,
+            "windowShownMs": 737,
+            "uiReadyMs": 686,
+            "mainInteractiveMs": 686,
+            "writesEnabledMs": 5791,
+            "startupCheckCompletedMs": 5791,
+            "fullCoverageCheckCompletedMs": null,
+            "storageCheckCompletedMs": 5791,
+            "health": {
+              "contract_version": 2,
+              "state": "ok",
+              "mode": "startup",
+              "write_gate": "open",
+              "main_checked": true,
+              "checked_shards": 4,
+              "total_shards": 8,
+              "planned_shards": 4,
+              "skipped_shards": 4,
+              "full_coverage": false
+            },
+            "initializeMs": 266,
+            "daemonEverReady": true,
+            "fatal": null
+          }
+        ],
+        "startupCheckCompletedMs": {
+          "count": 3,
+          "min": 5791,
+          "p50": 5843,
+          "p95": 10221.5,
+          "p99": 10610.7,
+          "max": 10708,
+          "mean": 7447.333
+        },
+        "uiReadyMs": {
+          "count": 3,
+          "min": 679,
+          "p50": 686,
+          "p95": 716.6,
+          "p99": 719.32,
+          "max": 720,
+          "mean": 695
+        },
+        "windowShownMs": {
+          "count": 3,
+          "min": 737,
+          "p50": 738,
+          "p95": 778,
+          "max": 778,
+          "mean": 751
+        },
+        "writesEnabledMs": {
+          "count": 3,
+          "min": 5791,
+          "p50": 5843,
+          "p95": 10221.5,
+          "p99": 10610.7,
+          "max": 10708,
+          "mean": 7447.333
+        },
+        "health": [
+          {
+            "contract_version": 2,
+            "state": "ok",
+            "mode": "startup",
+            "write_gate": "open",
+            "main_checked": true,
+            "checked_shards": 4,
+            "total_shards": 8,
+            "planned_shards": 4,
+            "skipped_shards": 4,
+            "full_coverage": false
+          },
+          {
+            "contract_version": 2,
+            "state": "ok",
+            "mode": "startup",
+            "write_gate": "open",
+            "main_checked": true,
+            "checked_shards": 4,
+            "total_shards": 8,
+            "planned_shards": 4,
+            "skipped_shards": 4,
+            "full_coverage": false
+          },
+          {
+            "contract_version": 2,
+            "state": "ok",
+            "mode": "startup",
+            "write_gate": "open",
+            "main_checked": true,
+            "checked_shards": 4,
+            "total_shards": 8,
+            "planned_shards": 4,
+            "skipped_shards": 4,
+            "full_coverage": false
+          }
+        ]
+      },
+      "8": {
+        "runs": [
+          {
+            "dirty": 8,
+            "run": 1,
+            "coldFirst": true,
+            "windowShownMs": 975,
+            "uiReadyMs": 880,
+            "mainInteractiveMs": 880,
+            "writesEnabledMs": 16032,
+            "startupCheckCompletedMs": 16032,
+            "fullCoverageCheckCompletedMs": 16034,
+            "storageCheckCompletedMs": 16032,
+            "health": {
+              "contract_version": 2,
+              "state": "ok",
+              "mode": "startup",
+              "write_gate": "open",
+              "main_checked": true,
+              "checked_shards": 8,
+              "total_shards": 8,
+              "planned_shards": 8,
+              "skipped_shards": 0,
+              "full_coverage": true
+            },
+            "initializeMs": 425,
+            "daemonEverReady": true,
+            "fatal": null
+          },
+          {
+            "dirty": 8,
+            "run": 2,
+            "coldFirst": false,
+            "windowShownMs": 838,
+            "uiReadyMs": 777,
+            "mainInteractiveMs": 777,
+            "writesEnabledMs": 15799,
+            "startupCheckCompletedMs": 15799,
+            "fullCoverageCheckCompletedMs": 15804,
+            "storageCheckCompletedMs": 15799,
+            "health": {
+              "contract_version": 2,
+              "state": "ok",
+              "mode": "startup",
+              "write_gate": "open",
+              "main_checked": true,
+              "checked_shards": 8,
+              "total_shards": 8,
+              "planned_shards": 8,
+              "skipped_shards": 0,
+              "full_coverage": true
+            },
+            "initializeMs": 301,
+            "daemonEverReady": true,
+            "fatal": null
+          },
+          {
+            "dirty": 8,
+            "run": 3,
+            "coldFirst": false,
+            "windowShownMs": 1249,
+            "uiReadyMs": 1184,
+            "mainInteractiveMs": 1184,
+            "writesEnabledMs": 16384,
+            "startupCheckCompletedMs": 16384,
+            "fullCoverageCheckCompletedMs": 16388,
+            "storageCheckCompletedMs": 16384,
+            "health": {
+              "contract_version": 2,
+              "state": "ok",
+              "mode": "startup",
+              "write_gate": "open",
+              "main_checked": true,
+              "checked_shards": 8,
+              "total_shards": 8,
+              "planned_shards": 8,
+              "skipped_shards": 0,
+              "full_coverage": true
+            },
+            "initializeMs": 454,
+            "daemonEverReady": true,
+            "fatal": null
+          }
+        ],
+        "startupCheckCompletedMs": {
+          "count": 3,
+          "min": 15799,
+          "p50": 16032,
+          "p95": 16348.8,
+          "p99": 16376.96,
+          "max": 16384,
+          "mean": 16071.667
+        },
+        "uiReadyMs": {
+          "count": 3,
+          "min": 777,
+          "p50": 880,
+          "p95": 1153.6,
+          "p99": 1177.92,
+          "max": 1184,
+          "mean": 947
+        },
+        "windowShownMs": {
+          "count": 3,
+          "min": 838,
+          "p50": 975,
+          "p95": 1249,
+          "max": 1249,
+          "mean": 1020.6666666666666
+        },
+        "writesEnabledMs": {
+          "count": 3,
+          "min": 15799,
+          "p50": 16032,
+          "p95": 16348.8,
+          "p99": 16376.96,
+          "max": 16384,
+          "mean": 16071.667
+        },
+        "health": [
+          {
+            "contract_version": 2,
+            "state": "ok",
+            "mode": "startup",
+            "write_gate": "open",
+            "main_checked": true,
+            "checked_shards": 8,
+            "total_shards": 8,
+            "planned_shards": 8,
+            "skipped_shards": 0,
+            "full_coverage": true
+          },
+          {
+            "contract_version": 2,
+            "state": "ok",
+            "mode": "startup",
+            "write_gate": "open",
+            "main_checked": true,
+            "checked_shards": 8,
+            "total_shards": 8,
+            "planned_shards": 8,
+            "skipped_shards": 0,
+            "full_coverage": true
+          },
+          {
+            "contract_version": 2,
+            "state": "ok",
+            "mode": "startup",
+            "write_gate": "open",
+            "main_checked": true,
+            "checked_shards": 8,
+            "total_shards": 8,
+            "planned_shards": 8,
+            "skipped_shards": 0,
+            "full_coverage": true
+          }
+        ]
+      }
+    },
+    "coldExtraDirty1": [
+      {
+        "dirty": 1,
+        "run": 1,
+        "coldFirst": true,
+        "windowShownMs": 898,
+        "uiReadyMs": 829,
+        "mainInteractiveMs": 829,
+        "writesEnabledMs": 5855,
+        "startupCheckCompletedMs": 5855,
+        "fullCoverageCheckCompletedMs": null,
+        "storageCheckCompletedMs": 5855,
+        "health": {
+          "contract_version": 2,
+          "state": "ok",
+          "mode": "startup",
+          "write_gate": "open",
+          "main_checked": true,
+          "checked_shards": 1,
+          "total_shards": 8,
+          "planned_shards": 1,
+          "skipped_shards": 7,
+          "full_coverage": false
+        },
+        "initializeMs": 318,
+        "daemonEverReady": true,
+        "fatal": null
+      },
+      {
+        "dirty": 1,
+        "run": 1,
+        "coldFirst": true,
+        "windowShownMs": 724,
+        "uiReadyMs": 661,
+        "mainInteractiveMs": 661,
+        "writesEnabledMs": 5672,
+        "startupCheckCompletedMs": 5672,
+        "fullCoverageCheckCompletedMs": null,
+        "storageCheckCompletedMs": 5672,
+        "health": {
+          "contract_version": 2,
+          "state": "ok",
+          "mode": "startup",
+          "write_gate": "open",
+          "main_checked": true,
+          "checked_shards": 1,
+          "total_shards": 8,
+          "planned_shards": 1,
+          "skipped_shards": 7,
+          "full_coverage": false
+        },
+        "initializeMs": 247,
+        "daemonEverReady": true,
+        "fatal": null
+      }
+    ],
+    "note": "真实 Electron + release aetherd；dirty1 cold-first 一次 uiReady=1895ms >1500ms，其余冷/热 UI ≤1184ms；startupCheckCompleted 全部 ≤25s（dirty8 ≤30s）"
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "task": "M10-10",
+  "adr": "ADR-039 v1.0 (amended by ADR-040 v1.0)",
+  "schema_version": 1,
+  "source_short": "11cb438",
+  "source_commit": "11cb4380242b15b3ee9d32f458d8576ecf29521b",
+  "generated_at": "2026-11-18T08:04:53.079Z",
+  "generator": "scripts/test/m10-10/generate-adr039-baseline.mjs",
+  "files": [
+    {
+      "path": "crates/aether-store/src/layout.rs",
+      "sha256": "d6f5ac0eaa76ad4ff69d250911b07d3b3c8d304a42209c405a0b4928a67e2f1b",
+      "required_snippets": [
+        "fn full_startup_plan",
+        "full_startup_plan(layout, \"fingerprint_mismatch\")"
+      ]
+    },
+    {
+      "path": "crates/aether-store/src/write_queue.rs",
+      "sha256": "85a3ffd022ce9cfdedb8de5382369c52424de91645a35530faa5e783a79cab2b",
+      "required_snippets": [
+        "background_check_completed",
+        "if strict_start"
+      ]
+    },
+    {
+      "path": "crates/aether-app/src/core_health.rs",
+      "sha256": "686424f008a80fc39e9c0b3fafa3f75b83478fa538b95337182de9e74942747f",
+      "required_snippets": [
+        "if plan.strict_ok",
+        "spawn_periodic_full_check"
+      ]
+    },
+    {
+      "path": "scripts/test/m10-10/verify-m10-10.mjs",
+      "sha256": "8c70fcda02bfbbc65845d1d4eae91cf6f344f87addfac5a724fd4f986abc34c6",
+      "required_snippets": [
+        "!layout.includes(\"dirty_shards\")",
+        "full_startup_plan"
+      ]
+    },
+    {
+      "path": "apps/desktop/electron/app.ts",
+      "sha256": "caa3784d85e4f50fad105f9e1d3ec7e1fd4a41553561056e7d0172a1c283cdd1",
+      "required_snippets": [
+        "storageCheckCompletedAt"
+      ]
+    },
+    {
+      "path": "apps/desktop/src/m10_10_storage_check.test.tsx",
+      "sha256": "3e83dcb24174a407c42835152d46d5a4730b0d17981f850df7b832bb038c0b31",
+      "required_snippets": [
+        "storage_check",
+        "checked_shards"
+      ]
+    }
+  ]
+}

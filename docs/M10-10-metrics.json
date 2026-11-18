@@ -168,6 +168,19 @@
     "withinBudgetP50": true,
     "withinBudgetAll": true
   },
+  "metrics": {
+    "startupCheckCompletedMs": 526,
+    "fullCoverageCheckCompletedMs": null,
+    "backgroundFullCheckDurationMs": null,
+    "periodicFullCheckDurationMs": null,
+    "note": "ADR-040 §4.1：M10-10 原证据保留 ADR-039 口径；拆分指标实际值见 docs/M10-10-补充-metrics.json"
+  },
+  "storageCheckCompletedAt": {
+    "value": 526,
+    "deprecated": true,
+    "metric_semantics": "adr039_ambiguous",
+    "alias_of": "startupCheckCompletedAt"
+  },
   "concurrencyMatrix": {
     "mainMs": 48.739900000000006,
     "levels": [

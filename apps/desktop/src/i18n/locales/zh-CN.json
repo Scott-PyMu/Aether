@@ -190,6 +190,8 @@
   "health.fetching_core_health": "正在获取核心健康状态…",
   "health.storage_check_in_progress": "正在校验数据（启动自检）",
   "health.storage_check_progress": "已检查 {p0}/{p1} 个分片（{p2}）。",
+  "health.storage_check_progress_v2": "已检查 {p0}/{p1} 个分片（{p2}；已跳过 {p3} 个未变化分片）。",
+  "health.storage_check_progress_v2_no_skip": "已检查 {p0}/{p1} 个分片（{p2}）。",
   "health.storage_check_main_checking": "主库校验中",
   "health.storage_check_main_done": "主库校验完成",
   "health.storage_check_writes_paused": "校验期间写入与新任务暂停；读取与界面可用。",
