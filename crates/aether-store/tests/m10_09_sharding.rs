@@ -19,9 +19,11 @@ use aether_store::layout::{
     CLEAN_SHUTDOWN_NAME, SHARD_COUNT,
 };
 use aether_store::{
-    create_backup_set, plan_startup_checks, replace_file_atomic, validate_backup_set, Store,
-    StoreCommand, StoreRuntime, WriteQueueConfig,
+    create_backup_set, plan_startup_checks, validate_backup_set, Store, StoreCommand, StoreRuntime,
+    WriteQueueConfig,
 };
+#[cfg(windows)]
+use aether_store::replace_file_atomic;
 use rusqlite::Connection;
 
 const SESSION_A: &str = "01J8ZQ00000000000000000001";

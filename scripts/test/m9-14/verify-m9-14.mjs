@@ -238,7 +238,7 @@ for (const icon of ["icon.ico", "icon.icns", "icon.png"]) {
 
 // ===== 6. 文档/发布说明/G8 报告 =====
 const requiredDocs = {
-  "README.md": ["已退役", "aether-tauri", "pnpm dev:desktop", "pnpm package:desktop", "v1.35"],
+  "README.md": ["已退役", "aether-tauri", "pnpm dev:desktop", "pnpm package:desktop", "v1.36"],
   "docs/P2-架构迁移-实施计划与验收标准.md": [
     "v0.14",
     "M9-14",
@@ -260,8 +260,8 @@ const requiredDocs = {
 // AGENTS.md / 设计文档.md 在本仓库为本地受控文档（.gitignore 排除，不入 CI checkout）；
 // 本机存在时强制校验，CI 缺失时显式 NOTE（不静默跳过）。
 const localDocs = {
-  "AGENTS.md": ["已退役", "v1.35", "v0.14", "M10-00"],
-  "设计文档.md": ["v1.35", "已退役", "不阻塞 M9/M10"],
+  "AGENTS.md": ["已退役", "v1.36", "v0.15", "M10-00"],
+  "设计文档.md": ["v1.36", "已退役", "不阻塞 M9/M10"],
 };
 for (const [rel, tokens] of Object.entries(requiredDocs)) {
   if (!exists(rel)) {
