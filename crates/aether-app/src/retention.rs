@@ -24,18 +24,16 @@ use std::time::Duration;
 
 use aether_control::SharedClock;
 use aether_security::Redactor;
-use aether_store::archive::{
-    archive_retention_batch, cleanup_archive_temps, verify_archive_file, RETENTION_BATCH_MAX,
-};
+use aether_store::archive::{archive_retention_batch, cleanup_archive_temps, verify_archive_file};
 use aether_store::checkpoint::CheckpointConfig;
 use aether_store::{AuditLogRecord, ReadPool, StoreCommand, StoreError, WriteQueue};
 use serde_json::{json, Value};
 
-use crate::backup_control::{file_len, wal_path, CapacityConfig};
+use crate::backup_control::{file_len, wal_path, CapacityConfig, SpaceProbe};
 use crate::diagnostics_control::{
     default_setting_value, EVENTS_RETENTION_DAYS_KEY, EVENTS_RETENTION_ENABLED_KEY,
 };
-use crate::ipc::error::IpcError;
+use crate::ipc::{IpcError, MaintenanceCell, MaintenanceState};
 
 /// 保留清理审计动作（ADR-023 附录 A-1：actor=`system`；result=`success`/`failed`）。
 pub const AUDIT_ACTION_RETENTION_CLEANED: &str = "retention.cleaned";
@@ -61,6 +59,19 @@ pub const RETENTION_DAYS_MIN: u32 = 7;
 pub const RETENTION_DAYS_MAX: u32 = 365;
 /// 保留窗口缺省值。
 pub const RETENTION_DAYS_DEFAULT: u32 = 30;
+/// 保留删除事务档位（M10-11/ADR-039 D-039-4 §1-3：按 500/1000/2000/5000 **持续**
+/// 实测选「P95 <500ms」的最大档。5.22GiB 标准 generation 上 500 档 P95 253ms
+/// （500 批，max 482ms，0 批 >500ms）；1000 档 P95 779ms、2000 档 P95 1101ms
+/// 均不合规——短跑 10 次矩阵会被冷缓存误导。故选 500；选批上限仍为
+/// [`aether_store::archive::RETENTION_BATCH_MAX`] = 5000）。
+pub const RETENTION_DELETE_BATCH_DEFAULT: usize = 500;
+/// 删除事务档位矩阵（M10-11 DoD-2：500/1000/2000/5000）。
+pub const RETENTION_DELETE_BATCH_TIERS: [usize; 4] = [500, 1_000, 2_000, 5_000];
+/// 归档文件块大小（M10-11/ADR-039 D-039-4 §1-1/§1-2：选批上限 5000，归档块可
+/// 独立于删除事务；1000 行/文件减少全量清理的归档文件数，删除仍按 500/事务）。
+pub const RETENTION_ARCHIVE_BATCH_DEFAULT: usize = 1_000;
+/// 有界 `incremental_vacuum` 每轮回收页数上限（4KiB 页 ≈16MiB；M10-11 DoD-5）。
+pub const RETENTION_INCREMENTAL_VACUUM_PAGES: u32 = 4_096;
 
 /// 阈值参数（2GB 警告 / 5GB 强提示 / 增长 >500MB/月；容量两档与 M3-05 同源注入）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -245,6 +256,8 @@ pub enum RetentionOutcome {
         freed_bytes: u64,
         archives: u64,
     },
+    /// 维护态（备份/恢复/手动 VACUUM）进行中：本轮延后，不阻塞维护操作。
+    Deferred { reason: String },
     /// 归档或删除失败：该批跳过清理（失败计数 + 审计）。
     Failed { error: String },
 }
@@ -264,6 +277,7 @@ impl RetentionTickReport {
             RetentionOutcome::NothingToClean => "nothing",
             RetentionOutcome::Armed(_) => "armed",
             RetentionOutcome::Cleaned { .. } => "success",
+            RetentionOutcome::Deferred { .. } => "deferred",
             RetentionOutcome::Failed { .. } => "failed",
         }
     }
@@ -283,6 +297,63 @@ struct RetentionState {
     auto_arm_reason: Option<&'static str>,
     armed_in_process: bool,
     last_error: Option<String>,
+    /// 最近一批删除事务耗时（队列等待 + 事务；毫秒；M10-11 DoD-2）。
+    last_delete_ms: u64,
+    /// 最近一批删除的事务内耗时（写任务 `last_commit_ms`；不含队列等待）。
+    last_delete_tx_ms: u64,
+    /// 本轮/历史最大删除队列耗时（毫秒；仅诊断，不改变 D3 断言）。
+    max_delete_ms: u64,
+    /// 本轮/历史最大删除事务内耗时（毫秒）。
+    max_delete_tx_ms: u64,
+    /// 删除队列耗时 ≥500ms 的次数（诊断）。
+    slow_delete_count: u64,
+    /// 最近一轮有界 `incremental_vacuum` 的页数上限。
+    last_incremental_vacuum_pages: u32,
+    /// 最近一次维护态手动 VACUUM 报告（JSON 投影）。
+    last_maintenance_vacuum: Option<Value>,
+}
+
+/// 维护态手动 VACUUM 报告（M10-11 DoD-5；内部维护入口，不新增 IPC 命令）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MaintenanceVacuumReport {
+    /// 物理 `db+wal` 是否超过阈值（未超过 → 不执行）。
+    pub required: bool,
+    /// 是否实际执行了 VACUUM。
+    pub performed: bool,
+    /// 执行前物理 `db+wal` 字节。
+    pub physical_before: u64,
+    /// 执行后物理 `db+wal` 字节。
+    pub physical_after: u64,
+    /// SQLite 在用页字节（逻辑 live）。
+    pub live_bytes: u64,
+    /// 预检时数据目录可用空间。
+    pub available_bytes: u64,
+    /// 预检要求空间（当前 `db+wal` ×2）。
+    pub required_space_bytes: u64,
+    /// VACUUM 耗时（毫秒）。
+    pub took_ms: u64,
+    /// 停写窗口（含 drain；毫秒）。
+    pub stop_write_ms: u64,
+    /// 告警文本（物理 >5GiB / 未达阈值等；无则为 `None`）。
+    pub warning: Option<String>,
+}
+
+impl MaintenanceVacuumReport {
+    /// 状态/诊断投影。
+    pub fn to_json(&self) -> Value {
+        json!({
+            "required": self.required,
+            "performed": self.performed,
+            "physical_before": self.physical_before,
+            "physical_after": self.physical_after,
+            "live_bytes": self.live_bytes,
+            "available_bytes": self.available_bytes,
+            "required_space_bytes": self.required_space_bytes,
+            "took_ms": self.took_ms,
+            "stop_write_ms": self.stop_write_ms,
+            "warning": self.warning,
+        })
+    }
 }
 
 /// 保留任务依赖（组合根注入；测试注入 `ManualClock`/参数化阈值）。
@@ -292,6 +363,42 @@ pub struct RetentionDeps {
     pub write: WriteQueue,
     pub clock: SharedClock,
     pub thresholds: RetentionThresholds,
+    /// 维护态共享单元（M10-11：维护态手动 VACUUM；组合根与备份/health 共享）。
+    pub maintenance: Option<Arc<MaintenanceCell>>,
+    /// 空间探针（维护态 VACUUM 预检；与备份后端同源）。
+    pub space: Arc<dyn SpaceProbe>,
+}
+
+/// 维护态 RAII 守卫（M10-11 手动 VACUUM；退出恢复上一状态）。
+struct RetentionMaintenanceGuard {
+    cell: Option<Arc<MaintenanceCell>>,
+    previous: Option<MaintenanceState>,
+}
+
+impl RetentionMaintenanceGuard {
+    fn enter(cell: Option<&Arc<MaintenanceCell>>, kind: &str, reason: String, at_ms: i64) -> Self {
+        let previous = cell.and_then(|cell| cell.get());
+        if let Some(cell) = cell {
+            cell.set(Some(MaintenanceState {
+                kind: kind.to_owned(),
+                reason,
+                started_at: at_ms,
+                progress: None,
+            }));
+        }
+        Self {
+            cell: cell.cloned(),
+            previous,
+        }
+    }
+}
+
+impl Drop for RetentionMaintenanceGuard {
+    fn drop(&mut self) {
+        if let Some(cell) = &self.cell {
+            cell.set(self.previous.take());
+        }
+    }
 }
 
 /// 保留策略与清理任务（后台 tick + 状态投影；`Clone` 共享状态）。
@@ -303,6 +410,8 @@ pub struct RetentionTask {
     clock: SharedClock,
     thresholds: Arc<Mutex<RetentionThresholds>>,
     state: Arc<Mutex<RetentionState>>,
+    maintenance: Option<Arc<MaintenanceCell>>,
+    space: Arc<dyn SpaceProbe>,
 }
 
 impl RetentionTask {
@@ -314,6 +423,8 @@ impl RetentionTask {
             clock: deps.clock,
             thresholds: Arc::new(Mutex::new(deps.thresholds)),
             state: Arc::new(Mutex::new(RetentionState::default())),
+            maintenance: deps.maintenance,
+            space: deps.space,
         }
     }
 
@@ -463,6 +574,130 @@ impl RetentionTask {
         self.run_cleanup(at_ms).await
     }
 
+    /// 维护态手动 `VACUUM`（M10-11/ADR-039 D-039-4 §2）。
+    ///
+    /// - 物理 `db+wal` 未超过阈值（缺省 5GiB 强提示档）→ 不执行；
+    /// - 预检数据目录可用空间 ≥ 当前 `db+wal` ×2，不足则拒绝且当前库不变；
+    /// - 进入内部维护态 + 停写/drain，执行主库 + 全部分片 `VACUUM`，记录耗时与停写窗口；
+    /// - 完成后写审计（复用 `retention.cleaned`，detail 标记 `op=manual_vacuum`）并告警。
+    ///
+    /// 说明：ADR-039 冻结命令面 87（0 新增、不新增维护命令）；按产品裁定**维护态
+    /// 不需要 UI 入口**，本入口为内部维护能力，由运维/测试直接调用；不新增 IPC
+    /// 命令或设置键。
+    pub async fn run_maintenance_vacuum(
+        &self,
+        threshold_bytes: Option<u64>,
+    ) -> Result<MaintenanceVacuumReport, IpcError> {
+        let threshold = threshold_bytes.unwrap_or_else(|| self.thresholds().critical_bytes);
+        let layout = aether_store::read_layout(&self.data_dir)
+            .map_err(|error| IpcError::internal(format!("generation 布局无效：{error}")))?;
+        let capacity_before = aether_store::generation_capacity(&layout)
+            .map_err(|error| IpcError::internal(format!("容量统计失败：{error}")))?;
+        let physical_before = capacity_before.physical_bytes;
+        let required_space_bytes = physical_before.saturating_mul(2);
+        let available_bytes = self
+            .space
+            .available_bytes(&self.data_dir)
+            .map_err(|error| IpcError::internal(format!("维护态 VACUUM 空间探针失败：{error}")))?;
+        if physical_before < threshold {
+            let report = MaintenanceVacuumReport {
+                required: false,
+                performed: false,
+                physical_before,
+                physical_after: physical_before,
+                live_bytes: capacity_before.live_bytes,
+                available_bytes,
+                required_space_bytes,
+                took_ms: 0,
+                stop_write_ms: 0,
+                warning: Some(format!(
+                    "物理 db+wal 未超过阈值（{physical_before} < {threshold} 字节）；未执行 VACUUM"
+                )),
+            };
+            self.state_guard().last_maintenance_vacuum = Some(report.to_json());
+            return Ok(report);
+        }
+        if available_bytes < required_space_bytes {
+            return Err(IpcError::internal(format!(
+                "维护态 VACUUM 空间预检失败：可用 {available_bytes} 字节 < 要求 \
+                 {required_space_bytes} 字节（当前 db+wal {physical_before} ×2）；\
+                 拒绝执行，当前库不变"
+            )));
+        }
+
+        let maintenance = RetentionMaintenanceGuard::enter(
+            self.maintenance.as_ref(),
+            "vacuum",
+            format!("手动 VACUUM：物理 db+wal {physical_before} 字节超过阈值 {threshold} 字节"),
+            self.clock.now_ms(),
+        );
+        let stop_started = std::time::Instant::now();
+        let write_guard = self
+            .write
+            .pause_and_drain()
+            .await
+            .map_err(|error| IpcError::internal(format!("维护态停写失败：{error}")))?;
+        let stop_write_ms = u64::try_from(stop_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let vacuum_started = std::time::Instant::now();
+        let vacuum_result = self
+            .write
+            .execute_maintenance(StoreCommand::VacuumAll)
+            .await;
+        let took_ms = u64::try_from(vacuum_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        if vacuum_result.is_ok() {
+            if let Err(error) = self
+                .write
+                .checkpoint_truncate(CheckpointConfig::default())
+                .await
+            {
+                tracing::warn!(error = %error, "维护态 VACUUM 后 checkpoint 失败（仅诊断）");
+            }
+        }
+        drop(write_guard);
+        drop(maintenance);
+        vacuum_result
+            .map_err(|error| IpcError::internal(format!("维护态 VACUUM 失败：{error}")))?;
+
+        let capacity_after = aether_store::generation_capacity(&layout)
+            .map_err(|error| IpcError::internal(format!("VACUUM 后容量统计失败：{error}")))?;
+        let warning = (capacity_after.physical_bytes >= threshold).then(|| {
+            format!(
+                "VACUUM 后物理 db+wal 仍为 {} 字节（≥ 阈值 {threshold}）；\
+                 单库高水位未能通过 VACUUM 降至阈值以下，请评估重建/分片或继续排查增长源",
+                capacity_after.physical_bytes
+            )
+        });
+        if let Some(text) = &warning {
+            tracing::warn!(warning = %text, "维护态 VACUUM 后物理高水位仍超阈值");
+        }
+        let report = MaintenanceVacuumReport {
+            required: true,
+            performed: true,
+            physical_before,
+            physical_after: capacity_after.physical_bytes,
+            live_bytes: capacity_after.live_bytes,
+            available_bytes,
+            required_space_bytes,
+            took_ms,
+            stop_write_ms,
+            warning,
+        };
+        self.write_audit(
+            AUDIT_ACTION_RETENTION_CLEANED,
+            "success",
+            None,
+            &format!(
+                "op=manual_vacuum; physical_before={physical_before}; \
+                 physical_after={}; live_bytes={}; took_ms={took_ms}; stop_write_ms={stop_write_ms}; \
+                 available_bytes={available_bytes}; required_space_bytes={required_space_bytes}",
+                report.physical_after, report.live_bytes
+            ),
+        )
+        .await;
+        self.state_guard().last_maintenance_vacuum = Some(report.to_json());
+        Ok(report)
+    }
+
     /// 自动启停评估（纯决策 [`decide_auto_arm`] + 落设置 + 审计）。
     pub async fn evaluate_auto_arm(&self) -> Result<Option<ArmReason>, IpcError> {
         let settings = self.load_settings().await?;
@@ -514,7 +749,8 @@ impl RetentionTask {
         Ok(Some(reason))
     }
 
-    /// 清理一轮：批循环（先归档 + 逐批校验 → 删除）；任一失败跳过该批并停止。
+    /// 清理一轮：选批（≤5000）→ 按删除档位分组（先归档 + 逐组校验 → 删除）；
+    /// 归档/删除失败跳过该组并停止（下轮重试）。
     async fn run_cleanup(&self, at_ms: i64) -> RetentionTickReport {
         let settings = match self.load_settings().await {
             Ok(settings) => settings,
@@ -532,6 +768,14 @@ impl RetentionTask {
         if !settings.enabled {
             return RetentionTickReport {
                 outcome: RetentionOutcome::Disabled,
+                at_ms,
+            };
+        }
+        if let Some(state) = self.maintenance.as_ref().and_then(|cell| cell.get()) {
+            return RetentionTickReport {
+                outcome: RetentionOutcome::Deferred {
+                    reason: format!("维护态（{}）进行中；保留清理延后", state.kind),
+                },
                 at_ms,
             };
         }
@@ -556,6 +800,10 @@ impl RetentionTask {
         let before = self.total_bytes();
         let mut cleaned_rows = 0u64;
         let mut archives = 0u64;
+        // 每个归档块使用递增 `created_at`（毫秒），使 `events-archive-<date>-<ms>.jsonl`
+        // 天然唯一，避免 `unique_archive_path` 在同 tick 内线性探测 1..n（全量历史
+        // 数千块时的 O(n²) 文件存在性检查）。
+        let mut archive_created_at = at_ms;
 
         loop {
             let layout = match aether_store::read_layout(&self.data_dir) {
@@ -574,7 +822,7 @@ impl RetentionTask {
             let batches = match aether_store::select_retention_batch_generation(
                 &layout,
                 cutoff,
-                RETENTION_BATCH_MAX,
+                aether_store::archive::RETENTION_BATCH_MAX,
             ) {
                 Ok(batches) => batches,
                 Err(error) => {
@@ -592,81 +840,117 @@ impl RetentionTask {
                 break;
             }
             for (shard_id, batch) in batches {
-                let rowids: Vec<i64> = batch.iter().map(|row| row.rowid).collect();
-                let row_count = batch.len() as u64;
-                let archive_dir = archives_dir.clone();
-                let archive_result =
-                    tokio::task::spawn_blocking(move || -> Result<PathBuf, StoreError> {
-                        let redactor = Redactor::new().map_err(|error| StoreError::Internal {
-                            reason: format!("脱敏器初始化失败：{error}"),
-                        })?;
-                        let sanitize = |value: &Value| -> Result<String, StoreError> {
-                            let redacted = redactor.redact_json(value);
-                            let line =
-                                serde_json::to_string(&redacted).map_err(|error| {
+                // 选批上限 5000；归档块 1000（独立于删除事务）；删除事务 500，
+                // 保证单事务 <500ms（ADR-039 D-039-4 §1-3/§1-4）。
+                for archive_chunk in batch.chunks(RETENTION_ARCHIVE_BATCH_DEFAULT) {
+                    let rows = archive_chunk.to_vec();
+                    let archive_rows = rows.clone();
+                    let archive_dir = archives_dir.clone();
+                    let chunk_created_at = archive_created_at;
+                    archive_created_at = archive_created_at.saturating_add(1);
+                    let archive_result =
+                        tokio::task::spawn_blocking(move || -> Result<PathBuf, StoreError> {
+                            let redactor =
+                                Redactor::new().map_err(|error| StoreError::Internal {
+                                    reason: format!("脱敏器初始化失败：{error}"),
+                                })?;
+                            let sanitize = |value: &Value| -> Result<String, StoreError> {
+                                let redacted = redactor.redact_json(value);
+                                let line = serde_json::to_string(&redacted).map_err(|error| {
                                     StoreError::Internal {
                                         reason: format!("归档行序列化失败：{error}"),
                                     }
                                 })?;
-                            if !redactor.is_clean(&line) {
+                                if !redactor.is_clean(&line) {
+                                    return Err(StoreError::Internal {
+                                        reason: "归档行脱敏后仍命中密钥模式，已拒绝写出（D10）"
+                                            .to_owned(),
+                                    });
+                                }
+                                Ok(line)
+                            };
+                            let report = archive_retention_batch(
+                                &archive_dir,
+                                &archive_rows,
+                                chunk_created_at,
+                                &sanitize,
+                            )?;
+                            let verification = verify_archive_file(&report.path)?;
+                            if !verification.matches {
                                 return Err(StoreError::Internal {
-                                    reason: "归档行脱敏后仍命中密钥模式，已拒绝写出（D10）"
-                                        .to_owned(),
+                                    reason: format!(
+                                        "归档产物校验失败（rows={} vs {}；sha256 不一致），\
+                                         跳过该批清理",
+                                        verification.rows, verification.manifest.rows
+                                    ),
                                 });
                             }
-                            Ok(line)
-                        };
-                        let report =
-                            archive_retention_batch(&archive_dir, &batch, at_ms, &sanitize)?;
-                        let verification = verify_archive_file(&report.path)?;
-                        if !verification.matches {
-                            return Err(StoreError::Internal {
-                                reason: format!(
-                                    "归档产物校验失败（rows={} vs {}；sha256 不一致），跳过该批清理",
-                                    verification.rows, verification.manifest.rows
-                                ),
-                            });
+                            Ok(report.path)
+                        })
+                        .await
+                        .map_err(|error| StoreError::Internal {
+                            reason: format!("归档任务异常退出：{error}"),
+                        })
+                        .and_then(|result| result);
+
+                    let archive_path = match archive_result {
+                        Ok(path) => path,
+                        Err(error) => {
+                            let report = RetentionTickReport {
+                                outcome: RetentionOutcome::Failed {
+                                    error: format!("归档失败，跳过该批清理：{error}"),
+                                },
+                                at_ms,
+                            };
+                            self.record_failure(at_ms, &report).await;
+                            return report;
                         }
-                        Ok(report.path)
-                    })
-                    .await
-                    .map_err(|error| StoreError::Internal {
-                        reason: format!("归档任务异常退出：{error}"),
-                    })
-                    .and_then(|result| result);
-
-                let archive_path = match archive_result {
-                    Ok(path) => path,
-                    Err(error) => {
-                        let report = RetentionTickReport {
-                            outcome: RetentionOutcome::Failed {
-                                error: format!("归档失败，跳过该批清理：{error}"),
-                            },
-                            at_ms,
-                        };
-                        self.record_failure(at_ms, &report).await;
-                        return report;
-                    }
-                };
-
-                let write = self.write.clone();
-                if let Err(error) = write
-                    .execute(StoreCommand::DeleteEventsInShard { shard_id, rowids })
-                    .await
-                {
-                    let report = RetentionTickReport {
-                        outcome: RetentionOutcome::Failed {
-                            error: format!(
-                                "已归档但删除失败（下轮重试；归档 {archive_path:?}）：{error}"
-                            ),
-                        },
-                        at_ms,
                     };
-                    self.record_failure(at_ms, &report).await;
-                    return report;
+
+                    for delete_chunk in rows.chunks(RETENTION_DELETE_BATCH_DEFAULT) {
+                        let rowids: Vec<i64> = delete_chunk.iter().map(|row| row.rowid).collect();
+                        let row_count = delete_chunk.len() as u64;
+                        let write = self.write.clone();
+                        let delete_started = std::time::Instant::now();
+                        let delete_result = write
+                            .execute(StoreCommand::DeleteEventsInShard { shard_id, rowids })
+                            .await;
+                        let delete_ms =
+                            u64::try_from(delete_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                        let tx_ms = self.write.metrics().last_commit_ms;
+                        {
+                            let mut state = self.state_guard();
+                            state.last_delete_ms = delete_ms;
+                            state.last_delete_tx_ms = tx_ms;
+                            state.max_delete_ms = state.max_delete_ms.max(delete_ms);
+                            state.max_delete_tx_ms = state.max_delete_tx_ms.max(tx_ms);
+                            if delete_ms >= 500 {
+                                state.slow_delete_count = state.slow_delete_count.saturating_add(1);
+                            }
+                        }
+                        if delete_ms >= 500 {
+                            tracing::warn!(
+                                delete_ms,
+                                delete_tx_ms = tx_ms,
+                                "保留清理单批删除队列耗时 ≥500ms（含队列等待；tx 为写任务提交耗时）"
+                            );
+                        }
+                        if let Err(error) = delete_result {
+                            let report = RetentionTickReport {
+                                outcome: RetentionOutcome::Failed {
+                                    error: format!(
+                                        "已归档但删除失败（下轮重试；归档 {archive_path:?}）：{error}"
+                                    ),
+                                },
+                                at_ms,
+                            };
+                            self.record_failure(at_ms, &report).await;
+                            return report;
+                        }
+                        cleaned_rows = cleaned_rows.saturating_add(row_count);
+                    }
+                    archives = archives.saturating_add(1);
                 }
-                cleaned_rows = cleaned_rows.saturating_add(row_count);
-                archives = archives.saturating_add(1);
             }
             tokio::task::yield_now().await;
         }
@@ -679,6 +963,31 @@ impl RetentionTask {
                 .await
             {
                 tracing::warn!(error = %error, "保留清理后的 WAL checkpoint 失败（仅诊断）");
+            }
+            // M10-11/ADR-039 D-039-4：有界 `incremental_vacuum`（主库 + 分片；
+            // 单轮页数上限，不重建库、不阻塞启动/UI）。
+            match self
+                .write
+                .execute(StoreCommand::IncrementalVacuum {
+                    pages: RETENTION_INCREMENTAL_VACUUM_PAGES,
+                })
+                .await
+            {
+                Ok(_) => {
+                    self.state_guard().last_incremental_vacuum_pages =
+                        RETENTION_INCREMENTAL_VACUUM_PAGES;
+                    // 收缩结果经 WAL 提交；再次 checkpoint 使物理文件可观测收缩。
+                    if let Err(error) = self
+                        .write
+                        .checkpoint_truncate(CheckpointConfig::default())
+                        .await
+                    {
+                        tracing::warn!(error = %error, "incremental_vacuum 后 checkpoint 失败（仅诊断）");
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(error = %error, "有界 incremental_vacuum 失败（仅诊断）");
+                }
             }
         }
 
@@ -772,7 +1081,6 @@ impl RetentionTask {
     pub async fn status(&self) -> Result<Value, IpcError> {
         let settings = self.load_settings().await?;
         let now = self.clock.now_ms();
-        let total = self.total_bytes();
         let thresholds = self.thresholds();
         let snapshot = self.snapshot_state();
         let samples: Vec<(i64, u64)> = snapshot.samples.iter().copied().collect();
@@ -780,16 +1088,12 @@ impl RetentionTask {
         let cutoff = settings
             .enabled
             .then(|| retention_cutoff_ms(now, settings.days));
+        let capacity = self.capacity_projection();
         Ok(json!({
             "enabled": settings.enabled,
             "days": settings.days,
             "cutoff_ts": cutoff,
-            "capacity": {
-                "level": thresholds.level(total),
-                "total_bytes": total,
-                "warn_bytes": thresholds.warn_bytes,
-                "critical_bytes": thresholds.critical_bytes,
-            },
+            "capacity": capacity,
             "growth": {
                 "bytes_per_month": growth,
                 "threshold_bytes": thresholds.growth_bytes_per_30d,
@@ -807,7 +1111,50 @@ impl RetentionTask {
             "last_archive_failures": snapshot.last_archive_failures,
             "archive_failures_total": snapshot.archive_failures_total,
             "last_error": snapshot.last_error,
+            "delete_batch": {
+                "tier": RETENTION_DELETE_BATCH_DEFAULT,
+                "tiers": RETENTION_DELETE_BATCH_TIERS,
+                "last_delete_ms": snapshot.last_delete_ms,
+                "last_delete_tx_ms": snapshot.last_delete_tx_ms,
+                "max_delete_ms": snapshot.max_delete_ms,
+                "max_delete_tx_ms": snapshot.max_delete_tx_ms,
+                "slow_delete_count": snapshot.slow_delete_count,
+            },
+            "vacuum": {
+                "incremental_pages": snapshot.last_incremental_vacuum_pages,
+                "last_maintenance": snapshot.last_maintenance_vacuum,
+            },
         }))
+    }
+
+    /// 容量投影（M10-11 DoD-6：live 与物理分开；物理 >5GiB 告警）。
+    fn capacity_projection(&self) -> Value {
+        let thresholds = self.thresholds();
+        let physical = self.total_bytes();
+        let capacity = aether_store::read_layout(&self.data_dir)
+            .and_then(|layout| aether_store::generation_capacity(&layout))
+            .ok();
+        let (live_bytes, free_bytes) = capacity
+            .map(|value| (value.live_bytes, value.free_bytes))
+            .unwrap_or((0, 0));
+        let physical_level = thresholds.level(physical);
+        let warning = (physical >= thresholds.critical_bytes).then_some(
+            "physical_retention_high_watermark: 当前 generation 物理 db+wal 超过 5GiB 强提示档；\
+             incremental_vacuum 受 bounded 预算限制，若高水位持续请执行维护态手动 VACUUM\
+             （预检可用空间 ≥ db+wal ×2）或评估重构/分片",
+        );
+        json!({
+            "level": thresholds.level(physical),
+            "live_bytes": live_bytes,
+            "free_bytes": free_bytes,
+            "physical_bytes": physical,
+            // 兼容既有 UI/诊断字段（`total_bytes` 口径仍为物理 db+wal）。
+            "total_bytes": physical,
+            "warn_bytes": thresholds.warn_bytes,
+            "critical_bytes": thresholds.critical_bytes,
+            "physical_level": physical_level,
+            "physical_warning": warning,
+        })
     }
 }
 

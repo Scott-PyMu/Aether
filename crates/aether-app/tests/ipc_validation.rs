@@ -2646,6 +2646,46 @@ fn every_command_is_routed_and_rejects_unknown_members() {
     );
 }
 #[test]
+fn vacuum_maintenance_allows_only_health_and_app_exit() {
+    let fixture = fixture("maintenance-vacuum");
+    let cell = Arc::new(MaintenanceCell::new());
+    cell.set(Some(MaintenanceState {
+        kind: "vacuum".to_owned(),
+        reason: "物理高水位收缩".to_owned(),
+        started_at: 1,
+        progress: None,
+    }));
+    assert!(fixture.state.install_maintenance(cell));
+
+    let rejected = invoke(&fixture.state, "session_list", json!({})).unwrap_err();
+    assert_eq!(
+        rejected.get("code").and_then(Value::as_str),
+        Some("core_not_ready"),
+        "手动 VACUUM 维护态拒绝读命令：{rejected}"
+    );
+    let message = rejected
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    assert!(
+        message.contains("手动 VACUUM") && message.contains("health/app_exit"),
+        "维护态错误文案：{rejected}"
+    );
+    let health = invoke(&fixture.state, "health", Value::Null).expect("health 必须放行");
+    assert_eq!(
+        health.get("recorded").and_then(Value::as_str),
+        Some("health")
+    );
+    let exit = invoke(&fixture.state, "app_exit", json!({ "confirm": true }))
+        .expect_err("未接线壳层时 app_exit 由命令体拒绝");
+    let exit_message = exit.get("message").and_then(Value::as_str).unwrap_or("");
+    assert!(
+        !exit_message.contains("手动 VACUUM"),
+        "app_exit 不得被维护态拒绝：{exit}"
+    );
+}
+
+#[test]
 fn backup_and_restore_maintenance_allow_only_health_and_app_exit() {
     let fixture = fixture("maintenance");
     let cell = Arc::new(MaintenanceCell::new());

@@ -1,0 +1,411 @@
+{
+  "task": "M10-11",
+  "adr": "ADR-039 v1.0 D-039-4",
+  "executed_at": "2026-11-18",
+  "platform": {
+    "os": "win32 10.0.26200",
+    "arch": "x64",
+    "cpu": "13th Gen Intel(R) Core(TM) i5-13400",
+    "ram_bytes": 16775471104,
+    "ssd": "C: (SATA SSD)",
+    "hdd": "E: (WDC WD20EZBX-08AYR SATA)"
+  },
+  "explain": {
+    "plan": [
+      "SEARCH events USING INDEX idx_events_type_ts (type=? AND ts<?)"
+    ],
+    "temp_btree": false,
+    "order_by_rowid": false,
+    "select_sql": "ORDER BY type ASC, ts ASC LIMIT ?5"
+  },
+  "delete_matrix": {
+    "chosen_tier": 500,
+    "hard_threshold_ms": 500,
+    "iterations": 500,
+    "dataset": "standard-generation-5.22GiB-sustained",
+    "methodology": "同一 5.22GiB generation 副本持续删除；每档 500 批（2000 档 1000 批，5000 档 100 批），记录写任务事务耗时；短跑 10 次矩阵仅作对照，不用于选档。",
+    "tiers": [
+      {
+        "tier": 500,
+        "delete": {
+          "samples": 500,
+          "min_ms": 2,
+          "p50_ms": 140,
+          "p95_ms": 253,
+          "p99_ms": 366,
+          "max_ms": 482,
+          "mean_ms": 140.214,
+          "slow_count": 0
+        },
+        "explain": [
+          "SEARCH events USING INDEX idx_events_type_ts (type=? AND ts<?)"
+        ],
+        "compliant": true,
+        "sample_source": "sustained"
+      },
+      {
+        "tier": 1000,
+        "delete": {
+          "samples": 500,
+          "min_ms": 3,
+          "p50_ms": 292,
+          "p95_ms": 779,
+          "p99_ms": 2190,
+          "max_ms": 4187,
+          "mean_ms": 376.85,
+          "slow_count": 70
+        },
+        "explain": [
+          "SEARCH events USING INDEX idx_events_type_ts (type=? AND ts<?)"
+        ],
+        "compliant": false,
+        "sample_source": "sustained"
+      },
+      {
+        "tier": 2000,
+        "delete": {
+          "samples": 1000,
+          "min_ms": 4,
+          "p50_ms": 499,
+          "p95_ms": 1101,
+          "p99_ms": 2887,
+          "max_ms": 15110,
+          "mean_ms": 561.336,
+          "slow_count": 498
+        },
+        "explain": [
+          "SEARCH events USING INDEX idx_events_type_ts (type=? AND ts<?)"
+        ],
+        "compliant": false,
+        "sample_source": "sustained"
+      },
+      {
+        "tier": 5000,
+        "delete": {
+          "samples": 100,
+          "min_ms": 16,
+          "p50_ms": 1349,
+          "p95_ms": 2510,
+          "p99_ms": 2852,
+          "max_ms": 2906,
+          "mean_ms": 1436.97,
+          "slow_count": 92
+        },
+        "explain": [
+          "SEARCH events USING INDEX idx_events_type_ts (type=? AND ts<?)"
+        ],
+        "compliant": false,
+        "sample_source": "sustained"
+      }
+    ],
+    "short_run_matrix": [
+      {
+        "tier": 500,
+        "delete": {
+          "max_ms": 6,
+          "mean_ms": 3,
+          "min_ms": 1,
+          "p50_ms": 3,
+          "p95_ms": 6,
+          "samples": 10
+        },
+        "select": {
+          "max_ms": 23,
+          "mean_ms": 14.6,
+          "min_ms": 5,
+          "p50_ms": 14,
+          "p95_ms": 23,
+          "samples": 10
+        },
+        "archive": {
+          "max_ms": 51,
+          "mean_ms": 31,
+          "min_ms": 25,
+          "p50_ms": 28,
+          "p95_ms": 51,
+          "samples": 10
+        }
+      },
+      {
+        "tier": 1000,
+        "delete": {
+          "max_ms": 6,
+          "mean_ms": 4.9,
+          "min_ms": 3,
+          "p50_ms": 5,
+          "p95_ms": 6,
+          "samples": 10
+        },
+        "select": {
+          "max_ms": 14,
+          "mean_ms": 11.2,
+          "min_ms": 5,
+          "p50_ms": 12,
+          "p95_ms": 14,
+          "samples": 10
+        },
+        "archive": {
+          "max_ms": 201,
+          "mean_ms": 51.4,
+          "min_ms": 26,
+          "p50_ms": 29,
+          "p95_ms": 201,
+          "samples": 10
+        }
+      },
+      {
+        "tier": 2000,
+        "delete": {
+          "max_ms": 15,
+          "mean_ms": 9.8,
+          "min_ms": 8,
+          "p50_ms": 9,
+          "p95_ms": 15,
+          "samples": 10
+        },
+        "select": {
+          "max_ms": 21,
+          "mean_ms": 16.7,
+          "min_ms": 10,
+          "p50_ms": 16,
+          "p95_ms": 21,
+          "samples": 10
+        },
+        "archive": {
+          "max_ms": 248,
+          "mean_ms": 80.6,
+          "min_ms": 32,
+          "p50_ms": 41,
+          "p95_ms": 248,
+          "samples": 10
+        }
+      },
+      {
+        "tier": 5000,
+        "delete": {
+          "max_ms": 2218,
+          "mean_ms": 1669.8,
+          "min_ms": 19,
+          "p50_ms": 1795,
+          "p95_ms": 2218,
+          "samples": 10
+        },
+        "select": {
+          "max_ms": 849,
+          "mean_ms": 639.3,
+          "min_ms": 15,
+          "p50_ms": 673,
+          "p95_ms": 849,
+          "samples": 10
+        },
+        "archive": {
+          "max_ms": 44,
+          "mean_ms": 40,
+          "min_ms": 37,
+          "p50_ms": 39,
+          "p95_ms": 44,
+          "samples": 10
+        }
+      }
+    ],
+    "archive_batch": 1000,
+    "selection_limit": 5000
+  },
+  "incremental_vacuum": {
+    "auto_vacuum": 2,
+    "pages": 4096,
+    "physical_before": 33890304,
+    "physical_after": 17092608,
+    "free_before": 0,
+    "free_after": 13721600,
+    "build": "debug"
+  },
+  "live_physical": {
+    "live_bytes": 1489279910,
+    "physical_bytes": 5604724736,
+    "physical_over_5gib_warning": true,
+    "physical_level": "critical",
+    "live_projection": "1.387 GiB（M10-08/09 30 天保留后行投影；不得代表物理）",
+    "small_case": {
+      "live_bytes": 3354624,
+      "physical_bytes": 3379376,
+      "physical_level": "ok"
+    },
+    "full_history_after": {
+      "live_bytes": 1520848896,
+      "physical_bytes": 5642207408,
+      "free_bytes": 4121333760,
+      "physical_level": "critical",
+      "physical_warning": true
+    },
+    "after_maintenance_vacuum": {
+      "live_bytes": 810483712,
+      "physical_bytes": 810647552,
+      "physical_level": "ok",
+      "physical_warning": false
+    }
+  },
+  "full_history": {
+    "scenario": "full_history_cleanup",
+    "elapsed_ms": 9356797,
+    "hard_budget_ms": 14400000,
+    "within_budget": true,
+    "outcome": "Cleaned { rows: 16417753, freed_bytes: 0, archives: 16425 }",
+    "build": "release",
+    "dataset": "standard-generation-5.22GiB",
+    "live_physical_after": {
+      "critical_bytes": 5368709120,
+      "free_bytes": 4121333760,
+      "level": "critical",
+      "live_bytes": 1520848896,
+      "physical_bytes": 5642207408,
+      "physical_level": "critical",
+      "physical_warning": "physical_retention_high_watermark: 当前 generation 物理 db+wal 超过 5GiB 强提示档；incremental_vacuum 受 bounded 预算限制，若高水位持续请执行维护态手动 VACUUM（预检可用空间 ≥ db+wal ×2）或评估重构/分片",
+      "total_bytes": 5642207408,
+      "warn_bytes": 2147483648
+    },
+    "delete_batch": {
+      "tier": 500,
+      "last_ms": 18,
+      "max_ms": 5572,
+      "slow_count": 132,
+      "slow_rate": 0.004020100502512563
+    }
+  },
+  "daily_incremental": {
+    "scenario": "daily_incremental_cleanup",
+    "rows": 1000000,
+    "elapsed_ms": 93732,
+    "hard_budget_ms": 300000,
+    "within_budget": true,
+    "outcome": "Cleaned { rows: 1000000, freed_bytes: 16789456, archives: 1000 }",
+    "build": "release"
+  },
+  "maintenance_vacuum": {
+    "physical_before": 5642182656,
+    "physical_after": 810647552,
+    "live_bytes": 810483712,
+    "available_bytes": 328027119616,
+    "required_space_bytes": 11284365312,
+    "took_ms": 13905,
+    "stop_write_ms": 0,
+    "warning": null,
+    "threshold_bytes": 5368709120,
+    "physical_warning_before": true,
+    "build": "release",
+    "dataset": "standard-generation-5.22GiB",
+    "delete_batch_tier": 500
+  },
+  "fault_injections": {
+    "archive_failure_skips_batch": true,
+    "maintenance_defers_cleanup": true,
+    "maintenance_vacuum_space_precheck_rejects": true,
+    "maintenance_vacuum_warning": true,
+    "auto_vacuum_all_databases": true,
+    "audit_log_not_cleaned": true,
+    "final_cleanup_set_unchanged": true,
+    "readback_gap_contract_unchanged": true,
+    "vacuum_maintenance_allowlist_strict": true
+  },
+  "contract": {
+    "commands": 87,
+    "business_codes": 35,
+    "settings_keys": 11,
+    "migrations": 14
+  },
+  "long_tail_probe": {
+    "scenario": "delete_long_tail_probe",
+    "description": "区分删除命令队列等待与写任务事务内耗时；全量 2000 档长尾 8573ms 由持续大事务/WAL 成本累积放大，非单次 OS 抖动。",
+    "probes": {
+      "500": {
+        "chunks": 500,
+        "queue": {
+          "max_ms": 482,
+          "mean_ms": 140.274,
+          "min_ms": 2,
+          "p50_ms": 140,
+          "p95_ms": 253,
+          "p99_ms": 366,
+          "samples": 500
+        },
+        "tx": {
+          "max_ms": 482,
+          "mean_ms": 140.214,
+          "min_ms": 2,
+          "p50_ms": 140,
+          "p95_ms": 253,
+          "p99_ms": 366,
+          "samples": 500
+        },
+        "slow_count": 0
+      },
+      "1000": {
+        "chunks": 500,
+        "queue": {
+          "max_ms": 4188,
+          "mean_ms": 376.932,
+          "min_ms": 3,
+          "p50_ms": 292,
+          "p95_ms": 779,
+          "p99_ms": 2190,
+          "samples": 500
+        },
+        "tx": {
+          "max_ms": 4187,
+          "mean_ms": 376.85,
+          "min_ms": 3,
+          "p50_ms": 292,
+          "p95_ms": 779,
+          "p99_ms": 2190,
+          "samples": 500
+        },
+        "slow_count": 70
+      },
+      "2000": {
+        "chunks": 1000,
+        "queue": {
+          "max_ms": 15110,
+          "mean_ms": 561.387,
+          "min_ms": 4,
+          "p50_ms": 499,
+          "p95_ms": 1101,
+          "p99_ms": 2887,
+          "samples": 1000
+        },
+        "tx": {
+          "max_ms": 15110,
+          "mean_ms": 561.336,
+          "min_ms": 4,
+          "p50_ms": 499,
+          "p95_ms": 1101,
+          "p99_ms": 2887,
+          "samples": 1000
+        },
+        "slow_count": 498
+      },
+      "5000": {
+        "chunks": 100,
+        "queue": {
+          "max_ms": 2906,
+          "mean_ms": 1437,
+          "min_ms": 16,
+          "p50_ms": 1349,
+          "p95_ms": 2510,
+          "p99_ms": 2853,
+          "samples": 100
+        },
+        "tx": {
+          "max_ms": 2906,
+          "mean_ms": 1436.97,
+          "min_ms": 16,
+          "p50_ms": 1349,
+          "p95_ms": 2510,
+          "p99_ms": 2852,
+          "samples": 100
+        },
+        "slow_count": 92
+      }
+    },
+    "resolution": "删除档位改为 500；持续 500 批 P95 253ms、max 482ms、0 批 >500ms。"
+  }
+}

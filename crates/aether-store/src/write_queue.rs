@@ -28,7 +28,9 @@ use crate::checkpoint::{
 };
 use crate::error::StoreError;
 use crate::layout::{shard_for, StorageLayout};
-use crate::ops::{apply_command, StoreCommand, StoreOutcome};
+use crate::ops::{
+    apply_command, incremental_vacuum_connection, vacuum_connection, StoreCommand, StoreOutcome,
+};
 use crate::store::Store;
 
 /// 写队列容量（D3：`mpsc::channel(4096)`）。
@@ -392,9 +394,36 @@ impl WriteQueue {
     /// - 命令在写任务内独立事务执行：成功 = `COMMIT` 已返回；
     /// - 与事件批次的顺序保持 FIFO（命令到达前的批次先提交）。
     pub async fn execute(&self, command: StoreCommand) -> Result<StoreOutcome, StoreError> {
+        self.send_command(command, true).await
+    }
+
+    /// 维护态命令执行（调用方已持有 [`WriteQueue::pause_and_drain`] 守卫；不等待写门）。
+    ///
+    /// 仅接受 `VacuumAll` / `IncrementalVacuum`；其他命令不得绕过写门。
+    pub async fn execute_maintenance(
+        &self,
+        command: StoreCommand,
+    ) -> Result<StoreOutcome, StoreError> {
+        match &command {
+            StoreCommand::VacuumAll | StoreCommand::IncrementalVacuum { .. } => {}
+            _ => {
+                return Err(StoreError::Internal {
+                    reason: "execute_maintenance 仅接受维护命令（VacuumAll/IncrementalVacuum）"
+                        .to_owned(),
+                })
+            }
+        }
+        self.send_command(command, false).await
+    }
+
+    async fn send_command(
+        &self,
+        command: StoreCommand,
+        wait_gate: bool,
+    ) -> Result<StoreOutcome, StoreError> {
         // 启动检查期允许非事件命令（会话创建/审计等）完成，避免启动尾段阻塞；
         // 事件写入仍由 append_events 快速拒绝。维护态（rejecting=false,paused=true）继续阻塞。
-        if !self.gate.is_rejecting() {
+        if wait_gate && !self.gate.is_rejecting() {
             self.gate.wait_open().await;
         }
         let (reply, reply_rx) = oneshot::channel();
@@ -1211,8 +1240,8 @@ impl StoreRuntime {
             .filter(|sidecar| sidecar.generation == layout.generation());
         // ADR-039 D-039-2 / P2-3：`clean_start_count` 仅在「干净启动且 sidecar 全匹配」
         // 时 +1；异常启动/sidecar 不匹配/版本升级/恢复/导入后重置为 0。
-        let strict_start = crate::layout::plan_startup_checks(&layout, env!("CARGO_PKG_VERSION"))
-            .strict_ok;
+        let strict_start =
+            crate::layout::plan_startup_checks(&layout, env!("CARGO_PKG_VERSION")).strict_ok;
         let last_full_check_at = sidecar
             .as_ref()
             .and_then(|sidecar| sidecar.last_full_check_at)
@@ -1562,9 +1591,7 @@ impl StoreRuntime {
             closed_at: now_ms(),
             close_sequence_completed: true,
             write_queue_drained: true,
-            background_check_completed: self
-                .background_check_completed
-                .load(Ordering::Acquire),
+            background_check_completed: self.background_check_completed.load(Ordering::Acquire),
             last_full_check_at,
             clean_start_count,
             main: crate::layout::database_fingerprint(layout.main_db(), None)?,
@@ -1913,6 +1940,20 @@ fn apply_command_multi(
                         reason: format!("分片 id 越界：{shard_id}"),
                     })?;
             apply_delete_events(connection, rowids)
+        }
+        StoreCommand::IncrementalVacuum { pages } => {
+            incremental_vacuum_connection(main, *pages)?;
+            for shard in shards.iter() {
+                incremental_vacuum_connection(shard, *pages)?;
+            }
+            Ok(StoreOutcome::Applied { affected: 0 })
+        }
+        StoreCommand::VacuumAll => {
+            vacuum_connection(main)?;
+            for shard in shards.iter() {
+                vacuum_connection(shard)?;
+            }
+            Ok(StoreOutcome::Applied { affected: 0 })
         }
         _ => apply_command(main, command),
     }

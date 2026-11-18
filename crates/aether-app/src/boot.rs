@@ -675,6 +675,7 @@ pub fn build_backend(
             write_for_diagnostics,
             handle.clone(),
             std::sync::Arc::new(aether_control::SystemClock),
+            Some(std::sync::Arc::clone(&maintenance)),
         ));
         if let (Some(orchestrator), Some(task)) = (&orchestrator, backend.spawn_retention(&handle))
         {

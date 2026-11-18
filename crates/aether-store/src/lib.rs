@@ -34,15 +34,16 @@ pub mod write_queue;
 
 pub use archive::{
     archive_line_whitelist, archive_retention_batch, audit_archive_file_name,
-    cleanup_archive_temps, compact_date_utc, export_audit_archive, export_full_archive,
-    export_full_archive_generation, export_session_archive, export_session_archive_generation,
-    full_archive_file_name, retention_archive_file_name, select_retention_batch,
-    select_retention_batch_generation, session_archive_file_name, unique_archive_path,
-    verify_archive_file, ArchiveCounts, ArchiveManifest, ArchiveReport, ArchiveSanitizer,
-    ArchiveVerification, RetentionEventRow, ARCHIVE_BUFFER_BYTES, ARCHIVE_FORMAT_VERSION,
-    ARCHIVE_MANIFEST_KIND, ARCHIVE_PARTIAL_INFIX, ARCHIVE_SOURCE_ARCHIVE_EXPORT,
-    ARCHIVE_SOURCE_AUDIT_EXPORT, ARCHIVE_SOURCE_AUTO_RETENTION, ARCHIVE_SOURCE_SESSION_EXPORT,
-    ARCHIVE_TEMP_INFIX, RETENTION_BATCH_MAX, RETENTION_EVENT_TYPES,
+    cleanup_archive_temps, compact_date_utc, explain_retention_batch, export_audit_archive,
+    export_full_archive, export_full_archive_generation, export_session_archive,
+    export_session_archive_generation, full_archive_file_name, retention_archive_file_name,
+    select_retention_batch, select_retention_batch_generation, session_archive_file_name,
+    unique_archive_path, verify_archive_file, ArchiveCounts, ArchiveManifest, ArchiveReport,
+    ArchiveSanitizer, ArchiveVerification, RetentionEventRow, ARCHIVE_BUFFER_BYTES,
+    ARCHIVE_FORMAT_VERSION, ARCHIVE_MANIFEST_KIND, ARCHIVE_PARTIAL_INFIX,
+    ARCHIVE_SOURCE_ARCHIVE_EXPORT, ARCHIVE_SOURCE_AUDIT_EXPORT, ARCHIVE_SOURCE_AUTO_RETENTION,
+    ARCHIVE_SOURCE_SESSION_EXPORT, ARCHIVE_TEMP_INFIX, RETENTION_BATCH_MAX, RETENTION_EVENT_TYPES,
+    RETENTION_SELECT_SQL,
 };
 
 pub use backup::{
@@ -96,19 +97,17 @@ pub use import::{
 pub use layout::{
     assert_invariants, clean_shutdown_is_strict, cleanup_old_generations,
     cleanup_unreferenced_staging, commit_staged_generation, database_fingerprint, file_size,
-    generation_live_bytes,
-    generations_total_bytes, header_change_counter, initialize as initialize_layout,
-    invalidate_clean_shutdown, is_valid_generation_id, journal_file_name, list_generations,
-    open_or_initialize as open_layout, pending_deletions, plan_startup_checks, read_clean_shutdown,
-    read_current,
-    read_existing as read_layout, read_generation_journal, remove_generation_journal,
-    replace_file_atomic, shard_file_name, shard_for, shard_last_seq, sqlite_sidecar,
-    write_clean_shutdown, write_current, write_generation_journal, CleanShutdown, CurrentPointer,
-    DatabaseFingerprint, GenerationInfo, GenerationJournal, GenerationRecovery, GenerationStatus,
+    generation_capacity, generation_live_bytes, generations_total_bytes, header_change_counter,
+    initialize as initialize_layout, invalidate_clean_shutdown, is_valid_generation_id,
+    journal_file_name, list_generations, open_or_initialize as open_layout, pending_deletions,
+    plan_startup_checks, read_clean_shutdown, read_current, read_existing as read_layout,
+    read_generation_journal, remove_generation_journal, replace_file_atomic, shard_file_name,
+    shard_for, shard_last_seq, sqlite_sidecar, write_clean_shutdown, write_current,
+    write_generation_journal, CleanShutdown, CurrentPointer, DatabaseFingerprint,
+    GenerationCapacity, GenerationInfo, GenerationJournal, GenerationRecovery, GenerationStatus,
     ShardEntry, ShardFingerprint, ShardsManifest, StartupCheckPlan, StorageLayout,
-    CLEAN_SHUTDOWN_NAME,
-    CURRENT_FILE_NAME, EVENTS_DIR_NAME, FAILED_GENERATION_PREFIX, FORMAT_VERSION,
-    GENERATIONS_DIR_NAME, IMPORT_JOURNAL_NAME, JOURNAL_VERSION, MAIN_DB_NAME,
+    CLEAN_SHUTDOWN_NAME, CURRENT_FILE_NAME, EVENTS_DIR_NAME, FAILED_GENERATION_PREFIX,
+    FORMAT_VERSION, GENERATIONS_DIR_NAME, IMPORT_JOURNAL_NAME, JOURNAL_VERSION, MAIN_DB_NAME,
     PRE_GENERATION_PREFIX, RESTORE_JOURNAL_NAME, SHARDS_MANIFEST_NAME, SHARD_COUNT,
     STAGING_DIR_NAME,
 };
@@ -133,10 +132,10 @@ pub use subagent::{SubagentCommand, SubagentInjectionRecord, SubagentResultRecor
 pub use workflow::{NodeRunRecord, TaskRecord, WorkflowCommand, WorkflowRecord, WorkflowRunRecord};
 pub use write_queue::{
     BatchTrigger, CommitReceipt, MaintenanceWriteGuard, QueueMetrics, QueuePressureLevel,
-    QueuePressurePhase, ReadPool, ReadPoolCloseReport, ShutdownConfig, ShutdownReport, ShutdownStep,
-    ShutdownStepRecord, StoreRuntime, WriteQueue, WriteQueueAlert, WriteQueueConfig, FLUSH_INTERVAL,
-    L1_THRESHOLD, L2_THRESHOLD, MAX_BATCH_ENTRIES, QUEUE_CAPACITY, READ_CONNECTION_COUNT,
-    SHUTDOWN_DRAIN_TIMEOUT, SHUTDOWN_READ_CLOSE_TIMEOUT,
+    QueuePressurePhase, ReadPool, ReadPoolCloseReport, ShutdownConfig, ShutdownReport,
+    ShutdownStep, ShutdownStepRecord, StoreRuntime, WriteQueue, WriteQueueAlert, WriteQueueConfig,
+    FLUSH_INTERVAL, L1_THRESHOLD, L2_THRESHOLD, MAX_BATCH_ENTRIES, QUEUE_CAPACITY,
+    READ_CONNECTION_COUNT, SHUTDOWN_DRAIN_TIMEOUT, SHUTDOWN_READ_CLOSE_TIMEOUT,
 };
 
 #[cfg(test)]

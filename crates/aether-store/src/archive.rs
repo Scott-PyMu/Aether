@@ -760,9 +760,19 @@ pub fn verify_archive_file(path: &Path) -> Result<ArchiveVerification, StoreErro
     })
 }
 
-/// 保留清理候选批：白名单类型 + `ts < cutoff`（`rowid` 升序，≤`limit`）。
+/// 保留清理选批 SQL（M10-11/ADR-039 D-039-4：`(type, ts)` 选批，走
+/// `idx_events_type_ts`，不得按 `rowid` 排序）。
 ///
-/// `limit` 由调用方以 [`RETENTION_BATCH_MAX`] 约束（ADR-021 §2.1-5）。
+/// `LIMIT` 由调用方以 [`RETENTION_BATCH_MAX`] 约束；`EXPLAIN QUERY PLAN` 断言见
+/// [`explain_retention_batch`]。
+pub const RETENTION_SELECT_SQL: &str = "SELECT rowid, id, session_id, run_id, runtime_id, seq, \
+     type, payload, ts, v FROM events WHERE type IN (?1, ?2, ?3) AND ts < ?4 \
+     ORDER BY type ASC, ts ASC LIMIT ?5";
+
+/// 保留清理候选批：白名单类型 + `ts < cutoff`（`(type, ts)` 升序，≤`limit`）。
+///
+/// `limit` 由调用方以 [`RETENTION_BATCH_MAX`] 约束（ADR-021 §2.1-5）；
+/// 实际删除事务档位由上层 `RetentionTask` 选择（M10-11）。
 pub fn select_retention_batch(
     conn: &Connection,
     cutoff_ts: i64,
@@ -772,11 +782,7 @@ pub fn select_retention_batch(
         i64::try_from(limit.min(RETENTION_BATCH_MAX)).map_err(|_| StoreError::Internal {
             reason: "保留清理批上限转换失败".to_owned(),
         })?;
-    let mut statement = conn.prepare(
-        "SELECT rowid, id, session_id, run_id, runtime_id, seq, type, payload, ts, v \
-         FROM events WHERE type IN (?1, ?2, ?3) AND ts < ?4 \
-         ORDER BY rowid ASC LIMIT ?5",
-    )?;
+    let mut statement = conn.prepare(RETENTION_SELECT_SQL)?;
     let rows = statement.query_map(
         rusqlite::params![
             RETENTION_EVENT_TYPES[0],
@@ -792,6 +798,37 @@ pub fn select_retention_batch(
         batch.push(row?);
     }
     Ok(batch)
+}
+
+/// 保留选批执行计划（`EXPLAIN QUERY PLAN`；M10-11 DoD-1）。
+///
+/// 返回每行 `detail` 文本；调用方断言不含 `TEMP B-TREE` 且命中
+/// `idx_events_type_ts`（不得退化为全表扫描或额外排序）。
+pub fn explain_retention_batch(
+    conn: &Connection,
+    cutoff_ts: i64,
+    limit: usize,
+) -> Result<Vec<String>, StoreError> {
+    let limit =
+        i64::try_from(limit.min(RETENTION_BATCH_MAX)).map_err(|_| StoreError::Internal {
+            reason: "保留清理批上限转换失败".to_owned(),
+        })?;
+    let mut statement = conn.prepare(&format!("EXPLAIN QUERY PLAN {RETENTION_SELECT_SQL}"))?;
+    let rows = statement.query_map(
+        rusqlite::params![
+            RETENTION_EVENT_TYPES[0],
+            RETENTION_EVENT_TYPES[1],
+            RETENTION_EVENT_TYPES[2],
+            cutoff_ts,
+            limit,
+        ],
+        |row| row.get::<_, String>(3),
+    )?;
+    let mut plan = Vec::new();
+    for row in rows {
+        plan.push(row?);
+    }
+    Ok(plan)
 }
 
 fn read_retention_row(row: &Row<'_>) -> rusqlite::Result<RetentionEventRow> {

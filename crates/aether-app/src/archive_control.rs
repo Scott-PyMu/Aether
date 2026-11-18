@@ -91,6 +91,7 @@ impl ArchiveControlBackend {
         write: Option<WriteQueue>,
         handle: tokio::runtime::Handle,
         clock: SharedClock,
+        maintenance: Option<Arc<crate::ipc::MaintenanceCell>>,
     ) -> Self {
         let retention = match (reads.clone(), write.clone()) {
             (Some(reads), Some(write)) => Some(Arc::new(RetentionTask::new(RetentionDeps {
@@ -99,6 +100,8 @@ impl ArchiveControlBackend {
                 write,
                 clock: clock.clone(),
                 thresholds: RetentionThresholds::from_env(),
+                maintenance,
+                space: Arc::new(crate::backup_control::NativeSpaceProbe),
             }))),
             _ => None,
         };

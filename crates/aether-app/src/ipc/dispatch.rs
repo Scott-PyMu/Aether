@@ -171,20 +171,23 @@ pub const BACKUP_MAINTENANCE_ALLOWED_COMMANDS: &[&str] = &["health", "app_exit"]
 /// 执行（Tauri：`spawn_blocking`；daemon：请求串行线程），命令语义不受影响。
 pub fn dispatch(state: &IpcState, method: &str, params: Value) -> Result<Value, IpcError> {
     if let Some(maintenance) = state.maintenance_state() {
-        let allowed = if maintenance.kind == "backup" || maintenance.kind == "restore" {
+        // 备份/恢复/手动 VACUUM 均为严格 allowlist（仅 health/app_exit）；
+        // 导入维护窗口沿用 ADR-034 的宽松 allowlist。
+        let strict = matches!(maintenance.kind.as_str(), "backup" | "restore" | "vacuum");
+        let allowed = if strict {
             BACKUP_MAINTENANCE_ALLOWED_COMMANDS
         } else {
             MAINTENANCE_ALLOWED_COMMANDS
         };
         if !allowed.contains(&method) {
-            let message = if maintenance.kind == "backup" || maintenance.kind == "restore" {
+            let message = if strict {
+                let label = match maintenance.kind.as_str() {
+                    "backup" => "备份",
+                    "restore" => "恢复",
+                    _ => "手动 VACUUM",
+                };
                 format!(
-                    "{}维护中：{}；除 health/app_exit 外全部命令拒绝",
-                    if maintenance.kind == "backup" {
-                        "备份"
-                    } else {
-                        "恢复"
-                    },
+                    "{label}维护中：{}；除 health/app_exit 外全部命令拒绝",
                     maintenance.reason
                 )
             } else {

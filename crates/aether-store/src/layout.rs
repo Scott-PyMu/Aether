@@ -851,6 +851,51 @@ pub fn generation_live_bytes(layout: &StorageLayout) -> u64 {
         .sum()
 }
 
+/// 当前 generation 容量分项（M10-11 DoD-6：逻辑 live 与物理 `db+wal` 分开报告）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GenerationCapacity {
+    /// 物理主库+分片 `.db` 文件字节。
+    pub db_bytes: u64,
+    /// 物理 `-wal` 文件字节。
+    pub wal_bytes: u64,
+    /// 物理合计（`db + wal`；不得用 live 代表此项）。
+    pub physical_bytes: u64,
+    /// SQLite 在用页字节（`(page_count - freelist_count) * page_size`，不含 WAL）。
+    pub live_bytes: u64,
+    /// SQLite freelist 页字节（可被 `incremental_vacuum` 回收）。
+    pub free_bytes: u64,
+}
+
+/// 统计当前 generation 的物理/逻辑容量（只读连接；分片缺失时返回错误）。
+pub fn generation_capacity(layout: &StorageLayout) -> Result<GenerationCapacity, StoreError> {
+    let mut capacity = GenerationCapacity::default();
+    for path in layout.all_db_paths() {
+        let db_bytes = file_size(&path);
+        let wal_bytes = file_size(&sqlite_sidecar(&path, "-wal"));
+        capacity.db_bytes = capacity.db_bytes.saturating_add(db_bytes);
+        capacity.wal_bytes = capacity.wal_bytes.saturating_add(wal_bytes);
+        let connection = Store::open_read_only(&path)?;
+        let page_count: i64 =
+            connection.pragma_query_value(None, "page_count", |row| row.get(0))?;
+        let freelist: i64 =
+            connection.pragma_query_value(None, "freelist_count", |row| row.get(0))?;
+        let page_size: i64 = connection.pragma_query_value(None, "page_size", |row| row.get(0))?;
+        let in_use = page_count.saturating_sub(freelist).max(0);
+        let free = freelist.max(0);
+        let page_size = u64::try_from(page_size).unwrap_or(0);
+        let in_use = u64::try_from(in_use).unwrap_or(0);
+        let free = u64::try_from(free).unwrap_or(0);
+        capacity.live_bytes = capacity
+            .live_bytes
+            .saturating_add(in_use.saturating_mul(page_size));
+        capacity.free_bytes = capacity
+            .free_bytes
+            .saturating_add(free.saturating_mul(page_size));
+    }
+    capacity.physical_bytes = capacity.db_bytes.saturating_add(capacity.wal_bytes);
+    Ok(capacity)
+}
+
 /// 当前 generation + `.pre-*` + `.failed-*` 总字节（容量巡检）。
 pub fn generations_total_bytes(layout: &StorageLayout) -> u64 {
     list_generations(&layout.data_dir)

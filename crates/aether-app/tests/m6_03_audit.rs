@@ -141,6 +141,7 @@ impl AuditFixture {
             Some(boot.write.clone()),
             handle,
             clock,
+            None,
         );
         if let Some(probe) = probe {
             backend = backend.with_space_probe(probe);

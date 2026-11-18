@@ -594,6 +594,19 @@ pub enum StoreCommand {
         /// 待删事件行 `rowid` 列表（空列表为 no-op）。
         rowids: Vec<i64>,
     },
+    /// ADR-039 D-039-4：有界 `PRAGMA incremental_vacuum(N)`（主库 + 全部分片）。
+    ///
+    /// 保留清理后按页数上限回收 freelist（`incremental auto_vacuum`）；不重建库、
+    /// 不阻塞启动/UI。单库上下文仅作用于当前连接。
+    IncrementalVacuum {
+        /// 本轮回收集中的页数上限（>0）。
+        pages: u32,
+    },
+    /// ADR-039 D-039-4：维护态手动 `VACUUM`（主库 + 全部分片）。
+    ///
+    /// 调用方必须先停写/drain（`WriteQueue::pause_and_drain`），并完成空间预检
+    /// （可用空间 ≥ 当前 `db+wal` ×2）；本命令不做空间预检。
+    VacuumAll,
     /// M10-01/ADR-031：编排定义/运行/节点/任务写命令（单事务由
     /// [`crate::workflow::apply_command`] 执行）。
     Workflow {
@@ -1802,9 +1815,40 @@ pub(crate) fn apply_command(
             reason: "DeleteEventsInShard 必须在分片写任务内执行（apply_command 单库上下文）"
                 .to_owned(),
         }),
+        StoreCommand::IncrementalVacuum { pages } => {
+            incremental_vacuum_connection(connection, *pages)?;
+            Ok(StoreOutcome::Applied { affected: 0 })
+        }
+        StoreCommand::VacuumAll => {
+            vacuum_connection(connection)?;
+            Ok(StoreOutcome::Applied { affected: 0 })
+        }
         StoreCommand::Workflow { command } => crate::workflow::apply_command(connection, command),
         StoreCommand::Subagent { command } => crate::subagent::apply_command(connection, command),
     }
+}
+
+/// 有界 `incremental_vacuum`（页数上限；`0` 为 no-op）。
+pub(crate) fn incremental_vacuum_connection(
+    connection: &Connection,
+    pages: u32,
+) -> Result<(), StoreError> {
+    if pages == 0 {
+        return Ok(());
+    }
+    // PRAGMA 不支持参数绑定；`pages` 为 `u32` 且由常量/内部调用约束，拼接安全。
+    // 注意：`PRAGMA incremental_vacuum(N)` 每步（每行）回收一页；rusqlite
+    // `execute_batch` 只 step 一次，必须显式遍历结果行直到结束。
+    let mut statement = connection.prepare(&format!("PRAGMA incremental_vacuum({pages})"))?;
+    let mut rows = statement.query([])?;
+    while rows.next()?.is_some() {}
+    Ok(())
+}
+
+/// 维护态 `VACUUM`（调用方已停写；不得在事务内执行）。
+pub(crate) fn vacuum_connection(connection: &Connection) -> Result<(), StoreError> {
+    connection.execute_batch("VACUUM;")?;
+    Ok(())
 }
 
 fn insert_message(connection: &Connection, message: &Message) -> Result<usize, StoreError> {

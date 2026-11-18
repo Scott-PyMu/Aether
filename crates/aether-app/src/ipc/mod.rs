@@ -40,7 +40,8 @@ use crate::startup::StartupGate;
 /// 维护态（ADR-039 D-039-5 §2）：备份/恢复独占；除 `health`/`app_exit` 外拒绝。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MaintenanceState {
-    /// `backup` / `restore`（导入维护窗口沿用 `IpcBackend::maintenance_state`）。
+    /// `backup` / `restore` / `vacuum`（手动收缩；导入维护窗口沿用
+    /// `IpcBackend::maintenance_state`）。
     pub kind: String,
     /// 面向 UI 的原因文本（不含密钥）。
     pub reason: String,
