@@ -197,7 +197,8 @@ P0/P1 明细见 `docs/M10-13-p0-p1.json`（T1–T15 + P1 三项 + M1-08/M4-05）
 
 - 首轮：commit `752bde5ce6cceaa890b14cfd7cbddf2e7794205a`，CI run **44485724444**。
 - 修复 Linux/macOS 冒烟 DB 探针后：commit **`3b49d1f239cd2c1c97bbd78a0a3be5101c3e8ab6`**，CI run **44487867096**。
-- Coverage job：`Coverage gate (>=70% lines)`，job id **135435798776** → **success**；TOTAL lines **73.62%**（64280 行，missed 16954）、functions **70.64%**、regions **71.16%**；`cargo llvm-cov --workspace --fail-under-lines 70` 通过。
-- 平台 job（run 44487867096）：`M9-12 Playwright Electron E2E (Windows/macOS)` **success**；`M10-09/03/11` Windows/Linux/macOS job **success**（首轮已确认；重跑继续）；`M9-12 Linux build + xvfb smoke` **success**（job `135435799293`，修复后）；`M9-13 Windows` 长 job 见 job `135435798980`（覆盖率/平台 job 不依赖该长 job）。
-- 首轮 Linux xvfb smoke 失败原因：`scripts/test/m9-11/smoke-linux.mjs` 仍查扁平 `aether.db`；已按 ADR-039 改为 `CURRENT` + `generations/<gen>/aether.db`（macOS 同修）。
+- 记录证据的 docs-only commit **`fd322b9a5c97e49aca2a78e05e8940bf3a531b9f`**，CI run **44490045490**，Coverage job **135443114497** **success**：TOTAL lines **73.64%**（64280 行，missed 16945）、functions **70.66%**、regions **71.18%**；`cargo llvm-cov --workspace --fail-under-lines 70` 通过。
+- 平台 job（run 44490045490）：`M9-12 Playwright Electron E2E (Windows/macOS)` **success**；`M9-12 Linux build + xvfb smoke` **success**；`M10-09/03/11` Windows/Linux/macOS job 首轮已 **success**。
+- `M9-13 Windows` 长 job 在 run 44487867096 被后续推送的 concurrency 取消；本地 `pnpm verify:m9-13` 134 项 PASS（见 §8），其最终 CI 结论以 GitHub 页面为准。
+- 首轮 Linux xvfb smoke 失败原因：`scripts/test/m9-11/smoke-linux.mjs` 仍查扁平 `aether.db`；已按 ADR-039 改为 `CURRENT` + `generations/<gen>/aether.db`（macOS 同修），修复后 success。
 - 若本文件与 GitHub 页面不一致，以 GitHub 页面/run 结论为准。
