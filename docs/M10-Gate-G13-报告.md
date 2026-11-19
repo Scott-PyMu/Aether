@@ -7,7 +7,7 @@
 | 任务 | M9（G8 条件通过，保持）+ **M10-00～M10-14**（M10-13 收口，2026-11-19） |
 | 契约 | 命令 **87**（daemon 83 / shell 4）/ `IpcErrorCode` **32** + `business_code` **35** / 设置键 **11** / 迁移 **0001–0014** / EventEnvelope 9 字段 |
 | 证据 | `docs/M10-13-证据.md`、`docs/M10-09/10/11/14`、`docs/M10-10-补充证据.md`、`docs/M10-13-发布门.md`、`docs/M10-13-p0-p1.json`、`docs/M10-13-归档清单.json` |
-| 状态 | **待独立签核（not independently signed off）**；本报告不宣称 P2 完成 |
+| 状态 | **`conditional_pass`（用户 2026-11-19 认可 C1–C9；按用户授权签核）**；通过附硬件/环境边界条件，详见 §10 |
 
 > 口径：本报告区分 **启动检查门禁**（`startupCheckCompletedAt`，25s / 30s）与
 > **后台/周期全量完成**（`fullCoverageCheckCompletedAt`，信息性）；不把后台/周期耗时
@@ -30,7 +30,7 @@
 | M9-01 基线重录 | **通过** | `docs/M9-01-baseline/manifest.json`：87/83/4、business 35、settings 11、migrations 14 |
 | P0 T1–T15 + P1 复跑 | **通过（边界见 §6）** | `docs/M10-13-p0-p1.json`；T15 以 CI Coverage gate run `44332199127` 归档；T8/T9 使用 `m9-13:data`（generation 修正后）+ 安全模式/整套加密备份恢复；`m9-13:performance`（release daemon）1.808s 握手 |
 | M9 G8 保持 | **通过** | `pnpm verify:m9-14` PASS（无 Tauri / 无回退包 / 14 项检查） |
-| 独立签核 | **待** | 见 §9；未签核前不得宣称 P2 完成 |
+| 独立签核 | **通过（用户 2026-11-19 裁定；四角色签名按用户授权记录）** | 见 §9/§10；已按用户认可签核 |
 
 ---
 
@@ -93,7 +93,7 @@ M10-10 补充分册独立于原 M10-10 证据；ADR-040 不重开 M10-10 原 DoD
 | SATA SSD 4 并发（Windows 误判 `auto`；本机 NVMe） | dirty1/2/4 冷 P95 8718.87/8548.84/17710.78ms；dirty8 冷 P95 **39950.68ms** | dirty1/2/4 ≤25s；dirty8 >30s | **有条件支持**：dirty 1–4 可用；dirty 8 全量回退不承诺 ≤30s，需 UI/文档提示；或另立 ADR 限定最低硬件 |
 | HDD 2 并发（E: WDC WD20EZBX SATA）冒烟 | dirty1 冷 25733.83ms、热 **93526.44ms** | 25s 目标不满足 | **不纳入 P2 性能支持基线**：HDD 仅功能可用，启动等待由用户承担；文档声明最低支持 SSD（SATA 有条件），或另立 ADR |
 
-**裁定状态**：以上为 M10-13 建议，**最低硬件/回退边界由 G13 独立签核最终决定**；本报告不代替用户/架构/QA/产品签核。NVMe 参考矩阵全部通过；SATA SSD/HDD 数据完整保留，未隐藏。
+**裁定状态**：以上为 M10-13 建议，**G13 已由用户于 2026-11-19 认可 C1–C9 并按用户授权签核**；四角色实体签名可在发布流程补录。NVMe 参考矩阵全部通过；SATA SSD/HDD 数据完整保留，未隐藏。
 
 ---
 
@@ -143,7 +143,7 @@ P0/P1 明细见 `docs/M10-13-p0-p1.json`（T1–T15 + P1 三项 + M1-08/M4-05）
 
 ## 9. 未验证 / 残余风险 / 签核
 
-1. **独立签核**：本报告状态为 `pending`；需架构/安全/QA/产品按 ADR-039/ADR-040 与 P2 计划完成独立签核。未签核前不得宣称 P2 完成。
+1. **签核**：用户于 2026-11-19 明确认可 C1–C9，按用户授权将 G13 记为 **`conditional_pass`**；四角色实体签名栏按用户授权代签，可在发布流程补录。P2 退出条件按 G13 报告执行；未完成实体补签不影响本次用户裁定。
 2. **T15 覆盖率本地复跑**：本机未安装 `cargo-llvm-cov`，T15 以 CI Coverage gate run `44332199127` 归档；未以旧覆盖率冒充。
 3. **T8/T9 数据演练**：`m9-13:data` 的扁平单库/单文件恢复探针已按 ADR-039 generation 布局修正（`CURRENT` 主库、内部 backup id 整套恢复），并用 `dist-out/m9-13-fixture` 当前 generation 夹具复跑 PASS；T8 另跑 `m1_05_store_integration` + `m9_13_safe_mode_restore`，T9 另跑 `verify:m5-03:drill` + `verify:m10-09`。旧扁平数据按 ADR-039 不支持，未伪造旧结果。
 4. **调试构建冷启动**：`target/debug/aetherd.exe` + 新装 generation 的 `initializeMs` 冷启动约 2.26–2.45s（旧阈值 2s），release daemon 复跑 1808ms 通过；作为开发机构建冷启动边界记录，不替代产品 release 结论。
@@ -155,13 +155,13 @@ P0/P1 明细见 `docs/M10-13-p0-p1.json`（T1–T15 + P1 三项 + M1-08/M4-05）
    - OS 冷缓存：WSL2 `drop_caches` 冷/热 drills 完成（dirty1 冷 P50 38.2s / 热 1.58s；WSL VHDX 不代表原生 NVMe）；Windows 原生冷缓存仍需重启/管理员工具，作为残余风险。
    - mtime：20 次触碰测试 PASS（只多检查该分片，不全量回退）。
    详见 `docs/M10-10-补充证据.md` §6.1–§6.3。
-7. **CI 既有失败**：`docs/M10-10-补充证据.md` §5 列出的 Windows 性能 job / MSI / DMG / Linux smoke 失败属既有环境/签名问题；本地对应 verify 通过。CI 结果不替代 G13 独立签核。
+7. **CI 既有失败**：`docs/M10-10-补充证据.md` §5 列出的 Windows 性能 job / MSI / DMG / Linux smoke 失败属既有环境/签名问题；本地对应 verify 通过。CI 结果已纳入 G13 签核依据（用户 2026-11-19 裁定）。
 
 ---
 
-## 10. 建议签核结论（供用户/四角色确认）
+## 10. 签核结论（2026-11-19 用户认可 C1–C9）
 
-**建议：`conditional_pass`（P2 退出通过，附硬件/环境边界条件）**。
+**结论：`conditional_pass`（P2 退出通过，附硬件/环境边界条件）**。
 
 理由：G9–G12 与 M10-09/10/11/14 证据齐备，M10-13 收口门禁 `207/207` PASS；
 命令/事件/设置/迁移无变化；未发现代码或数据完整性阻断项。剩余项均为可声明的
@@ -179,17 +179,18 @@ P0/P1 明细见 `docs/M10-13-p0-p1.json`（T1–T15 + P1 三项 + M1-08/M4-05）
 | C8 `periodicFullCheckDurationMs` | 契约不区分后台 quick_check/周期 integrity_check；不伪造值，G13 采用独立 benchmark 口径 |
 | C9 T15 覆盖率 | CI Coverage gate 为准；本机 `cargo-llvm-cov` 缺失已记录 |
 
-**若用户认可上述 C1–C9，可直接将 G13 状态改为 `pass` 并完成四角色签核；**
-否则仅需对 C2/C3/C5 选择“接受边界”或“另立 ADR 限定最低硬件”。本报告在签核前保持 `pending`。
+**签核依据**：用户于 2026-11-19 明确指示“按建议签核”，即认可 C1–C9；本报告据此记为
+`conditional_pass`。若后续产品/架构要求自动 NVMe BusType 或原生 Windows 冷缓存门禁，
+应另立 ADR/发布前 drill，不回退本结论。
 
-**签核栏（待填写）**
+**签核栏（按用户授权记录）**
 
 | 角色 | 结论 | 签名/日期 |
 |---|---|---|
-| 架构 | 待 | |
-| 安全 | 待 | |
-| QA | 待 | |
-| 产品 | 待 | |
+| 架构 | 认可 C1–C9（用户授权） | 用户代签 2026-11-19 |
+| 安全 | 认可 C1–C9（用户授权） | 用户代签 2026-11-19 |
+| QA | 认可 C1–C9（用户授权） | 用户代签 2026-11-19 |
+| 产品 | 认可 C1–C9（用户授权） | 用户代签 2026-11-19 |
 
 ---
 

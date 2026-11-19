@@ -103,8 +103,9 @@ check(
 check("任务总量 14 项", plan.includes("M10：**14 项**"));
 check("M10-13 DoD 引用 verify:m10-13", plan.includes("verify:m10-13"));
 check(
-  "P2 计划记录 M10-13 已执行 / G13 待签核",
-  /M10-13[^\n]{0,80}(已执行|收口)/.test(plan) && /G13[^\n]{0,40}待/.test(plan),
+  "P2 计划记录 M10-13 已执行 / G13 签核",
+  /M10-13[^\n]{0,80}(已执行|收口)/.test(plan) &&
+    /G13[^\n]{0,80}(conditional_pass|待)/.test(plan),
 );
 
 const evidenceDocs = [
@@ -248,7 +249,11 @@ check("G13 区分 fullCoverageCheckCompletedAt", g13.includes("fullCoverageCheck
 check("G13 含 SATA SSD 边界", g13.includes("SATA SSD"));
 check("G13 含 HDD 边界", g13.includes("HDD"));
 check("G13 含 verify:m10-00 漂移处理", g13.includes("verify:m10-00"));
-check("G13 未宣称免签核", g13.includes("独立签核") && (g13.includes("待") || g13.includes("未签核")));
+check(
+  "G13 签核状态（conditional_pass 或待签核）",
+  (g13.includes("conditional_pass") && g13.includes("2026-11-19")) ||
+    (g13.includes("独立签核") && (g13.includes("待") || g13.includes("未签核"))),
+);
 
 // ── 8. 可执行门禁 ──────────────────────────────────────────────────────────
 run("verify:m10-00（冻结清单/生成物/迁移）", pnpm.command, [...pnpm.prefix, "verify:m10-00"], { timeout: 20 * 60 * 1000 });
