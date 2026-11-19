@@ -36,6 +36,23 @@ const evidence = {
   checks,
 };
 
+function dataDbExists(dataDir) {
+  // ADR-039：新装为 CURRENT + generations/<gen>/aether.db；旧扁平仅历史回退。
+  if (existsSync(path.join(dataDir, "aether.db"))) return true;
+  const currentPath = path.join(dataDir, "CURRENT");
+  if (!existsSync(currentPath)) return false;
+  try {
+    const pointer = JSON.parse(readFileSync(currentPath, "utf8"));
+    const generation = pointer?.generation;
+    if (typeof generation !== "string" || !/^gen-[0-9A-Z]{26}$/.test(generation)) {
+      return false;
+    }
+    return existsSync(path.join(dataDir, "generations", generation, "aether.db"));
+  } catch {
+    return false;
+  }
+}
+
 function argValue(flag) {
   const index = process.argv.indexOf(flag);
   return index >= 0 ? path.resolve(process.argv[index + 1]) : null;
@@ -91,7 +108,7 @@ async function launch(appBinary, root) {
   try {
     result.window = await waitEvent("window.ready", 45_000);
     result.ui = await waitEvent("ui.ready", 60_000);
-    result.db = existsSync(path.join(dataDir, "aether.db"));
+    result.db = dataDbExists(dataDir);
   } finally {
     await sleep(1_500);
     if (child.exitCode === null) {

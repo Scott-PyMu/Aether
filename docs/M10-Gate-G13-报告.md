@@ -190,3 +190,18 @@ P0/P1 明细见 `docs/M10-13-p0-p1.json`（T1–T15 + P1 三项 + M1-08/M4-05）
 | 安全 | 待 | |
 | QA | 待 | |
 | 产品 | 待 | |
+
+---
+
+## 11. 最新代码 CI（2026-11-19）
+
+- commit：`752bde5ce6cceaa890b14cfd7cbddf2e7794205a`（`feat(M10-13): close P2 evidence and verify M10-14 boundary items`）
+- GitHub Actions `ci` run：**44485724444**
+- Coverage job：`Coverage gate (>=70% lines)`，job id **135428575557**
+- 平台 job：`M9-12 Playwright Electron E2E (macOS/Windows)`、`M9-12 Linux build + xvfb smoke`、`M10-09/03/11` 跨平台矩阵、`Supply chain gate`、`Electron security baseline` 等同一 run。
+- 结果（run 44485724444，commit `752bde5`）：
+  - `Coverage gate (>=70% lines)` **success**：TOTAL lines **73.62%**（64280 行，missed 16957）、functions **70.64%**、regions **71.16%**；`cargo llvm-cov --workspace --fail-under-lines 70` 通过。
+  - macOS：`M9-12 Playwright Electron E2E (macOS)` **success**；`M10-09/11` macOS job **success**。
+  - Windows：`M10-09/03/11` Windows job **success**；`M9-12 Playwright Electron E2E (Windows)` **success**；M9-13 Windows job 见下。
+  - Linux：`M10-09/03/11` Linux job **success**；`M9-12 Linux build + xvfb smoke` **failure**：首启 DB 探针仍查扁平 `aether.db`（ADR-039 后为 `CURRENT`/generation）；已在后续提交修复并重跑（见“最终结果”）。
+- **最终结果（待后续提交 CI 完成后填写）**：M9-13 Windows、Linux xvfb smoke 的最终 conclusion 与覆盖率以 GitHub 页面为准。
