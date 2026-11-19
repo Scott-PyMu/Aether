@@ -1,0 +1,183 @@
+{
+  "schema": "aether.m10-13.p0-p1.v1",
+  "task": "M10-13",
+  "recorded_at": "2026-11-19",
+  "baseline": {
+    "mapping": "scripts/test/m9-13/p0-p1-mapping.json",
+    "m9_gate_evidence": "docs/M9-13-证据.md",
+    "m9_gate_verify": "pnpm verify:m9-13",
+    "m9_g8_verify": "pnpm verify:m9-14",
+    "note": "P0 T1–T15 + P1 三项在 M10-13 收口时复跑；`m9-13:data` 的扁平单库/单文件恢复路径已按 ADR-039 generation 布局修正（CURRENT/整套备份集），并用当前 generation 夹具复跑；T15 以 CI Coverage gate 归档。"
+  },
+  "entries": [
+    {
+      "id": "T1",
+      "name": "会话创建时延",
+      "status": "passed",
+      "source": "pnpm m9-13:performance（AETHER_PERF_DAEMON=target/release/aetherd.exe）",
+      "evidence": "scripts/test/.tmp/m9-13/performance/performance.json",
+      "detail": "session_create_ms=61 < 2000；initialize_ms=1808；window_visible_ms=776；ui_ready_ms=2862"
+    },
+    {
+      "id": "T2",
+      "name": "事件回显时延",
+      "status": "passed",
+      "source": "pnpm m9-13:performance（10×50）",
+      "evidence": "scripts/test/.tmp/m9-13/performance/performance.json",
+      "detail": "10 sessions × 50 delta/s；deltas_received=500；p95_ms=1 < 150"
+    },
+    {
+      "id": "T3",
+      "name": "并发控制事件不丢",
+      "status": "passed",
+      "source": "pnpm m9-13:performance（10×50）",
+      "evidence": "scripts/test/.tmp/m9-13/performance/performance.json",
+      "detail": "control_received=20/20；control_lost=0"
+    },
+    {
+      "id": "T4",
+      "name": "kill -9 数据完整性（20 次）",
+      "status": "passed",
+      "source": "pnpm m9-13:regression --merge --only T4",
+      "evidence": "scripts/test/.tmp/m9-13/regression/results.json#T4",
+      "detail": "cargo test -p aether-app --test m3_06_t4：2 passed；exit=0"
+    },
+    {
+      "id": "T5a",
+      "name": "适配器崩溃自愈（30s Ready）",
+      "status": "passed",
+      "source": "pnpm m9-13:regression --merge --only T5a",
+      "evidence": "scripts/test/.tmp/m9-13/regression/results.json#T5a",
+      "detail": "aether-adapters m2_02_t5a：exit=0"
+    },
+    {
+      "id": "T5b",
+      "name": "适配器卡死恢复（120s Ready）",
+      "status": "passed",
+      "source": "pnpm m9-13:regression --merge --only T5b",
+      "evidence": "scripts/test/.tmp/m9-13/regression/results.json#T5b",
+      "detail": "aether-adapters m2_08_t5b：2 passed；exit=0"
+    },
+    {
+      "id": "T6",
+      "name": "权限审批压测（100 ask）",
+      "status": "passed",
+      "source": "pnpm m9-13:regression --merge --only T6",
+      "evidence": "scripts/test/.tmp/m9-13/regression/results.json#T6",
+      "detail": "aether-control m2_03_permission t6_100_concurrent_asks_no_loss_no_duplication：exit=0"
+    },
+    {
+      "id": "T7",
+      "name": "路径逃逸对抗",
+      "status": "passed",
+      "source": "pnpm m9-13:regression --merge --only security（M1-08 → M9-10）",
+      "evidence": "scripts/test/.tmp/m9-13/regression/results.json#security",
+      "detail": "pnpm verify:security：222 项 PASS；exit=0"
+    },
+    {
+      "id": "T8",
+      "name": "磁盘满降级 / 安全模式",
+      "status": "passed",
+      "source": "pnpm m9-13:data（当前 generation 夹具）+ m1_05_store_integration + m9_13_safe_mode_restore",
+      "evidence": "scripts/test/.tmp/m9-13/data/data-drill.json; scripts/test/.tmp/m10-13/t8-disk-full.log; scripts/test/.tmp/m10-13/t8-safe-mode.log",
+      "detail": "data-drill PASS；real_store_startup_check_failure_is_recovered_only_by_restart：1 passed；safe_mode_allows_backup_restore_and_applies_it_on_next_start：1 passed"
+    },
+    {
+      "id": "T9",
+      "name": "备份恢复",
+      "status": "passed",
+      "source": "pnpm m9-13:data（generation 整套备份/恢复）+ pnpm verify:m5-03:drill（2 轮）+ pnpm verify:m10-09（m5_03/m9_13）",
+      "evidence": "scripts/test/.tmp/m9-13/data/data-drill.json; scripts/test/.tmp/m9-13/regression/results.json#P1-encrypted-backup; scripts/test/.tmp/m5-03/",
+      "detail": "data-drill：backup_create → settings=false → backup_restore（internal backup id）→ 重启后 setting=true、quick_check=ok；m5_03 8/8；verify:m5-03:drill 2 轮 PASS；P1-encrypted-backup exit=0"
+    },
+    {
+      "id": "T10",
+      "name": "协议健壮性",
+      "status": "passed",
+      "source": "pnpm m9-13:regression --merge --only T10",
+      "evidence": "scripts/test/.tmp/m9-13/regression/results.json#T10",
+      "detail": "cargo test -p aether-rpc：exit=0（含 golden frames/dialog pick）"
+    },
+    {
+      "id": "T11",
+      "name": "退出可靠性（≤10s）",
+      "status": "passed",
+      "source": "pnpm m9-13:regression --merge --only T11",
+      "evidence": "scripts/test/.tmp/m9-13/regression/results.json#T11",
+      "detail": "t11-exit：stdin EOF/锁/8.2s + checkpoint/write-queue/stuck 三场景 exit=0；AETHER_M9_13_T11 PASS"
+    },
+    {
+      "id": "T12",
+      "name": "双开防护",
+      "status": "passed",
+      "source": "pnpm m9-13:regression --merge --only T12",
+      "evidence": "scripts/test/.tmp/m9-13/regression/results.json#T12",
+      "detail": "第二实例退出、聚焦主窗、daemonSpawnCount=1；exit=0"
+    },
+    {
+      "id": "T13",
+      "name": "同步盘防护（A4）",
+      "status": "passed",
+      "source": "pnpm m9-13:regression --merge --only T13",
+      "evidence": "scripts/test/.tmp/m9-13/regression/results.json#T13",
+      "detail": "pnpm verify:m9-09：93 项 PASS；exit=0"
+    },
+    {
+      "id": "T14",
+      "name": "类型契约",
+      "status": "passed",
+      "source": "pnpm m9-13:regression --merge --only baseline,protocol,error-codes",
+      "evidence": "scripts/test/.tmp/m9-13/regression/results.json#baseline; #protocol; #error-codes",
+      "detail": "M9-01 基线 87/83/4；protocol check diff=0；error-codes ipc=32/business=35；exit=0"
+    },
+    {
+      "id": "T15",
+      "name": "覆盖率（>70%）",
+      "status": "ci-pass",
+      "source": "GitHub Actions ci run 44332199127（M10-14 证据 §5）",
+      "evidence": "docs/M10-10-补充证据.md#5; scripts/test/.tmp/m9-13/coverage/coverage.json",
+      "ci_run": "44332199127",
+      "detail": "CI Coverage gate PASS；本机未安装 cargo-llvm-cov，未以本地旧覆盖率冒充复跑；历史 2026-11-03 本地覆盖率证据保留"
+    },
+    {
+      "id": "P1-三运行时一致性",
+      "name": "Claude Code / Codex / DSH 一致性",
+      "status": "passed",
+      "source": "pnpm m9-13:regression --merge --only P1-three-runtimes",
+      "evidence": "scripts/test/.tmp/m9-13/regression/results.json#P1-three-runtimes",
+      "detail": "m2_02_consistency + m2_11_codex + m2_11_dsh：7 passed；exit=0"
+    },
+    {
+      "id": "P1-加密备份恢复",
+      "name": "加密备份恢复演练",
+      "status": "passed",
+      "source": "pnpm m9-13:regression --merge --only P1-encrypted-backup",
+      "evidence": "scripts/test/.tmp/m9-13/regression/results.json#P1-encrypted-backup; scripts/test/.tmp/m5-03/",
+      "detail": "verify:m5-03:drill 2 轮全部 PASS；m5_03_encrypted_backup 8/8"
+    },
+    {
+      "id": "P1-规则误配率",
+      "name": "规则引擎误配率 <5%",
+      "status": "passed",
+      "source": "pnpm m9-13:regression --merge --only P1-rule-misconfiguration",
+      "evidence": "scripts/test/.tmp/m9-13/regression/results.json#P1-rule-misconfiguration",
+      "detail": "pnpm verify:m6-02：exit=0"
+    },
+    {
+      "id": "M1-08",
+      "name": "路径安全（M9-10 替代）",
+      "status": "passed",
+      "source": "pnpm m9-13:regression --merge --only security",
+      "evidence": "scripts/test/.tmp/m9-13/regression/results.json#security",
+      "detail": "verify:security 222 项 PASS"
+    },
+    {
+      "id": "M4-05",
+      "name": "安装器冒烟（M9-11 替代）",
+      "status": "passed",
+      "source": "pnpm m9-13:regression --merge --only smoke-installer",
+      "evidence": "scripts/test/.tmp/m9-13/regression/results.json#smoke-installer; dist-out/m9-11-smoke-test-*.json",
+      "detail": "MSI 安装/首启/功能闭环/卸载；全部通过；exit=0（M10-13 修复 generation/整套备份集探针后）"
+    }
+  ]
+}

@@ -42,12 +42,14 @@ const appRoot = path.join(repoRoot, "apps", "desktop");
 const requireFromDesktop = createRequire(path.join(appRoot, "package.json"));
 const { _electron } = requireFromDesktop("playwright-core");
 const electronPath = resolveElectronExecutable({ repoRoot });
-const daemonPath = path.join(
-  repoRoot,
-  "target",
-  "debug",
-  process.platform === "win32" ? "aetherd.exe" : "aetherd",
-);
+const daemonPath = process.env.AETHER_PERF_DAEMON
+  ? path.resolve(repoRoot, process.env.AETHER_PERF_DAEMON)
+  : path.join(
+      repoRoot,
+      "target",
+      "debug",
+      process.platform === "win32" ? "aetherd.exe" : "aetherd",
+    );
 const bundleDir = path.resolve(
   repoRoot,
   process.env.AETHER_M9_12_BUNDLE ?? path.join("dist-out", "m9-12-runtime-bundle"),
@@ -374,8 +376,16 @@ async function main() {
   // 关闭并记录 WAL（drain 先于 checkpoint；WAL 应已 TRUNCATE/回收）。
   let closed = false;
   try {
-    await app.close();
-    closed = true;
+    // Playwright `app.close()` 在 Windows 上可能等待过久（关停钩子/日志刷盘）；
+    // 30s 未返回则按整树回收处理，避免性能证据脚本无限挂起。
+    const closeResult = await Promise.race([
+      app.close().then(() => true).catch((error) => {
+        console.warn(`[m9-13-performance] app.close 失败（整树回收）：${error.message}`);
+        return false;
+      }),
+      sleep(30_000).then(() => false),
+    ]);
+    closed = closeResult;
   } catch (error) {
     console.warn(`[m9-13-performance] app.close 失败（整树回收）：${error.message}`);
   }
@@ -386,7 +396,19 @@ async function main() {
     const still = spawnSync("tasklist", ["/FI", `PID eq ${electronPid}`], { encoding: "utf8" });
     if ((still.stdout ?? "").includes(String(electronPid))) killTree(electronPid);
   }
-  const walPath = path.join(dataDir, "aether.db-wal");
+  const currentPath = path.join(dataDir, "CURRENT");
+  let dbDir = dataDir;
+  if (existsSync(currentPath)) {
+    try {
+      const pointer = JSON.parse(readFileSync(currentPath, "utf8"));
+      if (typeof pointer?.generation === "string" && /^gen-[0-9A-Z]{26}$/.test(pointer.generation)) {
+        dbDir = path.join(dataDir, "generations", pointer.generation);
+      }
+    } catch {
+      // 布局异常由后续启动/诊断处理；WAL 证据按数据目录根回退。
+    }
+  }
+  const walPath = path.join(dbDir, "aether.db-wal");
   const walBytes = existsSync(walPath) ? statSync(walPath).size : 0;
 
   const installer = latestInstaller();

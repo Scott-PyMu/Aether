@@ -1,0 +1,172 @@
+{
+  "schema": "aether.m10-13.archive.v1",
+  "task": "M10-13",
+  "recorded_at": "2026-11-19",
+  "versions": {
+    "design": "v1.36",
+    "p2": "v0.15",
+    "uiux": "v0.21",
+    "adr039": "v1.1",
+    "adr040": "v1.0",
+    "requirements": "v0.18"
+  },
+  "contract": {
+    "commands": 87,
+    "daemon": 83,
+    "shell": 4,
+    "ipc_error_codes": 32,
+    "business_codes": 35,
+    "settings_keys": 11,
+    "migrations": 14
+  },
+  "artifacts": [
+    {
+      "path": "设计文档.md",
+      "sha256": "eae07266def71fbfc56cd52b845d6983e28ee4e141aa5fc69efb6d97d233fb0e"
+    },
+    {
+      "path": "README.md",
+      "sha256": "7b8e9a55dc04d49257442e1547857cc6181fe3bb1f10860d874cebd61cd45223"
+    },
+    {
+      "path": "AGENTS.md",
+      "sha256": "2953eb5a87657392518224dcf4c691fa1757714e08bd2a0b056b3eb752bae269"
+    },
+    {
+      "path": "docs/P2-架构迁移-实施计划与验收标准.md",
+      "sha256": "1cdad71e9f9dc3281074532edc4e666393d0c801cd0e05e473b376be300ff51c"
+    },
+    {
+      "path": "docs/UI-UX-设计规格.md",
+      "sha256": "5e795aa77ca396288e22b37fbee7389be1ac4b087cffe7c39d22af5457a48e8f"
+    },
+    {
+      "path": "docs/adr/ADR-039-m10-event-sharding-and-startup-optimization.md",
+      "sha256": "e1135222815fcd52414341382a51b6fb9cb69cfdc0de94c00399c970817d4110"
+    },
+    {
+      "path": "docs/adr/ADR-040-selective-shard-startup-check.md",
+      "sha256": "38d15d32988c9f47648e49d3492adbc1a4f1854225292261fcb4e6c87929d72d"
+    },
+    {
+      "path": "docs/M10-00-证据.md",
+      "sha256": "6b7c7f24fb9bdb51bd46ff280fc5baf8f0b4479641bebb745dbef6a00bf47c51"
+    },
+    {
+      "path": "docs/M10-01-证据.md",
+      "sha256": "1c3dfffd9fa3975ec380fbb820bb0d8d190c6e95b5e34f2983ee4e87783a4061"
+    },
+    {
+      "path": "docs/M10-02-证据.md",
+      "sha256": "821f8e0159c076c961728bb5440b171b9f071d939cb0998c647c62e0eca1b88d"
+    },
+    {
+      "path": "docs/M10-03-证据.md",
+      "sha256": "9fc143de038f32e81913a4d2b04bf7d125c00097301e2340783f494c4b66b29f"
+    },
+    {
+      "path": "docs/M10-04-证据.md",
+      "sha256": "0cf0511ab55b77f50748f065850456f44a7a53b5c9cb0e9df90a5bd42d39a51e"
+    },
+    {
+      "path": "docs/M10-05-证据.md",
+      "sha256": "65124be336c83bc3ca944084c83c85b6f1e00fb8984b47cbe5607886ff24811c"
+    },
+    {
+      "path": "docs/M10-06-证据.md",
+      "sha256": "5943b1c2ac1901884ffc1fc7aa5125e9756f38968036f539727af4afd24cc637"
+    },
+    {
+      "path": "docs/M10-07-证据.md",
+      "sha256": "203ca932c209058a936daa0231e679a360a888f38685ea0aab29a7d9c85ae1d6"
+    },
+    {
+      "path": "docs/M10-08-证据.md",
+      "sha256": "38a1d6de3efeffb5f747200dc4667e2e2cf78e4b3729f0e3d286cd2ee685dd1a"
+    },
+    {
+      "path": "docs/M10-08-metrics.json",
+      "sha256": "647f2adf7c4cf260c0671e0eed4cbbc92412a5caa3f816e0657e38c9181730c3"
+    },
+    {
+      "path": "docs/M10-08-quick-check-parallel.json",
+      "sha256": "d567217960e8f45694678f40be4d33c32c126abb8b76ccc200977e2e3524eb76"
+    },
+    {
+      "path": "docs/M10-09-证据.md",
+      "sha256": "2803d8dc3dbc78e236e54f73a2ec9c7fcf48962e64886af03f41e276d79ad3b5"
+    },
+    {
+      "path": "docs/M10-09-metrics.json",
+      "sha256": "08f5ded1e6fa1498b11c170113aab879843760f7b0248ee039d66decbe5c22cd"
+    },
+    {
+      "path": "docs/M10-10-证据.md",
+      "sha256": "956ff298264ccb11f73e8a8c8be0f9b716b60fdf50047bab843022813a24475f"
+    },
+    {
+      "path": "docs/M10-10-metrics.json",
+      "sha256": "214a3901da3b1e7e3c7437f943c9d0403e420cfd8d9c4eb037a60708e36f85a7"
+    },
+    {
+      "path": "docs/M10-10-补充证据.md",
+      "sha256": "8437fe176510487a844b5b6ceeea25d340883deabcb0fafa344a85329c4c2d4a"
+    },
+    {
+      "path": "docs/M10-10-补充-metrics.json",
+      "sha256": "a3e9248f57f477ac9c76b936a377201dc0fed667a9d698b96555614a2f89ac3c"
+    },
+    {
+      "path": "docs/M10-11-证据.md",
+      "sha256": "1a670e8a1579f2c72ce7cc963a96078fa93c783c5871bee8787da990507350db"
+    },
+    {
+      "path": "docs/M10-11-metrics.json",
+      "sha256": "39b0ab95b980b4e398eb08ff54e4512da5f0bcb8a5c3bfc3562b5aa8e0207458"
+    },
+    {
+      "path": "docs/M10-13-发布门.md",
+      "sha256": "b6bd075e7f5af4a19301651db3c9b0a99a64c02f45907d9805ecac67b8b46a3b"
+    },
+    {
+      "path": "docs/M10-13-p0-p1.json",
+      "sha256": "0aee101608b00581e68038f597ca2a01e855b9f98785bdf81d5f037d1c3837f1"
+    },
+    {
+      "path": "docs/M10-14-device-probe.json",
+      "sha256": "0a9496b5480a00375c267c9f0f303bd75a3d171c376e5a2b8b4b1ebdbf0bac03"
+    },
+    {
+      "path": "docs/M10-14-cold-cache.json",
+      "sha256": "b53b21396cc2740fb0d8cb95ef6461f3e741a8462cd74a28453f13a8d5a0cd40"
+    },
+    {
+      "path": "package.json",
+      "sha256": "436eb5da7852f2acf4037ac6d5326f5cbb599138e8a745c00c70da7e44f31791"
+    },
+    {
+      "path": "scripts/test/m10-13/verify-m10-13.mjs",
+      "sha256": "ae06b6889edfe9c5f231d9b50e1d6f4067c8b5a5f303928c4b05dc1a7adb97ad"
+    },
+    {
+      "path": "scripts/test/m10-13/health-contract-regression.mjs",
+      "sha256": "f047a46ef831bbcfc53e9f05e1cd7474a50e72c7e63eb44a690321e16e0886ea"
+    },
+    {
+      "path": "scripts/test/m10-14/device-probe.mjs",
+      "sha256": "c3a399c66892a4b26d1d79db14e9adfdf4eadcadc8718549f67ceef15b71e39f"
+    },
+    {
+      "path": "crates/aether-app/tests/m10_14_device_probe.rs",
+      "sha256": "16e4a3f41de7d16b05b535207f9ce33b36faa9abeb4a7ed690e1ce8b7df0b104"
+    },
+    {
+      "path": "crates/aether-app/tests/m10_14_plan.rs",
+      "sha256": "9e2b86af20318bd7ccbe4b531d26a8e2808aeab7855dee06da5852ecb58c3e74"
+    },
+    {
+      "path": "crates/aether-store/tests/m10_09_sharding.rs",
+      "sha256": "c97e346b8ec236fb0ec5cf7f7f10a1ca9be96257259293f873b12566174ff3a9"
+    }
+  ]
+}

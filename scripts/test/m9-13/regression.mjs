@@ -48,7 +48,9 @@ const adapterEnv = {
 const pnpm = pnpmCommand();
 const only = (() => {
   const index = process.argv.indexOf("--only");
-  return index >= 0 ? new Set(process.argv[index + 1].split(",")) : null;
+  return index >= 0
+    ? new Set(process.argv[index + 1].split(/[,\s]+/).filter(Boolean))
+    : null;
 })();
 const commands = [
   {

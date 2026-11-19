@@ -112,6 +112,65 @@ function versionMatches(actual, expected) {
   return normalize(actual) === normalize(expected);
 }
 
+/**
+ * ADR-039 v1.0 D-039-1：新装为 `CURRENT` + `generations/<gen>/aether.db`。
+ * 保留旧扁平 `aether.db` 仅用于历史安装产物；不改变“数据目录已创建 DB”的断言强度。
+ */
+function dataDbPath(dataDir) {
+  const flat = path.join(dataDir, "aether.db");
+  if (existsSync(flat)) return flat;
+  const currentPath = path.join(dataDir, "CURRENT");
+  if (!existsSync(currentPath)) return null;
+  try {
+    const pointer = JSON.parse(readFileSync(currentPath, "utf8"));
+    const generation = pointer?.generation;
+    if (typeof generation !== "string" || !/^gen-[0-9A-Z]{26}$/.test(generation)) {
+      return null;
+    }
+    const candidate = path.join(dataDir, "generations", generation, "aether.db");
+    return existsSync(candidate) ? candidate : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * ADR-039 v1.0 D-039-5 / ADR-020 v1.1：备份为整套备份集
+ * `<target>/<backup_id>/manifest.json` + `manifest.sha256` + 逐文件快照。
+ * 旧单文件 `.aebk` 仅作为历史格式回退；两者都必须有实际落盘产物。
+ */
+function backupSetLayout(targetDir, backup) {
+  const backupId = backup?.backup?.id;
+  const setRoot = typeof backupId === "string" ? path.join(targetDir, backupId) : null;
+  const manifest = setRoot ? path.join(setRoot, "manifest.json") : null;
+  const manifestSha = setRoot ? path.join(setRoot, "manifest.sha256") : null;
+  const listFiles = (dir) => {
+    if (!existsSync(dir)) return [];
+    const files = [];
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) files.push(...listFiles(full));
+      else files.push(full);
+    }
+    return files;
+  };
+  const setFiles = setRoot
+    ? listFiles(setRoot).filter((name) => name.endsWith(".aebk"))
+    : [];
+  const legacyFiles = existsSync(targetDir)
+    ? readdirSync(targetDir).filter((name) => name.endsWith(".aebk"))
+    : [];
+  return {
+    ok:
+      Boolean(backup?.backup) &&
+      ((manifest && existsSync(manifest) && existsSync(manifestSha) && setFiles.length > 0) ||
+        legacyFiles.length > 0),
+    detail: setFiles.length > 0
+      ? `${setFiles.length} 个 .aebk（${backup?.backup?.format ?? "unknown"}）`
+      : legacyFiles[0] ?? JSON.stringify(backup)?.slice(0, 160),
+  };
+}
+
 function msiexec(args, label) {
   const exe = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "msiexec.exe");
   console.log(`\n$ msiexec ${args.join(" ")}   # ${label}`);
@@ -310,7 +369,7 @@ async function firstLaunch({ exe, dataDir, userData, root }) {
   evidence.metrics.keychain_preflight = keychainLine.slice(-2);
 
   // 数据目录与 DB 初始化（首启真实产物）。
-  record("首启创建 data 目录 DB", existsSync(path.join(dataDir, "aether.db")), path.join(dataDir, "aether.db"));
+  record("首启创建 data 目录 DB", Boolean(dataDbPath(dataDir)), dataDbPath(dataDir) ?? path.join(dataDir, "CURRENT"));
   const sentinel = path.join(dataDir, "m9-11-sentinel.txt");
   writeFileSync(sentinel, "M9-11 uninstall must keep this file\n", "utf8");
   evidence.data_dir = dataDir;
@@ -420,11 +479,11 @@ async function daemonFunctional({ daemon, dataDir, root }) {
       { label: "m9-11-install-smoke", target_dir: backupTarget },
       180_000,
     );
-    const backupFiles = readdirSync(backupTarget).filter((name) => name.endsWith(".aebk"));
+    const backupLayout = backupSetLayout(backupTarget, backup);
     record(
-      "安装产物备份可用（backup_create → .aebk 落盘）",
-      Boolean(backup?.backup) && backupFiles.length > 0,
-      backupFiles[0] ?? JSON.stringify(backup)?.slice(0, 160),
+      "安装产物备份可用（backup_create → 整套备份集落盘）",
+      backupLayout.ok,
+      backupLayout.detail,
     );
 
     if (variant === "test") {
@@ -655,7 +714,7 @@ async function main() {
       if (dataDir) {
         record(
           "卸载保留用户数据目录与哨兵文件",
-          existsSync(path.join(dataDir, "m9-11-sentinel.txt")) && existsSync(path.join(dataDir, "aether.db")),
+          existsSync(path.join(dataDir, "m9-11-sentinel.txt")) && Boolean(dataDbPath(dataDir)),
           dataDir,
         );
       }

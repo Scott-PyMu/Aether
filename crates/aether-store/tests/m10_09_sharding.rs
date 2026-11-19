@@ -18,12 +18,12 @@ use aether_store::layout::{
     read_current, read_existing as read_layout, shard_for, write_current, StorageLayout,
     CLEAN_SHUTDOWN_NAME, SHARD_COUNT,
 };
+#[cfg(windows)]
+use aether_store::replace_file_atomic;
 use aether_store::{
     create_backup_set, plan_startup_checks, validate_backup_set, Store, StoreCommand, StoreRuntime,
     WriteQueueConfig,
 };
-#[cfg(windows)]
-use aether_store::replace_file_atomic;
 use rusqlite::Connection;
 
 const SESSION_A: &str = "01J8ZQ00000000000000000001";
@@ -497,6 +497,19 @@ fn maintenance_pause_blocks_writes_until_resume() {
         .expect("shard")
         .to_path_buf();
     assert_eq!(count_events(&shard, SESSION_A), 1);
+}
+
+#[cfg(windows)]
+#[test]
+fn current_replacement_replaces_existing_pointer() {
+    let dir = tempfile::tempdir().expect("temp");
+    let destination = dir.path().join("CURRENT");
+    let temporary = dir.path().join("CURRENT.tmp");
+    std::fs::write(&destination, b"old").expect("old");
+    std::fs::write(&temporary, b"new").expect("tmp");
+    replace_file_atomic(&temporary, &destination).expect("MoveFileExW 替换既有 CURRENT");
+    assert_eq!(std::fs::read(&destination).expect("read"), b"new");
+    assert!(!temporary.exists(), "临时指针必须被替换消费");
 }
 
 #[cfg(windows)]

@@ -1,0 +1,395 @@
+{
+  "schema": "aether.m10-14.cold-cache.v1",
+  "task": "M10-14",
+  "recorded_at": "2026-11-19T07:47:02.052Z",
+  "environment": {
+    "platform": "WSL2 Ubuntu (Linux 6.6.87.2-microsoft-standard-WSL2)",
+    "storage": "ext4 on WSL2 VHDX (NTFS host)",
+    "cpu": "Windows host x64",
+    "note": "WSL2 虚拟磁盘冷读约 20-30MB/s，绝对值不代表原生 NVMe；用于验证 drop_caches 冷/热与方法学。"
+  },
+  "command": "root drop_caches (echo 3 > /proc/sys/vm/drop_caches) + m10_14_perf selective_startup_perf_cell",
+  "representative": false,
+  "cells": [
+    {
+      "checked_shards": 1,
+      "cold": false,
+      "concurrency": 8,
+      "device": "nvme",
+      "dirty": [
+        1
+      ],
+      "failureCount": 0,
+      "full_coverage": false,
+      "hardMs": 30000,
+      "initializeMs": 108.08839400000001,
+      "mainBytes": 6332416,
+      "mainMs": 108.78884099999999,
+      "mainRatio": 0.001122334455667789,
+      "planned_shards": 1,
+      "run": "1",
+      "shardMs": [
+        {
+          "ms": 670.6786,
+          "ok": true,
+          "shard_id": 1
+        }
+      ],
+      "skipped_shards": 7,
+      "startupCheckCompletedAtMs": 1781.789149,
+      "state": "ok",
+      "targetMs": 25000,
+      "totalBytes": 5642182656,
+      "write_gate": "open"
+    },
+    {
+      "checked_shards": 1,
+      "cold": true,
+      "concurrency": 8,
+      "device": "nvme",
+      "dirty": [
+        1
+      ],
+      "failureCount": 0,
+      "full_coverage": false,
+      "hardMs": 30000,
+      "initializeMs": 508.50384800000006,
+      "mainBytes": 6332416,
+      "mainMs": 407.004945,
+      "mainRatio": 0.001122334455667789,
+      "planned_shards": 1,
+      "run": "1",
+      "shardMs": [
+        {
+          "ms": 36785.626620999996,
+          "ok": true,
+          "shard_id": 1
+        }
+      ],
+      "skipped_shards": 7,
+      "startupCheckCompletedAtMs": 38297.135132999996,
+      "state": "ok",
+      "targetMs": 25000,
+      "totalBytes": 5642182656,
+      "write_gate": "open"
+    },
+    {
+      "checked_shards": 1,
+      "cold": false,
+      "concurrency": 8,
+      "device": "nvme",
+      "dirty": [
+        1
+      ],
+      "failureCount": 0,
+      "full_coverage": false,
+      "hardMs": 30000,
+      "initializeMs": 19.357125,
+      "mainBytes": 6332416,
+      "mainMs": 46.296065,
+      "mainRatio": 0.001122334455667789,
+      "planned_shards": 1,
+      "run": "2",
+      "shardMs": [
+        {
+          "ms": 554.032179,
+          "ok": true,
+          "shard_id": 1
+        }
+      ],
+      "skipped_shards": 7,
+      "startupCheckCompletedAtMs": 1575.5894349999999,
+      "state": "ok",
+      "targetMs": 25000,
+      "totalBytes": 5642182656,
+      "write_gate": "open"
+    },
+    {
+      "checked_shards": 1,
+      "cold": true,
+      "concurrency": 8,
+      "device": "nvme",
+      "dirty": [
+        1
+      ],
+      "failureCount": 0,
+      "full_coverage": false,
+      "hardMs": 30000,
+      "initializeMs": 380.294841,
+      "mainBytes": 6332416,
+      "mainMs": 283.798001,
+      "mainRatio": 0.001122334455667789,
+      "planned_shards": 1,
+      "run": "2",
+      "shardMs": [
+        {
+          "ms": 36809.497018999995,
+          "ok": true,
+          "shard_id": 1
+        }
+      ],
+      "skipped_shards": 7,
+      "startupCheckCompletedAtMs": 38193.116799,
+      "state": "ok",
+      "targetMs": 25000,
+      "totalBytes": 5642182656,
+      "write_gate": "open"
+    },
+    {
+      "checked_shards": 1,
+      "cold": false,
+      "concurrency": 8,
+      "device": "nvme",
+      "dirty": [
+        1
+      ],
+      "failureCount": 0,
+      "full_coverage": false,
+      "hardMs": 30000,
+      "initializeMs": 18.732248,
+      "mainBytes": 6332416,
+      "mainMs": 47.796468000000004,
+      "mainRatio": 0.001122334455667789,
+      "planned_shards": 1,
+      "run": "3",
+      "shardMs": [
+        {
+          "ms": 525.859667,
+          "ok": true,
+          "shard_id": 1
+        }
+      ],
+      "skipped_shards": 7,
+      "startupCheckCompletedAtMs": 1546.6355800000001,
+      "state": "ok",
+      "targetMs": 25000,
+      "totalBytes": 5642182656,
+      "write_gate": "open"
+    },
+    {
+      "checked_shards": 1,
+      "cold": true,
+      "concurrency": 8,
+      "device": "nvme",
+      "dirty": [
+        1
+      ],
+      "failureCount": 0,
+      "full_coverage": false,
+      "hardMs": 30000,
+      "initializeMs": 284.789506,
+      "mainBytes": 6332416,
+      "mainMs": 91.754752,
+      "mainRatio": 0.001122334455667789,
+      "planned_shards": 1,
+      "run": "3",
+      "shardMs": [
+        {
+          "ms": 30794.937222,
+          "ok": true,
+          "shard_id": 1
+        }
+      ],
+      "skipped_shards": 7,
+      "startupCheckCompletedAtMs": 32081.912400999998,
+      "state": "ok",
+      "targetMs": 25000,
+      "totalBytes": 5642182656,
+      "write_gate": "open"
+    },
+    {
+      "checked_shards": 8,
+      "cold": true,
+      "concurrency": 8,
+      "device": "nvme",
+      "dirty": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "failureCount": 0,
+      "full_coverage": true,
+      "hardMs": 30000,
+      "initializeMs": 728.3362330000001,
+      "mainBytes": 6332416,
+      "mainMs": 307.594395,
+      "mainRatio": 0.001122334455667789,
+      "planned_shards": 8,
+      "run": "1",
+      "shardMs": [
+        {
+          "ms": 219236.34251,
+          "ok": true,
+          "shard_id": 6
+        },
+        {
+          "ms": 222077.831813,
+          "ok": true,
+          "shard_id": 7
+        },
+        {
+          "ms": 223015.76282600002,
+          "ok": true,
+          "shard_id": 4
+        },
+        {
+          "ms": 224105.328953,
+          "ok": true,
+          "shard_id": 1
+        },
+        {
+          "ms": 249869.148198,
+          "ok": true,
+          "shard_id": 3
+        },
+        {
+          "ms": 252636.83036300002,
+          "ok": true,
+          "shard_id": 5
+        },
+        {
+          "ms": 255068.649209,
+          "ok": true,
+          "shard_id": 0
+        },
+        {
+          "ms": 257390.016973,
+          "ok": true,
+          "shard_id": 2
+        }
+      ],
+      "skipped_shards": 0,
+      "startupCheckCompletedAtMs": 259129.434281,
+      "state": "ok",
+      "targetMs": 25000,
+      "totalBytes": 5642182656,
+      "write_gate": "open"
+    },
+    {
+      "checked_shards": 8,
+      "cold": true,
+      "concurrency": 8,
+      "device": "nvme",
+      "dirty": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "failureCount": 0,
+      "full_coverage": true,
+      "hardMs": 30000,
+      "initializeMs": 330.48776000000004,
+      "mainBytes": 6332416,
+      "mainMs": 365.327117,
+      "mainRatio": 0.001122334455667789,
+      "planned_shards": 8,
+      "run": "2",
+      "shardMs": [
+        {
+          "ms": 235125.29397899998,
+          "ok": true,
+          "shard_id": 6
+        },
+        {
+          "ms": 238629.701356,
+          "ok": true,
+          "shard_id": 4
+        },
+        {
+          "ms": 239804.73686799998,
+          "ok": true,
+          "shard_id": 7
+        },
+        {
+          "ms": 242284.13492799998,
+          "ok": true,
+          "shard_id": 1
+        },
+        {
+          "ms": 277406.809431,
+          "ok": true,
+          "shard_id": 0
+        },
+        {
+          "ms": 284385.604783,
+          "ok": true,
+          "shard_id": 5
+        },
+        {
+          "ms": 299581.188235,
+          "ok": true,
+          "shard_id": 2
+        },
+        {
+          "ms": 304088.74989700003,
+          "ok": true,
+          "shard_id": 3
+        }
+      ],
+      "skipped_shards": 0,
+      "startupCheckCompletedAtMs": 305429.22239400004,
+      "state": "ok",
+      "targetMs": 25000,
+      "totalBytes": 5642182656,
+      "write_gate": "open"
+    }
+  ],
+  "matrix": {
+    "1": {
+      "cold": {
+        "count": 3,
+        "min": 32081.912400999998,
+        "p50": 38193.116799,
+        "p95": 38297.135132999996,
+        "max": 38297.135132999996,
+        "mean": 36190.72144433333
+      },
+      "hot": {
+        "count": 3,
+        "min": 1546.6355800000001,
+        "p50": 1575.5894349999999,
+        "p95": 1781.789149,
+        "max": 1781.789149,
+        "mean": 1634.671388
+      },
+      "failures": 0,
+      "status": "complete"
+    },
+    "8": {
+      "cold": {
+        "count": 2,
+        "min": 259129.434281,
+        "p50": 259129.434281,
+        "p95": 305429.22239400004,
+        "max": 305429.22239400004,
+        "mean": 282279.3283375
+      },
+      "hot": {
+        "count": 0,
+        "min": null,
+        "p50": null,
+        "p95": null,
+        "max": null,
+        "mean": null
+      },
+      "failures": 0,
+      "status": "partial (cold-only; WSL virtual disk hot run aborted at 30min timeout)"
+    }
+  },
+  "passed": true,
+  "unverified": [
+    "Windows 原生 OS 页缓存（无管理员权限/未重启）",
+    "WSL d8 热运行（虚拟磁盘单次冷检约 4-5min，30min 超时中断）"
+  ],
+  "conclusion": "冷/热分离成立（dirty1 冷 P50 38193ms vs 热 P50 1576ms）；WSL2 虚拟磁盘冷读慢，不作为 25/30s 门禁判定；Windows 原生冷缓存仍需重启/管理员工具验证。"
+}

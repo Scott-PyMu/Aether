@@ -83,8 +83,18 @@ function validateEvidence(evidenceDir) {
       "place_candidate",
       "verify",
     ];
-    if (JSON.stringify(steps) !== JSON.stringify(expected)) {
-      problems.push(`${name}：恢复七步序列不符（${JSON.stringify(steps)}）`);
+    const generationFlow =
+      drill.journal_phase === "staged" &&
+      drill.candidate_response?.format === "sharded_set" &&
+      drill.candidate_response?.shard_count === 8;
+    // ADR-039 v1.0 D-039-8：恢复从单文件七步改为 generation staging + CURRENT 切换；
+    // 旧七步证据（steps）仍接受，新路径以 journal_phase/sharded_set 行为证据等价校验。
+    if (steps.length > 0) {
+      if (JSON.stringify(steps) !== JSON.stringify(expected)) {
+        problems.push(`${name}：恢复七步序列不符（${JSON.stringify(steps)}）`);
+      }
+    } else if (!generationFlow) {
+      problems.push(`${name}：generation 恢复证据不完整（journal_phase/format/shard_count）`);
     }
     if (drill.fingerprint_before !== drill.fingerprint_after) {
       problems.push(`${name}：恢复前后哈希不一致`);
@@ -129,12 +139,31 @@ function validateEvidence(evidenceDir) {
   }
 
   // DoD4：加密路径现场保护与回滚。
-  const dod4 = read("dod4_scene_and_rollback");
+  const sceneEvidence = path.join(evidenceDir, "dod4_scene_and_rollback.json");
+  const dod4 = existsSync(sceneEvidence) ? read("dod4_scene_and_rollback") : null;
   if (dod4) {
     expectContains(dod4.rollback_error, "已回滚现场", "DoD4 回滚");
     if (dod4.rollback_pre_restore_files !== 0) problems.push("DoD4：回滚后 .pre-restore 残留");
     if (dod4.pre_restore_files !== 3) problems.push("DoD4：现场三件套保护数非 3");
     expectTrue(dod4.journal_finalized, "DoD4 journal 收尾");
+  } else {
+    // ADR-039 v1.0 D-039-8：generation staging 损坏 → 启动拒绝切换且当前 generation 不受损。
+    const generationEvidence = path.join(evidenceDir, "dod4_generation_rollback.json");
+    if (!existsSync(generationEvidence)) {
+      problems.push("缺少证据文件：dod4_scene_and_rollback.json / dod4_generation_rollback.json");
+    } else {
+      const generationRollback = read("dod4_generation_rollback");
+      expectContains(generationRollback.failed_outcome, "Failed", "DoD4 generation 拒绝");
+      if (generationRollback.fingerprint_before !== generationRollback.fingerprint_after) {
+        problems.push("DoD4：拒绝后当前库指纹变化");
+      }
+      if ((generationRollback.pre_restore ?? ["?"]).length !== 0) {
+        problems.push("DoD4：失败产生 .pre-restore 残留");
+      }
+      if (generationRollback.journal_phase !== "staged") {
+        problems.push(`DoD4：journal_phase 非 staged（${JSON.stringify(generationRollback.journal_phase)}）`);
+      }
+    }
   }
 
   // DoD5：密钥材料扫描。

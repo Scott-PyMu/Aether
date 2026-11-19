@@ -136,6 +136,19 @@ try {
     key: "backup.encryption.enabled",
     value: false,
   });
+  // M9-13 data-drill 的旧数据探针要求预设/供应商/提醒设置存在；
+  // 使用当前 generation 布局的夹具显式播种（不依赖 %APPDATA% 旧扁平库）。
+  await rpc.request("settings_set", { key: "backup.reminder", value: true });
+  await rpc.request("preset_add", {
+    name: "M9-13 fixture preset",
+    system_prompt: "M9-13 fixture system prompt",
+  });
+  await rpc.request("provider_create", {
+    name: "M9-13 fixture provider",
+    type: "custom",
+    base_url: "http://127.0.0.1:1",
+    enabled: true,
+  });
   const backup = await rpc.request("backup_create", { label: "M9-13 CI fixture" }, 60_000);
   if (!backup?.backup?.id) {
     throw new Error(`backup_create 未返回备份：${JSON.stringify(backup)}`);

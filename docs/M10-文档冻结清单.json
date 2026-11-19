@@ -2,7 +2,7 @@
   "schema": "aether.m10.doc-freeze.v1",
   "task": "M10-00",
   "frozen_at": "2026-11-05",
-  "amended_at": "2026-11-12",
+  "amended_at": "2026-11-19",
   "amendments": [
     {
       "task": "M10-01",
@@ -45,31 +45,61 @@
       "adr": "ADR-038",
       "field": "docs/P2-架构迁移-实施计划与验收标准.md",
       "reason": "M10-08 启动体验补充口径（>1.5s 另立优化 ADR；不改变 30s 分库阈值）"
+    },
+    {
+      "task": "M10-10",
+      "adr": "ADR-039",
+      "field": "设计文档.md",
+      "reason": "ADR-039 v1.0 升版 v1.35 + 启动并行检查/分库实施；M10-10 执行状态未同步冻结清单，M10-13 补齐版本/哈希。"
+    },
+    {
+      "task": "M10-11",
+      "adr": "ADR-039",
+      "field": "docs/UI-UX-设计规格.md",
+      "reason": "ADR-039 v1.0 升版 UI-UX v0.20（S-00/S-06/S-08）；M10-11 未同步冻结清单，M10-13 补齐版本/哈希。"
+    },
+    {
+      "task": "M10-14",
+      "adr": "ADR-040",
+      "field": "docs/P2-架构迁移-实施计划与验收标准.md",
+      "reason": "ADR-040 v1.0 升版 P2 v0.15（M10-14/M10-13/G13/health v2）；执行状态写入；结构/决策未变。"
+    },
+    {
+      "task": "M10-14",
+      "adr": "ADR-040",
+      "field": "设计文档.md",
+      "reason": "ADR-040 v1.0 升版设计 v1.36 + health v2/选择性检查/运行期调度；仅决策记录，命令/迁移计数不变。"
+    },
+    {
+      "task": "M10-13",
+      "adr": "ADR-039/ADR-040",
+      "field": "docs/M10-文档冻结清单.json",
+      "reason": "M10-13 DoD-8：修正冻结清单漂移（v1.35→v1.36、v0.14→v0.15、v0.20→v0.21），重录 README/AGENTS/设计/P2/UI-UX 哈希，并补入 ADR-039/ADR-040 归档哈希。"
     }
   ],
-  "design_version": "v1.35",
-  "p2_plan_version": "v0.14",
-  "uiux_version": "v0.20",
+  "design_version": "v1.36",
+  "p2_plan_version": "v0.15",
+  "uiux_version": "v0.21",
   "artifacts": [
     {
       "path": "设计文档.md",
-      "sha256": "35a163cc96d22095aa8ee0fc0b49ba251a03d4fb1691e5e3eb8b71eb1ee20374"
+      "sha256": "eae07266def71fbfc56cd52b845d6983e28ee4e141aa5fc69efb6d97d233fb0e"
     },
     {
       "path": "AGENTS.md",
-      "sha256": "330bf3347d8d8ac115425be2bd7c8f54614e5d87cf90b1ba78b209e9d427787b"
+      "sha256": "2953eb5a87657392518224dcf4c691fa1757714e08bd2a0b056b3eb752bae269"
     },
     {
       "path": "README.md",
-      "sha256": "922d95845f4bb551d0604d8db675bf24cf5555d2ab15896f0792c4ebf4e6cbec"
+      "sha256": "7b8e9a55dc04d49257442e1547857cc6181fe3bb1f10860d874cebd61cd45223"
     },
     {
       "path": "docs/P2-架构迁移-实施计划与验收标准.md",
-      "sha256": "e131a8f6701b7fecb88ca594dc72c1b7192fc35f4b29c28ed746d00b282d681c"
+      "sha256": "1cdad71e9f9dc3281074532edc4e666393d0c801cd0e05e473b376be300ff51c"
     },
     {
       "path": "docs/UI-UX-设计规格.md",
-      "sha256": "d78faf95b4e99e73623a2dbe77a794a15d4b2de4236853cef99f53d5fe5dc80d"
+      "sha256": "5e795aa77ca396288e22b37fbee7389be1ac4b087cffe7c39d22af5457a48e8f"
     },
     {
       "path": "docs/adr/ADR-031-m10-orchestration-dsl-state-machine.md",
@@ -102,6 +132,14 @@
     {
       "path": "docs/adr/ADR-038-m10-event-sharding-preplan.md",
       "sha256": "8d6899807e0fef62dc0a612c8eb1f740efc5cbe4d37b9a1705ea480507ab4289"
+    },
+    {
+      "path": "docs/adr/ADR-039-m10-event-sharding-and-startup-optimization.md",
+      "sha256": "e1135222815fcd52414341382a51b6fb9cb69cfdc0de94c00399c970817d4110"
+    },
+    {
+      "path": "docs/adr/ADR-040-selective-shard-startup-check.md",
+      "sha256": "38d15d32988c9f47648e49d3492adbc1a4f1854225292261fcb4e6c87929d72d"
     },
     {
       "path": "docs/M10-00-登记表.json",

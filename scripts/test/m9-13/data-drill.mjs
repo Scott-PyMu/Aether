@@ -80,6 +80,29 @@ async function waitFor(fn, timeoutMs, label) {
   throw new Error(`等待超时：${label}${last ? `（${last.message}）` : ""}`);
 }
 
+/**
+ * ADR-039 v1.0：新装为 `CURRENT` + `generations/<gen>/aether.db`。
+ * 旧扁平 `aether.db` 仅作为历史数据回退；两者都必须指向真实主库。
+ */
+function resolveMainDb(dataDir) {
+  const flat = path.join(dataDir, "aether.db");
+  if (existsSync(flat)) return flat;
+  const currentPath = path.join(dataDir, "CURRENT");
+  if (!existsSync(currentPath)) {
+    throw new Error(`数据目录缺少 CURRENT/aether.db：${dataDir}`);
+  }
+  const pointer = JSON.parse(readFileSync(currentPath, "utf8"));
+  const generation = pointer?.generation;
+  if (typeof generation !== "string" || !/^gen-[0-9A-Z]{26}$/.test(generation)) {
+    throw new Error(`CURRENT.generation 非法：${JSON.stringify(generation)}`);
+  }
+  const candidate = path.join(dataDir, "generations", generation, "aether.db");
+  if (!existsSync(candidate)) {
+    throw new Error(`generation 主库不存在：${candidate}`);
+  }
+  return candidate;
+}
+
 function killTree(pid) {
   if (!pid || pid <= 0) return;
   if (process.platform === "win32") {
@@ -342,9 +365,10 @@ async function keychainPreflight(root, sourceDataDir, registryDir) {
 
 async function main() {
   const source = realDataDir();
-  const sourceDb = path.join(source, "aether.db");
-  if (!existsSync(sourceDb)) {
-    fail(`真实数据目录缺少 aether.db：${source}（可用 AETHER_M9_13_REAL_DATA 指定）`);
+  try {
+    resolveMainDb(source);
+  } catch (error) {
+    fail(`${error.message}（可用 AETHER_M9_13_REAL_DATA 指定当前 generation 夹具）`);
   }
   const base = path.join(repoRoot, "dist-out", "m9-13-data");
   mkdirSync(base, { recursive: true });
@@ -354,9 +378,8 @@ async function main() {
   mkdirSync(registryDir, { recursive: true });
   cpSync(source, dataDir, { recursive: true });
 
-  const sourceSnapshot = sqliteSnapshot(path.join(dataDir, "aether.db"), { checkpoint: true });
-  const candidate = path.join(root, "m9-13-restore-candidate.db");
-  cpSync(path.join(dataDir, "aether.db"), candidate);
+  const dataMainDb = resolveMainDb(dataDir);
+  const sourceSnapshot = sqliteSnapshot(dataMainDb, { checkpoint: true });
 
   const checks = [];
   const record = (name, ok, detail) => {
@@ -364,6 +387,7 @@ async function main() {
     console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? `  ${detail}` : ""}`);
   };
 
+  let backupId = null;
   let app;
   try {
     const launched = await launch(root, dataDir, registryDir);
@@ -424,10 +448,20 @@ async function main() {
     );
 
     // 修改设置 → 恢复候选 → 重启后回滚（T9）。
+    // ADR-039 D-039-8：恢复候选为整套备份集（内部 backup id），不再复制单文件 .db。
+    const snapshotBackup = await rpcOk(rpc, "backup_create", {
+      label: "M9-13 data drill snapshot",
+    });
+    backupId = snapshotBackup?.backup?.id;
+    record(
+      "备份恢复前：backup_create",
+      typeof backupId === "string",
+      backupId ?? JSON.stringify(snapshotBackup)?.slice(0, 160),
+    );
     const before = await rpcOk(rpc, "settings_set", { key: "backup.reminder", value: false });
     record("备份恢复前：settings_set false", before?.value === false, JSON.stringify(before?.value));
     const restore = await rpcOk(rpc, "backup_restore", {
-      source: { external: { path: candidate } },
+      source: { internal: { id: backupId } },
     });
     record(
       "backup_restore 登记（restart_required）",
@@ -455,7 +489,8 @@ async function main() {
     if (app) await closeApp(app);
   }
 
-  const afterSnapshot = sqliteSnapshot(path.join(dataDir, "aether.db"));
+  const afterMainDb = resolveMainDb(dataDir);
+  const afterSnapshot = sqliteSnapshot(afterMainDb);
   const schemaUnchanged =
     !sourceSnapshot.unavailable &&
     !afterSnapshot.unavailable &&
@@ -469,9 +504,8 @@ async function main() {
       : `tables=${afterSnapshot.tables?.length ?? 0} migrations=${afterSnapshot.migrations?.length ?? 0}`,
   );
   record("恢复后 quick_check=ok", afterSnapshot.quick_check === "ok", afterSnapshot.quick_check ?? "?");
-  const walBytes = existsSync(path.join(dataDir, "aether.db-wal"))
-    ? statSync(path.join(dataDir, "aether.db-wal")).size
-    : 0;
+  const walPath = path.join(path.dirname(afterMainDb), "aether.db-wal");
+  const walBytes = existsSync(walPath) ? statSync(walPath).size : 0;
   record("关闭后 WAL checkpoint（≤4KiB）", walBytes <= 4096, `${walBytes} B`);
 
   const safeModeTest = runCommand("cargo", [
@@ -534,7 +568,7 @@ async function main() {
     schema_unchanged: schemaUnchanged,
     wal_bytes_after_shutdown: walBytes,
     backup_restore: {
-      candidate: path.basename(candidate),
+      candidate: backupId ?? null,
       restore_restart_required: true,
       setting_restored: checks.find((item) => item.name.includes("设置回滚"))?.ok === true,
       quick_check: afterSnapshot.quick_check ?? null,

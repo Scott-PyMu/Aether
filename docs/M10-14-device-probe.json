@@ -1,0 +1,41 @@
+{
+  "schema": "aether.m10-14.device-probe.v1",
+  "task": "M10-14",
+  "recorded_at": "2026-11-19T06:47:56.331Z",
+  "platform": {
+    "os": "win32",
+    "arch": "x64"
+  },
+  "physical_disks": [
+    {
+      "FriendlyName": "YMTC YMSS2EB06B66MC",
+      "MediaType": "SSD",
+      "BusType": "NVMe",
+      "Size": 512110190592
+    },
+    {
+      "FriendlyName": "WDC WD20EZBX-08AYR",
+      "MediaType": "HDD",
+      "BusType": "SATA",
+      "Size": 2000398934016
+    }
+  ],
+  "rust_probe": [
+    "test report_auto_profile_and_env_override ... M10_14_DEVICE_PROBE auto=StartupCheckProfile { device: Ssd, concurrency: 4, source: \"auto\" }",
+    "M10_14_DEVICE_PROBE override=StartupCheckProfile { device: Nvme, concurrency: 8, source: \"env:device\" }"
+  ],
+  "override": {
+    "device": "nvme",
+    "concurrency": 8,
+    "source": "env:device"
+  },
+  "notes": [
+    "BusType 来自 Get-PhysicalDisk；sysinfo 不暴露 BusType，NVMe 可能归为 SSD。"
+  ],
+  "passed": true,
+  "auto": {
+    "device": "ssd",
+    "concurrency": 4,
+    "source": "auto"
+  }
+}

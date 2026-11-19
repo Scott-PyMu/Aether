@@ -139,6 +139,27 @@ fn main_and_shard_fingerprint_mismatch_is_selective_with_main() {
 }
 
 #[test]
+fn mtime_only_touch_is_bounded_false_positive() {
+    let dir = tempfile::tempdir().expect("temp");
+    let (layout, _runtime) = clean_layout(dir.path());
+    let shard = layout.shard_path(0).expect("shard0").to_path_buf();
+    let mut touched = 0;
+    for _ in 0..20 {
+        // 内容/大小/header 不变，仅重写相同字节改变 mtime（模拟外部触碰）。
+        let bytes = std::fs::read(&shard).expect("read shard");
+        std::fs::write(&shard, &bytes).expect("rewrite shard");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let plan = plan_startup_checks(&layout, env!("CARGO_PKG_VERSION"));
+        assert!(!plan.full_fallback, "mtime 假阳性不得升级为全量回退");
+        assert!(plan.main, "mtime 假阳性仍检查主库");
+        assert_eq!(plan.shards, vec![0], "仅被触碰分片进入计划");
+        assert_eq!(plan.planned_shards(), 1);
+        touched += 1;
+    }
+    assert_eq!(touched, 20);
+}
+
+#[test]
 fn invalid_sidecar_entries_fall_back_to_full() {
     let dir = tempfile::tempdir().expect("temp");
     let (layout, _runtime) = clean_layout(dir.path());
