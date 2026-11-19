@@ -138,7 +138,7 @@
     },
     {
       "path": "docs/M10-14-cold-cache.json",
-      "sha256": "b53b21396cc2740fb0d8cb95ef6461f3e741a8462cd74a28453f13a8d5a0cd40"
+      "sha256": "518f8d05e74cc061b923351a76b150c4523015e1ae0bf22fb75bbb4a76d49f2c"
     },
     {
       "path": "package.json",
@@ -155,6 +155,14 @@
     {
       "path": "scripts/test/m10-14/device-probe.mjs",
       "sha256": "c3a399c66892a4b26d1d79db14e9adfdf4eadcadc8718549f67ceef15b71e39f"
+    },
+    {
+      "path": "scripts/test/m9-11/smoke-linux.mjs",
+      "sha256": "ac78317bea5c3e6541d5ab73120885a54fe3197603aa69c9e516bec1eb5edb4a"
+    },
+    {
+      "path": "scripts/test/m9-11/smoke-macos.mjs",
+      "sha256": "3bf50d6b565475c3c474190325b1adb66f3227473ff0ffc35618934117ec58b3"
     },
     {
       "path": "crates/aether-app/tests/m10_14_device_probe.rs",

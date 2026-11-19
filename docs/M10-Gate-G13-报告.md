@@ -24,7 +24,7 @@
 | G11 数据/多模态 | **通过（沿用任务证据）** | `docs/M10-04-证据.md`、`docs/M10-05-证据.md`；`pnpm verify:m10-04/05` 证据在案；M10-13 复跑 P1 加密备份/P0 T9 映射 |
 | G12 体验 | **通过（沿用任务证据）** | `docs/M10-06-证据.md`；zh-CN/en-US key 集合 100%、主题矩阵、视觉/锚点回归在案 |
 | M10-08 报告归档 | **通过** | `docs/M10-08-证据.md`、`docs/M10-08-metrics.json`、`docs/M10-08-quick-check-parallel.json`；归档哈希见 `docs/M10-13-归档清单.json` |
-| M10-09/10/11/14 + M10-13 | **通过（复跑）** | `pnpm verify:m10-09/10/11/14` 全 PASS；`pnpm verify:m10-10` ADR-039 基线 PASS；`pnpm verify:m10-14:level1/:level2` PASS；`pnpm verify:m10-13` **205/205 PASS**（见 §8） |
+| M10-09/10/11/14 + M10-13 | **通过（复跑）** | `pnpm verify:m10-09/10/11/14` 全 PASS；`pnpm verify:m10-10` ADR-039 基线 PASS；`pnpm verify:m10-14:level1/:level2` PASS；`pnpm verify:m10-13` **207/207 PASS**（见 §8） |
 | 设计/P2/UI-UX/ADR 版本 | **通过** | v1.36 / v0.15 / v0.21；ADR-039 v1.1、ADR-040 v1.0；冻结清单已重录（§6） |
 | M10-03 发布门 | **通过（待签核）** | 消费者清单/升级计划/旧 v1+新 v2 回归/发布说明见 `docs/M10-13-发布门.md`；health v2 回归 PASS |
 | M9-01 基线重录 | **通过** | `docs/M9-01-baseline/manifest.json`：87/83/4、business 35、settings 11、migrations 14 |
@@ -163,7 +163,7 @@ P0/P1 明细见 `docs/M10-13-p0-p1.json`（T1–T15 + P1 三项 + M1-08/M4-05）
 
 **建议：`conditional_pass`（P2 退出通过，附硬件/环境边界条件）**。
 
-理由：G9–G12 与 M10-09/10/11/14 证据齐备，M10-13 收口门禁 `205/205` PASS；
+理由：G9–G12 与 M10-09/10/11/14 证据齐备，M10-13 收口门禁 `207/207` PASS；
 命令/事件/设置/迁移无变化；未发现代码或数据完整性阻断项。剩余项均为可声明的
 硬件/环境边界，不是伪造通过：
 
@@ -195,13 +195,9 @@ P0/P1 明细见 `docs/M10-13-p0-p1.json`（T1–T15 + P1 三项 + M1-08/M4-05）
 
 ## 11. 最新代码 CI（2026-11-19）
 
-- commit：`752bde5ce6cceaa890b14cfd7cbddf2e7794205a`（`feat(M10-13): close P2 evidence and verify M10-14 boundary items`）
-- GitHub Actions `ci` run：**44485724444**
-- Coverage job：`Coverage gate (>=70% lines)`，job id **135428575557**
-- 平台 job：`M9-12 Playwright Electron E2E (macOS/Windows)`、`M9-12 Linux build + xvfb smoke`、`M10-09/03/11` 跨平台矩阵、`Supply chain gate`、`Electron security baseline` 等同一 run。
-- 结果（run 44485724444，commit `752bde5`）：
-  - `Coverage gate (>=70% lines)` **success**：TOTAL lines **73.62%**（64280 行，missed 16957）、functions **70.64%**、regions **71.16%**；`cargo llvm-cov --workspace --fail-under-lines 70` 通过。
-  - macOS：`M9-12 Playwright Electron E2E (macOS)` **success**；`M10-09/11` macOS job **success**。
-  - Windows：`M10-09/03/11` Windows job **success**；`M9-12 Playwright Electron E2E (Windows)` **success**；M9-13 Windows job 见下。
-  - Linux：`M10-09/03/11` Linux job **success**；`M9-12 Linux build + xvfb smoke` **failure**：首启 DB 探针仍查扁平 `aether.db`（ADR-039 后为 `CURRENT`/generation）；已在后续提交修复并重跑（见“最终结果”）。
-- **最终结果（待后续提交 CI 完成后填写）**：M9-13 Windows、Linux xvfb smoke 的最终 conclusion 与覆盖率以 GitHub 页面为准。
+- 首轮：commit `752bde5ce6cceaa890b14cfd7cbddf2e7794205a`，CI run **44485724444**。
+- 修复 Linux/macOS 冒烟 DB 探针后：commit **`3b49d1f239cd2c1c97bbd78a0a3be5101c3e8ab6`**，CI run **44487867096**。
+- Coverage job：`Coverage gate (>=70% lines)`，job id **135435798776** → **success**；TOTAL lines **73.62%**（64280 行，missed 16954）、functions **70.64%**、regions **71.16%**；`cargo llvm-cov --workspace --fail-under-lines 70` 通过。
+- 平台 job（run 44487867096）：`M9-12 Playwright Electron E2E (Windows/macOS)` **success**；`M10-09/03/11` Windows/Linux/macOS job **success**（首轮已确认；重跑继续）；`M9-12 Linux build + xvfb smoke` **success**（job `135435799293`，修复后）；`M9-13 Windows` 长 job 见 job `135435798980`（覆盖率/平台 job 不依赖该长 job）。
+- 首轮 Linux xvfb smoke 失败原因：`scripts/test/m9-11/smoke-linux.mjs` 仍查扁平 `aether.db`；已按 ADR-039 改为 `CURRENT` + `generations/<gen>/aether.db`（macOS 同修）。
+- 若本文件与 GitHub 页面不一致，以 GitHub 页面/run 结论为准。

@@ -391,5 +391,8 @@
     "Windows 原生 OS 页缓存（无管理员权限/未重启）",
     "WSL d8 热运行（虚拟磁盘单次冷检约 4-5min，30min 超时中断）"
   ],
-  "conclusion": "冷/热分离成立（dirty1 冷 P50 38193ms vs 热 P50 1576ms）；WSL2 虚拟磁盘冷读慢，不作为 25/30s 门禁判定；Windows 原生冷缓存仍需重启/管理员工具验证。"
+  "conclusion": "冷/热分离成立（dirty1 冷 P50 38193ms vs 热 P50 1576ms）；WSL2 虚拟磁盘冷读慢，不作为 25/30s 门禁判定；Windows 原生冷缓存仍需重启/管理员工具验证。",
+  "scope": "methodology",
+  "complete": false,
+  "passed_reason": "drop_caches 冷/热分离与 dirty1 3+3 样本完成；WSL VHDX 绝对值不代表原生 NVMe，Windows 原生冷缓存未验证。"
 }
